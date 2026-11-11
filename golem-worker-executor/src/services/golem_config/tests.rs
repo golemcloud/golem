@@ -296,7 +296,10 @@ fn invocation_results_config_constructs_configured_membership() {
     for index in 1..=6 {
         membership.insert(
             golem_common::model::IdempotencyKey::fresh(),
-            golem_common::model::oplog::OplogIndex::from_u64(index),
+            golem_common::model::InvocationResultPosition {
+                terminal: golem_common::model::oplog::OplogIndex::from_u64(index),
+                request: None,
+            },
         );
     }
 

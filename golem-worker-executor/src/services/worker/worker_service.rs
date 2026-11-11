@@ -595,7 +595,7 @@ impl WorkerService for DefaultWorkerService {
                                 let metadata = InvocationResultIndexMetadata {
                                     covered_through: OplogIndex::NONE,
                                     revert_generation: status_generation,
-                                    current_idempotency_key: None,
+                                    requests: InvocationRequests::default(),
                                 };
                                 let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
@@ -667,22 +667,22 @@ impl WorkerService for DefaultWorkerService {
                     let mut mappings = HashMap::new();
                     let mut advanced = metadata.clone();
                     fold_invocation_result_entries(
-                        &mut advanced.current_idempotency_key,
+                        &mut advanced.requests,
                         &status.deleted_regions,
                         &entries,
-                        |key, index| {
-                            mappings.insert(key.clone(), index);
+                        |key, position| {
+                            mappings.insert(key.clone(), position);
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
 
                     let mut fields = Vec::with_capacity(mappings.len() + 1);
-                    for (key, oplog_index) in mappings {
+                    for (key, position) in mappings {
                         fields.push((
                             invocation_result_index_field(&key),
                             serialize(&PersistedInvocationResult {
                                 revert_generation: advanced.revert_generation,
-                                oplog_index,
+                                position,
                             }).map_err(WorkerExecutorError::runtime)?,
                         ));
                     }
@@ -774,12 +774,12 @@ impl WorkerService for DefaultWorkerService {
         if value.revert_generation != metadata.revert_generation
             || status
                 .deleted_regions
-                .is_in_deleted_region(value.oplog_index)
+                .is_in_deleted_region(value.position.terminal)
         {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         }
 
-        Ok(InvocationResultIndexLookup::Found(value.oplog_index))
+        Ok(InvocationResultIndexLookup::Found(value.position))
     }
 
     async fn resolve_agent_identity(
