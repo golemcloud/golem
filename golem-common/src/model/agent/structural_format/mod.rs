@@ -12,23 +12,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Canonical structural format for agent IDs.
+//! Canonical agent key text.
 //!
-//! This module implements a positional, structural-only encoding for agent-ID
-//! parameter values. No field/variant/case names appear in the canonical form —
-//! everything is positional, making the encoding language-independent.
+//! This module implements the positional, structural-only text form of agent
+//! constructor parameters. It is the canonical agent key representation: the
+//! form users see, and the input of the keyed agent ID hash. No field, variant
+//! or case names appear in it, so it is language-independent and a rename does
+//! not change it.
+//!
+//! The formatter writes exactly one text for each value, so equal values give
+//! equal text:
+//!
+//! - Integers are written in decimal without leading zeros; floats always have a
+//!   decimal point, and NaN and infinities are rejected.
+//! - Strings, chars and tagged strings use JSON escaping. Unicode code points are
+//!   kept as given, with no normalization.
+//! - A record is `(f1,f2,…)`; the root record has no parentheses. Trailing fields
+//!   whose type is an option and whose value is `none` are omitted, and the
+//!   parser reads missing trailing option fields as `none`. Appending an option
+//!   field to a record therefore keeps the text of existing values.
+//! - A tuple is `(e1,e2,…)` and keeps every element.
+//! - A map is `m[(k,v),…]` with its entries sorted by the canonical text of their
+//!   keys (byte order). The formatter and the parser reject duplicate keys, and
+//!   the parser accepts entries in any order.
+//! - A variant or enum is `v<case>` with an optional `(payload)`, and a result is
+//!   `ok` or `err` with an optional `(payload)`. A value whose payload presence
+//!   does not match its case is rejected.
+//! - A union is `u<branch>(body)`. The body is omitted when its text is `()`, and
+//!   the parser reads a missing body as `()`.
+//! - A text value is `@t"…"`, or `@t[lang]"…"` with a language tag. A binary value
+//!   is `@b[mime]"<base64>"`, with an empty tag when it has no MIME type. Inside
+//!   the brackets `]` and `\` are escaped with a backslash and whitespace is kept.
+//!   Language tags are ASCII-lowercased; a MIME type has the part before its first
+//!   `;` ASCII-lowercased and its parameters kept as given. An empty tag is the
+//!   same as no tag.
+//!
+//! The text carries no version. Any change to the formatter or the parser changes
+//! the address of keyed agents, so it is a breaking change to every keyed agent.
+//! The golden tests of this module guard it.
 //!
 //! The public entry points:
 //! - [`format_structural_typed`] — serialize a `TypedSchemaValue` → canonical string
 //! - [`parse_structural_typed`] — parse a canonical string + schema → `SchemaValue`
-//! - [`normalize_structural`] — strip whitespace outside string literals (no schema needed)
+//! - [`normalize_structural`] — strip whitespace outside string literals and tags (no schema needed)
 
 use crate::model::agent::text_utils::{
     write_json_escaped, write_json_escaped_char, write_with_decimal_point,
 };
 use crate::schema::canonical::{datetime, duration, quantity, uuid as canonical_uuid};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
-use crate::schema::schema_type::{SchemaType, UnionSpec};
+use crate::schema::schema_type::{NamedFieldType, SchemaType, UnionSpec};
 use crate::schema::schema_value::{
     BinaryValuePayload, ResultValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
     VariantValuePayload,
@@ -57,6 +90,10 @@ pub enum StructuralFormatError {
     ParseError { position: usize, message: String },
     #[error("Schema mismatch: {0}")]
     SchemaMismatch(String),
+    #[error("Duplicate map key: {0}")]
+    DuplicateMapKey(String),
+    #[error("Payload mismatch: {0}")]
+    PayloadMismatch(String),
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -96,12 +133,7 @@ pub fn format_structural_typed(
     }
 
     let mut buf = String::new();
-    for (i, (value, field_type)) in fields.iter().zip(field_types.iter()).enumerate() {
-        if i > 0 {
-            buf.push(',');
-        }
-        format_schema_value(&mut buf, value, &field_type.body, graph, 0)?;
-    }
+    format_record_fields(&mut buf, fields, field_types, graph, 0)?;
     Ok(buf)
 }
 
@@ -127,13 +159,7 @@ pub fn parse_structural_typed(
     };
 
     let mut parser = Parser::new(s);
-    let mut fields = Vec::with_capacity(field_types.len());
-    for (i, field_type) in field_types.iter().enumerate() {
-        if i > 0 {
-            parser.expect(',')?;
-        }
-        fields.push(parser.parse_schema_value(&field_type.body, graph, 0)?);
-    }
+    let fields = parser.parse_record_fields(field_types, None, graph, 0)?;
     if parser.pos < parser.input.len() {
         return Err(parser.error(&format!(
             "Unexpected trailing input: {:?}",
@@ -143,71 +169,78 @@ pub fn parse_structural_typed(
     Ok(SchemaValue::Record { fields })
 }
 
-/// Normalize a canonical structural string by stripping whitespace outside string literals.
-/// Does not require a schema.
+/// Normalize a canonical structural string by stripping whitespace outside string literals
+/// and outside the `@t[…]` and `@b[…]` tags. Does not require a schema.
 pub fn normalize_structural(s: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Outside,
+        InString,
+        InStringEscape,
+        InTag,
+        InTagEscape,
+    }
+
     let bytes = s.as_bytes();
+    let mut result: Option<Vec<u8>> = None;
+    let mut state = State::Outside;
+    let mut last_kept = [0u8; 2];
 
-    // Fast path: check if there is any whitespace outside strings to strip
-    {
-        let mut in_string = false;
-        let mut escape_next = false;
-        let mut has_outside_ws = false;
-        for &b in bytes {
-            if escape_next {
-                escape_next = false;
-                continue;
-            }
-            if in_string {
-                if b == b'\\' {
-                    escape_next = true;
-                } else if b == b'"' {
-                    in_string = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        let keep = match state {
+            State::Outside => {
+                if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
+                    false
+                } else {
+                    if b == b'"' {
+                        state = State::InString;
+                    } else if b == b'[' && matches!(last_kept, [b'@', b't' | b'b']) {
+                        state = State::InTag;
+                    }
+                    last_kept = [last_kept[1], b];
+                    true
                 }
-                continue;
             }
-            if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
-                has_outside_ws = true;
-                break;
+            State::InString => {
+                match b {
+                    b'\\' => state = State::InStringEscape,
+                    b'"' => state = State::Outside,
+                    _ => {}
+                }
+                true
             }
-            if b == b'"' {
-                in_string = true;
+            State::InStringEscape => {
+                state = State::InString;
+                true
             }
-        }
-        if !has_outside_ws {
-            return s.to_owned();
+            State::InTag => {
+                match b {
+                    b'\\' => state = State::InTagEscape,
+                    b']' => {
+                        state = State::Outside;
+                        last_kept = [0, b']'];
+                    }
+                    _ => {}
+                }
+                true
+            }
+            State::InTagEscape => {
+                state = State::InTag;
+                true
+            }
+        };
+        match (&mut result, keep) {
+            (Some(result), true) => result.push(b),
+            (None, false) => result = Some(bytes[..i].to_vec()),
+            _ => {}
         }
     }
 
-    let mut result = Vec::with_capacity(bytes.len());
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for &b in bytes {
-        if escape_next {
-            result.push(b);
-            escape_next = false;
-            continue;
-        }
-        if in_string {
-            result.push(b);
-            if b == b'\\' {
-                escape_next = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
-            continue;
-        }
-        if b == b'"' {
-            in_string = true;
-        }
-        result.push(b);
+    match result {
+        None => s.to_owned(),
+        // SAFETY: Only ASCII whitespace bytes were removed from valid UTF-8, which keeps it valid UTF-8.
+        Some(result) => unsafe { String::from_utf8_unchecked(result) },
     }
-    // SAFETY: We only removed ASCII whitespace bytes from valid UTF-8, which is still valid UTF-8.
-    unsafe { String::from_utf8_unchecked(result) }
 }
 
 // ── Formatter internals ─────────────────────────────────────────────────────
@@ -303,12 +336,7 @@ fn format_schema_value(
                 )));
             }
             buf.push('(');
-            for (i, (v, t)) in fields.iter().zip(types.iter()).enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                format_schema_value(buf, v, &t.body, graph, depth + 1)?;
-            }
+            format_record_fields(buf, fields, types, graph, depth + 1)?;
             buf.push(')');
         }
         (
@@ -355,15 +383,29 @@ fn format_schema_value(
             buf.push(']');
         }
         (SchemaValue::Map { entries }, SchemaType::Map { key, value, .. }) => {
+            let mut formatted = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                let mut key_text = String::new();
+                format_schema_value(&mut key_text, k, key, graph, depth + 1)?;
+                let mut value_text = String::new();
+                format_schema_value(&mut value_text, v, value, graph, depth + 1)?;
+                formatted.push((key_text, value_text));
+            }
+            formatted.sort_by(|a, b| a.0.cmp(&b.0));
+            if let Some(duplicate) = formatted.windows(2).find(|w| w[0].0 == w[1].0) {
+                return Err(StructuralFormatError::DuplicateMapKey(
+                    duplicate[0].0.clone(),
+                ));
+            }
             buf.push_str("m[");
-            for (i, (k, v)) in entries.iter().enumerate() {
+            for (i, (k, v)) in formatted.iter().enumerate() {
                 if i > 0 {
                     buf.push(',');
                 }
                 buf.push('(');
-                format_schema_value(buf, k, key, graph, depth + 1)?;
+                buf.push_str(k);
                 buf.push(',');
-                format_schema_value(buf, v, value, graph, depth + 1)?;
+                buf.push_str(v);
                 buf.push(')');
             }
             buf.push(']');
@@ -386,9 +428,14 @@ fn format_schema_value(
                     format_schema_value(buf, v, t, graph, depth + 1)?;
                     buf.push(')');
                 }
-                (None, None) | (None, Some(_)) => {}
+                (None, None) => {}
+                (None, Some(_)) => {
+                    return Err(StructuralFormatError::PayloadMismatch(format!(
+                        "Variant case {idx} has no payload type but value has a payload"
+                    )));
+                }
                 (Some(_), None) => {
-                    return Err(schema_mismatch(format!(
+                    return Err(StructuralFormatError::PayloadMismatch(format!(
                         "Variant case {idx} expects payload but value has none"
                     )));
                 }
@@ -448,28 +495,23 @@ fn format_schema_value(
             depth,
         )?,
         (SchemaValue::Text(TextValuePayload { text, language }), SchemaType::Text { .. }) => {
-            match language {
-                Some(l) => {
-                    buf.push_str("@t[");
-                    buf.push_str(l);
-                    buf.push_str("]\"");
-                    write_json_escaped(buf, text);
-                    buf.push('"');
-                }
-                None => {
-                    buf.push_str("@t\"");
-                    write_json_escaped(buf, text);
-                    buf.push('"');
-                }
+            buf.push_str("@t");
+            if let Some(language) = language.as_deref().filter(|l| !l.is_empty()) {
+                buf.push('[');
+                write_escaped_tag(buf, &canonical_language_tag(language));
+                buf.push(']');
             }
+            buf.push('"');
+            write_json_escaped(buf, text);
+            buf.push('"');
         }
         (
             SchemaValue::Binary(BinaryValuePayload { bytes, mime_type }),
             SchemaType::Binary { .. },
         ) => {
             buf.push_str("@b[");
-            if let Some(m) = mime_type {
-                buf.push_str(m);
+            if let Some(mime_type) = mime_type {
+                write_escaped_tag(buf, &canonical_mime_type(mime_type));
             }
             buf.push_str("]\"");
             base64::engine::general_purpose::STANDARD.encode_string(bytes, buf);
@@ -500,11 +542,11 @@ fn format_schema_value(
         (SchemaValue::Union(UnionValuePayload { tag, body }), SchemaType::Union { spec, .. }) => {
             let (idx, branch) = union_branch(spec, tag)?;
             write!(buf, "u{idx}").unwrap();
-            // Always emit the body unless the branch body is an empty record.
-            if !matches!(graph.resolve_ref(&branch.body).map_err(|e| StructuralFormatError::SchemaMismatch(e.to_string()))?, SchemaType::Record { fields, .. } if fields.is_empty())
-            {
+            let mut body_text = String::new();
+            format_schema_value(&mut body_text, body, &branch.body, graph, depth + 1)?;
+            if body_text != "()" {
                 buf.push('(');
-                format_schema_value(buf, body, &branch.body, graph, depth + 1)?;
+                buf.push_str(&body_text);
                 buf.push(')');
             }
         }
@@ -538,14 +580,72 @@ fn format_result_arm(
             buf.push(')');
         }
         (None, None) => {}
-        (Some(_), None) => {}
+        (Some(_), None) => {
+            return Err(StructuralFormatError::PayloadMismatch(format!(
+                "Result {tag} type has no payload but value has one"
+            )));
+        }
         (None, Some(_)) => {
-            return Err(schema_mismatch(format!(
+            return Err(StructuralFormatError::PayloadMismatch(format!(
                 "Result {tag} type requires payload but value has none"
             )));
         }
     }
     Ok(())
+}
+
+/// Writes the fields of a record, comma-separated, without its trailing `none` option fields.
+fn format_record_fields(
+    buf: &mut String,
+    fields: &[SchemaValue],
+    types: &[NamedFieldType],
+    graph: &SchemaGraph,
+    depth: usize,
+) -> Result<(), StructuralFormatError> {
+    let mut present = fields.len();
+    while present > 0
+        && matches!(fields[present - 1], SchemaValue::Option { inner: None })
+        && is_option_type(&types[present - 1].body, graph)?
+    {
+        present -= 1;
+    }
+    for (i, (v, t)) in fields[..present].iter().zip(types).enumerate() {
+        if i > 0 {
+            buf.push(',');
+        }
+        format_schema_value(buf, v, &t.body, graph, depth)?;
+    }
+    Ok(())
+}
+
+fn is_option_type(typ: &SchemaType, graph: &SchemaGraph) -> Result<bool, StructuralFormatError> {
+    Ok(matches!(
+        graph
+            .resolve_ref(typ)
+            .map_err(|e| StructuralFormatError::SchemaMismatch(e.to_string()))?,
+        SchemaType::Option { .. }
+    ))
+}
+
+fn write_escaped_tag(buf: &mut String, tag: &str) {
+    for ch in tag.chars() {
+        if matches!(ch, ']' | '\\') {
+            buf.push('\\');
+        }
+        buf.push(ch);
+    }
+}
+
+fn canonical_language_tag(language: &str) -> String {
+    language.to_ascii_lowercase()
+}
+
+/// Lowercases the type and subtype of a MIME type and keeps its parameters as given.
+fn canonical_mime_type(mime_type: &str) -> String {
+    match mime_type.split_once(';') {
+        Some((essence, parameters)) => format!("{};{parameters}", essence.to_ascii_lowercase()),
+        None => mime_type.to_ascii_lowercase(),
+    }
 }
 
 fn union_branch<'a>(
@@ -684,8 +784,8 @@ impl<'a> Parser<'a> {
             }
             SchemaType::Record { fields, .. } => {
                 self.expect('(')?;
-                let fields =
-                    self.parse_schema_sequence(fields.iter().map(|f| &f.body), ')', graph, depth)?;
+                let fields = self.parse_record_fields(fields, Some(')'), graph, depth + 1)?;
+                self.expect(')')?;
                 Ok(SchemaValue::Record { fields })
             }
             SchemaType::Tuple { elements, .. } => {
@@ -807,6 +907,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses comma-separated record fields up to `terminator`, or to the end of the
+    /// input when it is `None`, without consuming it. Missing trailing fields are
+    /// accepted only when they are options, and become `none`.
+    fn parse_record_fields(
+        &mut self,
+        types: &[NamedFieldType],
+        terminator: Option<char>,
+        graph: &SchemaGraph,
+        field_depth: usize,
+    ) -> Result<Vec<SchemaValue>, StructuralFormatError> {
+        let mut values = Vec::with_capacity(types.len());
+        for (i, t) in types.iter().enumerate() {
+            if self.peek() == terminator {
+                break;
+            }
+            if i > 0 {
+                self.expect(',')?;
+            }
+            values.push(self.parse_schema_value(&t.body, graph, field_depth)?);
+        }
+        for t in &types[values.len()..] {
+            if !is_option_type(&t.body, graph)? {
+                return Err(self.error(&format!(
+                    "Missing record field {:?}; only trailing option fields may be omitted",
+                    t.name
+                )));
+            }
+            values.push(SchemaValue::Option { inner: None });
+        }
+        Ok(values)
+    }
+
     fn parse_schema_sequence<'b, I>(
         &mut self,
         types: I,
@@ -873,7 +1005,21 @@ impl<'a> Parser<'a> {
             }
             self.expect(']')?;
         }
-        Ok(SchemaValue::Map { entries })
+        let mut keyed = Vec::with_capacity(entries.len());
+        for (k, v) in entries {
+            let mut key_text = String::new();
+            format_schema_value(&mut key_text, &k, key, graph, depth + 1)?;
+            keyed.push((key_text, (k, v)));
+        }
+        keyed.sort_by(|a, b| a.0.cmp(&b.0));
+        if let Some(duplicate) = keyed.windows(2).find(|w| w[0].0 == w[1].0) {
+            return Err(StructuralFormatError::DuplicateMapKey(
+                duplicate[0].0.clone(),
+            ));
+        }
+        Ok(SchemaValue::Map {
+            entries: keyed.into_iter().map(|(_, entry)| entry).collect(),
+        })
     }
 
     fn parse_schema_flags(&mut self, count: usize) -> Result<SchemaValue, StructuralFormatError> {
@@ -948,6 +1094,8 @@ impl<'a> Parser<'a> {
         }
         let language = if self.eat('[') {
             Some(self.parse_bracket_content()?)
+                .filter(|l| !l.is_empty())
+                .map(|l| canonical_language_tag(&l))
         } else {
             None
         };
@@ -970,7 +1118,11 @@ impl<'a> Parser<'a> {
             .map_err(|e| self.error(&format!("Invalid base64: {e}")))?;
         Ok(SchemaValue::Binary(BinaryValuePayload {
             bytes,
-            mime_type: if mime.is_empty() { None } else { Some(mime) },
+            mime_type: if mime.is_empty() {
+                None
+            } else {
+                Some(canonical_mime_type(&mime))
+            },
         }))
     }
 
@@ -1017,7 +1169,10 @@ impl<'a> Parser<'a> {
             self.expect(')')?;
             v
         } else {
-            SchemaValue::Record { fields: Vec::new() }
+            let mut empty = Parser::new("()");
+            empty
+                .parse_schema_value(&branch.body, graph, depth + 1)
+                .map_err(|e| self.error(&format!("Union branch {idx} requires a body: {e}")))?
         };
         Ok(SchemaValue::Union(UnionValuePayload {
             tag: branch.tag.clone(),
@@ -1356,6 +1511,18 @@ impl<'a> Parser<'a> {
                 Some(']') => {
                     self.advance();
                     break;
+                }
+                Some('\\') => {
+                    self.advance();
+                    match self.peek() {
+                        Some(c @ (']' | '\\')) => {
+                            content.push(c);
+                            self.advance();
+                        }
+                        other => {
+                            return Err(self.error(&format!("Invalid escape in tag: \\{other:?}")));
+                        }
+                    }
                 }
                 Some(c) => {
                     content.push(c);

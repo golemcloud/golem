@@ -468,3 +468,371 @@ mod schema_native_tests {
         }
     }
 }
+
+mod canonical_key_tests {
+    use super::*;
+    use crate::schema::metadata::MetadataEnvelope;
+    use crate::schema::render::tests::paired_strategy::paired_strategy;
+    use crate::schema::schema_type::{
+        BinaryRestrictions, DiscriminatorRule, NamedFieldType, ResultSpec, SchemaType,
+        TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
+    };
+    use crate::schema::schema_value::{
+        BinaryValuePayload, ResultValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
+        VariantValuePayload,
+    };
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    fn field(name: &str, body: SchemaType) -> NamedFieldType {
+        NamedFieldType {
+            name: name.to_string(),
+            body,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    fn record_type(types: Vec<SchemaType>) -> SchemaType {
+        SchemaType::record(
+            types
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| field(&format!("f{i}"), t))
+                .collect(),
+        )
+    }
+
+    fn params(types: Vec<SchemaType>, values: Vec<SchemaValue>) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(record_type(types)),
+            SchemaValue::Record { fields: values },
+        )
+    }
+
+    fn format(types: Vec<SchemaType>, values: Vec<SchemaValue>) -> String {
+        format_structural_typed(&params(types, values)).unwrap()
+    }
+
+    fn parse(
+        text: &str,
+        types: Vec<SchemaType>,
+    ) -> Result<Vec<SchemaValue>, StructuralFormatError> {
+        let graph = SchemaGraph::anonymous(record_type(types));
+        match parse_structural_typed(text, &graph, &graph.root)? {
+            SchemaValue::Record { fields } => Ok(fields),
+            other => panic!("expected a record, got {other:?}"),
+        }
+    }
+
+    fn none() -> SchemaValue {
+        SchemaValue::Option { inner: None }
+    }
+
+    fn some(v: SchemaValue) -> SchemaValue {
+        SchemaValue::Option {
+            inner: Some(Box::new(v)),
+        }
+    }
+
+    fn text(text: &str, language: Option<&str>) -> SchemaValue {
+        SchemaValue::Text(TextValuePayload {
+            text: text.to_string(),
+            language: language.map(str::to_string),
+        })
+    }
+
+    fn binary(bytes: &[u8], mime_type: Option<&str>) -> SchemaValue {
+        SchemaValue::Binary(BinaryValuePayload {
+            bytes: bytes.to_vec(),
+            mime_type: mime_type.map(str::to_string),
+        })
+    }
+
+    fn map_type() -> SchemaType {
+        SchemaType::map(SchemaType::u32(), SchemaType::string())
+    }
+
+    fn map(entries: &[(u32, &str)]) -> SchemaValue {
+        SchemaValue::Map {
+            entries: entries
+                .iter()
+                .map(|(k, v)| (SchemaValue::U32(*k), SchemaValue::String(v.to_string())))
+                .collect(),
+        }
+    }
+
+    fn text_type() -> SchemaType {
+        SchemaType::text(TextRestrictions::default())
+    }
+
+    fn binary_type() -> SchemaType {
+        SchemaType::binary(BinaryRestrictions::default())
+    }
+
+    fn branch(tag: &str, body: SchemaType) -> UnionBranch {
+        UnionBranch {
+            tag: tag.into(),
+            body,
+            discriminator: DiscriminatorRule::FieldAbsent {
+                field_name: tag.into(),
+            },
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    /// Pins the canonical text of every value kind that this module's canonical rules
+    /// touch. Any change to this string changes the address of keyed agents.
+    #[test]
+    fn golden_canonical_text() {
+        let union = SchemaType::union(UnionSpec {
+            branches: vec![
+                branch(
+                    "opt",
+                    record_type(vec![SchemaType::option(SchemaType::u8())]),
+                ),
+                branch("num", SchemaType::u8()),
+            ],
+        });
+        let nested = record_type(vec![
+            SchemaType::option(SchemaType::u32()),
+            SchemaType::u32(),
+            SchemaType::option(SchemaType::u32()),
+        ]);
+        let types = vec![
+            map_type(),
+            text_type(),
+            text_type(),
+            text_type(),
+            binary_type(),
+            binary_type(),
+            binary_type(),
+            union.clone(),
+            union,
+            nested,
+            SchemaType::tuple(vec![SchemaType::option(SchemaType::u8())]),
+            SchemaType::string(),
+            SchemaType::option(SchemaType::u32()),
+            SchemaType::option(SchemaType::u32()),
+        ];
+        let values = vec![
+            map(&[(9, "nine"), (10, "ten"), (1, "one")]),
+            text("hello", Some("EN-us")),
+            text("szia", Some("x]y\\z")),
+            text("plain", Some("")),
+            binary(b"abc", Some("Text/Plain; Charset=UTF-8")),
+            binary(b"", Some("a]b")),
+            binary(&[1, 2, 3], None),
+            SchemaValue::Union(UnionValuePayload {
+                tag: "opt".into(),
+                body: Box::new(SchemaValue::Record {
+                    fields: vec![none()],
+                }),
+            }),
+            SchemaValue::Union(UnionValuePayload {
+                tag: "num".into(),
+                body: Box::new(SchemaValue::U8(7)),
+            }),
+            SchemaValue::Record {
+                fields: vec![none(), SchemaValue::U32(5), none()],
+            },
+            SchemaValue::Tuple {
+                elements: vec![none()],
+            },
+            SchemaValue::String("é".into()),
+            some(SchemaValue::U32(3)),
+            none(),
+        ];
+        let formatted = format(types.clone(), values);
+        assert_eq!(
+            formatted,
+            r#"m[(1,"one"),(10,"ten"),(9,"nine")],@t[en-us]"hello",@t[x\]y\\z]"szia",@t"plain",@b[text/plain; Charset=UTF-8]"YWJj",@b[a\]b]"",@b[]"AQID",u0,u1(7),(n,5),(n),"é",s(3)"#
+        );
+        let parsed = parse(&formatted, types.clone()).unwrap();
+        assert_eq!(format(types, parsed), formatted);
+    }
+
+    #[test]
+    fn map_keys_sort_by_their_text_not_their_value() {
+        assert_eq!(
+            format(vec![map_type()], vec![map(&[(9, "a"), (10, "b")])]),
+            r#"m[(10,"b"),(9,"a")]"#
+        );
+    }
+
+    #[test]
+    fn duplicate_map_keys_are_rejected() {
+        assert_eq!(
+            format_structural_typed(&params(vec![map_type()], vec![map(&[(1, "a"), (1, "b")])])),
+            Err(StructuralFormatError::DuplicateMapKey("1".to_string()))
+        );
+        assert_eq!(
+            parse(r#"m[(1,"a"),(2,"c"),(1,"b")]"#, vec![map_type()]),
+            Err(StructuralFormatError::DuplicateMapKey("1".to_string()))
+        );
+    }
+
+    #[test]
+    fn unsorted_map_input_parses_to_the_canonical_value() {
+        let canonical = parse(r#"m[(10,"b"),(9,"a")]"#, vec![map_type()]).unwrap();
+        let unsorted = parse(r#"m[(9,"a"),(10,"b")]"#, vec![map_type()]).unwrap();
+        assert_eq!(unsorted, canonical);
+        assert_eq!(canonical, vec![map(&[(10, "b"), (9, "a")])]);
+    }
+
+    #[test]
+    fn payload_mismatches_are_rejected() {
+        let variant = SchemaType::variant(vec![VariantCaseType {
+            name: "unit".into(),
+            payload: None,
+            metadata: MetadataEnvelope::default(),
+        }]);
+        let unit_ok = SchemaType::result(ResultSpec {
+            ok: None,
+            err: None,
+        });
+        let cases = [
+            (
+                variant,
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 0,
+                    payload: Some(Box::new(SchemaValue::U8(1))),
+                }),
+            ),
+            (
+                unit_ok,
+                SchemaValue::Result(ResultValuePayload::Ok {
+                    value: Some(Box::new(SchemaValue::U8(1))),
+                }),
+            ),
+        ];
+        for (typ, value) in cases {
+            assert!(matches!(
+                format_structural_typed(&params(vec![typ], vec![value])),
+                Err(StructuralFormatError::PayloadMismatch(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn only_trailing_none_fields_are_omitted() {
+        let types = vec![
+            SchemaType::option(SchemaType::u32()),
+            SchemaType::u32(),
+            SchemaType::option(SchemaType::u32()),
+        ];
+        let values = vec![none(), SchemaValue::U32(5), none()];
+        assert_eq!(format(types.clone(), values.clone()), "n,5");
+        assert_eq!(parse("n,5", types.clone()).unwrap(), values);
+        assert_eq!(parse("n,5,n", types).unwrap(), values);
+    }
+
+    #[test]
+    fn missing_trailing_fields_must_be_options() {
+        let types = vec![SchemaType::u32(), SchemaType::u32()];
+        assert!(matches!(
+            parse("1", types),
+            Err(StructuralFormatError::ParseError { .. })
+        ));
+    }
+
+    #[test]
+    fn tag_whitespace_survives_normalization() {
+        assert_eq!(
+            normalize_structural(r#"@b[text/plain; charset=utf-8] "YQ==" , @t[a\] b]"x""#),
+            r#"@b[text/plain; charset=utf-8]"YQ==",@t[a\] b]"x""#
+        );
+        assert_eq!(normalize_structural("[ 1, 2 ]"), "[1,2]");
+    }
+
+    #[test]
+    fn tag_escapes_other_than_bracket_and_backslash_are_rejected() {
+        assert!(matches!(
+            parse(r#"@t[a\x]"y""#, vec![text_type()]),
+            Err(StructuralFormatError::ParseError { .. })
+        ));
+    }
+
+    #[test]
+    fn non_canonical_tags_parse_to_the_canonical_value() {
+        assert_eq!(
+            parse(
+                r#"@t[EN]"x",@t[]"y",@b[IMAGE/PNG]"""#,
+                vec![text_type(), text_type(), binary_type()]
+            )
+            .unwrap(),
+            vec![
+                text("x", Some("en")),
+                text("y", None),
+                binary(b"", Some("image/png"))
+            ]
+        );
+    }
+
+    #[test]
+    fn unicode_is_not_normalized() {
+        let precomposed = format(
+            vec![SchemaType::string()],
+            vec![SchemaValue::String("\u{e9}".into())],
+        );
+        let decomposed = format(
+            vec![SchemaType::string()],
+            vec![SchemaValue::String("e\u{301}".into())],
+        );
+        assert_ne!(precomposed, decomposed);
+        assert_eq!(
+            parse(&decomposed, vec![SchemaType::string()]).unwrap(),
+            vec![SchemaValue::String("e\u{301}".into())]
+        );
+    }
+
+    /// Paired values whose type the canonical text supports (no host-managed capabilities).
+    fn key_value_strategy() -> impl Strategy<Value = (SchemaType, SchemaValue)> {
+        paired_strategy().prop_filter("formattable as an agent key", |(t, v)| {
+            format_structural_typed(&params(vec![t.clone()], vec![v.clone()])).is_ok()
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn map_insertion_order_does_not_change_the_text(
+            entries in proptest::collection::btree_map(any::<u32>(), "[ -~]{0,4}", 0..8)
+                .prop_map(|m| m.into_iter().collect::<Vec<_>>())
+                .prop_shuffle()
+        ) {
+            let mut sorted = entries.clone();
+            sorted.sort_by_key(|(k, _)| k.to_string());
+            let to_map = |entries: &[(u32, String)]| SchemaValue::Map {
+                entries: entries
+                    .iter()
+                    .map(|(k, v)| (SchemaValue::U32(*k), SchemaValue::String(v.clone())))
+                    .collect(),
+            };
+            let shuffled_text = format(vec![map_type()], vec![to_map(&entries)]);
+            prop_assert_eq!(&shuffled_text, &format(vec![map_type()], vec![to_map(&sorted)]));
+            prop_assert_eq!(parse(&shuffled_text, vec![map_type()]).unwrap(), vec![to_map(&sorted)]);
+        }
+
+        #[test]
+        fn parse_of_format_is_the_identity(pairs in proptest::collection::vec(key_value_strategy(), 0..4)) {
+            let (types, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+            let formatted = format(types.clone(), values.clone());
+            prop_assert_eq!(parse(&formatted, types).unwrap(), values);
+        }
+
+        #[test]
+        fn appending_an_option_field_keeps_existing_text(
+            pairs in proptest::collection::vec(key_value_strategy(), 0..4),
+            (appended, _) in key_value_strategy(),
+        ) {
+            let (types, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+            let old_text = format(types.clone(), values.clone());
+            let mut new_types = types;
+            new_types.push(SchemaType::option(appended));
+            let mut new_values = values;
+            new_values.push(none());
+            prop_assert_eq!(&format(new_types.clone(), new_values.clone()), &old_text);
+            prop_assert_eq!(parse(&old_text, new_types).unwrap(), new_values);
+        }
+    }
+}

@@ -15,9 +15,12 @@
 mod config;
 pub mod extraction;
 mod invocation;
+mod key;
 mod normalisation;
 mod protobuf;
 mod status;
+
+pub use key::AgentKey;
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
@@ -300,42 +303,14 @@ impl ParsedAgentKey {
         s: impl AsRef<str>,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        use crate::model::agent::structural_format::{
-            normalize_structural, parse_structural_typed,
-        };
-        use crate::schema::schema_type::NamedFieldType;
-
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
-        let agent_type_name = AgentTypeName(agent_type_name.to_string());
         let phantom_id = phantom_id_str
             .map(Uuid::parse_str)
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
-        let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let root = SchemaType::record(
-            agent_type
-                .constructor
-                .input_schema
-                .fields()
-                .iter()
-                .filter(|field| {
-                    matches!(
-                        field.source,
-                        crate::schema::agent::FieldSource::UserSupplied
-                    )
-                })
-                .map(|field| NamedFieldType {
-                    name: field.name.clone(),
-                    body: field.schema.clone(),
-                    metadata: field.metadata.clone(),
-                })
-                .collect(),
-        );
-        let value =
-            parse_structural_typed(&normalize_structural(param_list), &agent_type.schema, &root)
-                .map_err(|e| e.to_string())?;
-        let parameters = typed_constructor_parameters(&agent_type, value);
+        let (key, agent_type) = AgentKey::parse_parts(agent_type_name, param_list, resolver)?;
+        let (agent_type_name, parameters) = key.into_parts();
         let agent_id = Self::try_new(agent_type_name, parameters, phantom_id)?;
         Ok((agent_id, agent_type))
     }
@@ -381,9 +356,19 @@ pub fn typed_constructor_parameters(
     agent_type: &AgentTypeSchema,
     value: SchemaValue,
 ) -> TypedSchemaValue {
+    let root = constructor_parameter_record(agent_type);
+    // The result is a single-root carrier, so project the agent graph's defs to
+    // exactly those reachable from this constructor record instead of cloning
+    // the whole multi-root registry.
+    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+}
+
+/// The record of a constructor's user-supplied parameters: the type of an agent key's
+/// parameters. Agent config fields are not part of it.
+pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType {
     use crate::schema::schema_type::NamedFieldType;
 
-    let root = SchemaType::record(
+    SchemaType::record(
         agent_type
             .constructor
             .input_schema
@@ -401,12 +386,9 @@ pub fn typed_constructor_parameters(
                 metadata: field.metadata.clone(),
             })
             .collect(),
-    );
-    // The result is a single-root carrier, so project the agent graph's defs to
-    // exactly those reachable from this constructor record instead of cloning
-    // the whole multi-root registry.
-    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+    )
 }
+
 /// Status of an idempotency key lookup on a worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
 #[serde(rename_all = "camelCase")]
