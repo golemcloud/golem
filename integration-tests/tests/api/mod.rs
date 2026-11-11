@@ -28,6 +28,7 @@ mod plugin_registration;
 mod reports;
 mod resource_definition;
 mod retry_policies;
+mod revision_reads;
 mod rpc_auth;
 mod security_schemes;
 pub(crate) mod streaming_rpc;

@@ -40,6 +40,19 @@ use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
+/// Selects which revisions a read of an exact `(component ID, revision)` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentRevisionSelection {
+    /// A revision of the component as it is now: the component is not deleted, and the revision
+    /// is newer than the latest deletion of the component.
+    Current,
+    /// Any revision that is not a deletion tombstone, also after the component is deleted or
+    /// recreated.
+    Retained,
+    /// Any revision, including a deletion tombstone.
+    Any,
+}
+
 #[async_trait]
 pub trait ComponentRepo: Send + Sync {
     async fn create(
@@ -94,7 +107,7 @@ pub trait ComponentRepo: Send + Sync {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        include_deleted: bool,
+        selection: ComponentRevisionSelection,
     ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>>;
 
     async fn list_staged(
@@ -271,10 +284,10 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        include_deleted: bool,
+        selection: ComponentRevisionSelection,
     ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         self.repo
-            .get_by_id_and_revision(component_id, revision_id, include_deleted)
+            .get_by_id_and_revision(component_id, revision_id, selection)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
             .await
     }
@@ -900,7 +913,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         component_id: Uuid,
         revision_id: i64,
-        include_deleted: bool,
+        selection: ComponentRevisionSelection,
     ) -> RepoResult<Option<ComponentAuthExtRevisionRecord>> {
         let revision = self
             .with_ro("get_by_id_and_revision")
@@ -940,13 +953,15 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                             ),
                             -1
                         ))
+                        AND ($4 OR NOT cr.deleted)
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
-                .bind(include_deleted),
+                .bind(selection != ComponentRevisionSelection::Current)
+                .bind(selection == ComponentRevisionSelection::Any),
             )
             .await?;
 
