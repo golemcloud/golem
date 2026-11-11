@@ -2268,6 +2268,73 @@ record. A record with a name on an executor without filesystem snapshots gives `
   replay.
 - No pending update — `try_load_snapshot` loads the selected periodic record.
 
+### Bootstrap blocks
+
+The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
+any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
+that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the
+instantiation; the *bootstrap range* is the region from the first to the last entry the
+initializer claimed or appended (hints inside it belong to the main history). Durability is never
+suppressed for `instantiate`.
+
+Every restore point names its range, and the status records carry it: `Snapshot.bootstrap` (the
+range of the generation that wrote the periodic record), `SuccessfulUpdate.bootstrap` (the
+target's own block, for snapshot-based and snapshot-assisted updates), and
+`SnapshotAssistedAutomatic.snapshot_bootstrap` in the strategy entry. On these entries `None` means
+the initializer made no durable call; the `SuccessfulUpdate` of a plain automatic update always
+names `None`.
+
+`ReplayBaseline.bootstrap` (`BootstrapSource`, filled by `plan_start`) decides where the
+initializer runs; `ReplayBaseline::initializer_replay` and `attempt_region` turn it into the
+cursor choice (`worker/filesystem_snapshots/mod.rs`):
+
+| Source | Baselines | Initializer runs on | Main cursor also skips |
+|---|---|---|---|
+| `Recorded(range)` | `Periodic`, `ManualPromoted`, `AssistedPromoted` (also under a plain `Automatic` head) | A `BootstrapTail::Strict` bootstrap cursor over the range; `None` is an empty strict cursor | — (the range lies in the skipped prefix of a periodic record, or in the regions a successful update committed) |
+| `Attempt { anchor }` | `ManualPending` (anchor `P`), `AssistedPending` (anchor: the strategy entry `P'`) | A `BootstrapTail::Live` cursor after the anchor: it replays what an interrupted earlier attempt recorded, then appends live | The attempt region `anchor+1..=horizon` |
+| `Positional` | `InitialFiles` | The main cursor, in its position | — |
+
+The bootstrap cursor (`ReplayState::new_for_bootstrap`) skips `1..=skip_through` and the deleted
+regions; a `Live` cursor also skips what the status skips after its anchor
+(`bootstrap_skipped_regions`), so it never replays the block of an earlier update in the queue. It
+has no owner wallet, records no replay events (so its `ReplayFinished` never reaches
+`replay_application::reserve`), and switches to live locally without publishing the
+generation's liveness or touching linear-memory reconciliation. `runtime.rs` installs it with
+`enter_bootstrap_phase` around `instantiate` and restores the main cursor with
+`finish_bootstrap_phase`, which checks that every recorded call of the block was claimed
+(`ensure_bootstrap_consumed`) and records the observed range on `DurableWorkerCtx`. While a
+bootstrap cursor is installed, only direct `ReadLocal`/`ReadRemote` calls outside the
+permission-card and fork families are admitted, and accessor calls are refused; a refusal or a
+divergence is `RawStartError::Replay { diverged: true }`: a periodic record is rejected, a pending
+update fails (`UPDATE_REPLAY_FAILED` for a plain automatic one, `UPDATE_SNAPSHOT_INCOMPATIBLE` for
+a snapshot-assisted one, a failed update without a code for a manual one), and any other start ends
+with the error. No invocation is current during the phase.
+
+For a pending snapshot-assisted update the main cursor has not replayed the source tail when the
+initializer runs, so `bootstrap_uses_reconstructed_authority` lets the initializer's value reads
+skip the `FinalizeUpdate` fence and its authority checks use the authority the start
+reconstructed. When `replay(…, true)` grows the replay target, the live part of the block after
+the old target is passed as the skip of `set_replay_target`.
+
+The writers: `invocation_loop/snapshots.rs` writes the generation's range into every periodic
+`Snapshot`; `finalize_pending_snapshot_update` writes it into the snapshot-based
+`SuccessfulUpdate`, and `reserve` into the snapshot-assisted one. `reserve` never takes a
+`SnapshotBased` update, so no `ReplayFinished` of the main cursor takes a manual update; only
+`finalize_pending_snapshot_update` finalizes it.
+`status/regions.rs` commits a successful snapshot-based update's `2..=P` and a successful
+snapshot-assisted update's `2..=S`, each with its bootstrap range, as skipped; a failed one
+commits its attempt region `max(anchor, last_outcome)+1..=F-1`, where `last_outcome` is the latest
+outcome that ended a queue element, so the source revision never replays the target's calls.
+`cut_point::validate_restore_point_ranges` refuses a revert or fork cut that retains a restore
+point but not its whole range.
+
+Tests: `tests/durability.rs::automatic_snapshot_every_2nd_invocation` (the initializer seed hash
+survives periodic recovery), and in `tests/hot_update.rs` the
+`a_snapshot_based_update_*`, `a_snapshot_assisted_update_*`,
+`a_restart_right_after_a_snapshot_based_update_recovers_the_target_initializer_state`, `a_failed_snapshot_*_update_keeps_the_source_and_its_initializer_state`,
+`an_interrupted_snapshot_*_update_attempt_replays_its_initializer_calls_on_the_next_attempt` and
+`a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot` tests.
+
 Every start failure goes through `worker/start_outcome.rs::decide(role, head, RawStartError,
 lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `ManualPromoted`,
 `InitialFiles`, `AutomaticPending`, `AssistedPending`, `AssistedPromoted`). It gives a
@@ -3341,6 +3408,7 @@ incomplete decision decides at its own `Start`. Tests:
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
 | "A snapshot load is just a fast-forwarded replay, so its host calls are recorded/consumed like any other." | Snapshotting mode (`durability_is_suppressed`) neither appends nor consumes; the loaded state replaces skipped history from a revision-scoped baseline. | `tests/hot_update.rs::{auto_update_invalidates_snapshot_from_previous_revision, automatic_snapshot_invalid_entry_fallback_recreates_replay_context}` |
+| "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; an update target records and replays its own block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_runs_a_target_initializer_that_makes_durable_calls}` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
