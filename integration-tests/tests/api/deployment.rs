@@ -2247,6 +2247,16 @@ async fn tool_middleware_lookup_with_invalid_name_keeps_registry_serving(
         invalid.status()
     );
 
+    // A valid name that the deployment does not hold used to reach the panicking branch.
+    let absent = raw_client
+        .get(format!("{base_url}/audit-log"))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(absent.status(), reqwest::StatusCode::NOT_FOUND);
+    let absent: serde_json::Value = absent.json().await?;
+    assert_eq!(absent["code"], "TOOL_NOT_FOUND");
+
     let list = raw_client
         .get(&base_url)
         .bearer_auth(user.token.secret())

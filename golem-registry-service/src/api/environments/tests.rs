@@ -292,3 +292,341 @@ async fn requests_with_invalid_tool_names_are_refused_with_bad_request() {
     let deployments: Value = deployments.0.into_body().into_json().await.unwrap();
     assert_eq!(deployments["values"].as_array().unwrap().len(), 1);
 }
+
+/// A registry before the name checks accepted any text as a middleware name inside a component's
+/// tool binding and stored it. These tests rewrite stored bytes to that shape; the registry must
+/// still read the rows, so that the user can remove the binding.
+mod stored_invalid_binding_name {
+    use crate::api::make_open_api_service;
+    use crate::bootstrap::Services;
+    use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
+    use golem_common::config::{DbConfig, DbSqliteConfig};
+    use golem_common::model::Empty;
+    use golem_common::model::application::{ApplicationCreation, ApplicationName};
+    use golem_common::model::component::{
+        ComponentCreation, ComponentName, ComponentUpdate, ToolDeploymentConfigCreation,
+        ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
+    };
+    use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
+    use golem_common::model::json::NormalizedJsonValue;
+    use golem_common::model::tool::{ToolBindingInput, ToolName};
+    use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{
+        CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
+    };
+    use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+    use golem_service_base::model::auth::AuthCtx;
+    use poem::http::StatusCode;
+    use poem::test::TestClient;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use test_r::{test, timeout};
+    use tokio::task::JoinSet;
+
+    fn config(directory: &std::path::Path) -> RegistryServiceConfig {
+        RegistryServiceConfig {
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: directory.join("registry.db").to_string_lossy().into(),
+                max_connections: 4,
+                foreign_keys: true,
+            }),
+            login: LoginConfig::Disabled(Empty {}),
+            blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+                root: directory.join("blobs"),
+            }),
+            component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
+            ..Default::default()
+        }
+    }
+
+    fn probe_tool() -> Tool {
+        let node = |name: &str, subcommands, body| CommandNode {
+            name: name.to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            globals: Globals::default(),
+            subcommands,
+            body,
+        };
+        let body = CommandBody {
+            positionals: Positionals::default(),
+            options: Vec::new(),
+            flags: Vec::new(),
+            constraints: Vec::new(),
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: Vec::new(),
+            annotations: None,
+        };
+        Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree {
+                nodes: vec![
+                    node("probe", vec![CommandIndex(1)], None),
+                    node("run", Vec::new(), Some(body)),
+                ],
+            },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    /// A component whose tool `probe` binds the middleware `audit-log` for a component that the
+    /// environment does not hold, so the binding is stored and never resolved.
+    fn creation() -> ComponentCreation {
+        let binding = ToolBindingInput {
+            middleware: Some(vec![ToolMiddlewareInstallation {
+                name: ToolMiddlewareName::try_from("audit-log").unwrap(),
+                version: None,
+                parameters: NormalizedJsonValue::new(json!({})),
+                account: None,
+                secret_keys_readable: None,
+                secret_keys_revealable: None,
+                filesystem_access: Default::default(),
+            }]),
+            ..Default::default()
+        };
+        ComponentCreation {
+            component_name: ComponentName("probe-tools".into()),
+            config_schema: Default::default(),
+            component_provision_config: Default::default(),
+            agent_types: Vec::new(),
+            agent_type_provision_configs: BTreeMap::new(),
+            tools: vec![probe_tool()],
+            tool_deployment_configs: BTreeMap::from([(
+                ToolName::try_from("probe").unwrap(),
+                ToolDeploymentConfigCreation {
+                    provision: ToolProvisionConfigCreation {
+                        config: NormalizedJsonValue::new(json!({})),
+                        env: BTreeMap::new(),
+                        plugin_installations: Vec::new(),
+                        files: BTreeMap::new(),
+                    },
+                    environment_binding: None,
+                    component_bindings: BTreeMap::from([(
+                        ComponentName("absent-component".into()),
+                        binding,
+                    )]),
+                    agent_bindings: BTreeMap::new(),
+                },
+            )]),
+            tool_middlewares: Vec::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
+        }
+    }
+
+    /// Test only: rewrites every `audit-log` in a stored blob column to `Audit_Log`, which are
+    /// the bytes a registry without the name checks writes for that REST request.
+    async fn store_invalid_name(pool: &sqlx::SqlitePool, table: &str, column: &str) -> usize {
+        const GOOD: &[u8] = b"audit-log";
+        const BAD: &[u8] = b"Audit_Log";
+        let rows: Vec<(i64, Vec<u8>)> =
+            sqlx::query_as(&format!("SELECT rowid, {column} FROM {table}"))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let mut rewritten = 0;
+        for (rowid, mut bytes) in rows {
+            let mut hits = 0;
+            let mut i = 0;
+            while i + GOOD.len() <= bytes.len() {
+                if &bytes[i..i + GOOD.len()] == GOOD {
+                    bytes[i..i + GOOD.len()].copy_from_slice(BAD);
+                    hits += 1;
+                    i += GOOD.len();
+                } else {
+                    i += 1;
+                }
+            }
+            if hits > 0 {
+                sqlx::query(&format!("UPDATE {table} SET {column} = ? WHERE rowid = ?"))
+                    .bind(bytes)
+                    .bind(rowid)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                rewritten += hits;
+            }
+        }
+        rewritten
+    }
+
+    #[test]
+    #[timeout("300s")]
+    async fn a_stored_invalid_binding_name_still_reads_and_can_be_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = config(directory.path());
+        let root = config.initial_accounts["root"].clone();
+        let bearer = format!("Bearer {}", root.token.as_ref().unwrap().secret());
+        let auth = AuthCtx::system();
+        let wasm = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../builtin-tools/filesystem-tools.wasm"
+        ))
+        .unwrap();
+
+        // The registry stores the binding and deploys the environment.
+        let mut tasks = JoinSet::new();
+        let services = Services::new_without_component_builtins(&config, &mut tasks)
+            .await
+            .unwrap();
+        let app = services
+            .application_service
+            .create(
+                root.id,
+                ApplicationCreation {
+                    name: ApplicationName("stored-binding".into()),
+                },
+                &auth,
+            )
+            .await
+            .unwrap();
+        let env = services
+            .environment_service
+            .create(
+                app.id,
+                EnvironmentCreation {
+                    name: EnvironmentName("test".into()),
+                    compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
+                    version_check: false,
+                    security_overrides: false,
+                },
+                &auth,
+            )
+            .await
+            .unwrap();
+        let user_auth = services
+            .auth_service
+            .authenticate_token(root.token.clone().unwrap())
+            .await
+            .unwrap();
+        let component = services
+            .component_write_service
+            .create(env.id, creation(), wasm, None, &user_auth)
+            .await
+            .unwrap();
+        let api = TestClient::new(make_open_api_service(&services));
+        let plan = api
+            .get(format!("/v1/envs/{}/plan", env.id))
+            .header("Authorization", &bearer)
+            .send()
+            .await;
+        plan.assert_status_is_ok();
+        let plan: serde_json::Value = plan.0.into_body().into_json().await.unwrap();
+        let deployment = api
+            .post(format!("/v1/envs/{}/deployments", env.id))
+            .header("Authorization", &bearer)
+            .body_json(&json!({
+                "currentRevision": null,
+                "expectedDeploymentHash": plan["deploymentHash"],
+                "version": "0.0.1",
+                "agentSecretDefaults": [],
+                "quotaResourceDefaults": [],
+                "retryPolicyDefaults": []
+            }))
+            .send()
+            .await;
+        deployment.assert_status_is_ok();
+        drop(api);
+        drop(services);
+        tasks.shutdown().await;
+
+        // The same rows as an older registry writes them for the name `Audit_Log`.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&format!(
+                "sqlite://{}",
+                directory.path().join("registry.db").display()
+            ))
+            .await
+            .unwrap();
+        assert!(store_invalid_name(&pool, "component_revisions", "metadata").await > 0);
+        assert!(
+            store_invalid_name(&pool, "deployment_registered_tools", "component_bindings").await
+                > 0
+        );
+        pool.close().await;
+
+        // After a restart, the rows still read and the binding can be removed.
+        let mut tasks = JoinSet::new();
+        let services = Services::new_without_component_builtins(&config, &mut tasks)
+            .await
+            .unwrap();
+        let api = TestClient::new(make_open_api_service(&services));
+        let user_auth = services
+            .auth_service
+            .authenticate_token(root.token.clone().unwrap())
+            .await
+            .unwrap();
+        for path in [
+            format!("/v1/components/{}", component.id),
+            format!("/v1/envs/{}/components", env.id),
+        ] {
+            let response = api.get(&path).header("Authorization", &bearer).send().await;
+            response.assert_status(StatusCode::OK);
+        }
+        let stored = services
+            .component_service
+            .get_staged_component(component.id, &user_auth)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored.metadata.tools()[&ToolName::try_from("probe").unwrap()]
+                .component_bindings
+                .len(),
+            1
+        );
+
+        services
+            .component_write_service
+            .update(
+                component.id,
+                ComponentUpdate {
+                    current_revision: component.revision,
+                    config_schema: None,
+                    component_provision_config: None,
+                    agent_types: None,
+                    agent_type_provision_config_updates: None,
+                    tools: None,
+                    tool_deployment_config_updates: Some(BTreeMap::from([(
+                        ToolName::try_from("probe").unwrap(),
+                        ToolDeploymentConfigUpdate {
+                            provision: None,
+                            environment_binding: Default::default(),
+                            component_bindings: Some(BTreeMap::new()),
+                            agent_bindings: None,
+                        },
+                    )])),
+                    tool_middlewares: None,
+                    tool_middleware_provision_config_updates: None,
+                    allow_incompatible_config: false,
+                },
+                None,
+                None,
+                &user_auth,
+            )
+            .await
+            .unwrap();
+        let updated = services
+            .component_service
+            .get_staged_component(component.id, &user_auth)
+            .await
+            .unwrap();
+        assert!(
+            updated.metadata.tools()[&ToolName::try_from("probe").unwrap()]
+                .component_bindings
+                .is_empty()
+        );
+        api.get(format!("/v1/components/{}", component.id))
+            .header("Authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+
+        tasks.shutdown().await;
+    }
+}
