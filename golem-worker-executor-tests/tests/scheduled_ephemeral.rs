@@ -550,6 +550,26 @@ async fn cancelled_scheduled_ephemeral_target_never_runs(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    cancelled_scheduled_ephemeral_target_case(last_unique_id, deps, agent_rpc_rust, false).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn publicly_cancelled_scheduled_ephemeral_target_never_runs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    cancelled_scheduled_ephemeral_target_case(last_unique_id, deps, agent_rpc_rust, true).await
+}
+
+async fn cancelled_scheduled_ephemeral_target_case(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_rpc_rust: &PrecompiledComponent,
+    public_cancel: bool,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
@@ -557,23 +577,42 @@ async fn cancelled_scheduled_ephemeral_target_never_runs(
         .store()
         .await?;
     let name = "cancelled";
-    let due = Utc::now() + chrono::Duration::seconds(10);
+    let due = Utc::now() + chrono::Duration::seconds(20);
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
     drop(executor);
 
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id!("ScheduledInvocationClient", CLIENT),
-            "cancel_scheduled",
-            data_value!(),
-        )
-        .await?;
+    if public_cancel {
+        let key = scheduled_key(&executor.get_oplog(&target, OplogIndex::INITIAL).await?)
+            .expect("the schedule must commit in the target oplog");
+        assert!(executor.cancel_invocation(&target, &key).await?);
+    } else {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id!("ScheduledInvocationClient", CLIENT),
+                "cancel_scheduled",
+                data_value!(),
+            )
+            .await?;
+    }
     assert!(
         Utc::now() < due,
         "the cancellation must precede the deadline"
+    );
+    executor.resume(&target, false).await?;
+    assert_inspection_is_answered(&executor, &target).await?;
+    assert_eq!(effects(&executor, &component, name).await?, (0, 0));
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let error = executor.resume(&target, false).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("An ephemeral agent cannot accept another invocation or be resumed"),
+        "{error}"
     );
     assert_inspection_is_answered(&executor, &target).await?;
 
