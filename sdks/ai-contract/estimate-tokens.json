@@ -1,0 +1,25 @@
+{
+  "algorithm": "ceil(Unicode scalar values / provider ratio)",
+  "ratios": {
+    "anthropic": 3.5,
+    "bedrock": 3.5,
+    "grok": 4,
+    "ollama": 4,
+    "openai": 4,
+    "openrouter": 4
+  },
+  "caseIds": [
+    "empty", "ascii-boundary", "ascii-over-boundary", "half-ratio-boundary",
+    "half-ratio-over-boundary", "cjk", "astral", "combining"
+  ],
+  "cases": [
+    { "id": "empty", "text": "", "scalarCount": 0, "ratio4": 0, "ratio3_5": 0 },
+    { "id": "ascii-boundary", "text": "1234", "scalarCount": 4, "ratio4": 1, "ratio3_5": 2 },
+    { "id": "ascii-over-boundary", "text": "12345", "scalarCount": 5, "ratio4": 2, "ratio3_5": 2 },
+    { "id": "half-ratio-boundary", "text": "1234567", "scalarCount": 7, "ratio4": 2, "ratio3_5": 2 },
+    { "id": "half-ratio-over-boundary", "text": "12345678", "scalarCount": 8, "ratio4": 2, "ratio3_5": 3 },
+    { "id": "cjk", "text": "你好世界", "scalarCount": 4, "ratio4": 1, "ratio3_5": 2 },
+    { "id": "astral", "text": "😀😀😀😀", "scalarCount": 4, "ratio4": 1, "ratio3_5": 2 },
+    { "id": "combining", "text": "éé", "scalarCount": 4, "ratio4": 1, "ratio3_5": 2 }
+  ]
+}

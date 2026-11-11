@@ -1,0 +1,31 @@
+{
+  "provider": "openai",
+  "provenance": "fault-injection",
+  "caseIds": ["429", "503", "malformed"],
+  "cases": [
+    {
+      "id": "429",
+      "status": 429,
+      "headers": { "content-type": "application/json", "retry-after": "17" },
+      "format": "json",
+      "body": "{\"error\":{\"message\":\"Rate limit reached\",\"type\":\"rate_limit_error\",\"code\":\"rate_limit_exceeded\"}}",
+      "expected": { "kind": "unavailable", "retryAfterSeconds": 17 }
+    },
+    {
+      "id": "503",
+      "status": 503,
+      "headers": { "content-type": "application/json" },
+      "format": "json",
+      "body": "{\"error\":{\"message\":\"Service unavailable\",\"type\":\"server_error\",\"code\":null}}",
+      "expected": { "kind": "unavailable" }
+    },
+    {
+      "id": "malformed",
+      "status": 200,
+      "headers": { "content-type": "application/json" },
+      "format": "malformed",
+      "body": "{not valid json",
+      "expected": { "kind": "invalid-output" }
+    }
+  ]
+}

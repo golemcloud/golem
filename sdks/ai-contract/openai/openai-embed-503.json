@@ -1,0 +1,31 @@
+{
+  "id": "openai-embed-503",
+  "provider": "openai",
+  "operation": "embed",
+  "provenance": "fault-injection",
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/embeddings",
+    "headers": {
+      "authorization": "<credential>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "dimensions": 8,
+      "encoding_format": "float",
+      "input": [
+        "A short sentence.",
+        "A different sentence."
+      ],
+      "model": "text-embedding-3-small"
+    }
+  },
+  "response": {
+    "status": 503,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": "openai-embed-503.body",
+    "format": "json"
+  }
+}

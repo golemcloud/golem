@@ -1,0 +1,4 @@
+{
+  "files": ["estimate-tokens.json", "openai-faults.json"],
+  "recordingSets": ["openai"]
+}

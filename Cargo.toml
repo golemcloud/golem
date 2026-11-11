@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "golem-ai-contract",
     "golem-api-grpc",
     "golem-client",
     "golem-common",
