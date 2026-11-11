@@ -304,12 +304,14 @@ mod stored_invalid_binding_name {
     use golem_common::model::Empty;
     use golem_common::model::application::{ApplicationCreation, ApplicationName};
     use golem_common::model::component::{
-        ComponentCreation, ComponentName, ComponentUpdate, ToolDeploymentConfigCreation,
-        ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
+        ComponentCreation, ComponentName, ComponentUpdate, ToolDeploymentConfigUpdate,
     };
+    use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
     use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::tool::{ToolBindingInput, ToolName};
+    use golem_common::model::tool::{
+        ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolProvisionConfig,
+    };
     use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{
@@ -317,6 +319,7 @@ mod stored_invalid_binding_name {
     };
     use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
     use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::repo::Blob;
     use poem::http::StatusCode;
     use poem::test::TestClient;
     use serde_json::json;
@@ -374,9 +377,25 @@ mod stored_invalid_binding_name {
         }
     }
 
-    /// A component whose tool `probe` binds the middleware `audit-log` for a component that the
-    /// environment does not hold, so the binding is stored and never resolved.
+    /// A component without tools. The committed test wasms do not export the tool guest, so the
+    /// tool and its binding are written into the stored metadata afterwards.
     fn creation() -> ComponentCreation {
+        ComponentCreation {
+            component_name: ComponentName("probe-tools".into()),
+            config_schema: Default::default(),
+            component_provision_config: Default::default(),
+            agent_types: Vec::new(),
+            agent_type_provision_configs: BTreeMap::new(),
+            tools: Vec::new(),
+            tool_deployment_configs: BTreeMap::new(),
+            tool_middlewares: Vec::new(),
+            tool_middleware_provision_configs: BTreeMap::new(),
+        }
+    }
+
+    /// The metadata of a component whose tool `probe` binds the middleware `audit-log` for a
+    /// component that the environment does not hold.
+    fn metadata_with_binding() -> ComponentMetadata {
         let binding = ToolBindingInput {
             middleware: Some(vec![ToolMiddlewareInstallation {
                 name: ToolMiddlewareName::try_from("audit-log").unwrap(),
@@ -389,21 +408,23 @@ mod stored_invalid_binding_name {
             }]),
             ..Default::default()
         };
-        ComponentCreation {
-            component_name: ComponentName("probe-tools".into()),
-            config_schema: Default::default(),
-            component_provision_config: Default::default(),
-            agent_types: Vec::new(),
-            agent_type_provision_configs: BTreeMap::new(),
-            tools: vec![probe_tool()],
-            tool_deployment_configs: BTreeMap::from([(
+        ComponentMetadata::from_parts_with_tools(
+            KnownExports {
+                tool_guest_interface: Some("golem:tool/guest@0.1.0".to_string()),
+                ..KnownExports::default()
+            },
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            BTreeMap::from([(
                 ToolName::try_from("probe").unwrap(),
-                ToolDeploymentConfigCreation {
-                    provision: ToolProvisionConfigCreation {
+                ToolDeploymentMetadata {
+                    definition: probe_tool(),
+                    provision: ToolProvisionConfig {
                         config: NormalizedJsonValue::new(json!({})),
                         env: BTreeMap::new(),
-                        plugin_installations: Vec::new(),
-                        files: BTreeMap::new(),
+                        plugins: Vec::new(),
+                        files: Vec::new(),
                     },
                     environment_binding: None,
                     component_bindings: BTreeMap::from([(
@@ -413,9 +434,7 @@ mod stored_invalid_binding_name {
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
-            tool_middlewares: Vec::new(),
-            tool_middleware_provision_configs: BTreeMap::new(),
-        }
+        )
     }
 
     /// Test only: rewrites every `audit-log` in a stored blob column to `Audit_Log`, which are
@@ -464,11 +483,11 @@ mod stored_invalid_binding_name {
         let auth = AuthCtx::system();
         let wasm = std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../builtin-tools/filesystem-tools.wasm"
+            "/../golem-common/wasm/shopping-cart-resource-versioned.wasm"
         ))
         .unwrap();
 
-        // The registry stores the binding and deploys the environment.
+        // The registry creates the component.
         let mut tasks = JoinSet::new();
         let services = Services::new_without_component_builtins(&config, &mut tasks)
             .await
@@ -509,29 +528,6 @@ mod stored_invalid_binding_name {
             .create(env.id, creation(), wasm, None, &user_auth)
             .await
             .unwrap();
-        let api = TestClient::new(make_open_api_service(&services));
-        let plan = api
-            .get(format!("/v1/envs/{}/plan", env.id))
-            .header("Authorization", &bearer)
-            .send()
-            .await;
-        plan.assert_status_is_ok();
-        let plan: serde_json::Value = plan.0.into_body().into_json().await.unwrap();
-        let deployment = api
-            .post(format!("/v1/envs/{}/deployments", env.id))
-            .header("Authorization", &bearer)
-            .body_json(&json!({
-                "currentRevision": null,
-                "expectedDeploymentHash": plan["deploymentHash"],
-                "version": "0.0.1",
-                "agentSecretDefaults": [],
-                "quotaResourceDefaults": [],
-                "retryPolicyDefaults": []
-            }))
-            .send()
-            .await;
-        deployment.assert_status_is_ok();
-        drop(api);
         drop(services);
         tasks.shutdown().await;
 
@@ -544,11 +540,12 @@ mod stored_invalid_binding_name {
             ))
             .await
             .unwrap();
+        sqlx::query("UPDATE component_revisions SET metadata = ?")
+            .bind(Blob::new(metadata_with_binding()))
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(store_invalid_name(&pool, "component_revisions", "metadata").await > 0);
-        assert!(
-            store_invalid_name(&pool, "deployment_registered_tools", "component_bindings").await
-                > 0
-        );
         pool.close().await;
 
         // After a restart, the rows still read and the binding can be removed.
