@@ -27,6 +27,7 @@ const PromiseIdSchema = z.object({
     }),
     agentId: z.string(),
   }),
+  fingerprint: z.object({ highBits: s.u64(), lowBits: s.u64() }),
   oplogIdx: s.u64(),
 });
 
