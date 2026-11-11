@@ -562,6 +562,22 @@ pub trait TestDsl {
 
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
 
+    /// The ID of the promise that the agent's current incarnation created at `oplog_idx`.
+    ///
+    /// It reads the fingerprint of the current incarnation, not the one the guest received. A test
+    /// that deletes and re-creates the agent must use the promise ID that the guest returned.
+    async fn promise_id(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> anyhow::Result<PromiseId> {
+        Ok(PromiseId {
+            agent_id: agent_id.clone(),
+            fingerprint: self.get_worker_metadata(agent_id).await?.fingerprint,
+            oplog_idx,
+        })
+    }
+
     async fn make_worker_log_event_stream(
         &self,
         agent_id: &AgentId,

@@ -20,8 +20,8 @@ use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
-use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, stdout_event_matching};
 use golem_worker_executor_test_utils::{
@@ -75,7 +75,6 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
 ) -> anyhow::Result<()> {
     use golem_common::model::oplog::payload::HostResponseWebsocketReceiveResponse;
     use golem_common::model::oplog::payload::types::SerializableWebsocketError;
-    use golem_common::schema::FromSchema;
 
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await?;
@@ -101,10 +100,7 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected promise return value"))?;
-    let cancel = PromiseId {
-        agent_id: worker_id.clone(),
-        oplog_idx: extract_oplog_idx_from_promise_id(&cancel_value),
-    };
+    let cancel = promise_id_from_value(&cancel_value);
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     executor = start(deps, &context).await?;
@@ -1823,15 +1819,8 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
     assert_eq!(transcript.lock().unwrap().len(), 2);
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![1],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![1])
         .await?;
 
     let result = executor
@@ -1985,15 +1974,8 @@ async fn websocket_reconnect_failure_returns_guest_error(
 
     let executor = start(deps, &context).await?;
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![1],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![1])
         .await?;
 
     let result = executor
@@ -2278,15 +2260,8 @@ fn replay_reconnect_roundtrip_params(
     crate::raw_params(vec![SchemaValue::String(url), promise_id_value.clone()])
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
-    let SchemaValue::Record { fields } = promise_id_value else {
-        panic!("Expected a record for PromiseId");
-    };
-    let SchemaValue::U64(oplog_idx) = fields[1] else {
-        panic!("Expected second PromiseId field to be oplog_idx");
-    };
-
-    OplogIndex::from_u64(oplog_idx)
+fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
+    PromiseId::from_value(value).expect("expected a promise ID returned by the guest")
 }
 
 fn get_result_error_string(result: golem_test_framework::dsl::AgentResult) -> String {

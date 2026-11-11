@@ -20,7 +20,7 @@ use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
 use golem_common::base_model::component::ComponentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -71,9 +71,10 @@ impl PromiseService for FlakyPromiseService {
     async fn create(
         &self,
         agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
-        self.inner.create(agent_id, oplog_idx).await
+        self.inner.create(agent_id, fingerprint, oplog_idx).await
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -124,7 +125,11 @@ fn agent_id() -> AgentId {
 async fn transient_poll_failure_is_not_memoized() {
     let promise_service = Arc::new(FlakyPromiseService::new(1));
     let promise_id = promise_service
-        .create(&agent_id(), OplogIndex::from_u64(1))
+        .create(
+            &agent_id(),
+            AgentFingerprint::new(),
+            OplogIndex::from_u64(1),
+        )
         .await
         .unwrap();
     let entry = GetPromiseResultEntry::new(
@@ -146,7 +151,11 @@ async fn transient_poll_failure_is_not_memoized() {
 async fn resolved_handle_observes_completion() {
     let promise_service = Arc::new(FlakyPromiseService::new(1));
     let promise_id = promise_service
-        .create(&agent_id(), OplogIndex::from_u64(1))
+        .create(
+            &agent_id(),
+            AgentFingerprint::new(),
+            OplogIndex::from_u64(1),
+        )
         .await
         .unwrap();
     let entry = GetPromiseResultEntry::new(

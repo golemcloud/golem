@@ -201,8 +201,9 @@ pub trait WorkerService: Send + Sync {
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
     /// after everything it can rebuild, so a run that stops part-way leaves the oplog the next one
-    /// re-derives the rest from. Only the recovery-index entry follows it; one a crash leaves
-    /// behind names no oplog, and the next recovery scan drops it.
+    /// re-derives the rest from. The promises of the incarnation, which nothing rebuilds, and the
+    /// recovery-index entry follow it; a recovery-index entry a crash leaves behind names no
+    /// oplog, and the next recovery scan drops it.
     ///
     /// `expected_epoch` is the epoch the caller's oplog handle asserts, confirmed before anything is
     /// removed; refused, nothing is removed and the result is [`WorkerExecutorError::OplogFenced`],

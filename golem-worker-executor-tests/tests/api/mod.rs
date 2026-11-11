@@ -36,8 +36,8 @@ use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
     IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
 };
-use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_service_base::clients::registry::{
     RegistryService, RegistryServiceError, ResourceUsageUpdate,
@@ -3257,15 +3257,8 @@ async fn promise(
 
     info!("Completing promise to resume worker");
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     let result = fiber.await??;
@@ -3336,15 +3329,8 @@ async fn p3_promise_suspend_survives_executor_restart(
         .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     executor
@@ -3374,14 +3360,8 @@ async fn p3_promise_suspend_survives_executor_restart(
     Ok(())
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
-    let SchemaValue::Record { fields } = promise_id_value else {
-        panic!("Expected a record for PromiseId");
-    };
-    let SchemaValue::U64(oplog_idx) = fields[1] else {
-        panic!("Expected u64 oplog-idx field");
-    };
-    OplogIndex::from_u64(oplog_idx)
+fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
+    PromiseId::from_value(value).expect("expected a promise ID returned by the guest")
 }
 
 #[test]
@@ -3705,15 +3685,8 @@ async fn get_workers_opaque_cursor_replays_after_restart(
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: caller_id.clone(),
-                oplog_idx,
-            },
-            Vec::new(),
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), Vec::new())
         .await?;
     let pages = executor
         .invoke_and_await_agent_with_key(
@@ -5372,14 +5345,12 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 .all()
                 .promise_service();
             executor.delete_worker(&worker_id).await?;
-            let before = if recreate {
+            let (before, promise_fingerprint) = if recreate {
                 executor
                     .start_agent(&component.id, counter_id.clone())
                     .await?;
-                assert_ne!(
-                    executor.get_worker_metadata(&worker_id).await?.fingerprint,
-                    original.fingerprint
-                );
+                let replacement = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+                assert_ne!(replacement, original.fingerprint);
                 executor
                     .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
                     .await?;
@@ -5395,14 +5366,17 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 .await?;
                 executor.retire_unloaded_worker(&owned).await?;
                 assert!(!executor.worker_is_cached(&owned).await);
-                Some(executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+                (
+                    Some(executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+                    replacement,
+                )
             } else {
-                None
+                (None, original.fingerprint)
             };
             // Reuse the public promise identity deliberately: stale delivery must not
             // complete a replacement's promise at the same oplog index.
             let promise_id = promises
-                .create(&worker_id, OplogIndex::from_u64(42))
+                .create(&worker_id, promise_fingerprint, OplogIndex::from_u64(42))
                 .await?;
             let promise = promises.poll(promise_id.clone()).await?;
             let action = match kind {
@@ -7587,16 +7561,8 @@ async fn cancelling_pending_invocations(
     let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
 
     // Extract oplog_idx from promise value to complete it
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
-
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     // get_value should be 5 + 7 = 12 (ik1 already done, ik2 cancelled, ik3 goes through)
@@ -9675,15 +9641,8 @@ impl ParkedCaller {
         executor: &TestWorkerExecutor,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let oplog_idx = extract_oplog_idx_from_promise_id(&self.promise_id);
         executor
-            .complete_promise(
-                &PromiseId {
-                    agent_id: self.agent_id.clone(),
-                    oplog_idx,
-                },
-                payload,
-            )
+            .complete_promise(&promise_id_from_value(&self.promise_id), payload)
             .await?;
         Ok(())
     }

@@ -911,6 +911,7 @@ async fn claim_all(
 fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
     PromiseId {
         agent_id,
+        fingerprint: AgentFingerprint(Uuid::from_u128(u128::from(idx))),
         oplog_idx: OplogIndex::from_u64(idx),
     }
 }
@@ -1092,8 +1093,8 @@ fn complete_promise_action(promise_id: PromiseId) -> ScheduledAction {
     ScheduledAction::CompletePromise {
         account_id: AccountId::new(),
         environment_id: EnvironmentId::new(),
+        target_worker_fingerprint: promise_id.fingerprint,
         promise_id,
-        target_worker_fingerprint: AgentFingerprint::new(),
     }
 }
 

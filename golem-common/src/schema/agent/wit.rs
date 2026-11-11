@@ -65,7 +65,7 @@ pub use super::bindings::golem::agent::common as wire;
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::ComponentId;
-use crate::base_model::{AgentId, OplogIndex, PromiseId};
+use crate::base_model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
 
 fn uuid_to_core2(value: uuid::Uuid) -> golem_schema::schema::wit::wire::Uuid {
     let (high_bits, low_bits) = value.as_u64_pair();
@@ -129,6 +129,7 @@ impl From<PromiseId> for golem_schema::schema::wit::wire::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             agent_id: value.agent_id.into(),
+            fingerprint: uuid_to_core2(value.fingerprint.0),
             oplog_idx: value.oplog_idx.into(),
         }
     }
@@ -138,6 +139,7 @@ impl From<golem_schema::schema::wit::wire::PromiseId> for PromiseId {
     fn from(value: golem_schema::schema::wit::wire::PromiseId) -> Self {
         PromiseId {
             agent_id: value.agent_id.into(),
+            fingerprint: AgentFingerprint(uuid_from_core2(value.fingerprint)),
             oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         }
     }
