@@ -35,11 +35,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+    oai(from_json = false, from_parameter = false, from_multipart = false)
 )]
-#[cfg_attr(feature = "full", desert(transparent))]
 #[serde(try_from = "String", into = "String")]
 pub struct ToolName(String);
 
@@ -87,6 +87,57 @@ impl FromStr for ToolName {
 impl From<ToolName> for String {
     fn from(value: ToolName) -> Self {
         value.0
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for ToolName {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let raw = <String as poem_openapi::types::ParseFromJSON>::parse_from_json(value)
+            .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromParameter for ToolName {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Self::try_from(value).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromMultipartField for ToolName {
+    async fn parse_from_multipart(
+        field: Option<poem::web::Field>,
+    ) -> poem_openapi::types::ParseResult<Self> {
+        let raw =
+            <String as poem_openapi::types::ParseFromMultipartField>::parse_from_multipart(field)
+                .await
+                .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for ToolName {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.0, context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for ToolName {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Self::try_from(value).map_err(|e| {
+            desert_rust::Error::DeserializationFailure(format!("Invalid ToolName: {e}"))
+        })
     }
 }
 
@@ -316,11 +367,11 @@ pub const DEFAULT_TOOLS: &[DefaultTool] = &[DefaultTool {
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+    oai(from_json = false, from_parameter = false, from_multipart = false)
 )]
-#[cfg_attr(feature = "full", desert(transparent))]
 #[serde(try_from = "String", into = "String")]
 pub struct HostToolId(String);
 
@@ -342,6 +393,57 @@ impl TryFrom<String> for HostToolId {
 impl From<HostToolId> for String {
     fn from(value: HostToolId) -> Self {
         value.0
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for HostToolId {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let raw = <String as poem_openapi::types::ParseFromJSON>::parse_from_json(value)
+            .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromParameter for HostToolId {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Self::try_from(value.to_string()).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromMultipartField for HostToolId {
+    async fn parse_from_multipart(
+        field: Option<poem::web::Field>,
+    ) -> poem_openapi::types::ParseResult<Self> {
+        let raw =
+            <String as poem_openapi::types::ParseFromMultipartField>::parse_from_multipart(field)
+                .await
+                .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for HostToolId {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.0, context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for HostToolId {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Self::try_from(value).map_err(|e| {
+            desert_rust::Error::DeserializationFailure(format!("Invalid HostToolId: {e}"))
+        })
     }
 }
 
@@ -953,5 +1055,232 @@ mod tests {
         assert!(effective.contains(&a));
         assert!(!effective.contains(&CanonicalAgentConfigPath(vec!["b".to_string()])));
         assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
+    }
+}
+
+#[cfg(all(test, feature = "full"))]
+pub(crate) mod name_codec_tests {
+    use super::{HostToolId, ToolName};
+    use crate::base_model::deployment::DeploymentCreation;
+    use crate::base_model::diff::Hash;
+    use crate::base_model::environment_tool_grant::EnvironmentToolGrantCreation;
+    use crate::base_model::tool::{RemoteToolDeployment, ToolProvisionConfig};
+    use crate::base_model::tool_release::{ToolReleaseByCoordinates, ToolReleaseReference};
+    use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ToJSON, Type};
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
+    use std::fmt::Debug;
+    use test_r::test;
+
+    pub(crate) const VALID: [&str; 5] = ["a", "grep", "git-client", "tool2", "a-2b"];
+    pub(crate) const INVALID: [&str; 7] = [
+        "",
+        "Grep",
+        "git_client",
+        "2tool",
+        "tool-",
+        "tool--x",
+        "Report/v2",
+    ];
+
+    /// poem (JSON, parameter) and desert must accept exactly what serde accepts, and refuse
+    /// with the text of the `TryFrom` rule.
+    pub(crate) fn assert_poem_and_desert_match_serde<T>()
+    where
+        T: TryFrom<String, Error = String>
+            + DeserializeOwned
+            + ParseFromJSON
+            + ParseFromParameter
+            + desert_rust::BinaryDeserializer
+            + Debug
+            + PartialEq,
+    {
+        for v in VALID.iter().chain(INVALID.iter()) {
+            let expected = T::try_from(v.to_string());
+            let serde_result = serde_json::from_value::<T>(json!(v));
+            assert_eq!(serde_result.is_ok(), expected.is_ok(), "serde on {v:?}");
+
+            let from_json = T::parse_from_json(Some(json!(v)));
+            let from_parameter = T::parse_from_parameter(v);
+            let from_parameters = T::parse_from_parameters([v]);
+            let from_desert = desert_rust::deserialize::<T>(
+                &desert_rust::serialize_to_byte_vec(&v.to_string()).unwrap(),
+            );
+
+            match &expected {
+                Ok(value) => {
+                    assert_eq!(&from_json.unwrap(), value, "json {v:?}");
+                    assert_eq!(&from_parameter.unwrap(), value, "parameter {v:?}");
+                    assert_eq!(&from_parameters.unwrap(), value, "parameters {v:?}");
+                    assert_eq!(&from_desert.unwrap(), value, "desert {v:?}");
+                }
+                Err(rule) => {
+                    let json_error = from_json.expect_err(&format!("json accepted {v:?}"));
+                    assert!(
+                        json_error.into_message().contains(rule.as_str()),
+                        "json message for {v:?}"
+                    );
+                    let parameter_error =
+                        from_parameter.expect_err(&format!("parameter accepted {v:?}"));
+                    assert!(
+                        parameter_error.into_message().contains(rule.as_str()),
+                        "parameter message for {v:?}"
+                    );
+                    assert!(from_parameters.is_err(), "parameters accepted {v:?}");
+                    let desert_error = from_desert.expect_err(&format!("desert accepted {v:?}"));
+                    assert!(
+                        desert_error.to_string().contains(rule.as_str()),
+                        "desert message for {v:?}: {desert_error}"
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn assert_schema_and_json_are_a_plain_string<T>()
+    where
+        T: TryFrom<String, Error = String> + Type + ToJSON + ParseFromJSON + Debug + PartialEq,
+    {
+        assert_eq!(T::name(), <String as Type>::name());
+        assert_eq!(T::schema_ref(), <String as Type>::schema_ref());
+        let value = T::try_from("report-v2".to_string()).unwrap();
+        assert_eq!(value.to_json(), Some(json!("report-v2")));
+        assert_eq!(T::parse_from_json(value.to_json()).unwrap(), value);
+    }
+
+    pub(crate) fn assert_desert_bytes_equal_string_bytes<T>()
+    where
+        T: TryFrom<String, Error = String>
+            + Clone
+            + Debug
+            + PartialEq
+            + desert_rust::BinarySerializer
+            + desert_rust::BinaryDeserializer
+            + 'static,
+    {
+        let a = T::try_from("report-v2".to_string()).unwrap();
+        let b = T::try_from("grep".to_string()).unwrap();
+
+        assert_eq!(
+            desert_rust::serialize_to_byte_vec(&a).unwrap(),
+            desert_rust::serialize_to_byte_vec(&"report-v2".to_string()).unwrap()
+        );
+
+        let names = vec![a.clone(), a.clone(), b.clone()];
+        let strings = vec![
+            "report-v2".to_string(),
+            "report-v2".to_string(),
+            "grep".to_string(),
+        ];
+        let bytes = desert_rust::serialize_to_byte_vec(&names).unwrap();
+        assert_eq!(bytes, desert_rust::serialize_to_byte_vec(&strings).unwrap());
+        assert_eq!(desert_rust::deserialize::<Vec<T>>(&bytes).unwrap(), names);
+    }
+
+    #[test]
+    fn tool_name_poem_and_desert_accept_exactly_what_serde_accepts() {
+        assert_poem_and_desert_match_serde::<ToolName>();
+    }
+
+    #[test]
+    fn tool_name_poem_schema_and_json_are_a_plain_string() {
+        assert_schema_and_json_are_a_plain_string::<ToolName>();
+    }
+
+    #[test]
+    fn tool_name_desert_bytes_equal_string_bytes() {
+        assert_desert_bytes_equal_string_bytes::<ToolName>();
+    }
+
+    #[test]
+    fn host_tool_id_poem_and_desert_accept_exactly_what_serde_accepts() {
+        assert_poem_and_desert_match_serde::<HostToolId>();
+    }
+
+    #[test]
+    fn host_tool_id_poem_schema_and_json_are_a_plain_string() {
+        assert_schema_and_json_are_a_plain_string::<HostToolId>();
+    }
+
+    #[test]
+    fn host_tool_id_desert_bytes_equal_string_bytes() {
+        assert_desert_bytes_equal_string_bytes::<HostToolId>();
+    }
+
+    fn valid_deployment_body() -> Value {
+        json!({
+            "currentRevision": null,
+            "expectedDeploymentHash": serde_json::to_value(Hash::default()).unwrap(),
+            "version": "0.0.1",
+            "agentSecretDefaults": [],
+            "quotaResourceDefaults": [],
+            "retryPolicyDefaults": []
+        })
+    }
+
+    #[test]
+    fn deploy_body_with_invalid_names_is_refused_by_poem_as_by_serde() {
+        let control = valid_deployment_body();
+        DeploymentCreation::parse_from_json(Some(control.clone())).expect("control body");
+        serde_json::from_value::<DeploymentCreation>(control).expect("control body (serde)");
+
+        let remote_tool = RemoteToolDeployment {
+            name: ToolName::try_from("report-v2").unwrap(),
+            release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+                account: "a@b.c".into(),
+                name: ToolName::try_from("report-v2").unwrap(),
+                version: "1.0.0".to_string(),
+            }),
+            provision: ToolProvisionConfig::default(),
+            environment_binding: None,
+            component_bindings: Default::default(),
+            agent_bindings: Default::default(),
+        };
+        let mut remote_tool = serde_json::to_value(&remote_tool).unwrap();
+        // The control entry with a valid name is accepted.
+        let mut with_valid_remote_tool = valid_deployment_body();
+        with_valid_remote_tool["remoteTools"] = json!([remote_tool.clone()]);
+        DeploymentCreation::parse_from_json(Some(with_valid_remote_tool))
+            .expect("remote tool control");
+        remote_tool["name"] = json!("Report/v2");
+
+        let cases = [
+            ("publishTools", json!(["Report/v2"])),
+            ("publishToolMiddlewares", json!(["Audit_Log"])),
+            (
+                "universalToolMiddlewares",
+                json!([{"name": "Audit_Log", "parameters": {}}]),
+            ),
+            ("remoteTools", json!([remote_tool])),
+        ];
+        for (field, value) in cases {
+            let mut body = valid_deployment_body();
+            body[field] = value;
+            assert!(
+                serde_json::from_value::<DeploymentCreation>(body.clone()).is_err(),
+                "serde accepted {field}"
+            );
+            assert!(
+                DeploymentCreation::parse_from_json(Some(body)).is_err(),
+                "poem accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_body_with_an_invalid_release_name_is_refused() {
+        let grant = |name: &str| {
+            let release = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+                account: "a@b.c".into(),
+                name: ToolName::try_from("report-v2").unwrap(),
+                version: "1.0.0".to_string(),
+            });
+            let mut body = json!({ "release": release, "automatic": false });
+            assert!(body.is_object());
+            body["release"]["name"] = json!(name);
+            body
+        };
+        assert!(EnvironmentToolGrantCreation::parse_from_json(Some(grant("report-v2"))).is_ok());
+        assert!(EnvironmentToolGrantCreation::parse_from_json(Some(grant("Report/v2"))).is_err());
     }
 }

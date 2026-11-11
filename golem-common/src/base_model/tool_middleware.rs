@@ -31,11 +31,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+    oai(from_json = false, from_parameter = false, from_multipart = false)
 )]
-#[cfg_attr(feature = "full", desert(transparent))]
 #[serde(try_from = "String", into = "String")]
 pub struct ToolMiddlewareName(String);
 
@@ -79,6 +79,57 @@ impl FromStr for ToolMiddlewareName {
 impl From<ToolMiddlewareName> for String {
     fn from(value: ToolMiddlewareName) -> Self {
         value.0
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for ToolMiddlewareName {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let raw = <String as poem_openapi::types::ParseFromJSON>::parse_from_json(value)
+            .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromParameter for ToolMiddlewareName {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Self::try_from(value).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromMultipartField for ToolMiddlewareName {
+    async fn parse_from_multipart(
+        field: Option<poem::web::Field>,
+    ) -> poem_openapi::types::ParseResult<Self> {
+        let raw =
+            <String as poem_openapi::types::ParseFromMultipartField>::parse_from_multipart(field)
+                .await
+                .map_err(poem_openapi::types::ParseError::propagate)?;
+        Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for ToolMiddlewareName {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.0, context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for ToolMiddlewareName {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Self::try_from(value).map_err(|e| {
+            desert_rust::Error::DeserializationFailure(format!("Invalid ToolMiddlewareName: {e}"))
+        })
     }
 }
 
@@ -234,4 +285,48 @@ pub struct CompiledToolMiddlewareChain {
     pub tool_name: ToolName,
     pub effective_definition: Tool,
     pub occurrences: Vec<CompiledToolMiddlewareOccurrence>,
+}
+
+#[cfg(all(test, feature = "full"))]
+mod name_codec_tests {
+    use super::{ToolMiddlewareInstallation, ToolMiddlewareName};
+    use crate::base_model::tool::name_codec_tests::{
+        assert_desert_bytes_equal_string_bytes, assert_poem_and_desert_match_serde,
+        assert_schema_and_json_are_a_plain_string,
+    };
+    use poem_openapi::types::ParseFromJSON;
+    use serde_json::json;
+    use test_r::test;
+
+    #[test]
+    fn tool_middleware_name_poem_and_desert_accept_exactly_what_serde_accepts() {
+        assert_poem_and_desert_match_serde::<ToolMiddlewareName>();
+        assert!(ToolMiddlewareName::try_from("Audit_Log").is_err());
+    }
+
+    #[test]
+    fn tool_middleware_name_poem_schema_and_json_are_a_plain_string() {
+        assert_schema_and_json_are_a_plain_string::<ToolMiddlewareName>();
+    }
+
+    #[test]
+    fn tool_middleware_name_desert_bytes_equal_string_bytes() {
+        assert_desert_bytes_equal_string_bytes::<ToolMiddlewareName>();
+    }
+
+    #[test]
+    fn installation_with_an_invalid_name_is_refused_by_poem() {
+        assert!(
+            ToolMiddlewareInstallation::parse_from_json(Some(
+                json!({"name": "Audit_Log", "parameters": {}})
+            ))
+            .is_err()
+        );
+        assert!(
+            ToolMiddlewareInstallation::parse_from_json(Some(
+                json!({"name": "audit-log", "parameters": {}})
+            ))
+            .is_ok()
+        );
+    }
 }

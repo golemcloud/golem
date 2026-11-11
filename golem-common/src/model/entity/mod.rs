@@ -69,10 +69,7 @@ impl Display for AgentEntity {
     }
 }
 
-#[derive(
-    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, BinaryCodec,
-)]
-#[desert(transparent)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ToolMiddlewareName(String);
 
@@ -106,6 +103,26 @@ impl TryFrom<String> for ToolMiddlewareName {
 impl From<ToolMiddlewareName> for String {
     fn from(value: ToolMiddlewareName) -> Self {
         value.0
+    }
+}
+
+impl desert_rust::BinarySerializer for ToolMiddlewareName {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.0, context)
+    }
+}
+
+impl desert_rust::BinaryDeserializer for ToolMiddlewareName {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Self::try_from(value).map_err(|e| {
+            desert_rust::Error::DeserializationFailure(format!("Invalid ToolMiddlewareName: {e}"))
+        })
     }
 }
 
