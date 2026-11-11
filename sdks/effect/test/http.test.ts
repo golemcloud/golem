@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "@effect/vitest"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Option, Schema, Stream } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { PrincipalSchema } from "../src/Principal.js"
+import { AgentStream } from "../src/WitTypes.js"
 import { guest } from "../src/internal/guest.js"
 import {
   agentType,
@@ -388,6 +389,8 @@ describe("Http compileMount / compileEndpoint", () => {
     const w = compileEndpoint(get("/x"))
     expect(w.authDetails).toBeUndefined()
     expect(w.durableStreams).toBeUndefined()
+    expect(w.mode).toBeUndefined()
+    expect(compileEndpoint(get("/events", { mode: "sse" })).mode).toBe("sse")
   })
 
   it("compiles full durable-stream options to the WIT metadata shape", () => {
@@ -404,9 +407,6 @@ describe("Http compileMount / compileEndpoint", () => {
                 contentType: "application/vnd.golem.events",
               },
             ],
-            allowExternalWrites: true,
-            allowStreamDelete: false,
-            allowInvocationDelete: false,
             load: {
               maxConcurrentReadersPerStream: 8,
               maxAppendRequestsPerSecondPerStream: 25,
@@ -423,9 +423,6 @@ describe("Http compileMount / compileEndpoint", () => {
           contentType: "application/vnd.golem.events",
         },
       ],
-      allowExternalWrites: true,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: {
         maxConcurrentReadersPerStream: 8,
         maxAppendRequestsPerSecondPerStream: 25,
@@ -492,6 +489,39 @@ describe("Http isQueryOrHeaderBindableSchema", () => {
 describe("Http defineAgent integration", () => {
   beforeEach(async () => {
     await __resetAgents()
+  })
+
+  it("publishes declared modes without resolving streaming defaults", async () => {
+    defineAgent({
+      name: "DeclaredRouteModes",
+      id: {},
+      http: mount("/route-modes"),
+      methods: {
+        events: method({
+          input: {},
+          success: AgentStream(Schema.String),
+          http: [get("/events", { mode: "sse" })],
+        }),
+        inferred: method({
+          input: {},
+          success: AgentStream(Schema.String),
+          http: [get("/inferred")],
+        }),
+      },
+    }).implement({
+      init: () => Effect.void,
+      methods: () =>
+        Effect.succeed({
+          events: () => Effect.succeed(Stream.empty),
+          inferred: () => Effect.succeed(Stream.empty),
+        }),
+    })
+    const types = await guest.discoverAgentTypes()
+    const methods = types.find((type) => type.typeName === "DeclaredRouteModes")!.methods
+    expect(methods.find((method) => method.name === "events")!.httpEndpoint[0].mode).toBe("sse")
+    expect(
+      methods.find((method) => method.name === "inferred")!.httpEndpoint[0].mode,
+    ).toBeUndefined()
   })
 
   it("publishes all selector variants through agent registration", async () => {
@@ -1075,18 +1105,12 @@ describe("Http pipeable combinators — endpoints", () => {
   it("`.pipe(withDurableStreams(...))` matches literal endpoint options", () => {
     const durableStreams = {
       slots: [{ source: "output" as const, slot: "$result" }],
-      allowExternalWrites: false,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: { maxConcurrentReadersPerStream: 0 },
     }
     const piped = post("/x").pipe(withDurableStreams(durableStreams))
     const literal = endpoint("POST", "/x", { durableStreams })
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
     expect(compileEndpoint(piped).durableStreams).toMatchObject({
-      allowExternalWrites: false,
-      allowStreamDelete: false,
-      allowInvocationDelete: false,
       load: { maxConcurrentReadersPerStream: 0 },
     })
   })

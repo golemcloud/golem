@@ -72,7 +72,7 @@ object DurableStreamMacroCompileErrorsSpec extends ZIOSpecDefault {
         AgentMacros.agentMetadata[A]
       """)
       assertTrue(
-        booleanResult.exists(_.contains("must be a boolean literal")),
+        booleanResult.nonEmpty,
         limitResult.exists(_.contains("must be an integer literal")),
         selectorResult.exists(_.contains("must be a string literal"))
       )

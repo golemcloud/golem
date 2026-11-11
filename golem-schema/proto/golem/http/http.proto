@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package golem.http;
+
+enum HttpRouteMode {
+  HTTP_ROUTE_MODE_DURABLE_STREAMS = 0;
+  HTTP_ROUTE_MODE_PLAIN = 1;
+  HTTP_ROUTE_MODE_SSE = 2;
+  HTTP_ROUTE_MODE_WEB_SOCKET = 3;
+}
+
+message DurableStreamRouteOptions {
+  repeated DurableStreamSlotOptions slots = 1;
+  optional DurableStreamRouteLoadOptions load = 2;
+}
+
+message DurableStreamSlotOptions {
+  DurableStreamSlotSource source = 1;
+  optional string name = 2;
+  optional string content_type = 3;
+}
+
+message DurableStreamSlotSource {
+  oneof value {
+    string input = 1;
+    string output = 2;
+  }
+}
+
+message DurableStreamRouteLoadOptions {
+  optional uint32 max_concurrent_readers_per_stream = 1;
+  optional uint32 max_append_requests_per_second_per_stream = 2;
+}

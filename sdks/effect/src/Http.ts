@@ -414,11 +414,16 @@ export interface DurableStreamLoadOptions {
  */
 export interface DurableStreamOptions {
   readonly slots: ReadonlyArray<DurableStreamSlotOptions>
-  readonly allowExternalWrites?: boolean
-  readonly allowStreamDelete?: boolean
-  readonly allowInvocationDelete?: boolean
   readonly load?: DurableStreamLoadOptions
 }
+
+/**
+ * Declared HTTP transport. Omission leaves the default to the registry.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type HttpRouteMode = "durableStreams" | "plain" | "sse" | "webSocket"
 
 /**
  * Mount declaration carried by `AgentMetadata.http`. Compiled to
@@ -524,6 +529,7 @@ export interface EndpointDef<
   readonly authRequired?: boolean
   readonly cors: ReadonlyArray<string>
   readonly durableStreams?: DurableStreamOptions
+  readonly mode?: HttpRouteMode
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +929,7 @@ export interface EndpointOptions<H extends Readonly<Record<string, string>> = No
   readonly cors?: ReadonlyArray<string>
   /** Durable-stream route customization for this endpoint. */
   readonly durableStreams?: DurableStreamOptions
+  readonly mode?: HttpRouteMode
 }
 
 const buildEndpoint = <H extends Readonly<Record<string, string>>>(
@@ -945,6 +952,7 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
     authRequired: opts?.auth,
     cors: opts?.cors ?? [],
     durableStreams: opts?.durableStreams,
+    mode: opts?.mode,
   }) as unknown as EndpointDef<string>
 }
 
@@ -1482,6 +1490,12 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
   })),
   authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
   corsOptions: { allowedPatterns: [...ep.cors] },
+  mode:
+    ep.mode === "durableStreams"
+      ? "durable-streams"
+      : ep.mode === "webSocket"
+        ? "web-socket"
+        : ep.mode,
   durableStreams:
     ep.durableStreams === undefined
       ? undefined
@@ -1491,9 +1505,6 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
             name: slot.name,
             contentType: slot.contentType,
           })),
-          allowExternalWrites: ep.durableStreams.allowExternalWrites,
-          allowStreamDelete: ep.durableStreams.allowStreamDelete,
-          allowInvocationDelete: ep.durableStreams.allowInvocationDelete,
           load:
             ep.durableStreams.load === undefined
               ? undefined

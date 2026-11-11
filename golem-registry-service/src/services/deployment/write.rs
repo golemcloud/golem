@@ -170,6 +170,7 @@ pub struct DeploymentWriteService {
     tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
     mcp_import_resolver: Arc<McpImportResolver>,
+    stream_limits: crate::config::DurableStreamRouteLimits,
 }
 
 impl DeploymentWriteService {
@@ -190,6 +191,7 @@ impl DeploymentWriteService {
         tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
         mcp_import_resolver: Arc<McpImportResolver>,
+        stream_limits: crate::config::DurableStreamRouteLimits,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -208,6 +210,7 @@ impl DeploymentWriteService {
             tool_middleware_release_service,
             native_tool_catalog,
             mcp_import_resolver,
+            stream_limits,
         }
     }
 
@@ -465,6 +468,7 @@ impl DeploymentWriteService {
             &security_schemes_map,
             &mut errors,
             &mut warnings,
+            &self.stream_limits,
         );
         for (index, import, _) in &mcp_imports {
             if let Some(security_scheme) = &import.security_scheme

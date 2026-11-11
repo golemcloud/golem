@@ -9,5 +9,6 @@ world golem-schema {
   /// `add_to_linker` for its functions. Runtime code never instantiates this
   /// world; it only reuses the generated type and host modules.
   import golem:core/types@2.0.0;
+  import golem:core/http@2.0.0;
   import golem:tool/common@0.1.0;
 }
