@@ -31,7 +31,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[cfg_attr(
     feature = "full",
     oai(from_json = false, from_parameter = false, from_multipart = false)
@@ -108,28 +112,6 @@ impl poem_openapi::types::ParseFromMultipartField for ToolMiddlewareName {
                 .await
                 .map_err(poem_openapi::types::ParseError::propagate)?;
         Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinarySerializer for ToolMiddlewareName {
-    fn serialize<Output: desert_rust::BinaryOutput>(
-        &self,
-        context: &mut desert_rust::SerializationContext<Output>,
-    ) -> desert_rust::Result<()> {
-        desert_rust::BinarySerializer::serialize(&self.0, context)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinaryDeserializer for ToolMiddlewareName {
-    fn deserialize(
-        context: &mut desert_rust::DeserializationContext<'_>,
-    ) -> desert_rust::Result<Self> {
-        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
-        Self::try_from(value).map_err(|e| {
-            desert_rust::Error::DeserializationFailure(format!("Invalid ToolMiddlewareName: {e}"))
-        })
     }
 }
 
@@ -291,7 +273,8 @@ pub struct CompiledToolMiddlewareChain {
 mod name_codec_tests {
     use super::{ToolMiddlewareInstallation, ToolMiddlewareName};
     use crate::base_model::tool::name_codec_tests::{
-        assert_desert_bytes_equal_string_bytes, assert_poem_and_desert_match_serde,
+        assert_desert_bytes_equal_string_bytes,
+        assert_desert_decodes_stored_names_without_the_name_check, assert_poem_matches_serde,
         assert_schema_and_json_are_a_plain_string,
     };
     use poem_openapi::types::ParseFromJSON;
@@ -299,9 +282,14 @@ mod name_codec_tests {
     use test_r::test;
 
     #[test]
-    fn tool_middleware_name_poem_and_desert_accept_exactly_what_serde_accepts() {
-        assert_poem_and_desert_match_serde::<ToolMiddlewareName>();
+    fn tool_middleware_name_poem_accepts_exactly_what_serde_accepts() {
+        assert_poem_matches_serde::<ToolMiddlewareName>();
         assert!(ToolMiddlewareName::try_from("Audit_Log").is_err());
+    }
+
+    #[test]
+    fn tool_middleware_name_desert_decodes_stored_names_without_the_name_check() {
+        assert_desert_decodes_stored_names_without_the_name_check::<ToolMiddlewareName>();
     }
 
     #[test]

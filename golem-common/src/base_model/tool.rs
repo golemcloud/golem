@@ -35,7 +35,11 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[cfg_attr(
     feature = "full",
     oai(from_json = false, from_parameter = false, from_multipart = false)
@@ -116,28 +120,6 @@ impl poem_openapi::types::ParseFromMultipartField for ToolName {
                 .await
                 .map_err(poem_openapi::types::ParseError::propagate)?;
         Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinarySerializer for ToolName {
-    fn serialize<Output: desert_rust::BinaryOutput>(
-        &self,
-        context: &mut desert_rust::SerializationContext<Output>,
-    ) -> desert_rust::Result<()> {
-        desert_rust::BinarySerializer::serialize(&self.0, context)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinaryDeserializer for ToolName {
-    fn deserialize(
-        context: &mut desert_rust::DeserializationContext<'_>,
-    ) -> desert_rust::Result<Self> {
-        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
-        Self::try_from(value).map_err(|e| {
-            desert_rust::Error::DeserializationFailure(format!("Invalid ToolName: {e}"))
-        })
     }
 }
 
@@ -367,7 +349,11 @@ pub const DEFAULT_TOOLS: &[DefaultTool] = &[DefaultTool {
 }];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::NewType)
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[cfg_attr(
     feature = "full",
     oai(from_json = false, from_parameter = false, from_multipart = false)
@@ -422,28 +408,6 @@ impl poem_openapi::types::ParseFromMultipartField for HostToolId {
                 .await
                 .map_err(poem_openapi::types::ParseError::propagate)?;
         Self::try_from(raw).map_err(poem_openapi::types::ParseError::custom)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinarySerializer for HostToolId {
-    fn serialize<Output: desert_rust::BinaryOutput>(
-        &self,
-        context: &mut desert_rust::SerializationContext<Output>,
-    ) -> desert_rust::Result<()> {
-        desert_rust::BinarySerializer::serialize(&self.0, context)
-    }
-}
-
-#[cfg(feature = "full")]
-impl desert_rust::BinaryDeserializer for HostToolId {
-    fn deserialize(
-        context: &mut desert_rust::DeserializationContext<'_>,
-    ) -> desert_rust::Result<Self> {
-        let value = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
-        Self::try_from(value).map_err(|e| {
-            desert_rust::Error::DeserializationFailure(format!("Invalid HostToolId: {e}"))
-        })
     }
 }
 
@@ -1083,15 +1047,14 @@ pub(crate) mod name_codec_tests {
         "Report/v2",
     ];
 
-    /// poem (JSON, parameter) and desert must accept exactly what serde accepts, and refuse
-    /// with the text of the `TryFrom` rule.
-    pub(crate) fn assert_poem_and_desert_match_serde<T>()
+    /// poem (JSON, parameter) must accept exactly what serde accepts, and refuse with the
+    /// text of the `TryFrom` rule.
+    pub(crate) fn assert_poem_matches_serde<T>()
     where
         T: TryFrom<String, Error = String>
             + DeserializeOwned
             + ParseFromJSON
             + ParseFromParameter
-            + desert_rust::BinaryDeserializer
             + Debug
             + PartialEq,
     {
@@ -1103,16 +1066,12 @@ pub(crate) mod name_codec_tests {
             let from_json = T::parse_from_json(Some(json!(v)));
             let from_parameter = T::parse_from_parameter(v);
             let from_parameters = T::parse_from_parameters([v]);
-            let from_desert = desert_rust::deserialize::<T>(
-                &desert_rust::serialize_to_byte_vec(&v.to_string()).unwrap(),
-            );
 
             match &expected {
                 Ok(value) => {
                     assert_eq!(&from_json.unwrap(), value, "json {v:?}");
                     assert_eq!(&from_parameter.unwrap(), value, "parameter {v:?}");
                     assert_eq!(&from_parameters.unwrap(), value, "parameters {v:?}");
-                    assert_eq!(&from_desert.unwrap(), value, "desert {v:?}");
                 }
                 Err(rule) => {
                     let json_error = from_json.expect_err(&format!("json accepted {v:?}"));
@@ -1127,13 +1086,22 @@ pub(crate) mod name_codec_tests {
                         "parameter message for {v:?}"
                     );
                     assert!(from_parameters.is_err(), "parameters accepted {v:?}");
-                    let desert_error = from_desert.expect_err(&format!("desert accepted {v:?}"));
-                    assert!(
-                        desert_error.to_string().contains(rule.as_str()),
-                        "desert message for {v:?}: {desert_error}"
-                    );
                 }
             }
+        }
+    }
+
+    /// Stored data from older versions may hold a name that breaks the rules. desert decodes
+    /// the plain string bytes anyway and writes the same bytes back.
+    pub(crate) fn assert_desert_decodes_stored_names_without_the_name_check<T>()
+    where
+        T: desert_rust::BinarySerializer + desert_rust::BinaryDeserializer,
+    {
+        for v in VALID.iter().chain(INVALID.iter()) {
+            let bytes = desert_rust::serialize_to_byte_vec(&v.to_string()).unwrap();
+            let decoded = desert_rust::deserialize::<T>(&bytes)
+                .unwrap_or_else(|e| panic!("desert refused stored name {v:?}: {e}"));
+            assert_eq!(desert_rust::serialize_to_byte_vec(&decoded).unwrap(), bytes);
         }
     }
 
@@ -1178,8 +1146,13 @@ pub(crate) mod name_codec_tests {
     }
 
     #[test]
-    fn tool_name_poem_and_desert_accept_exactly_what_serde_accepts() {
-        assert_poem_and_desert_match_serde::<ToolName>();
+    fn tool_name_poem_accepts_exactly_what_serde_accepts() {
+        assert_poem_matches_serde::<ToolName>();
+    }
+
+    #[test]
+    fn tool_name_desert_decodes_stored_names_without_the_name_check() {
+        assert_desert_decodes_stored_names_without_the_name_check::<ToolName>();
     }
 
     #[test]
@@ -1193,8 +1166,13 @@ pub(crate) mod name_codec_tests {
     }
 
     #[test]
-    fn host_tool_id_poem_and_desert_accept_exactly_what_serde_accepts() {
-        assert_poem_and_desert_match_serde::<HostToolId>();
+    fn host_tool_id_poem_accepts_exactly_what_serde_accepts() {
+        assert_poem_matches_serde::<HostToolId>();
+    }
+
+    #[test]
+    fn host_tool_id_desert_decodes_stored_names_without_the_name_check() {
+        assert_desert_decodes_stored_names_without_the_name_check::<HostToolId>();
     }
 
     #[test]

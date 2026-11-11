@@ -937,11 +937,16 @@ fn activation_rejects_executable_that_differs_from_binding_source() {
 }
 
 #[test]
-fn entity_tool_middleware_name_desert_decode_checks_the_name() {
-    let invalid_bytes = desert_rust::serialize_to_byte_vec(&"Audit_Log".to_string()).unwrap();
-    let rule = ToolMiddlewareName::try_from("Audit_Log").unwrap_err();
-    let error = desert_rust::deserialize::<ToolMiddlewareName>(&invalid_bytes).unwrap_err();
-    assert!(error.to_string().contains(rule.as_str()), "{error}");
+fn entity_tool_middleware_name_desert_decodes_and_re_encodes_stored_names() {
+    // Older versions stored names as sent, so a stored name may break the rules.
+    assert!(ToolMiddlewareName::try_from("Audit_Log").is_err());
+    let stored = desert_rust::serialize_to_byte_vec(&"Audit_Log".to_string()).unwrap();
+    let decoded = desert_rust::deserialize::<ToolMiddlewareName>(&stored).unwrap();
+    assert_eq!(decoded.as_str(), "Audit_Log");
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&decoded).unwrap(),
+        stored
+    );
 
     let valid = ToolMiddlewareName::try_from("audit-log").unwrap();
     let valid_bytes = desert_rust::serialize_to_byte_vec(&"audit-log".to_string()).unwrap();
