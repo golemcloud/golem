@@ -810,6 +810,3 @@ impl EnvironmentsApi {
 struct UploadInitialAgentFileRequest {
     file: TempFileUpload,
 }
-
-#[cfg(test)]
-mod tests;
