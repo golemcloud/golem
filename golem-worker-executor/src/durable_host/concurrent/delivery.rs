@@ -560,8 +560,9 @@ impl CompletionDelivery {
     /// recovery.
     ///
     /// After the cursor boundary, live and replay both wait for one fresh guest block. This
-    /// guest-driven wait may park across settlement; cursor transactions and marker waits stay
-    /// active. Guest-initiated cancellation with a partial result remains immediate.
+    /// guest-driven wait may park across settlement, and so may a marker wait whose marker lies
+    /// in a later invocation. Cursor transactions and marker waits within the current invocation
+    /// stay active. Guest-initiated cancellation with a partial result remains immediate.
     pub async fn prepare_delivery(
         &mut self,
         activity: Option<&TailActivity>,
@@ -602,7 +603,7 @@ impl CompletionDelivery {
                 let (replay_state, start_index, marker_index) =
                     (replay_state.clone(), *start_index, *marker_index);
                 let barrier = replay_state
-                    .await_completion_delivery(start_index, marker_index)
+                    .await_completion_delivery(start_index, marker_index, activity)
                     .await?;
                 self.state =
                     CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier));

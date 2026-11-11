@@ -2103,9 +2103,11 @@ async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
         ));
-        let mut delivery = Box::pin(
-            replay.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7)),
-        );
+        let mut delivery = Box::pin(replay.await_completion_delivery(
+            OplogIndex::from_u64(3),
+            OplogIndex::from_u64(7),
+            None,
+        ));
         if !already_failed {
             assert_pending(&mut claim, "claim beyond another call's delivery marker").await;
             assert!(
@@ -4081,7 +4083,7 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
@@ -4206,7 +4208,7 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6), None)
         .await
         .unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
@@ -5434,7 +5436,7 @@ async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
     rs.await_resolution(first).await.unwrap();
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
         .await
         .unwrap();
     barrier.acknowledge();
@@ -5516,7 +5518,7 @@ async fn span_closed_hints_do_not_change_claims_or_delivery_bounding() {
 
     let barrier = tokio::time::timeout(
         Duration::from_secs(5),
-        rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6)),
+        rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6), None),
     )
     .await
     .expect("a SpanClosed between the End and the marker must not hold delivery")
@@ -5570,7 +5572,7 @@ async fn optional_reader_waits_at_delivery_marker_before_testing_later_entry() {
     );
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
         .await
         .unwrap();
     assert!(
@@ -5616,7 +5618,7 @@ async fn identity_claim_does_not_scan_past_delivery_marker() {
     );
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
         .await
         .unwrap();
     assert!(
@@ -5980,6 +5982,421 @@ async fn await_natural_tail_end_park_restores_activity_on_error_and_drop() {
     }
 }
 
+fn unpinned_invocation_started() -> OplogEntry {
+    invocation_started(InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [3; 32],
+            generation: 0,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    })
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_invocation() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // Invocation A records the End at 4; invocation B consumes the result and records its
+    // marker at 7. Replaying A must not wait for B's history while counted as active.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        unpinned_invocation_started(),
+        delivered_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery = Box::pin(rs.await_completion_delivery(
+        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(7),
+        Some(&activity),
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "a delivery marker recorded after the invocation finish must not keep that invocation active"
+    );
+
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "the wait is active again once its marker belongs to the current invocation"
+    );
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation B starts");
+    let barrier = delivery.await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
+    assert_eq!(tracker.active_count(), 1);
+    barrier.acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn completion_delivery_marker_in_same_invocation_stays_active() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        remove_retry_policy(),
+        delivered_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery = Box::pin(rs.await_completion_delivery(
+        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(6),
+        Some(&activity),
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "settlement must wait for a delivery marker recorded inside the same invocation"
+    );
+
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    let barrier = delivery.await.unwrap();
+    barrier.acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("60s")]
+async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_reads() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // Invocation A records `CALLS` completed calls and then a tail longer than one read chunk
+    // before it finishes. Invocation B records every delivery marker.
+    const CALLS: u64 = 16;
+    const TAIL: u64 = 2500;
+    let start_of = |call: u64| OplogIndex::from_u64(3 + 2 * call);
+    let mut entries = vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+    ];
+    for call in 0..CALLS {
+        entries.push(start_now());
+        entries.push(end_for(start_of(call).as_u64(), call));
+    }
+    entries.extend((0..TAIL).map(|_| remove_retry_policy()));
+    entries.push(invocation_finished());
+    let finish = OplogIndex::from_u64(entries.len() as u64);
+    entries.push(unpinned_invocation_started());
+    let marker_of = |call: u64| OplogIndex::from_u64(finish.as_u64() + 2 + call);
+    entries.extend((0..CALLS).map(|call| delivered_for(start_of(call).as_u64())));
+    entries.push(invocation_finished());
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
+    for _ in 0..CALLS {
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(handle).await.unwrap();
+    }
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), Some(finish));
+
+    let tracker = TailWorkTracker::new();
+    let activities = (0..CALLS).map(|_| tracker.activity()).collect::<Vec<_>>();
+    let mut deliveries = (0..CALLS)
+        .map(|call| {
+            Box::pin(rs.await_completion_delivery(
+                start_of(call),
+                marker_of(call),
+                Some(&activities[call as usize]),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let reads_before_waits = oplog.reads.lock().unwrap().len();
+    for _ in 0..3 {
+        for delivery in &mut deliveries {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "every wait for a marker after the invocation finish parks"
+    );
+    let cursor = rs.last_replayed_index();
+    let read_while_waiting = oplog.reads.lock().unwrap()[reads_before_waits..]
+        .iter()
+        .copied()
+        .filter(|index| index.as_u64() > cursor.as_u64() + CHUNK_SIZE)
+        .collect::<Vec<_>>();
+    assert!(
+        read_while_waiting.is_empty(),
+        "the waits read the oplog beyond the cursor chunk to find their boundary: {} reads",
+        read_while_waiting.len()
+    );
+
+    for _ in 0..TAIL {
+        let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    }
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
+    for delivery in &mut deliveries {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        tracker.active_count(),
+        CALLS as usize,
+        "every wait is active once its marker belongs to the current invocation"
+    );
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation B starts");
+    for delivery in deliveries {
+        delivery.await.unwrap().acknowledge();
+    }
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activities);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // A deleted region hides the invocation boundary at 5..=6, so the marker at 8 belongs to the
+    // invocation that recorded the End at 4.
+    let entries = vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        delivered_for(3),
+        invocation_finished(),
+    ];
+    let marker = OplogIndex::from_u64(8);
+    let visible = replay_state_over(entries.clone()).await;
+    assert_eq!(
+        visible.invocation_finish_before(marker),
+        Some(OplogIndex::from_u64(5))
+    );
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog as Arc<dyn Oplog>,
+        DeletedRegions::from_regions([OplogRegion::from_range(5..=6)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), None);
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery =
+        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(3), marker, Some(&activity)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "a deleted invocation finish must not park the wait"
+    );
+
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    delivery.await.unwrap().acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let (rs, oplog) = replay_state_and_oplog_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+        invocation_finished(),
+        unpinned_invocation_started(),
+        delivered_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    let finish = OplogIndex::from_u64(5);
+    let marker = OplogIndex::from_u64(7);
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    assert_eq!(
+        rs.invocation_finish_before(marker),
+        None,
+        "a finish after the replay target is not visible"
+    );
+    rs.set_replay_target(finish).await.unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
+    assert_eq!(rs.invocation_finish_before(marker), Some(finish));
+
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery =
+        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(3), marker, Some(&activity)));
+    let reads = oplog.reads.lock().unwrap().len();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), delivery.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "the rediscovered finish parks the wait"
+    );
+    assert!(
+        oplog.reads.lock().unwrap()[reads..]
+            .iter()
+            .all(|index| *index <= finish),
+        "the wait read past the invocation finish"
+    );
+
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation B starts");
+    delivery.await.unwrap().acknowledge();
+    assert!(read_invocation_finished(&rs).await.unwrap().is_some());
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
 #[test]
 async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
     let rs = replay_state_over(vec![
@@ -6013,10 +6430,11 @@ async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
     rs.await_resolution(b).await.unwrap();
 
     let barrier_a = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6), None)
         .await
         .unwrap();
-    let barrier_b = rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7));
+    let barrier_b =
+        rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7), None);
     tokio::pin!(barrier_b);
     assert!(
         futures::poll!(barrier_b.as_mut()).is_pending(),
@@ -6054,7 +6472,7 @@ async fn dropped_replay_delivery_barrier_fails_later_cursor_work() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
         .await
         .unwrap();
     drop(barrier);
@@ -6166,7 +6584,7 @@ async fn completed_retained_start_resolves_while_another_delivery_holds_the_gate
         .unwrap();
     rs.await_resolution(a).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6), None)
         .await
         .unwrap();
     assert!(rs.has_unclaimed_retained_starts());
@@ -6223,7 +6641,7 @@ async fn open_retained_start_claims_but_its_later_terminal_waits_for_delivery_ac
         .unwrap();
     rs.await_resolution(a).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     assert!(rs.has_unclaimed_retained_starts());
@@ -6273,8 +6691,11 @@ async fn unobserved_owned_delivery_barrier_result_latches_delivery_failure() {
     let progress = rs.cursor.progress.notified();
     tokio::pin!(progress);
     progress.as_mut().enable();
-    let mut delivery =
-        Box::pin(rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4)));
+    let mut delivery = Box::pin(rs.await_completion_delivery(
+        OplogIndex::from_u64(2),
+        OplogIndex::from_u64(4),
+        None,
+    ));
     assert!(futures::poll!(delivery.as_mut()).is_pending());
     // The acquired gate prevents the spawned marker operation from completing before its
     // waiter is cancelled. Progress then proves that operation consumed the marker.
@@ -6969,7 +7390,7 @@ async fn mismatched_invocation_rejects_before_later_delivery_but_waits_for_earli
                 .await
                 .unwrap();
             rs.await_resolution(first).await.unwrap();
-            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
                 .await
                 .unwrap()
                 .acknowledge();
@@ -7050,7 +7471,7 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
                 .is_err(),
             "a retained sibling must not reject a later full match"
         );
-        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
             .await
             .unwrap()
             .acknowledge();
@@ -8858,7 +9279,7 @@ async fn deferred_anchored_error_is_not_structural_divergence() {
     );
 
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     assert_eq!(
@@ -8908,7 +9329,7 @@ async fn deferred_root_error_ignores_live_retry_from_descendant() {
     rs.await_resolution(root).await.unwrap();
     rs.drain_awaited_terminals().await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     {
@@ -11450,7 +11871,7 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
         }
         other => panic!("expected the entity call to complete, got {other:?}"),
     }
-    rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+    rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
         .await
         .unwrap()
         .acknowledge();
@@ -12413,7 +12834,7 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
     };
     rs.await_resolution(first).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     let position = rs.last_replayed_index();
@@ -12457,7 +12878,7 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
             .unwrap()
     );
     rs.await_resolution(second).await.unwrap();
-    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8), None)
         .await
         .unwrap()
         .acknowledge();
@@ -12514,7 +12935,7 @@ async fn positional_admission_refusal_preserves_records_and_delivery_gates() {
             .unwrap();
         rs.await_resolution(child).await.unwrap();
         let barrier = rs
-            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
             .await
             .unwrap();
         let position = rs.last_replayed_index();
@@ -12641,7 +13062,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
         .unwrap();
     rs.await_resolution(first).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     let claim = StartClaim::owned(
@@ -12698,7 +13119,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
     assert_eq!(refused, 1);
     assert_eq!(operation.observed_admission_refusal(), Some(refusal));
     rs.await_resolution(claimed.unwrap()).await.unwrap();
-    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8), None)
         .await
         .unwrap()
         .acknowledge();
@@ -12836,7 +13257,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
             "the guest delivery must still happen"
         );
         let delivery = rs
-            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
             .await
             .unwrap();
         assert_eq!(
@@ -13037,12 +13458,12 @@ async fn disposal_refusal_without_collection_preserves_nested_calls() {
         assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
         assert_eq!(operation.observed_admission_refusal(), None);
         rs.await_resolution(handle).await.unwrap();
-        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
             .await
             .unwrap()
             .acknowledge();
         rs.await_resolution(parent).await.unwrap();
-        rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(8))
+        rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(8), None)
             .await
             .unwrap()
             .acknowledge();
