@@ -14,14 +14,18 @@
 
 //! mimalloc allocator memory accounting, sampled into Prometheus gauges.
 //!
-//! `mi_process_info` reports both the resident set (touched pages actually in
-//! physical RAM) and the committed set (pages mimalloc has obtained from the OS
-//! and not yet returned). On the containerised Linux deployment the cgroup's
-//! `memory.current` — which the admission gate reads — charges the committed
-//! set, so a large `committed - resident` gap means mimalloc is holding pages
-//! it could return, inflating the gate's measured usage. Comparing committed vs
-//! resident distinguishes allocator retention/fragmentation (commit >> rss)
-//! from genuinely live memory (commit ~= rss).
+//! The committed count of `mi_process_info` is the address space that mimalloc
+//! made readable and writable for the heap. The kernel charges a page to the
+//! cgroup only when the process touches it, so the committed count can be
+//! larger than `memory.current`. On Linux, mimalloc gives freed pages back with
+//! `MADV_DONTNEED` and keeps them counted as committed, so the count goes down
+//! only when mimalloc unmaps memory. It is close to a high-water mark of the
+//! heap, not the heap that is in use.
+//!
+//! On Linux, the current resident set of `mi_process_info` is a copy of the
+//! committed count, so there is no gauge for it. The peak resident set comes
+//! from `getrusage` and is the peak of the whole process, linear memories
+//! included.
 
 use lazy_static::lazy_static;
 use prometheus::*;
@@ -44,27 +48,21 @@ unsafe extern "C" {
 }
 
 lazy_static! {
-    static ref MIMALLOC_CURRENT_RSS_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_mimalloc_current_rss_bytes",
-        "mimalloc-reported resident set size: pages currently touched and in physical RAM",
-        &["executor_id"]
-    )
-    .unwrap();
     static ref MIMALLOC_PEAK_RSS_BYTES: GaugeVec = register_gauge_vec!(
         "golem_mimalloc_peak_rss_bytes",
-        "mimalloc-reported peak resident set size since process start",
+        "Peak resident set size of the executor process since it started, from getrusage",
         &["executor_id"]
     )
     .unwrap();
     static ref MIMALLOC_CURRENT_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
         "golem_mimalloc_current_commit_bytes",
-        "mimalloc-reported committed memory: pages obtained from the OS and not yet returned (what the cgroup charges as memory.current)",
+        "Heap address space that mimalloc committed; on Linux it goes down only when mimalloc unmaps memory, so it is close to a high-water mark and can exceed the resident heap",
         &["executor_id"]
     )
     .unwrap();
     static ref MIMALLOC_PEAK_COMMIT_BYTES: GaugeVec = register_gauge_vec!(
         "golem_mimalloc_peak_commit_bytes",
-        "mimalloc-reported peak committed memory since process start",
+        "Peak of golem_mimalloc_current_commit_bytes since the executor started",
         &["executor_id"]
     )
     .unwrap();
@@ -73,34 +71,27 @@ lazy_static! {
 /// Reads `mi_process_info` and updates the mimalloc memory gauges. Cheap and
 /// allocation-free; intended to be called from a periodic sampling loop.
 pub fn sample() {
-    let mut elapsed = 0usize;
-    let mut user = 0usize;
-    let mut system = 0usize;
-    let mut current_rss = 0usize;
     let mut peak_rss = 0usize;
     let mut current_commit = 0usize;
     let mut peak_commit = 0usize;
-    let mut page_faults = 0usize;
 
-    // Safety: all pointers are valid, non-overlapping stack locations of the
-    // expected `size_t` type; mi_process_info only writes through them.
+    // Safety: the non-null pointers are valid, non-overlapping stack locations
+    // of the expected `size_t` type; mi_process_info only writes through them,
+    // and skips the null ones.
     unsafe {
         mi_process_info(
-            &mut elapsed,
-            &mut user,
-            &mut system,
-            &mut current_rss,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
             &mut peak_rss,
             &mut current_commit,
             &mut peak_commit,
-            &mut page_faults,
+            std::ptr::null_mut(),
         );
     }
 
     let id = crate::identity::executor_id();
-    MIMALLOC_CURRENT_RSS_BYTES
-        .with_label_values(&[id])
-        .set(current_rss as f64);
     MIMALLOC_PEAK_RSS_BYTES
         .with_label_values(&[id])
         .set(peak_rss as f64);
