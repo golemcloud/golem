@@ -148,9 +148,11 @@ An ephemeral target is created at schedule time (`create_demand`, then `schedule
 its pending entry is committed like a durable target's. Its first start waits for the due wake; an
 ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in
 `RunningWorkers` and the wake is acknowledged once the start begins, so an executor lost before the
-start commits `Restart` loses the scheduled invocation, as fail-stop allows. Token cancellation of a
-never-started ephemeral target also withdraws its constructor reservation; once it has begun,
-cancellation returns false.
+start commits `Restart` loses the scheduled invocation, as fail-stop allows. Cancelling a scheduled
+invocation on a never-started ephemeral target, through either its token or the public cancellation
+endpoint, also withdraws its constructor reservation under the instance mutex. A later resume or
+reconstruction runs neither the constructor nor the cancelled method. Token cancellation returns
+false once execution has begun; ordinary public cancellation keeps its existing pending-work rules.
 When an owner finishes construction, it registers the wake of every folded future entry
 again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
 wake lost between the pending commit and the wake insert. A cancellation that commits during

@@ -16,6 +16,7 @@ use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::AgentStatusRecord;
 use golem_common::model::agent::ScheduleId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
@@ -1059,24 +1060,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Ok(false);
         }
-        // A never-started ephemeral agent exists only for this work: withdrawing its constructor
-        // reservation too leaves its start nothing to run.
-        let initialization_key = self.initialization_idempotency_key();
-        if ephemeral
-            && status
-                .pending_invocations
-                .iter()
-                .any(|pending| pending.has_idempotency_key(&initialization_key))
-        {
-            self.add_to_oplog(OplogEntry::cancel_pending_invocation(initialization_key))
-                .await?;
-        }
-        self.add_and_commit_oplog_internal(
-            &instance_guard,
-            OplogEntry::cancel_pending_invocation(idempotency_key),
-            Some(WorkerCommand::WorkAvailable),
-        )
-        .await?;
+        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+            .await?;
         Ok(true)
     }
 
@@ -1101,14 +1086,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
+        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+            .await?;
+
+        drop(instance_guard);
+        Ok(())
+    }
+
+    /// Withdraws validated pending work while its instance is locked against starting. A scheduled
+    /// method on a never-started ephemeral target also owns the constructor reservation.
+    async fn withdraw_pending_invocation(
+        &self,
+        instance_guard: &tokio::sync::MutexGuard<'_, WorkerInstance>,
+        status: &AgentStatusRecord,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<(), WorkerExecutorError> {
+        let initialization_key = self.initialization_idempotency_key();
+        if self.agent_mode() == AgentMode::Ephemeral
+            && !status.ephemeral_execution_begun
+            && status.pending_invocations.iter().any(|pending| {
+                pending.has_idempotency_key(&idempotency_key) && pending.not_before.is_some()
+            })
+            && status
+                .pending_invocations
+                .iter()
+                .any(|pending| pending.has_idempotency_key(&initialization_key))
+        {
+            self.add_to_oplog(OplogEntry::cancel_pending_invocation(initialization_key))
+                .await?;
+        }
         self.add_and_commit_oplog_internal(
-            &instance_guard,
+            instance_guard,
             OplogEntry::cancel_pending_invocation(idempotency_key),
             Some(WorkerCommand::WorkAvailable),
         )
         .await?;
-
-        drop(instance_guard);
         Ok(())
     }
     pub(in crate::worker) async fn revert_to_last_oplog_index(
