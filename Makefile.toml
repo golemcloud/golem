@@ -253,6 +253,13 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-cli-test-bins"] }]
 
+[tasks.build-service-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+description = "Builds the service binaries that the CLI integration tests start directly"
+command = "cargo"
+args = ["build", "-p", "golem-registry-service", "-p", "golem-worker-service", "-p", "golem-shard-manager", "-p", "golem-component-compilation-service", "-p", "golem-worker-executor", "--bins"]
+
 [tasks.build-bins-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
@@ -963,7 +970,7 @@ cargo-test-r run --package integration-tests --test memory-billing -- --nocaptur
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-service-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -1052,7 +1059,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-service-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
