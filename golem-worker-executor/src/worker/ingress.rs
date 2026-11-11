@@ -1151,6 +1151,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         Ok(())
     }
+    /// The number of transient commands, such as file reads, listings and wallet reads, that
+    /// wait in the worker's queue.
+    #[doc(hidden)]
+    pub async fn queued_command_count_for_test(&self) -> usize {
+        self.queue.read().await.len()
+    }
     pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 

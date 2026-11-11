@@ -31,7 +31,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_existing_running(&request).await?;
 
-        let wallet_cards = worker.get_wallet_cards().await?;
+        let wallet_cards =
+            Self::not_found_if_deleting(&worker, worker.get_wallet_cards().await).await?;
         let wallet_cards = wallet_cards
             .into_iter()
             .map(|card| golem_common::serialization::serialize(&card))

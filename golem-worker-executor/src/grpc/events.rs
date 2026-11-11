@@ -35,6 +35,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
+        self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
@@ -49,9 +50,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, principal).await?;
-            worker.ensure_component_agent_ingress("connect")?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "connect")
+                .await?;
             let event_service = worker.event_service();
 
             let receiver = event_service.receiver();

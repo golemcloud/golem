@@ -33,7 +33,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
 
         let result = match self.get_existing_running(&request).await {
-            Ok(worker) => worker.get_file_system_node(path).await?,
+            Ok(worker) => {
+                Self::not_found_if_deleting(&worker, worker.get_file_system_node(path).await).await
+            }
+            Err(error) => Err(error),
+        };
+        let result = match result {
+            Ok(result) => result,
             Err(WorkerExecutorError::AgentNotFound { .. }) => GetFileSystemNodeResult::NotFound,
             Err(error) => return Err(error),
         };
@@ -88,13 +94,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return Ok(Err(error));
             }
         };
-        match self.get_existing_running(&request).await {
-            Ok(worker) => Ok(worker.read_file(path, selection).await),
-            Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(Ok(FileReadResponse {
-                head: FileReadHead::Absent,
-                body: Box::pin(futures::stream::empty()),
-            })),
-            Err(error) => Err(error),
+        let absent = || FileReadResponse {
+            head: FileReadHead::Absent,
+            body: Box::pin(futures::stream::empty()),
+        };
+        let worker = match self.get_existing_running(&request).await {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(Ok(absent())),
+            Err(error) => return Err(error),
+        };
+        match worker.read_file(path, selection).await {
+            Err(FileReadError::Lifecycle) if worker.answers_as_deleted().await => Ok(Ok(absent())),
+            result => Ok(result),
         }
     }
 }

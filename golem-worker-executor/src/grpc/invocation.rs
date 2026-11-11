@@ -263,9 +263,55 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::ensure_not_failed(self, owned_agent_id, agent_mode, status).await
     }
 
+    /// Gives `AgentNotFound` when a delete is running on the agent's cached generation or has
+    /// removed its durable state, so the read and management paths answer it like a missing
+    /// agent. A failed delete that left the agent in place keeps its deletion error.
+    pub(super) async fn ensure_not_being_deleted(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<Arc<Worker<Ctx>>>, WorkerExecutorError> {
+        match self.active_agents().try_get(owned_agent_id).await {
+            Some(worker) if worker.answers_as_deleted().await => Err(
+                WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()),
+            ),
+            resident => Ok(resident),
+        }
+    }
+
+    /// Gives `AgentNotFound` instead of the failure of an operation on a worker that a delete
+    /// claimed after [`Self::ensure_not_being_deleted`] passed, under the same rule.
+    pub(super) async fn not_found_if_deleting<T>(
+        worker: &Worker<Ctx>,
+        result: Result<T, WorkerExecutorError>,
+    ) -> Result<T, WorkerExecutorError> {
+        match result {
+            Err(_) if worker.answers_as_deleted().await => Err(
+                WorkerExecutorError::worker_not_found(worker.owned_agent_id().agent_id()),
+            ),
+            result => result,
+        }
+    }
+
+    /// Resolves an existing component agent for `operation` without starting it. A missing agent,
+    /// or one that a running delete has claimed, gives `AgentNotFound`.
+    pub(super) async fn get_existing_for_management(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+        operation: &str,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress(operation)?;
+        if worker.answers_as_deleted().await {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        }
+        Ok(worker)
+    }
+
     /// Resolves an agent that already exists and starts it. This never creates an agent: a
-    /// missing agent gives `AgentNotFound`. A delete that races the lookup gives either
-    /// `AgentNotFound` or a deletion error, and never recreates the agent.
+    /// missing agent, or one that a running delete has claimed, gives `AgentNotFound`.
     pub(super) async fn get_existing_running<Req: CanStartWorker>(
         &self,
         request: &Req,
@@ -286,7 +332,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // The status comes from `get_latest_metadata`, which stays safe when a delete has
             // already stopped the resident worker's actors, and which rejects a failed agent
             // without loading it.
-            let pending_startup = match self.active_agents().try_get(&owned_agent_id).await {
+            let pending_startup = match self.ensure_not_being_deleted(&owned_agent_id).await? {
                 Some(worker) => worker.pending_startup_attempt().is_some(),
                 None => false,
             };
@@ -308,7 +354,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker =
                 Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
                     .await?;
-            Worker::start_if_needed(worker.clone()).await?;
+            Self::not_found_if_deleting(&worker, Worker::start_if_needed(worker.clone()).await)
+                .await?;
             Ok(worker)
         }
         .instrument(info_span!("get_existing_worker"))

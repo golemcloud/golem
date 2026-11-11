@@ -398,6 +398,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))?
             .into();
 
+        self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
@@ -410,10 +411,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, principal).await?;
-            worker.ensure_component_agent_ingress("cancel")?;
-            worker.cancel_invocation(idempotency_key).await?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
+            Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
+                .await?;
             Ok(true)
         } else if status.invocation_results.contains_key(&idempotency_key) {
             Ok(false)
@@ -423,9 +425,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, principal).await?;
-            worker.ensure_component_agent_ingress("cancel")?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
             match worker.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {
@@ -435,7 +437,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .iter()
                         .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
                     {
-                        worker.cancel_invocation(idempotency_key).await?;
+                        Self::not_found_if_deleting(
+                            &worker,
+                            worker.cancel_invocation(idempotency_key).await,
+                        )
+                        .await?;
                         Ok(true)
                     } else {
                         Err(WorkerExecutorError::invalid_request("Invocation not found"))

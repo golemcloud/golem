@@ -18,6 +18,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn deletion_owns_retirement(&self) -> bool {
         self.instance.lock().await.deletion_owns_retirement()
     }
+    /// Whether reads and management calls answer this generation as a missing agent: a delete
+    /// is running on it, or a delete removed its durable state. A delete that failed earlier
+    /// leaves the agent in place, so it does not count until a retry claims it again. A
+    /// generation retired for a lost shard keeps its error unchanged.
+    pub(crate) async fn answers_as_deleted(&self) -> bool {
+        if self.retired_for_lost_shard() {
+            return false;
+        }
+        match &*self.instance.lock().await {
+            WorkerInstance::Deleting(deleting) => {
+                deleting.handle.result().is_none()
+                    || deleting.completed_stage >= WorkerDeletionStage::DurableStateRemoved
+            }
+            WorkerInstance::StoppedForDeletion => true,
+            _ => false,
+        }
+    }
     pub(in crate::worker) async fn deletion_stage_completed(
         &self,
         stage: WorkerDeletionStage,
