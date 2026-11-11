@@ -3280,6 +3280,165 @@ async fn promise(
 
 #[test]
 #[tracing::instrument]
+#[timeout("4m")]
+async fn promise_of_a_deleted_incarnation_does_not_reach_the_recreated_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::promise::promise_namespace_of;
+    use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+
+    let context = TestContext::new(last_unique_id);
+    let storage: Arc<std::sync::Mutex<Option<Arc<dyn KeyValueStorage + Send + Sync>>>> =
+        Arc::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let storage = storage.clone();
+                move |inner| {
+                    *storage.lock().unwrap() = Some(inner.clone());
+                    inner
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let storage = storage
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the executor uses key-value storage");
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "promise-incarnations");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let old_promise_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let old_promise_id = promise_id_from_value(&old_promise_value);
+    // A completed promise has both its pending and its completed row.
+    executor.complete_promise(&old_promise_id, vec![0]).await?;
+    let old_namespace = promise_namespace_of(&worker_id, old_promise_id.fingerprint);
+    assert!(
+        !storage
+            .with("test", "keys")
+            .keys(old_namespace.clone())
+            .await
+            .map_err(|e| anyhow!(e))?
+            .is_empty()
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace)
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new(),
+        "delete must remove the deleted incarnation's promises"
+    );
+
+    // Before any re-creation, the deleted incarnation's promise is gone from storage.
+    let error = executor
+        .complete_promise(&old_promise_id, vec![1])
+        .await
+        .expect_err("completing a promise of a deleted agent must fail");
+    assert!(
+        format!("{error:?}").contains("PromiseNotFound"),
+        "unexpected error: {error:?}"
+    );
+
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let new_promise_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let new_promise_id = promise_id_from_value(&new_promise_value);
+    assert_eq!(new_promise_id.agent_id, old_promise_id.agent_id);
+    assert_eq!(new_promise_id.oplog_idx, old_promise_id.oplog_idx);
+    assert_ne!(new_promise_id.fingerprint, old_promise_id.fingerprint);
+
+    let error = executor
+        .complete_promise(&old_promise_id, vec![1])
+        .await
+        .expect_err("the old promise ID must not complete the new incarnation's promise");
+    assert!(
+        format!("{error:?}").contains("PromiseNotFound"),
+        "unexpected error: {error:?}"
+    );
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let mut fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    crate::raw_params(vec![new_promise_value]),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+    tokio::select! {
+        result = &mut fiber => {
+            return Err(anyhow!("the new promise was not pending: {:?}", result??));
+        }
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+    executor.complete_promise(&new_promise_id, vec![2]).await?;
+    assert_eq!(
+        fiber.await??.into_return_value(),
+        Some(SchemaValue::List {
+            elements: vec![SchemaValue::U8(2)]
+        })
+    );
+
+    // The new incarnation cannot await the old incarnation's promise either.
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "await_promise",
+            crate::raw_params(vec![old_promise_value]),
+        )
+        .await
+        .expect_err("awaiting the old promise ID must fail");
+    assert!(
+        format!("{error:?}").contains("not created by the current agent"),
+        "unexpected error: {error:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn p3_promise_suspend_survives_executor_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

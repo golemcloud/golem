@@ -121,10 +121,22 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index. Deferred
-`InvokeEphemeral` retains its separate creation path.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. Ordinary
+promise completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`; it never creates an agent, and a missing or re-created
+agent is left alone. Deferred `InvokeEphemeral` retains its separate creation path.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
