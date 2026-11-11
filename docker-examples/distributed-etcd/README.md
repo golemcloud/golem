@@ -41,10 +41,11 @@ The misconfigurations described below stop a replica at startup:
   https://... uses https://, which needs persistence.config.tls (at least ca_cert_file or ca_cert)`
 - no `GOLEM__GRPC__ADVERTISED_HOST` → exits 1 with `grpc.advertised_host must be set in
   distributed mode`
-- unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
-  sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
-  config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a
-  clean exit; check its log.
+- unbracketed endpoint list → exits 1 with `Error: Failed to load config: invalid type: found string
+  "...", expected a sequence for key "PERSISTENCE"`
+
+Each of these exits with status 1, so `restart: on-failure` starts the replica again, and it stops
+again until the configuration is fixed. Read the reason with `docker compose logs <service>`.
 
 ## What changes, and why
 
