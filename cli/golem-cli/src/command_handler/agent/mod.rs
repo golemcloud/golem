@@ -689,9 +689,11 @@ impl AgentCommandHandler {
                 self.with_previous_invocation_failed_hint(error.into(), &agent_id_match)
             })?;
 
+        // The key the server accepted the invocation under, which cancels and looks it up.
+        let accepted_key = IdempotencyKey::new(result.idempotency_key.clone());
         if let Some((goal, handle)) = connect_handle.take() {
             if let Some(goal) = goal {
-                goal.set_target(IdempotencyKey::new(result.idempotency_key.clone()).to_uuid());
+                goal.set_target(accepted_key.to_uuid());
                 goal.set_output_written();
             }
             let _ = timeout(Duration::from_secs(3), handle).await;
@@ -701,13 +703,13 @@ impl AgentCommandHandler {
             log_action("Triggered", "invocation");
             self.ctx
                 .log_handler()
-                .log_output(InvokeResultView::new_trigger(idempotency_key))?;
+                .log_output(InvokeResultView::new_trigger(accepted_key))?;
         } else {
             logln("");
             self.ctx
                 .log_handler()
                 .log_output(InvokeResultView::new_agent_invoke(
-                    idempotency_key,
+                    accepted_key,
                     result,
                     &agent_type,
                     &method_name,

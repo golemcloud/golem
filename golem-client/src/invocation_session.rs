@@ -2250,13 +2250,16 @@ where
         stderr,
         cancelled,
         std::future::pending::<()>(),
+        |_| {},
     )
     .await
 }
 
 /// Drives a native tool session until completion. `stop_input` cancels only the tool's stdin
 /// and the session then still waits for the result; `cancelled` cancels every open stream and
-/// returns at once.
+/// returns at once. `on_accepted` receives the accepted invocation key each time the server
+/// accepts the call, before the call runs: it is the key that cancels or looks up the call.
+#[allow(clippy::too_many_arguments)]
 pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
     mut session: InvocationSession,
     input: Option<R>,
@@ -2264,6 +2267,7 @@ pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
     stderr: &mut E,
     cancelled: C,
     stop_input: S,
+    mut on_accepted: impl FnMut(&str),
 ) -> Result<PublicInvocationResult, SessionTransportError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -2574,7 +2578,8 @@ where
                         Err(error) => return Err(error),
                     };
                     match received.frame() {
-                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { mappings, .. }) => {
+                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { idempotency_key, mappings, .. }) => {
+                            on_accepted(idempotency_key);
                             stdout_channel = None;
                             stderr_channel = None;
                             for mapping in mappings {
@@ -5225,7 +5230,7 @@ mod tests {
             .send(Message::Text(
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
-                    idempotency_key: "tool-invocation-key".to_string(),
+                    idempotency_key: "accepted-tool-invocation-key".to_string(),
                     mappings: vec![
                         PublicStreamMapping {
                             channel: stdin_channel,
@@ -5386,6 +5391,7 @@ mod tests {
     /// Opens a tool session and drives it with the two signals.
     async fn open_and_drive_native_tool_session<R, W, C, S>(
         address: std::net::SocketAddr,
+        on_accepted: impl FnMut(&str),
         initial: PublicClientMessage,
         input: R,
         stdout: &mut W,
@@ -5423,6 +5429,7 @@ mod tests {
                 &mut stderr,
                 cancelled,
                 stop_input,
+                on_accepted,
             ),
         )
         .await
@@ -5452,8 +5459,10 @@ mod tests {
 
         // The writer stays alive, so the input stays open and carries no data.
         let (input, _input_writer) = tokio::io::duplex(1);
+        let mut accepted = Vec::new();
         let result = open_and_drive_native_tool_session(
             address,
+            |key| accepted.push(key.to_string()),
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5467,6 +5476,8 @@ mod tests {
             result.unwrap(),
             PublicInvocationResult::ToolSuccess { result: None }
         );
+        // The server's invocation key, not the one the client sent.
+        assert_eq!(accepted, vec!["accepted-tool-invocation-key".to_string()]);
         server.await.unwrap();
     }
 
@@ -5491,6 +5502,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5530,6 +5542,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5584,6 +5597,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5638,6 +5652,7 @@ mod tests {
 
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             tokio::io::empty(),
             &mut tokio::io::sink(),
@@ -5691,6 +5706,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout_writer,
@@ -5739,6 +5755,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5801,6 +5818,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout_writer,
@@ -5865,6 +5883,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5947,6 +5966,7 @@ mod tests {
 
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout,

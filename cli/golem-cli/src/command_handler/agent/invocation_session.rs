@@ -530,6 +530,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let bindings = session.delivery_tracker();
     let mut failed = false;
     let mut accepted = false;
+    // Events show the key the server accepted the invocation under once it has; before that,
+    // such as for a rejection, the key the session sent.
+    let mut accepted_key = idempotency_key_value.clone();
     let mut stdin_open = has_input;
     let mut input_terminal = !has_input;
     let mut fatal_input_failure = None;
@@ -653,6 +656,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 }) = &server_frame
                 {
                     accepted = true;
+                    accepted_key.clone_from(idempotency_key);
                     if let Some(goal) = &args.invocation_goal {
                         goal.set_target(IdempotencyKey::new(idempotency_key.clone()).to_uuid());
                     }
@@ -743,7 +747,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &source_language,
                     args.stdout_format,
                     structured,
-                    &idempotency_key_value,
+                    &accepted_key,
                     &session_identity,
                     &bindings,
                     &mut output_streams,
