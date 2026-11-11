@@ -199,7 +199,7 @@ describe("GitHub sign-in", () => {
     const body = await response.text()
 
     expect(response.status).toBe(200)
-    expect(body).toContain("You're on Free")
+    expect(body).toContain("<h1>Free</h1>")
     expect(body).toContain(breakAtHyphens(upstreams.registryAccount.accountId).value)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
@@ -212,7 +212,7 @@ describe("GitHub sign-in", () => {
 
     expect(response.status).toBe(200)
     expect(body).toContain('action="/sign-in/github"')
-    expect(body).not.toContain("You're on Free")
+    expect(body).not.toContain("<h1>Free</h1>")
   })
 
   it("rejects a cross-origin sign-in form post", async () => {

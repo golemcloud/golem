@@ -37,7 +37,7 @@ const page = (body: SafeHtml, status = 200) =>
     headers: securityHeaders
   })
 
-const errorPage = HttpServerResponse.text("Something went wrong. Reload the page to try again.", {
+const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
   headers: securityHeaders
 })

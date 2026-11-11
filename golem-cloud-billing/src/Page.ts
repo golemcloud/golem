@@ -116,11 +116,11 @@ ${options.body}
 const signInErrorMessage = (code: string): string => {
   switch (code) {
     case "access_denied":
-      return "GitHub sign-in was cancelled."
+      return "You cancelled the GitHub sign-in."
     case "account_not_linked":
       return "Another GitHub account signed in with this email address before. Sign in with that GitHub account."
     case "unable_to_create_session":
-      return "Signed in with GitHub, but Golem could not link the sign-in to your Golem account. Try again in a minute."
+      return "GitHub accepted the sign-in, but Golem could not link it to your Golem account. Try again after one minute."
     default:
       return "Sign-in failed. Try again."
   }
@@ -132,7 +132,7 @@ export const signedOutPage = (options: { readonly error: string | undefined }) =
     body: html`      <section class="hero">
         <span class="eyebrow">Golem Cloud</span>
         <h1>Plans and billing</h1>
-        <p class="lead">Sign in with the GitHub account that you use with the Golem CLI. Both sign-ins open the same Golem account.</p>
+        <p class="lead">Sign in with the GitHub account that you use with the Golem CLI. Then this page and the CLI use the same Golem account.</p>
         ${
           options.error === undefined
             ? null
@@ -193,56 +193,56 @@ const renewal = (subscription: Subscription | undefined) => {
   if (subscription?.currentPeriodEnd === undefined) return null
   const date = longDate.format(subscription.currentPeriodEnd)
   return subscription.cancelAtPeriodEnd
-    ? html`<p class="lead">Your subscription ends on ${date}. The account moves to Free then.</p>`
+    ? html`<p class="lead">Your subscription stops on ${date}. Then your plan changes to Free.</p>`
     : html`<p class="lead">Your subscription renews on ${date}.</p>`
 }
 
 const planHero = (options: SignedInPageOptions) => {
   if (options.checkoutPending) {
     return html`<span class="eyebrow">Your plan</span>
-        <h1>Activating Paid</h1>
-        <p class="lead">Polar has the payment. Your plan changes to Paid within a minute; reload the page to see it.</p>`
+        <h1>Polar has your payment</h1>
+        <p class="lead">Your plan changes to Paid within one minute. Reload the page to see the change.</p>`
   }
   switch (options.plan) {
     case "paid":
       return html`<span class="eyebrow">Your plan</span>
-        <h1>You're on Paid</h1>
+        <h1>Paid</h1>
         ${renewal(options.subscription)}
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
     case "suspended":
       return html`<span class="eyebrow">Your plan</span>
-        <h1>Your account is suspended</h1>
-        <p class="alert" role="alert">An invoice for paid overage is not paid, so the agents of this account are stopped. Pay the invoice in Billing. After the payment, the account gets its plan back.</p>
+        <h1>Suspended</h1>
+        <p class="alert" role="alert">Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account. Pay the invoice in the Polar customer portal. After the payment, the agents can run again.</p>
         <div class="actions">
-          ${portalForm("Pay in Billing")}
+          ${portalForm("Pay the invoice")}
         </div>`
     case "free":
       // A new checkout would start a second subscription; the payment of the first one is open.
       if (options.subscription?.status === "past_due") {
         return html`<span class="eyebrow">Your plan</span>
-        <h1>You're on Free</h1>
-        <p class="alert" role="alert">The last payment for Paid failed, so the account is on Free. Update the payment method in Manage billing. After the payment, the account is on Paid again.</p>
+        <h1>Free</h1>
+        <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
       }
       return html`<span class="eyebrow">Your plan</span>
-        <h1>You're on Free</h1>
-        <p class="lead">Paid has larger monthly allowances. Polar handles the payment.</p>
+        <h1>Free</h1>
+        <p class="lead">Paid has larger monthly allowances. You pay through Polar.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
         </div>`
     case "other":
       return html`<span class="eyebrow">Your plan</span>
-        <h1>You're on a custom plan</h1>
-        <p class="lead">Golem gave this account its plan. Contact Golem to change it.</p>`
+        <h1>Custom</h1>
+        <p class="lead">Golem set the plan of this account. To change the plan, ask Golem.</p>`
     case "unknown":
       return html`<span class="eyebrow">Your plan</span>
         <h1>Plans and billing</h1>
-        <p class="lead">Golem did not return the plan of the account. Reload the page to try again.</p>`
+        <p class="lead">Golem did not send the plan of the account. Reload the page.</p>`
   }
 }
 
@@ -251,9 +251,9 @@ const overageNoticeHtml = (notice: OverageNotice | undefined) => {
     case undefined:
       return null
     case "on":
-      return html`<p class="notice" role="status">Paid overage is on. The change takes effect within ${usageModeDelay}.</p>`
+      return html`<p class="notice" role="status">Paid overage is on. Golem uses the new setting within ${usageModeDelay}.</p>`
     case "off":
-      return html`<p class="notice" role="status">Paid overage is off. The change takes effect within ${usageModeDelay}.</p>`
+      return html`<p class="notice" role="status">Paid overage is off. Golem uses the new setting within ${usageModeDelay}.</p>`
     case "not-eligible":
       return html`<p class="alert" role="alert">The plan of this account has no paid overage.</p>`
   }
@@ -334,7 +334,7 @@ const usageItem = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices
     return html`<div><dt>${meter.label}</dt><dd class="muted">Not metered</dd></div>`
   }
   if (limit.usage === undefined) {
-    return html`<div><dt>${meter.label}</dt><dd class="muted">No usage reported this month</dd></div>`
+    return html`<div><dt>${meter.label}</dt><dd class="muted">No usage this month</dd></div>`
   }
   if (limit.resolvedMonthlyAmount === undefined) {
     return html`<div><dt>${meter.label}</dt><dd>${amount(limit.usage)}, no monthly limit</dd></div>`
@@ -368,7 +368,7 @@ const overageBilling = (subscription: Subscription | undefined): string => {
   }
   const date = longDate.format(subscription.currentPeriodEnd)
   return subscription.cancelAtPeriodEnd
-    ? `Polar bills it on the last invoice, when the subscription ends on ${date}.`
+    ? `Polar bills it on the last invoice, when the subscription stops on ${date}.`
     : `Polar bills it on the invoice of ${date}, with the next month of the plan.`
 }
 
@@ -376,13 +376,12 @@ const overageBilling = (subscription: Subscription | undefined): string => {
  * The usage push sends the overage to Polar on a schedule, and Polar prices the events some time
  * after it receives them, so the customer portal of Polar shows less than this page for a while.
  */
-const polarDelay =
-  "This page shows the overage as Golem meters it now. The Polar customer portal shows it later, so its amount can be lower for a while."
+const polarDelay = "Polar shows this amount after a delay."
 
 const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription: Subscription | undefined) => {
   const monthly = limits.monthly
   if (monthly === undefined) {
-    return html`<p class="muted">Golem did not return the usage of this month. Reload the page to try again.</p>`
+    return html`<p class="muted">Golem did not send the usage of this month. Reload the page.</p>`
   }
   const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
   return html`<p class="muted">This month (UTC), against the monthly allowance of the plan.</p>
@@ -413,8 +412,8 @@ const usageCard = (options: SignedInPageOptions) => {
         ${overageNoticeHtml(options.overageNotice)}
         <p>${
           on
-            ? "On. When the account has used its monthly allowance, its agents keep running, and the usage above the allowance is billed at these prices."
-            : "Off. When the account has used its monthly allowance, its agents stop until the next month."
+            ? "On. When the account uses all of its monthly allowance, its agents continue to run. Polar bills the usage above the allowance at these prices."
+            : "Off. When the account uses all of its monthly allowance, its agents stop until the next month."
         }</p>
         <dl class="facts prices">
           <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
@@ -422,12 +421,12 @@ const usageCard = (options: SignedInPageOptions) => {
           <div><dt>Durable storage</dt><dd>$${prices.perDurableGbMonth} per GB-month</dd></div>
           <div><dt>Ephemeral storage</dt><dd>$${prices.perEphemeralGbMonth} per GB-month</dd></div>
         </dl>
-        <p class="muted">Prices in USD, plus tax. The overage of a month is billed on the next invoice.</p>
+        <p class="muted">Prices in USD, plus tax. Polar bills the overage of a month on the next invoice.</p>
         <form method="post" action="/billing/overage" class="actions">
           <input type="hidden" name="mode" value="${on ? "hardLimit" : "allowOverage"}">
           <button type="submit" class="btn ${on ? "btn-secondary" : "btn-primary"}">${on ? "Turn off paid overage" : "Turn on paid overage"}</button>
         </form>
-        <p class="muted">A change takes effect within ${usageModeDelay}.</p>
+        <p class="muted">Golem uses a new setting within ${usageModeDelay}.</p>
       </section>`
 }
 
@@ -448,7 +447,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
           <dl class="facts">
             ${
               options.account === undefined
-                ? html`<div><dt>Details</dt><dd class="muted">Golem did not return the account details. Reload the page to try again.</dd></div>`
+                ? html`<div><dt>Details</dt><dd class="muted">Golem did not send the account details. Reload the page.</dd></div>`
                 : html`<div><dt>Name</dt><dd>${options.account.name}</dd></div>
             <div><dt>Email</dt><dd>${options.account.email}</dd></div>`
             }
@@ -457,7 +456,7 @@ export const signedInPage = (options: SignedInPageOptions) =>
         </section>
         <section class="card" aria-labelledby="cli-heading">
           <h2 id="cli-heading">Use this account from the CLI</h2>
-          <p>Run these commands to connect the Golem CLI to this account. The CLI opens GitHub in your browser to sign in.</p>
+          <p>Run these commands to connect the Golem CLI to this account. The CLI opens GitHub in your browser for the sign-in.</p>
           <div class="code">
             <div class="code-header">
               <span>Shell</span>
