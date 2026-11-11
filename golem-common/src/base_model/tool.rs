@@ -1283,4 +1283,33 @@ pub(crate) mod name_codec_tests {
         assert!(EnvironmentToolGrantCreation::parse_from_json(Some(grant("report-v2"))).is_ok());
         assert!(EnvironmentToolGrantCreation::parse_from_json(Some(grant("Report/v2"))).is_err());
     }
+
+    async fn multipart_field_parse(value: &str) -> poem_openapi::types::ParseResult<ToolName> {
+        use poem::FromRequest;
+        use poem_openapi::types::ParseFromMultipartField;
+
+        let body = format!(
+            "--b\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n{value}\r\n--b--\r\n"
+        );
+        let request = poem::Request::builder()
+            .content_type("multipart/form-data; boundary=b")
+            .body(body);
+        let (request, mut body) = request.split();
+        let mut multipart = poem::web::Multipart::from_request(&request, &mut body)
+            .await
+            .unwrap();
+        let field = multipart.next_field().await.unwrap();
+        ToolName::parse_from_multipart(field).await
+    }
+
+    #[test]
+    async fn tool_name_multipart_field_is_checked_like_serde() {
+        assert_eq!(
+            multipart_field_parse("report-v2").await.unwrap(),
+            ToolName::try_from("report-v2").unwrap()
+        );
+        let rule = ToolName::try_from("Report/v2").unwrap_err();
+        let error = multipart_field_parse("Report/v2").await.unwrap_err();
+        assert!(error.into_message().contains(rule.as_str()));
+    }
 }
