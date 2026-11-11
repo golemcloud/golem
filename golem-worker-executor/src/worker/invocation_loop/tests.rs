@@ -1710,14 +1710,14 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
             drop(observer);
         } else {
             probe.released.store(true, Ordering::Release);
-            operation.settle().await;
+            operation.settle().await.unwrap();
             assert!(observer.await.is_none());
             final_cleanup.await.unwrap();
             operations.begin_generation().unwrap();
             continue;
         }
         probe.released.store(true, Ordering::Release);
-        operation.settle().await;
+        operation.settle().await.unwrap();
         if metering_failed {
             assert_eq!(final_cleanup.await.unwrap_err(), early_error.unwrap());
         } else {
