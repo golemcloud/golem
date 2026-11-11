@@ -21,7 +21,7 @@ pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
-use crate::repo::component::ComponentRepo;
+use crate::repo::component::{ComponentRepo, ComponentRevisionSelection};
 use crate::repo::model::component::ComponentAuthExtRevisionRecord;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
@@ -179,14 +179,14 @@ impl ComponentService {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        include_deleted: bool,
+        selection: ComponentRevisionSelection,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component revision");
 
         let record = self
             .component_repo
-            .get_by_id_and_revision(component_id.0, revision.into(), include_deleted)
+            .get_by_id_and_revision(component_id.0, revision.into(), selection)
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
@@ -499,11 +499,11 @@ impl ComponentService {
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
-        include_deleted: bool,
+        selection: ComponentRevisionSelection,
         auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let component = self
-            .get_component_revision(component_id, revision, include_deleted, auth)
+            .get_component_revision(component_id, revision, selection, auth)
             .await?;
 
         // A revision whose binary the store no longer holds is not found: every later download

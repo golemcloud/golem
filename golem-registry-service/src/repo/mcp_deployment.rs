@@ -494,7 +494,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                     WHERE m.mcp_deployment_id = $1
                         AND mr.revision_id = $2
-                        AND m.deleted_at IS NULL
+                        AND NOT mr.deleted
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL

@@ -14,6 +14,7 @@
 
 use super::account::{AccountError, AccountService};
 use super::component::{ComponentError, ComponentService};
+use crate::repo::component::ComponentRevisionSelection;
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::{PluginAuthRecord, PluginRecord};
 use crate::repo::plugin::PluginRepo;
@@ -352,7 +353,7 @@ impl PluginRegistrationService {
             .get_component_revision(
                 definition.component_id,
                 definition.component_revision,
-                false,
+                ComponentRevisionSelection::Current,
                 auth,
             )
             .await

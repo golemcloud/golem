@@ -571,7 +571,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         ON rr.resource_definition_id = r.resource_definition_id
                     WHERE r.resource_definition_id = $1
                         AND rr.revision_id = $2
-                        AND r.deleted_at IS NULL
+                        AND NOT rr.deleted
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL
