@@ -278,10 +278,11 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             .unwrap()
             .primary();
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
-        let mut started = if after_selection {
+        let lane = worker.owner_execution().lane();
+        let prebody = if after_selection {
             None
         } else {
-            Some(executor.gate_next_invocation_started(&owned).await?)
+            Some(lane.acquire_exclusive().await)
         };
         let mut selected_write = if after_selection {
             Some(executor.gate_next_invocation_outcome_append(&id).await)
@@ -306,8 +307,13 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
                     .await
             }
         });
-        if let Some(started) = &mut started {
-            started.entered().await;
+        if prebody.is_some() {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while lane.metadata().active_invocation_count == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
         } else {
             (&mut selected_write.as_mut().unwrap().0).await?;
         }
@@ -351,8 +357,8 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             // Started precedes Running. This stop exposes driver completion, not a signal receipt.
             receipt = None;
         }
-        if let Some(started) = started {
-            started.release();
+        if let Some(prebody) = prebody {
+            drop(prebody);
         } else {
             selected_write.take().unwrap().1.send(false).unwrap();
         }

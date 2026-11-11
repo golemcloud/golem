@@ -340,7 +340,7 @@ async fn schedule(
                 target_name.to_string(),
                 hold_ms,
                 due.timestamp() as u64,
-                0u32
+                due.timestamp_subsec_nanos()
             ),
         )
         .await?;
@@ -507,7 +507,7 @@ async fn scheduled_ephemeral_target_runs_once_at_its_deadline_across_a_restart(
         .store()
         .await?;
     let name = "runs-once";
-    let due = Utc::now() + chrono::Duration::seconds(12);
+    let due = DateTime::from_timestamp_millis(Utc::now().timestamp_millis() + 12_000).unwrap();
     schedule(&executor, &component, name, 0, due).await?;
 
     let target = ephemeral_target(&executor, &component).await?;
