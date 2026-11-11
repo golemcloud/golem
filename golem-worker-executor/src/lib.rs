@@ -1262,7 +1262,7 @@ pub async fn bootstrap_and_run_worker_executor<
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
 >(
     bootstrap: &BootstrapImpl,
-    golem_config: GolemConfig,
+    mut golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
@@ -1270,6 +1270,7 @@ pub async fn bootstrap_and_run_worker_executor<
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
     golem_config.validate()?;
+    golem_config.resolve_golem_issuer();
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,

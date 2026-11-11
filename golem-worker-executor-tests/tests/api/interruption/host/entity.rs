@@ -232,6 +232,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 store,
                 instance,
                 InvocationMode::Replay,
+                None,
             )
             .await?;
             assert!(
@@ -259,6 +260,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 store,
                 instance,
                 InvocationMode::Replay,
+                None,
             )
             .await
         })

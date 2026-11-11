@@ -221,7 +221,6 @@ use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
     invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
-    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
