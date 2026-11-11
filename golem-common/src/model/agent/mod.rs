@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_uuid;
 mod config;
 pub mod extraction;
 mod invocation;
@@ -20,6 +21,7 @@ mod normalisation;
 mod protobuf;
 mod status;
 
+pub use agent_uuid::AgentUuid;
 pub use key::AgentKey;
 
 pub use invocation::{
