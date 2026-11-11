@@ -24,10 +24,10 @@ use crate::model::mcp::McpDeploymentDeployProperties;
 use anyhow::{anyhow, bail};
 use golem_client::api::{ApiDeploymentClient, McpDeploymentClient};
 use golem_common::cache::SimpleCache;
-use golem_common::model::deployment::{DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision};
+use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentCreation, HttpApiDeploymentId, HttpApiDeploymentRevision,
     HttpApiDeploymentUpdate,
@@ -240,46 +240,6 @@ impl ApiDeploymentCommandHandler {
             .await?
             .mcp_deployment
             .get_mcp_deployment_revision(&mcp_deployment_id.0, revision.into())
-            .await
-            .map_service_error()?)
-    }
-
-    /// Reads the HTTP API deployment of a domain as the deployment has it. The read does not
-    /// depend on the staging area, which can have deleted the HTTP API deployment since.
-    pub async fn get_http_api_deployment_in_deployment(
-        &self,
-        environment_id: &EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        domain: &Domain,
-    ) -> anyhow::Result<HttpApiDeployment> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .api_deployment
-            .get_deployment_http_api_deployment(
-                &environment_id.0,
-                deployment_revision.get(),
-                &domain.0,
-            )
-            .await
-            .map_service_error()?)
-    }
-
-    /// Reads the MCP deployment of a domain as the deployment has it. The read does not depend on
-    /// the staging area, which can have deleted the MCP deployment since.
-    pub async fn get_mcp_deployment_in_deployment(
-        &self,
-        environment_id: &EnvironmentId,
-        deployment_revision: DeploymentRevision,
-        domain: &Domain,
-    ) -> anyhow::Result<McpDeployment> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .mcp_deployment
-            .get_deployment_mcp_deployment(&environment_id.0, deployment_revision.get(), &domain.0)
             .await
             .map_service_error()?)
     }
