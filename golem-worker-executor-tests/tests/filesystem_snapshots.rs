@@ -3407,7 +3407,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
 /// snapshot record with a name, and a confirmation of that name. The caller calls it after an
 /// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
 /// and no snapshot record is waiting for its upload when the wait ends.
-async fn newest_snapshot_confirmed(
+pub(crate) async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {

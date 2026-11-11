@@ -1184,7 +1184,7 @@ async fn initialize_entity(
         principal,
     };
     let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
-    let result = invoke_observed_and_traced(lowered, store, instance).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1221,7 +1221,7 @@ async fn invoke_sleep_p3(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    let result = invoke_observed_and_traced(lowered, store, instance).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1254,7 +1254,7 @@ async fn invoke_entity_method(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    match invoke_observed_and_traced(lowered, store, instance).await? {
+    match invoke_observed_and_traced(lowered, store, instance, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(

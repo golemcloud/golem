@@ -114,6 +114,9 @@ services:
     environment:
       <<: *blob-storage
       RUST_LOG: info,h2=warn,hyper=warn,tower=warn
+      # Set GOLEM_ISSUER to the installation's https issuer. The worker service and every
+      # executor need the same value; when it is empty, each process generates its own.
+      GOLEM__GOLEM_ISSUER: ${GOLEM_ISSUER:-}
       GOLEM__PORT: 9005
       GOLEM__CUSTOM_REQUEST_PORT: 9006
       GOLEM__MCP_PORT: 9007
@@ -166,6 +169,9 @@ services:
     environment:
       <<: *blob-storage
       RUST_LOG: info
+      # Set GOLEM_ISSUER to the installation's https issuer. The worker service and every
+      # executor need the same value; when it is empty, each process generates its own.
+      GOLEM__GOLEM_ISSUER: ${GOLEM_ISSUER:-}
       GOLEM__HTTP_PORT: 8082
       GOLEM__GRPC__PORT: 9000
 
