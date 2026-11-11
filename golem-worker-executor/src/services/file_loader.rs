@@ -62,13 +62,14 @@ impl InitialFileSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitialFileLoadFailure {
     /// The blob storage could not give the source, or a concurrent download of it stopped
-    /// before its end, or this executor is shutting down. A later load can pass on a live executor.
+    /// before its end, the local cache has an I/O failure, or this executor is shutting down.
+    /// A later load can pass on a live executor.
     Unavailable,
     /// The blob storage refuses the executor. A later load passes only after an operator fixes
     /// the storage.
     Refused(BlobRefusal),
     /// The source cannot load: the blob storage has no source with the key, gives a permanent
-    /// error, or gives bytes that do not verify, or the local cache failed.
+    /// error, or gives bytes that do not verify.
     Failed,
 }
 
@@ -84,6 +85,13 @@ pub(crate) struct InitialFileLoadError {
 }
 
 impl InitialFileLoadError {
+    fn unavailable(key: AgentFileContentHash, reason: impl Display) -> Self {
+        Self {
+            failure: InitialFileLoadFailure::Unavailable,
+            reason: format!("{key}: {reason}").into(),
+        }
+    }
+
     fn failed(key: AgentFileContentHash, reason: impl Display) -> Self {
         Self {
             failure: InitialFileLoadFailure::Failed,
@@ -291,7 +299,7 @@ impl FileLoader {
         key: AgentFileContentHash,
         expected_size: u64,
     ) -> Result<(), InitialFileLoadError> {
-        let failed = |error| InitialFileLoadError::failed(key, error);
+        let failed = |error| InitialFileLoadError::unavailable(key, error);
         let temporary =
             tempfile::NamedTempFile::new_in(self.cache_dir.path().as_path()).map_err(failed)?;
         self.download_file(environment_id, &temporary, key, expected_size)
@@ -312,7 +320,7 @@ impl FileLoader {
         expected_size: u64,
     ) -> Result<(), InitialFileLoadError> {
         debug!("Downloading {} to immutable cache", key);
-        let failed_io = |error: std::io::Error| InitialFileLoadError::failed(key, error);
+        let failed_io = |error: std::io::Error| InitialFileLoadError::unavailable(key, error);
         let failed = |error: anyhow::Error| InitialFileLoadError::failed(key, error);
         let mut data = self
             .initial_agent_files_service
@@ -942,6 +950,27 @@ mod tests {
             ]
         );
         assert_eq!(missing, InitialFileLoadFailure::Failed);
+    }
+
+    #[test]
+    async fn a_cache_io_failure_is_unavailable_and_a_later_load_passes() {
+        let content = b"cached after recovery";
+        let (loader, hash, env_id) = setup(content).await;
+        let cache = loader.cache_dir.path().as_path().to_path_buf();
+        let offline = cache.with_extension("offline");
+        std::fs::rename(&cache, &offline).unwrap();
+        let failed = loader.get_source(env_id, hash, content.len() as u64).await;
+        std::fs::rename(&offline, &cache).unwrap();
+
+        assert_eq!(
+            failed.unwrap_err().failure,
+            InitialFileLoadFailure::Unavailable
+        );
+        let source = loader
+            .get_source(env_id, hash, content.len() as u64)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(source.path().as_path()).unwrap(), content);
     }
 
     /// A load that waits for a concurrent download of the same source gets the error of that

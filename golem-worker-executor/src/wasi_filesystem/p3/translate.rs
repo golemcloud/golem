@@ -44,6 +44,7 @@ pub(super) fn p3_agent_error(error: AgentFilesystemError) -> FilesystemError {
         | AgentFilesystemError::Baseline(_)
         | AgentFilesystemError::InitialFileConflict(_)
         | AgentFilesystemError::InitialFileUnavailable(_)
+        | AgentFilesystemError::InitialFileFailed(_)
         | AgentFilesystemError::InitialFileRefused { .. }
         | AgentFilesystemError::RuntimeInvalidated) => {
             FilesystemError::trap(wasmtime::Error::msg(error.to_string()))
