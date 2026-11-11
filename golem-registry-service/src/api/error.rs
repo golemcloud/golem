@@ -1089,7 +1089,25 @@ impl From<ToolMiddlewareReleaseError> for ApiError {
                 api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
                 error,
             ),
-            _ => Self::conflict(
+            ToolMiddlewareReleaseError::PublicationToolNotFound(_) => Self::bad_request(
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_MIDDLEWARE_NOT_FOUND,
+                error,
+            ),
+            ToolMiddlewareReleaseError::DuplicatePublication(_) => Self::bad_request(
+                api::error_code::DUPLICATE_TOOL_MIDDLEWARE_PUBLICATION,
+                error,
+            ),
+            ToolMiddlewareReleaseError::PublicationOwnerMismatch(_) => Self::bad_request(
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_OWNER_MISMATCH,
+                error,
+            ),
+            ToolMiddlewareReleaseError::PublicationHostSource(_) => Self::bad_request(
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+                error,
+            ),
+            ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore
+            | ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished
+            | ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotDePublished => Self::conflict(
                 api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
                 error,
             ),
@@ -1218,6 +1236,8 @@ impl From<DeploymentWriteError> for ApiError {
                 api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
                 error,
             ),
+            DeploymentWriteError::ToolPublication(inner) => inner.into(),
+            DeploymentWriteError::ToolMiddlewarePublication(inner) => inner.into(),
 
             DeploymentWriteError::Unauthorized(inner) => inner.into(),
             DeploymentWriteError::InternalError(_) => Self::InternalError(Json(ErrorBody {
@@ -1957,8 +1977,10 @@ mod tests {
 
     #[test]
     fn tool_middleware_release_errors_use_specific_codes() {
+        use golem_common::model::tool_middleware::ToolMiddlewareName;
         use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
 
+        let name = ToolMiddlewareName::try_from("audit-log").unwrap();
         let cases = [
             (
                 ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(
@@ -1979,6 +2001,36 @@ mod tests {
             ),
             (
                 ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+            (
+                ToolMiddlewareReleaseError::PublicationToolNotFound(name.clone()),
+                "bad_request",
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_MIDDLEWARE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::DuplicatePublication(name.clone()),
+                "bad_request",
+                api::error_code::DUPLICATE_TOOL_MIDDLEWARE_PUBLICATION,
+            ),
+            (
+                ToolMiddlewareReleaseError::PublicationOwnerMismatch(name.clone()),
+                "bad_request",
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_OWNER_MISMATCH,
+            ),
+            (
+                ToolMiddlewareReleaseError::PublicationHostSource(name),
+                "bad_request",
+                api::error_code::TOOL_MIDDLEWARE_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+            ),
+            (
+                ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+            (
+                ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotDePublished,
                 "conflict",
                 api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
             ),
@@ -2138,5 +2190,131 @@ mod tests {
             assert_eq!(status, "conflict");
             assert_eq!(code, expected_code);
         }
+    }
+
+    fn status_code_and_messages(api_error: ApiError) -> (&'static str, String, Vec<String>) {
+        match api_error {
+            ApiError::BadRequest(body) => ("bad_request", body.0.code, body.0.errors),
+            ApiError::Forbidden(body) => ("forbidden", body.0.code, vec![body.0.error]),
+            ApiError::NotFound(body) => ("not_found", body.0.code, vec![body.0.error]),
+            ApiError::Conflict(body) => ("conflict", body.0.code, vec![body.0.error]),
+            other => panic!("Expected client error, got: {other:?}"),
+        }
+    }
+
+    fn deploy_tool_publication_client_errors() -> Vec<ToolReleaseError> {
+        use golem_common::model::tool::ToolName;
+        let name = ToolName::try_from("report-v2").unwrap();
+        vec![
+            ToolReleaseError::PublicationToolNotFound(name.clone()),
+            ToolReleaseError::DuplicatePublication(name.clone()),
+            ToolReleaseError::PublicationOwnerMismatch(name.clone()),
+            ToolReleaseError::PublicationHostSource(name),
+            ToolReleaseError::ImmutableReleaseConflict,
+            ToolReleaseError::DePublishedReleaseRequiresExplicitRestore,
+            ToolReleaseError::Unauthorized(AuthorizationError::SystemOnlyActionNotAllowed(
+                "publish".to_string(),
+            )),
+        ]
+    }
+
+    fn deploy_tool_middleware_publication_client_errors() -> Vec<ToolMiddlewareReleaseError> {
+        use golem_common::model::tool_middleware::ToolMiddlewareName;
+        let name = ToolMiddlewareName::try_from("audit-log").unwrap();
+        vec![
+            ToolMiddlewareReleaseError::PublicationToolNotFound(name.clone()),
+            ToolMiddlewareReleaseError::DuplicatePublication(name.clone()),
+            ToolMiddlewareReleaseError::PublicationOwnerMismatch(name.clone()),
+            ToolMiddlewareReleaseError::PublicationHostSource(name),
+            ToolMiddlewareReleaseError::ImmutableReleaseConflict,
+            ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore,
+            ToolMiddlewareReleaseError::Unauthorized(
+                AuthorizationError::SystemOnlyActionNotAllowed("publish".to_string()),
+            ),
+        ]
+    }
+
+    #[test]
+    fn deployment_tool_publication_errors_keep_the_release_status_code_and_message() {
+        use golem_common::model::tool::ToolName;
+
+        for (a, b) in deploy_tool_publication_client_errors()
+            .into_iter()
+            .zip(deploy_tool_publication_client_errors())
+        {
+            assert_eq!(
+                status_code_and_messages(DeploymentWriteError::from(a).into()),
+                status_code_and_messages(b.into())
+            );
+        }
+
+        let name = ToolName::try_from("report-v2").unwrap();
+        assert_eq!(
+            status_code_and_messages(
+                DeploymentWriteError::from(ToolReleaseError::PublicationToolNotFound(name)).into()
+            ),
+            (
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND.to_string(),
+                vec![
+                    "Tool report-v2 selected for publication is not implemented by this deployment"
+                        .to_string()
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn deployment_tool_middleware_publication_errors_keep_the_release_status_code_and_message() {
+        for (a, b) in deploy_tool_middleware_publication_client_errors()
+            .into_iter()
+            .zip(deploy_tool_middleware_publication_client_errors())
+        {
+            assert_eq!(
+                status_code_and_messages(DeploymentWriteError::from(a).into()),
+                status_code_and_messages(b.into())
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_publication_internal_errors_stay_internal() {
+        let errors: Vec<DeploymentWriteError> = vec![
+            ToolReleaseError::InternalError(anyhow::anyhow!("tool release storage failure")).into(),
+            ToolMiddlewareReleaseError::InternalError(anyhow::anyhow!(
+                "tool middleware release storage failure"
+            ))
+            .into(),
+        ];
+        for error in errors {
+            assert_eq!(error.to_safe_string(), "Internal error");
+            match ApiError::from(error) {
+                ApiError::InternalError(body) => {
+                    assert_eq!(body.0.code, api::error_code::INTERNAL_UNKNOWN);
+                    assert_eq!(body.0.error, "Internal error");
+                    let cause = body.0.cause.expect("the cause stays for the log");
+                    assert!(format!("{cause:?}").contains("storage failure"));
+                }
+                other => panic!("Expected InternalError, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn tool_middleware_validation_publication_errors_are_bad_requests() {
+        use golem_common::model::tool_middleware::ToolMiddlewareName;
+
+        let name = ToolMiddlewareName::try_from("audit-log").unwrap();
+        let (status, code) = status_and_code(
+            EnvironmentToolMiddlewareValidationError::Publication(
+                ToolMiddlewareReleaseError::PublicationToolNotFound(name),
+            )
+            .into(),
+        );
+        assert_eq!(status, "bad_request");
+        assert_eq!(
+            code,
+            api::error_code::TOOL_MIDDLEWARE_PUBLICATION_MIDDLEWARE_NOT_FOUND
+        );
     }
 }
