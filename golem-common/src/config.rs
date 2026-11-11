@@ -628,6 +628,21 @@ mod tests {
     }
 
     #[test]
+    fn missing_file_is_a_load_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let loader = ConfigLoader::<LoaderTestConfig>::new(&dir.path().join("does-not-exist.toml"));
+        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
+        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn malformed_file_is_a_load_error() {
+        let (_dir, loader) = loader_with_file("loader_test_port = = 1\n");
+        let err = loader.load_or_dump_config_for_flag("").unwrap_err();
+        assert!(matches!(err, ConfigError::Load(_)), "got {err:?}");
+    }
+
+    #[test]
     fn dump_flag_dumps_without_loading() {
         let (_dir, loader) = loader_with_file("loader_test_port = \"notanumber\"\n");
         for flag in [
