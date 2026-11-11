@@ -1573,7 +1573,7 @@ execution so HTTP, RPC, and guest span parents resolve to the same ids as in the
 ## Durable host call lifecycle
 
 Two-step callers use `DurableCallSession::begin` (returning `BegunCall`) → `BegunCall::resolve` →
-`ResolvedCall::{Live, Replay}` (`concurrent/call.rs`). Only the `Live` branch performs
+`ResolvedCall::{Live, Replay}` (`concurrent/call/`). Only the `Live` branch performs
 live-only authorization and request preparation before `start_live`; `BegunCall::is_live`
 is private so callers cannot choose a branch before resolution. `Replay` consumes the recorded
 result or repairs an admitted incomplete call without re-authorizing. Resolution may finish a
@@ -1591,8 +1591,12 @@ call replays the `Start` the grown target covers instead of failing. Both paths 
 
 Every nondeterministic host function goes through `begin_durable_function` /
 `end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls and direct
-(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call.rs`) with the same
+(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call/`) with the same
 `Start`/`End` shape.
+
+`concurrent/call/state.rs` owns the session lifecycle through consuming handles. The session's dynamic boundary extracts an `ExecutingCall` or `ReplayCall`, returning an error on the wrong phase. `ReplayCall::begin_resolution` consumes the claim and returns its receiver plus a `ResolvingReplay` that owns cleanup across the await. Only that handle can accept a terminal, park for guest drop, or enter `RepairPendingCall`. Pending repair owns a permit before awaiting protocol readiness, so that wait blocks snapshot admission. Successful readiness returns an `ExecutingCall`; this is session-local execution, not permission to perform external effects before Store liveness is published.
+
+Each handle owns a `CallGuard` with its cleanup obligation and permit. Extracting a handle leaves the session released; the extracted guard now handles cancellation. Resident sessions supply fresh drop metadata at destruction; extracted handles capture it at extraction. An `ExecutingCall` owns recorded request-upload tracking or unrecorded snapshot execution. Its consuming terminal methods release unfinished-call cleanup before fallible persistence, while retaining the resources in `ReleasedCall`. Released means cleanup was released, not that an `End` exists. Active recorded Drop transfers its permit to the deferred drop event. Readiness failure releases the preparation permit immediately. Keep the terminal guard and completion-delivery state machines separate.
 
 Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
 `Cancelled`) → hand the result to the guest → append `CompletionDelivered` (or
@@ -2202,7 +2206,7 @@ supported"); an entity body's synchronous call into its owner must pass
 ## Snapshots and updates
 
 Snapshot save/load runs guest code in a third mode: it neither appends nor consumes durable-call
-oplog entries (`DurableCallSession` created with `persisted: false`; `durability_is_suppressed`
+oplog entries (`DurableCallSession` executes with `CallRecording::Unrecorded`; `durability_is_suppressed`
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,

@@ -579,17 +579,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let start_idx = handle.start_idx();
                 let executed = ExecutedAccessStart {
                     start_idx,
-                    persisted: false,
+                    state: SessionState::replaying(handle),
                     requires_agent_authority: false,
                     agent_auth_ctx: None,
-                    request_upload: PendingUpload::already_durable(),
-                    replay: Some(handle),
                     execution_scope: prepared.execution_scope.finish(start_idx),
                     retry: prepared.retry,
                     scope_replay_recovery: prepared.claim_options.scope_replay_recovery,
                     drop_sink: prepared.drop_sink,
                     cleanup_sink: prepared.cleanup_sink,
-                    live_call_permit: None,
                     _phantom: PhantomData,
                 };
                 let handle = store.with(|mut access| {
@@ -633,7 +630,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        if !(self.is_live && self.persisted) {
+        if !self.state.is_recorded_execution() {
             return Ok(());
         }
         let cleared = match store.clear_terminal_observer() {
@@ -717,7 +714,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if let Err(error) =
             reproduce_incomplete_start_refusal(operation.as_ref(), &replay, self.start_idx).await
         {
-            self.finished = true;
+            self.state.fail();
             return Err(error);
         }
         Ok(())
@@ -737,23 +734,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         let replay_state =
             store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-        let replay = self
-            .replay
-            .take()
-            .expect("incomplete scope repair requires a replaying parent");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let result = async {
             let outcome = replay_state.await_resolution_outcome(replay).await?;
             if !matches!(
                 classify_replay_resolution(outcome),
                 ReplayedResolution::Incomplete
             ) {
+                self.state = pending_call.accept_terminal().into_session();
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "an incomplete parent for a live demand-stream child",
                     format!("completed scope at {}", self.start_idx),
                 ));
             }
-            self.prepare_incomplete_live_repair_at(&mut AccessorContext::new(store, get_ctx))
-                .await?;
+            self.prepare_incomplete_live_repair_at(
+                &mut AccessorContext::new(store, get_ctx),
+                pending_call,
+            )
+            .await?;
             publish_incomplete_replay_tail_at(
                 &mut AccessorContext::new(store, get_ctx),
                 Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
@@ -774,9 +772,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     pub(super) async fn prepare_incomplete_live_repair_at<Ctx: WorkerCtx>(
         &mut self,
         access: &mut impl DurableContext<Ctx>,
+        pending_call: ResolvingReplay<P>,
     ) -> Result<(), WorkerExecutorError> {
         let counter = access.with_ctx(|ctx| ctx.state.live_host_call_counter());
-        if let Err(error) = self.prepare_incomplete_live_repair(|| counter).await {
+        if let Err(error) = self
+            .prepare_incomplete_live_repair(pending_call, || counter)
+            .await
+        {
             let replay = access.with_ctx(|ctx| ctx.state.replay_state.clone());
             replay.abandon_replay_for_failure().await?;
             access.with_ctx(|ctx| {
@@ -798,16 +800,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// this call's own retry point via the call-owned `execution_scope` (and the semantic-trap
     /// error marker).
     ///
-    /// On refusal the handle is marked finished (the outcome is terminal); on success it is live,
-    /// persisted, and holds a fresh in-flight permit obtained from `get_counter` (a closure so
+    /// On refusal the session releases its Drop responsibility; on success it can record a
+    /// terminal and holds a fresh in-flight permit obtained from `get_counter` (a closure so
     /// accessor callers can bound their `store.with` window to the refusal-free path).
     pub(super) async fn prepare_incomplete_live_repair(
         &mut self,
+        pending_call: ResolvingReplay<P>,
         get_counter: impl FnOnce() -> Arc<AtomicUsize>,
     ) -> Result<(), WorkerExecutorError> {
         let mut recovery = std::mem::take(self.scope_replay_recovery.get_mut().unwrap());
         if !self.retry.can_reexecute_on_incomplete_replay() {
-            self.finished = true;
+            self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "End or Cancelled",
                 format!(
@@ -817,14 +820,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ),
             ));
         }
-        self.live_call_permit = Some(LiveCallPermit::new(get_counter()));
+        let pending_call = pending_call.begin_repair(LiveCallPermit::new(get_counter()));
         if let Err(error) = recovery.await_readiness().await {
-            self.finished = true;
-            self.live_call_permit = None;
+            pending_call.fail();
             return Err(error);
         }
-        self.is_live = true;
-        self.persisted = true;
+        self.state = pending_call.finish_readiness().into_session();
         Ok(())
     }
 }

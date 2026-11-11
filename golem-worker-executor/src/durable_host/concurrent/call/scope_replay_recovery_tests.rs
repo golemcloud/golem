@@ -68,19 +68,16 @@ fn replaying_call(
 > {
     use super::*;
     let index = OplogIndex::from_u64(5);
+    let (_, receiver) = tokio::sync::oneshot::channel();
+    let state = SessionState::replaying(ReplayCallHandle::new(index, receiver));
     DurableCallSession::<
         golem_common::model::oplog::host_functions::MonotonicClockNow,
         LeaveIncompleteOnDrop,
     > {
         start_idx: index,
-        is_live: false,
-        persisted: false,
-        request_upload: PendingUpload::already_durable(),
-        replay: None,
-        finished: false,
+        state,
         cancellation_span_id: None,
         span_observer: None,
-        parked_undelivered_replay: false,
         host_internal_calls: false,
         execution_scope: CallExecutionScope {
             retry_from: index,
@@ -110,7 +107,6 @@ fn replaying_call(
         agent_auth_ctx: None,
         drop_sink: None,
         cleanup_sink: None,
-        live_call_permit: None,
         _phantom: PhantomData,
     }
 }
@@ -124,7 +120,9 @@ async fn incomplete_repair_readiness_blocks_snapshot_boundary() {
         ScopeReplayRecovery::reexecute_when(async { readiness.await.unwrap() }),
         None,
     );
-    let mut repair = Box::pin(call.prepare_incomplete_live_repair(|| counter.clone()));
+    let (_, pending_call) = call.take_replay_call().unwrap().begin_resolution();
+    let mut repair =
+        Box::pin(call.prepare_incomplete_live_repair(pending_call, || counter.clone()));
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(repair.as_mut().poll(cx)))
             .await
@@ -148,8 +146,33 @@ async fn incomplete_repair_readiness_blocks_snapshot_boundary() {
         Err(WorkerExecutorError::RecoveryRequired { .. })
     ));
     assert!(!call.is_live());
-    assert!(call.finished);
+    assert!(call.state.is_released());
     assert_eq!(counter.load(Ordering::Acquire), 0);
+}
+
+#[test]
+async fn cancelling_pending_repair_releases_permit_without_cancelling_the_call() {
+    use super::*;
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let mut call = replaying_call(
+        ScopeReplayRecovery::reexecute_when(std::future::pending()),
+        None,
+    );
+    call.entity_admission = true;
+    call.tool_trap_disposal.store(true, Ordering::Release);
+    call.cleanup_sink = Some(sink);
+    let (_, pending_call) = call.take_replay_call().unwrap().begin_resolution();
+    let mut repair =
+        Box::pin(call.prepare_incomplete_live_repair(pending_call, || counter.clone()));
+    assert!(futures::poll!(&mut repair).is_pending());
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    drop(repair);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(!call.is_live());
+    assert_eq!(call.start_index(), OplogIndex::from_u64(5));
+    drop(call);
+    assert!(events.try_recv().is_err());
 }
 
 #[test]
@@ -165,7 +188,9 @@ async fn demand_children_share_the_parent_readiness_decision() {
         let mut child = replaying_call(parent.child_replay_recovery(), Some(true));
         let mut new_child = parent.child_replay_recovery();
         let counter = Arc::new(AtomicUsize::new(0));
-        let mut repair = Box::pin(child.prepare_incomplete_live_repair(|| counter.clone()));
+        let (_, pending_child) = child.take_replay_call().unwrap().begin_resolution();
+        let mut repair =
+            Box::pin(child.prepare_incomplete_live_repair(pending_child, || counter.clone()));
         let mut begin = Box::pin(new_child.await_new_call_readiness::<MonotonicClockNow>());
         assert!(futures::poll!(&mut repair).is_pending());
         assert!(futures::poll!(&mut begin).is_pending());
@@ -182,9 +207,10 @@ async fn demand_children_share_the_parent_readiness_decision() {
         assert_eq!(repair.await.is_err(), unavailable);
         assert_eq!(begin.await.is_err(), unavailable);
         assert_eq!(child.is_live(), !unavailable);
+        let (_, pending_parent) = parent.take_replay_call().unwrap().begin_resolution();
         assert_eq!(
             parent
-                .prepare_incomplete_live_repair(|| counter.clone())
+                .prepare_incomplete_live_repair(pending_parent, || counter.clone())
                 .await
                 .is_err(),
             unavailable
@@ -222,8 +248,9 @@ async fn typed_owner_loss_requires_child_authorization() {
     use super::*;
     let counter = Arc::new(AtomicUsize::new(0));
     let mut unauthorized = replaying_call(ScopeReplayRecovery::CompleteWithLoss, Some(false));
+    let (_, pending_call) = unauthorized.take_replay_call().unwrap().begin_resolution();
     let error = unauthorized
-        .prepare_incomplete_live_repair(|| counter.clone())
+        .prepare_incomplete_live_repair(pending_call, || counter.clone())
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no owner authorization"));
@@ -231,8 +258,9 @@ async fn typed_owner_loss_requires_child_authorization() {
     assert_eq!(counter.load(Ordering::Acquire), 0);
 
     let mut authorized = replaying_call(ScopeReplayRecovery::CompleteWithLoss, Some(true));
+    let (_, pending_call) = authorized.take_replay_call().unwrap().begin_resolution();
     authorized
-        .prepare_incomplete_live_repair(|| counter.clone())
+        .prepare_incomplete_live_repair(pending_call, || counter.clone())
         .await
         .unwrap();
     assert!(authorized.is_live());
