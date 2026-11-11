@@ -115,6 +115,7 @@ pub async fn invoke_resource(
             proto_principal,
             None,
             None,
+            None,
         )
         .await
         .map_err(|e| {

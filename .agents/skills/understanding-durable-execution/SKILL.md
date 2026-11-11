@@ -1308,6 +1308,21 @@ existing-only acquisition, reciprocal cold topologies, and reconciler graph shut
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent.
+`ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
+`AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
+whether the worker was resident or loaded cold. A caller that joined another caller's load loads
+again with its own fingerprint when that load answered not found. Invocation admission uses the
+guard for every mode when `InvocationStart.expected_callee_fingerprint` is set, before any
+schedule or `PendingAgentInvocation`, and validates a schedule against the pinned worker; such a
+request cannot be `KnownFresh`. A generation under deletion stays cached until the deletion ends,
+so with a fingerprint set `Worker::get_exact_existing_suspended_for_response` and a refused
+task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` once the deletion
+has completed `DurableStateRemoved`, because nothing committed to the generation can run after
+that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
+still fail and leave an invocation an earlier attempt with the same key committed. A failed
+deletion attempt and a lost-shard retirement keep their own errors. Failures after the bind keep
+their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
+while it runs.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete

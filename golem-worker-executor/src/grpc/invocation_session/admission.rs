@@ -20,7 +20,6 @@ use super::{
     Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
     extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
 };
-use crate::services::HasActiveAgents;
 use golem_common::model::InvocationRequestKey;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -45,6 +44,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let freshness_disposition =
             decode_invocation_freshness_disposition(request.freshness_disposition);
+
+        // An expected fingerprint names one existing incarnation. Every mode acquires the agent
+        // through the existing-only guard, so a missing agent or another incarnation fails as
+        // not found before anything is created or enqueued.
+        let expected_fingerprint = request
+            .expected_callee_fingerprint
+            .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into()));
+        if expected_fingerprint.is_some()
+            && freshness_disposition == InvocationFreshnessDisposition::KnownFresh
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "KnownFresh cannot be used with an expected agent fingerprint",
+            ));
+        }
 
         let mode = request.mode();
 
@@ -85,11 +98,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "KnownFresh cannot be used for an invocation lookup",
                 ));
             }
-            let inv_status = match self.get_or_create_pending_for_lookup(request).await? {
+            let inv_status = match self
+                .get_or_create_pending_for_lookup(request, expected_fingerprint)
+                .await?
+            {
                 Some((worker, _response_lease)) => {
-                    scope
+                    let bound = scope
                         .bind(&worker.tasks)
-                        .map_err(WorkerExecutorError::runtime)?;
+                        .map_err(WorkerExecutorError::runtime);
+                    worker
+                        .deleted_incarnation_as_not_found(expected_fingerprint, bound)
+                        .await?;
                     match worker.lookup_invocation_result(&ik).await {
                         crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
                         crate::model::LookupResult::Complete(Err(err)) => return Err(err),
@@ -173,11 +192,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
                 let (worker, _response_lease) = self
-                    .get_or_create_pending_with_freshness(request, freshness_disposition)
+                    .get_or_create_pending_with_freshness(
+                        request,
+                        freshness_disposition,
+                        expected_fingerprint,
+                    )
                     .await?;
-                scope
+                let bound = scope
                     .bind(&worker.tasks)
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(WorkerExecutorError::runtime);
+                worker
+                    .deleted_incarnation_as_not_found(expected_fingerprint, bound)
+                    .await?;
                 let metadata = worker.get_initial_worker_metadata();
                 let final_agent_id = metadata.agent_id.clone();
                 let ik = IdempotencyKey::new(
@@ -301,34 +327,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(invocation_output)
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
-                let pinned_worker = if let (Some(expected), Some(_)) =
-                    (request.expected_callee_fingerprint, schedule_at)
-                {
-                    let expected = golem_common::model::AgentFingerprint(expected.into());
-                    let worker = self
-                        .active_agents()
-                        .get_existing_with_fingerprint(
+                // A caller that names an incarnation is answered for that incarnation alone, so
+                // it is pinned first, and its revision and method are validated against it.
+                let pinned = match (expected_fingerprint, schedule_at) {
+                    // A delayed schedule for a named incarnation is not refused because that
+                    // incarnation failed, the same as a guest's local scheduled call.
+                    (Some(expected), Some(_)) => Some(
+                        Worker::get_exact_existing_suspended_for_response(
                             self,
                             &owned_agent_id,
                             principal.clone(),
                             Some(expected),
                         )
-                        .await?;
-                    if worker.get_initial_worker_metadata().fingerprint != expected {
-                        return Err(WorkerExecutorError::worker_not_found(
-                            owned_agent_id.agent_id(),
-                        ));
-                    }
-                    Some(worker)
-                } else {
-                    None
+                        .await?,
+                    ),
+                    (Some(_), None) => Some(
+                        self.get_or_create_pending_with_freshness(
+                            request,
+                            freshness_disposition,
+                            expected_fingerprint,
+                        )
+                        .await?,
+                    ),
+                    (None, _) => None,
                 };
-                let existing_metadata =
-                    if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                        None
-                    } else {
-                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
-                    };
+                let existing_metadata = if let Some((worker, _)) = &pinned {
+                    Some(worker.get_latest_worker_metadata().await)
+                } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                    None
+                } else {
+                    Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
+                };
                 let component_revision = existing_metadata.as_ref().map(|metadata| {
                     let status = &metadata.last_known_status;
                     status
@@ -372,16 +401,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         "live streams require an attached Await invocation session",
                     ));
                 }
-                let (worker, _response_lease) = match pinned_worker {
-                    Some(worker) => (worker, None),
+                let (worker, _response_lease) = match pinned {
+                    Some(pinned) => pinned,
                     None => {
-                        self.get_or_create_pending_with_freshness(request, freshness_disposition)
-                            .await?
+                        self.get_or_create_pending_with_freshness(
+                            request,
+                            freshness_disposition,
+                            None,
+                        )
+                        .await?
                     }
                 };
-                scope
+                let bound = scope
                     .bind(&worker.tasks)
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(WorkerExecutorError::runtime);
+                worker
+                    .deleted_incarnation_as_not_found(expected_fingerprint, bound)
+                    .await?;
                 let metadata = worker.get_initial_worker_metadata();
                 let final_agent_id = metadata.agent_id;
                 let ik = IdempotencyKey::new(

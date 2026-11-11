@@ -157,18 +157,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_existing(deps, owned_agent_id, principal)
             .await
     }
-    /// Pins an existing owner's response metadata without allowing owner creation.
+    /// Pins an existing owner's response metadata without allowing owner creation. With an
+    /// expected fingerprint, only that incarnation is pinned: a missing owner or another
+    /// incarnation is `AgentNotFound`, and one that a deletion retires gets the deletion's answer.
     pub(crate) async fn get_exact_existing_suspended_for_response<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         loop {
-            let worker =
-                Self::get_exact_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+            let worker = deps
+                .active_agents()
+                .get_existing_with_fingerprint(
+                    deps,
+                    owned_agent_id,
+                    principal.clone(),
+                    expected_fingerprint,
+                )
+                .await?;
+            // The deleting generation stays cached until its deletion ends, with its runtime
+            // stopped, so it is refused here rather than by whichever step reads it next.
+            if expected_fingerprint.is_some()
+                && let Some(refusal) = worker.pinned_deletion_refusal().await
+            {
+                return Err(refusal);
+            }
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok((worker, None));
             }
@@ -280,9 +297,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .worker_service()
             .resolve_agent_identity(owned_agent_id)
             .await?;
-        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint
-            || current.is_none_or(|identity| identity.fingerprint != expected_fingerprint)
-        {
+        if current.is_none_or(|identity| identity.fingerprint != expected_fingerprint) {
             return Err(WorkerExecutorError::AgentNotFound {
                 agent_id: owned_agent_id.agent_id.clone(),
             });
@@ -569,48 +584,58 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
         // must still reach the retained cleanup owner after a failed unload.
-        if self.is_resolved() {
-            return Ok(());
-        }
-        let worker = self.clone();
-        let build = async move {
-            let start = std::time::Instant::now();
-            let mut lifecycle = worker
-                .deps
-                .oplog_service()
-                .lock_lifecycle(&worker.owned_agent_id.agent_id)
-                .await;
-            // The epoch is read first, as in `get_or_create_worker_metadata`: a worker whose shard
-            // has already left the assignment is refused without touching storage, and the oplog
-            // opened below asserts the epoch this executor holds.
-            let metadata = match owned_shard_epoch(&worker.deps, &worker.owned_agent_id.agent_id) {
-                Ok(shard_epoch) => {
-                    Self::get_existing_worker_metadata(
-                        &worker.deps,
-                        &mut lifecycle,
-                        &worker.owned_agent_id,
-                        expected_fingerprint,
-                        shard_epoch,
+        loop {
+            if self.is_resolved() {
+                return Ok(());
+            }
+            let worker = self.clone();
+            let principal = principal.clone();
+            let build = async move {
+                let start = std::time::Instant::now();
+                let mut lifecycle = worker
+                    .deps
+                    .oplog_service()
+                    .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                    .await;
+                // The epoch is read first, as in `get_or_create_worker_metadata`: a worker whose
+                // shard has already left the assignment is refused without touching storage, and
+                // the oplog opened below asserts the epoch this executor holds.
+                let metadata =
+                    match owned_shard_epoch(&worker.deps, &worker.owned_agent_id.agent_id) {
+                        Ok(shard_epoch) => {
+                            Self::get_existing_worker_metadata(
+                                &worker.deps,
+                                &mut lifecycle,
+                                &worker.owned_agent_id,
+                                expected_fingerprint,
+                                shard_epoch,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    }
+                    .and_then(|metadata| {
+                        metadata.ok_or_else(|| {
+                            WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
+                        })
+                    });
+                worker
+                    .finish_construction(
+                        start,
+                        metadata,
+                        Some((InvocationContextStack::fresh(), principal)),
                     )
                     .await
-                }
-                Err(error) => Err(error),
             }
-            .and_then(|metadata| {
-                metadata.ok_or_else(|| {
-                    WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
-                })
-            });
-            worker
-                .finish_construction(
-                    start,
-                    metadata,
-                    Some((InvocationContextStack::fresh(), principal)),
-                )
-                .await
+            .boxed();
+            let (started, result) = self.initialize_with(build).await;
+            match result {
+                // A load another caller started answers that caller's expected fingerprint,
+                // not this one's, so this caller loads again with its own.
+                Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
+                result => return result,
+            }
         }
-        .boxed();
-        self.initialize_with(build).await.1
     }
     pub(in crate::worker) async fn initialize_with(
         self: &Arc<Self>,

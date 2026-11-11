@@ -57,13 +57,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ..Default::default()
             };
             let (worker, _response_lease) = self
-                .get_or_create_pending_for_lookup(&lookup)
+                .get_or_create_pending_for_lookup(&lookup, None)
                 .await?
                 .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "NotFound: durable Stream Session worker was not found",
-                )
-            })?;
+                    WorkerExecutorError::invalid_request(
+                        "NotFound: durable Stream Session worker was not found",
+                    )
+                })?;
             scope
                 .bind(&worker.tasks)
                 .map_err(WorkerExecutorError::runtime)?;

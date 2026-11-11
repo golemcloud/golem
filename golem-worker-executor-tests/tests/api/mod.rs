@@ -11231,3 +11231,109 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
     drop(executor);
     Ok(())
 }
+
+// Sends an `increment` with the incarnation's expected fingerprint while a deletion of that
+// incarnation is held before `stage`, and returns how each mode was answered.
+async fn fingerprinted_calls_during_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_counters: &PrecompiledComponent,
+    stage: WorkerDeletionStage,
+) -> anyhow::Result<Vec<String>> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
+    let mut report = Vec::new();
+    for (mode, delayed) in [
+        (Mode::Await, false),
+        (Mode::Schedule, false),
+        (Mode::Schedule, true),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let name = agent_id!("Counter", "fingerprinted-deleting");
+        let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+        let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let hook = Arc::new(DeletionStageHook::new(owned.clone(), Some(stage), None));
+        executor.set_worker_deletion_hook(hook.clone());
+        let deleting = tokio::spawn({
+            let executor = executor.clone();
+            let worker_id = worker_id.clone();
+            async move { executor.delete_worker(&worker_id).await }
+        });
+        hook.wait_until_gated().await;
+        let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            method_name: Some("increment".to_string()),
+            input: Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            mode: mode as i32,
+            schedule_at: delayed.then(|| prost_types::Timestamp {
+                seconds: chrono::Utc::now().timestamp() + 3600,
+                nanos: 0,
+            }),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            expected_callee_fingerprint: Some(fingerprint.0.into()),
+            request_key: Some(
+                golem_common::model::InvocationRequestKey::external(None, None).into(),
+            ),
+            ..Default::default()
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.invoke_agent_session(start),
+        )
+        .await;
+        report.push(match result {
+            Err(_) => format!("{stage:?} {mode:?} delayed={delayed}: timed out"),
+            Ok(Ok(_)) => format!("{stage:?} {mode:?} delayed={delayed}: admitted"),
+            Ok(Err(error)) => format!("{stage:?} {mode:?} delayed={delayed}: {error:#}"),
+        });
+        hook.release();
+        let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
+        drop(executor);
+    }
+    Ok(report)
+}
+
+// A caller that names an incarnation by its fingerprint gets the deletion's refusal while a
+// deletion of that incarnation runs, because the deletion can still fail and leave the agent in
+// place, and not found once the deletion has removed its durable state.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_removed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+    for (stage, expected) in [
+        (WorkerDeletionStage::ExecutionFenced, "VALIDATION"),
+        (WorkerDeletionStage::StreamsCleaned, "VALIDATION"),
+        (WorkerDeletionStage::DurableStateRemoved, "VALIDATION"),
+        (WorkerDeletionStage::CacheRemoved, "NOT_FOUND"),
+    ] {
+        failures.extend(
+            fingerprinted_calls_during_deletion(last_unique_id, deps, agent_counters, stage)
+                .await?
+                .into_iter()
+                .filter(|line| !line.contains(expected)),
+        );
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}

@@ -315,9 +315,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(expected_fingerprint),
             )
             .await?;
-        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
-            return Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into());
-        }
         let final_id = request_key.finalize(
             worker.get_initial_worker_metadata().agent_id,
             expected_fingerprint,

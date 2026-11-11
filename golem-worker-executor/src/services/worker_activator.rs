@@ -579,9 +579,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
             Err(error) => return Err(error),
         };
-        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
-            return Ok(false);
-        }
         match delivery {
             ExactExistingDelivery::WakeInvocation(key) => {
                 let status = worker.get_last_known_status().await;
