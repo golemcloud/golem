@@ -15,7 +15,7 @@
 use crate::Tracing;
 use futures::poll;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, InvocationFreshnessDisposition, Principal,
+    AgentMode, AgentPrincipal, AgentTarget, InvocationFreshnessDisposition, Principal,
 };
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::durable_stream::*;
@@ -84,7 +84,8 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
         .all()
         .rpc()
         .create_demand(
-            &target,
+            AgentTarget::Current(target.agent_id()),
+            target.environment_id,
             "increment",
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
@@ -115,7 +116,8 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
         .all()
         .rpc()
         .create_demand(
-            &target,
+            AgentTarget::Current(target.agent_id()),
+            target.environment_id,
             "increment",
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
@@ -240,7 +242,8 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     );
     remote
         .create_demand(
-            &OwnedAgentId::new(metadata.environment_id, &rpc_target),
+            AgentTarget::Current(rpc_target.clone()),
+            metadata.environment_id,
             "increment",
             metadata.created_by,
             &seed.agent_id(),

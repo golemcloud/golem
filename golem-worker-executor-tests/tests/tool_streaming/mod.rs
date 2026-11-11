@@ -885,7 +885,7 @@ pub(crate) fn deployment_state(
     let account_email = AccountEmail::new("test@golem");
     let mut registered_tools = BTreeMap::new();
 
-    for definition in definitions {
+    for (index, definition) in definitions.into_iter().enumerate() {
         let root_name = definition
             .commands
             .nodes
@@ -897,20 +897,26 @@ pub(crate) fn deployment_state(
         registered_tools.insert(
             name,
             RegisteredTool {
-                deployment_revision,
-                release_id: None,
-                metadata_digest: Default::default(),
-                definition,
-                provision: ToolProvisionConfig::default(),
-                component_bindings: Default::default(),
-                source: ToolSource::Component {
-                    component_id: provider_component_id,
-                    component_revision: provider_revision,
-                    component_name: ComponentName(provider_component_name.to_string()),
+                type_id: golem_common::model::type_id::TypeId::try_from(
+                    u32::try_from(index + 1).unwrap(),
+                )
+                .unwrap(),
+                registration: golem_common::model::tool::ToolRegistration {
+                    deployment_revision,
+                    release_id: None,
+                    metadata_digest: Default::default(),
+                    definition,
+                    provision: ToolProvisionConfig::default(),
+                    component_bindings: Default::default(),
+                    source: ToolSource::Component {
+                        component_id: provider_component_id,
+                        component_revision: provider_revision,
+                        component_name: ComponentName(provider_component_name.to_string()),
+                    },
+                    owner_account_id,
+                    owner_account_email: account_email.clone(),
+                    metadata_version: "0.1.0".to_string(),
                 },
-                owner_account_id,
-                owner_account_email: account_email.clone(),
-                metadata_version: "0.1.0".to_string(),
             },
         );
     }
@@ -928,14 +934,14 @@ pub(crate) fn deployment_state(
                 name.clone(),
                 CompiledToolBinding {
                     deployment_revision,
-                    release_id: tool.release_id,
-                    metadata_digest: tool.metadata_digest,
+                    release_id: tool.registration.release_id,
+                    metadata_digest: tool.registration.metadata_digest,
                     owner: ToolBindingOwner::AgentType {
                         agent_type_name: agent_type.clone(),
                     },
                     tool_name: name.clone(),
-                    version: tool.definition.version.clone(),
-                    metadata_version: tool.metadata_version.clone(),
+                    version: tool.registration.definition.version.clone(),
+                    metadata_version: tool.registration.metadata_version.clone(),
                     account_id: owner_account_id,
                     account_email: account_email.clone(),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -943,7 +949,7 @@ pub(crate) fn deployment_state(
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
-                    source: tool.source.clone(),
+                    source: tool.registration.source.clone(),
                 },
             )
         })
@@ -1688,8 +1694,13 @@ fn install_middleware_chain(
     middleware_definitions: &[ToolMiddleware],
     occurrences: Vec<(&str, TypedSchemaValue)>,
 ) {
-    let mut effective_definition = deployment.registered_tools[tool_name].definition.clone();
-    let owner_account_id = deployment.registered_tools[tool_name].owner_account_id;
+    let mut effective_definition = deployment.registered_tools[tool_name]
+        .registration
+        .definition
+        .clone();
+    let owner_account_id = deployment.registered_tools[tool_name]
+        .registration
+        .owner_account_id;
     let account_email = AccountEmail::new("middleware@golem");
     let registrations = middleware_definitions
         .iter()
@@ -1915,16 +1926,19 @@ fn native_deployment_state(
         implementation_version: "1.0.0".to_string(),
     };
     let registered = RegisteredTool {
-        deployment_revision,
-        release_id: None,
-        definition,
-        provision: ToolProvisionConfig::default(),
-        source: source.clone(),
-        owner_account_id,
-        owner_account_email: account_email.clone(),
-        metadata_version: "0.1.0".to_string(),
-        metadata_digest: definition_digest,
-        component_bindings: BTreeMap::new(),
+        type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+        registration: golem_common::model::tool::ToolRegistration {
+            deployment_revision,
+            release_id: None,
+            definition,
+            provision: ToolProvisionConfig::default(),
+            source: source.clone(),
+            owner_account_id,
+            owner_account_email: account_email.clone(),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: definition_digest,
+            component_bindings: BTreeMap::new(),
+        },
     };
     let agent_type = AgentTypeName(caller_agent_type.to_string());
     let owner = ToolBindingOwner::AgentType {
@@ -1935,9 +1949,9 @@ fn native_deployment_state(
         release_id: None,
         owner: owner.clone(),
         tool_name: tool_name.clone(),
-        version: registered.definition.version.clone(),
-        metadata_version: registered.metadata_version.clone(),
-        metadata_digest: registered.metadata_digest,
+        version: registered.registration.definition.version.clone(),
+        metadata_version: registered.registration.metadata_version.clone(),
+        metadata_digest: registered.registration.metadata_digest,
         account_id: owner_account_id,
         account_email,
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -1964,16 +1978,19 @@ fn native_deployment_state(
     state.registered_tools.insert(
         helper_name.clone(),
         RegisteredTool {
-            deployment_revision,
-            release_id: None,
-            definition: helper_definition,
-            provision: ToolProvisionConfig::default(),
-            source: helper_source.clone(),
-            owner_account_id,
-            owner_account_email: AccountEmail::new("test@golem"),
-            metadata_version: "0.1.0".to_string(),
-            metadata_digest: helper_digest,
-            component_bindings: BTreeMap::new(),
+            type_id: golem_common::model::type_id::TypeId::try_from(2_u32).unwrap(),
+            registration: golem_common::model::tool::ToolRegistration {
+                deployment_revision,
+                release_id: None,
+                definition: helper_definition,
+                provision: ToolProvisionConfig::default(),
+                source: helper_source.clone(),
+                owner_account_id,
+                owner_account_email: AccountEmail::new("test@golem"),
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: helper_digest,
+                component_bindings: BTreeMap::new(),
+            },
         },
     );
     state.tool_bindings.get_mut(&owner).unwrap().insert(
@@ -17562,10 +17579,9 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
     Ok(())
 }
 
-/// Node exits once only unreferenced timers remain: the runtime cancels the pending `wait-for` of
-/// the interval. A short referenced timer runs first, so that `wait-for` has already recorded its
-/// `now` read, whatever the runtime does once it becomes idle. The next rebuild of the owner
-/// replays the completed body with that cancelled wait.
+/// Node exits once only unreferenced timers remain. An HTTP response keeps the body alive until
+/// the interval's internal clock read completes, then the runtime cancels the pending wait.
+/// The next rebuild of the owner replays the completed body with that cancelled wait.
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -17626,18 +17642,69 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
         )
         .await?;
 
-    let unreferenced = invoke_cli_tool(
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let script = format!(
+        "setInterval(() => {{}}, 60_000).unref(); await fetch('http://{address}/'); console.log('done')"
+    );
+    let release_after_clock_read = async {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (connection, _) = listener.accept().await?;
+        let mut connection = BufReader::new(connection);
+        loop {
+            let mut line = String::new();
+            anyhow::ensure!(
+                connection.read_line(&mut line).await? != 0,
+                "HTTP request ended early"
+            );
+            if line == "\r\n" {
+                break;
+            }
+        }
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let completed_clock_read = entries.iter().any(|read| {
+                let PublicOplogEntry::Start(start) = &read.entry else {
+                    return false;
+                };
+                start.function_name.ends_with("monotonic-clock::now")
+                    && entries.iter().any(|wait| {
+                        Some(wait.oplog_index) == start.parent_start_index
+                            && matches!(&wait.entry, PublicOplogEntry::Start(start)
+                                if start.function_name.ends_with("monotonic-clock::wait-for"))
+                    })
+                    && entries.iter().any(|entry| {
+                        matches!(&entry.entry, PublicOplogEntry::End(end)
+                            if end.start_index == read.oplog_index)
+                    })
+            });
+            if completed_clock_read {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        connection
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let invocation = invoke_cli_tool(
         &executor,
         &caller_component,
         agent_name,
         "node",
         "/workspace",
-        vec![
-            "-e",
-            "setInterval(() => {}, 60_000).unref(); setTimeout(() => console.log('done'), 5)",
-        ],
-    )
-    .await?;
+        vec!["-e", &script],
+    );
+    let (unreferenced, ()) = tokio::try_join!(invocation, async {
+        tokio::time::timeout(Duration::from_secs(30), release_after_clock_read)
+            .await
+            .map_err(|_| anyhow::anyhow!("the interval's clock read did not complete"))?
+    })?;
+    drop(listener);
     assert_eq!(unreferenced.exit_code, 0, "{unreferenced:?}");
     assert_eq!(unreferenced.stdout, b"done\n");
     assert!(unreferenced.stderr.is_empty());

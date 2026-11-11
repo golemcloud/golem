@@ -18,7 +18,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
@@ -247,7 +249,8 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn create_demand(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -260,14 +263,25 @@ impl Rpc for StreamingRemoteRpc {
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                agent,
+                environment_id,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -282,7 +296,18 @@ impl Rpc for StreamingRemoteRpc {
     ) -> Result<SchemaValue, RpcError> {
         self.inner
             .invoke_and_await(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
                 card,
             )
             .await
@@ -290,7 +315,8 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn invoke_and_await_streaming(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: IdempotencyKey,
         method: String,
         input: ProtoSchemaValue,
@@ -310,6 +336,7 @@ impl Rpc for StreamingRemoteRpc {
         self.remote
             .invoke_and_await_streaming(
                 agent,
+                environment_id,
                 key,
                 method,
                 input,
@@ -349,7 +376,8 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn invoke(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -363,7 +391,18 @@ impl Rpc for StreamingRemoteRpc {
     ) -> Result<(), RpcError> {
         self.inner
             .invoke(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
             )
             .await
     }

@@ -14,10 +14,9 @@
 
 use super::{
     AccountId, ActivatePluginRequest, AgentInvocation, AgentMetadataDto, AgentMetadataForGuests,
-    AuthCtx, DeactivatePluginRequest, HasAll, IdempotencyKey, InvocationContextStack, OplogIndex,
-    PluginPriority, Principal, ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps,
-    Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id,
-    extract_principal,
+    AuthCtx, DeactivatePluginRequest, HasAll, IdempotencyKey, OplogIndex, PluginPriority,
+    ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps, Worker, WorkerCtx,
+    WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, extract_principal,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -126,29 +125,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
 
-        let worker = Worker::get_or_create_running(
+        Worker::enqueue_oplog_processor(
             self,
             &owned_agent_id,
-            None,
-            Vec::new(),
-            Some(component_revision),
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await?;
-
-        let _result = worker
-            .invoke(AgentInvocation::ProcessOplogEntries {
+            component_revision,
+            AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
                 entries,
-            })
-            .await?;
-
-        Ok(())
+            },
+        )
+        .await
     }
 }

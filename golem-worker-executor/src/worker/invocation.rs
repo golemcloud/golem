@@ -118,13 +118,37 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
     .await
 }
 
-/// Describes how an invocation is being executed with respect to the oplog.
-#[allow(clippy::large_enum_variant)]
-pub enum InvocationMode {
-    /// The invocation is happening live and should write oplog markers.
-    Live(crate::worker::HydratedInvocation),
-    /// The invocation is being replayed from the oplog; no markers need to be written.
-    Replay,
+/// Admits a pending invocation before executing it. `None` means admission declined to start.
+pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
+    lowered: LoweredInvocation,
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    invocation: crate::worker::HydratedInvocation,
+) -> Result<Option<InvokeResult>, WorkerExecutorError> {
+    let mut store = store.as_context_mut();
+    let was_live_before = store.data().is_live();
+    let started = async {
+        store
+            .data_mut()
+            .on_agent_invocation_started(invocation)
+            .await
+    }
+    .instrument(span!(Level::INFO, "on_agent_invocation_started"))
+    .await;
+    match started {
+        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance)
+            .await
+            .map(Some),
+        Ok(false) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            Ok(None)
+        }
+        Err(error) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            record_invocation(was_live_before, "failed");
+            Err(error)
+        }
+    }
 }
 
 /// Invokes a function on a worker.
@@ -136,20 +160,20 @@ pub enum InvocationMode {
 /// - `lowered`: the lowered invocation describing what to invoke
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
-/// - `mode`: whether this is a live invocation or a replay
+///
+/// Pending live invocations must first pass admission through
+/// [`invoke_live_observed_and_traced`]. Replay and snapshot calls need no pending admission.
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance, mode).await;
+    let result = invoke_observed(lowered, &mut store, instance).await;
 
     match &result {
-        Ok(InvokeResult::NotStarted) => result,
         Err(_) => {
             record_invocation(was_live_before, "failed");
             result
@@ -193,7 +217,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -204,28 +227,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     } = lowered;
     let operator_authorized_oplog_processor =
         matches!(&call, LoweredCall::ProcessOplogEntries { .. });
-
-    if let InvocationMode::Live(invocation) = mode {
-        let started = async {
-            store
-                .data_mut()
-                .on_agent_invocation_started(invocation)
-                .await
-        }
-        .instrument(span!(Level::INFO, "on_agent_invocation_started"))
-        .await;
-        match started {
-            Ok(true) => {}
-            Ok(false) => {
-                store.data_mut().on_agent_invocation_finished().await;
-                return Ok(InvokeResult::NotStarted);
-            }
-            Err(error) => {
-                store.data_mut().on_agent_invocation_finished().await;
-                return Err(error);
-            }
-        }
-    }
 
     // The invocation start records the authority that admits any secret handles
     // carried by the input. Materialize those handles only after that admission.
@@ -1453,8 +1454,6 @@ pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
 
 #[derive(Debug, Clone)]
 pub enum InvokeResult {
-    /// The pending invocation was removed before its start transition.
-    NotStarted,
     /// The invoked function exited with exit code 0
     Exited { consumed_fuel: u64 },
     /// The invoked function has failed
@@ -1548,7 +1547,6 @@ impl InvokeResult {
 
     pub fn consumed_fuel(&self) -> u64 {
         match self {
-            InvokeResult::NotStarted => 0,
             InvokeResult::Exited { consumed_fuel, .. }
             | InvokeResult::Failed { consumed_fuel, .. }
             | InvokeResult::Succeeded { consumed_fuel, .. }
@@ -2455,8 +2453,6 @@ mod tests {
         ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             vec![at],
             BTreeMap::new(),
         )

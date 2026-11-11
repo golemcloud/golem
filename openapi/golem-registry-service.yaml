@@ -14053,6 +14053,21 @@ components:
           $ref: '#/components/schemas/McpImportDeployment'
         callback:
           $ref: '#/components/schemas/McpImportOAuthCallback'
+    ComponentAgentTypeDto:
+      type: object
+      title: ComponentAgentTypeDto
+      required:
+      - declaration
+      properties:
+        declaration:
+          $ref: '#/components/schemas/AgentTypeSchema'
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          nullable: true
+          example: 1
     ComponentConfigSchema:
       type: object
       properties:
@@ -14182,16 +14197,17 @@ components:
           type: integer
           format: uint64
         metadata:
-          $ref: '#/components/schemas/ComponentMetadata'
+          $ref: '#/components/schemas/ComponentMetadataDto'
         createdAt:
           type: string
           format: date-time
         wasmHash:
           type: string
           format: hash
-    ComponentMetadata:
+    ComponentMetadataDto:
       type: object
-      title: ComponentMetadata
+      title: ComponentMetadataDto
+      description: Component metadata projected for REST responses, with identities beside declarations.
       required:
       - knownExports
       - producers
@@ -14209,10 +14225,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        rootPackageName:
-          type: string
-        rootPackageVersion:
-          type: string
         configSchema:
           default:
             schema:
@@ -14234,31 +14246,25 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/AgentTypeSchema'
+            $ref: '#/components/schemas/ComponentAgentTypeDto'
         agentMethodStreams:
           type: object
-          description: Server-derived streaming classification for each declared agent method.
           additionalProperties:
             type: object
             additionalProperties:
               $ref: '#/components/schemas/AgentMethodStreamMetadata'
         agentTypeProvisionConfigs:
           type: object
-          description: |-
-            Per-agent-type provisioning configuration: env, config, plugins, files.
-            Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
         tools:
           type: object
-          description: Complete deployment input for every tool implemented by this component.
           default: {}
           additionalProperties:
-            $ref: '#/components/schemas/ToolDeploymentMetadata'
+            $ref: '#/components/schemas/ComponentToolDto'
         toolMiddlewares:
           type: object
-          description: Complete deployment input for every tool middleware implemented by this component.
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
@@ -14318,6 +14324,21 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/AgentFileOptions'
+    ComponentToolDto:
+      type: object
+      title: ComponentToolDto
+      required:
+      - declaration
+      properties:
+        declaration:
+          $ref: '#/components/schemas/ToolDeploymentMetadata'
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          nullable: true
+          example: 1
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -14643,9 +14664,15 @@ components:
         RegisteredAgentType with deployment specific information
         Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
       required:
+      - typeId
       - agentType
       - implementedBy
       properties:
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          example: 1
         agentType:
           $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
@@ -14656,6 +14683,7 @@ components:
       type: object
       title: DeployedRegisteredTool
       required:
+      - typeId
       - deploymentRevision
       - definition
       - source
@@ -14664,6 +14692,11 @@ components:
       - metadataVersion
       - metadataDigest
       properties:
+        typeId:
+          type: integer
+          format: uint32
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          example: 1
         deploymentRevision:
           type: integer
           format: uint64

@@ -547,6 +547,7 @@ fn handle_create(
         owner_kind: match params.owner_kind {
             OwnerKind::ComponentAgent => "component-agent",
             OwnerKind::EphemeralExternalTool => "ephemeral-external-tool",
+            OwnerKind::OplogProcessor => "oplog-processor",
         },
     });
 

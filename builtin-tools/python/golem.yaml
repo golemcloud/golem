@@ -1,4 +1,4 @@
-manifestVersion: 1.6.0
+manifestVersion: 2.0.0
 app: golem-builtin-python
 
 componentTemplates:
@@ -10,10 +10,9 @@ componentTemplates:
           - command: cargo build --locked --release --target wasm32-wasip2 --lib
             dir: "{{ appRootDir }}"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/golem_python.wasm"
-        outputWasm: "{{ golemTempDir }}/components/golem_python.wasm"
         customCommands:
           copy:
-            - command: cp "{{ golemTempDir }}/components/golem_python.wasm" "{{ appRootDir }}/../python.wasm"
+            - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/golem_python.wasm" "{{ appRootDir }}/../python.wasm"
 
 components:
   golem:python:

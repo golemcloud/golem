@@ -309,8 +309,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
-        worker.ensure_component_agent_ingress("update")?;
         let metadata = worker.get_latest_worker_metadata().await;
+        if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return Err(WorkerExecutorError::invalid_request(
+                "update is not supported for an external tool owner",
+            ));
+        }
+        worker.ensure_component_agent_ingress("update")?;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
@@ -336,15 +341,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if mode != UpdateMode::Automatic
             && let Ok(target_component_metadata) = deps
                 .component_service()
-                .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+                .get_metadata(metadata.component_id, Some(target_revision))
                 .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
-                &owned_agent_id.agent_id.agent_id,
-                &target_component_metadata.metadata,
-            )
+            && let Some(agent_type_name) = &metadata.agent_type_name
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
+                .find_agent_type_by_name_ref(agent_type_name)
+            && ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {
@@ -355,7 +358,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     owned_agent_id,
                     persisted_mode,
                     target_revision,
-                    agent_id.agent_type,
+                    agent_type_name,
                     target_agent_type.mode,
                     persisted_mode,
                 )));
@@ -540,15 +543,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_metadata = deps
             .component_service()
             .get_metadata(
-                owned_agent_id.agent_id.component_id,
+                metadata.component_id,
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let grant_id = component_metadata
             .metadata
-            .owner_plugins(metadata.owner_kind, agent_type.as_ref())
+            .owner_plugins(metadata.owner_kind, metadata.agent_type_name.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -965,10 +966,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Records the start of an ephemeral agent's execution before any of its guest code runs.
     /// The committed `Restart` makes the agent fail-stop; scheduled cancellation takes the same
-    /// instance mutex, so exactly one of them wins.
-    pub(in crate::worker) async fn begin_ephemeral_execution(
-        &self,
-    ) -> Result<EphemeralStart, WorkerExecutorError> {
+    /// instance mutex, so exactly one of them wins. Targets created for future work stay unloaded
+    /// until that work is due. A loss after this commit never permits another execution, even if
+    /// instantiation had not yet run guest code.
+    pub async fn begin_ephemeral_execution(&self) -> Result<EphemeralStart, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
         let status = self
             .state_actor
@@ -987,9 +988,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(decision)
     }
 
-    /// Restarts an ephemeral worker that stopped as not runnable if its start would run now. A
-    /// start requested while the stop was in progress joined the stopping attempt and was lost.
-    pub(in crate::worker) async fn restart_if_ephemeral_start_became_runnable(self: &Arc<Self>) {
+    /// Rechecks due work after a never-started ephemeral worker stopped as not runnable. A wake
+    /// during the stop can join the stopping attempt without starting a new instance. Requesting
+    /// a start after the stop prevents that race from stranding the first execution. This does not
+    /// reconstruct an ephemeral instance that already executed guest code.
+    pub async fn restart_if_ephemeral_start_became_runnable(self: &Arc<Self>) {
         let Ok(status) = self.state_actor.try_status().await else {
             return;
         };
@@ -1007,7 +1010,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         }
     }
-    /// Cancels only scheduled work recorded for this incarnation and scheduling agent.
+    /// Commits cancellation only for scheduled work belonging to this incarnation and scheduling
+    /// agent. Returns false for a stale receipt, withdrawn work, or a start that already won.
+    /// Cancelling a never-started ephemeral target also withdraws its constructor reservation, so
+    /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
         idempotency_key: IdempotencyKey,
@@ -1085,6 +1091,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot cancel invocation on a deleting worker",
             ));
         };
+
+        let status = self.get_repaired_status().await?;
+        if !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            return Ok(());
+        }
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
@@ -1377,11 +1392,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or(status.component_revision);
         let (_, active_component) = self
             .component_service()
-            .get(
-                &self.engine(),
-                self.owned_agent_id.component_id(),
-                active_revision,
-            )
+            .get(&self.engine(), self.component_id(), active_revision)
             .await?;
 
         let selection = self.select_start(status).await?;
@@ -1390,7 +1401,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             active_component.clone()
         } else {
             self.component_service()
-                .get_metadata(self.owned_agent_id.component_id(), Some(replay_revision))
+                .get_metadata(self.component_id(), Some(replay_revision))
                 .await?
         };
 

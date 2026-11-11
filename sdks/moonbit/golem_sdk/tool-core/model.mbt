@@ -16,6 +16,12 @@ pub suberror ToolBuildError {
 } derive(Eq, Debug)
 
 ///|
+pub extend ToolBuildError with Eq::{equal, not_equal}
+
+///|
+pub extend ToolBuildError with Debug::{to_repr}
+
+///|
 pub(all) struct ToolDef {
   version : String
   requires_filesystem : Bool
@@ -28,7 +34,7 @@ pub(all) struct CommandNodeDef {
   aliases : Array[String]
   doc : @toolCommon.Doc
   globals : GlobalsDef
-  subcommands : Array[Int]
+  subcommands : Array[Int32]
   body : CommandBodyDef?
 }
 
@@ -75,8 +81,8 @@ pub(all) struct TailPositionalDef {
   doc : @toolCommon.Doc
   value_name : String?
   item_type : @model.SchemaGraph
-  min : UInt
-  max : UInt?
+  min : UInt32
+  max : UInt32?
   separator : String?
   verbatim : Bool
   accepts_stdio : Bool
@@ -571,7 +577,7 @@ fn ErrorCaseDef::to_error_case(
 fn encode_graph_root(
   encoder : @model.GraphEncoder,
   graph : @model.SchemaGraph,
-) -> Int raise ToolBuildError {
+) -> Int32 raise ToolBuildError {
   encoder.encode_type(graph.root) catch {
     e => raise SchemaModelError(Repr(e).to_string())
   }

@@ -697,16 +697,7 @@ impl ParsedAgentId {
     }
 
     pub fn parts(&self) -> Result<ParsedAgentIdParts, GolemReflectError> {
-        let (type_name, typed, phantom_id) =
-            host::parse_agent_id(&self.0).map_err(agent_error_to_reflect)?;
-        let typed = crate::decode_typed_schema_value(&typed)
-            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-        Ok(ParsedAgentIdParts {
-            type_name,
-            constructor_value: typed.value().clone(),
-            constructor_schema: typed.graph().clone(),
-            phantom_id: phantom_id.map(crate::wire_uuid_to_schema),
-        })
+        super::identity::parts(&self.0)
     }
 
     pub fn dynamic_client(&self) -> Result<DynamicAgentClient, GolemReflectError> {
@@ -745,15 +736,7 @@ pub fn make_agent_id_value(
     constructor_value: SchemaValue,
     phantom_id: Option<Uuid>,
 ) -> Result<ParsedAgentId, GolemReflectError> {
-    let encoded = crate::encode_schema_value(&constructor_value)
-        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-    let agent_id = host::make_agent_id(
-        type_name,
-        encoded,
-        phantom_id.map(crate::schema_uuid_to_wire),
-    )
-    .map_err(agent_error_to_reflect)?;
-    Ok(ParsedAgentId::new(agent_id))
+    super::identity::make_agent_id_value(type_name, constructor_value, phantom_id)
 }
 
 #[derive(Clone, Debug)]
@@ -1733,17 +1716,9 @@ impl RpcTransport {
         phantom_id: Option<Uuid>,
         config: Vec<AgentConfigValue>,
     ) -> Result<Self, GolemReflectError> {
-        let config = config
-            .into_iter()
-            .map(|value| {
-                Ok(wire_common::TypedAgentConfigValue {
-                    path: value.path,
-                    value: crate::encode_typed_schema_value_owned(value.value)
-                        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?,
-                })
-            })
-            .collect::<Result<Vec<_>, GolemReflectError>>()?;
-        Self::create_with_typed_config(type_name, constructor, phantom_id, config)
+        let raw =
+            super::identity::connect_with_config(&type_name, &constructor, phantom_id, config)?;
+        Ok(Self { raw })
     }
 
     fn create_with_typed_config(
@@ -1752,15 +1727,7 @@ impl RpcTransport {
         phantom_id: Option<Uuid>,
         config: Vec<wire_common::TypedAgentConfigValue>,
     ) -> Result<Self, GolemReflectError> {
-        let constructor = crate::encode_schema_value(&constructor)
-            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let raw = host::WasmRpc::create(
-            &type_name,
-            constructor,
-            phantom_id.map(crate::schema_uuid_to_wire),
-            config,
-        )
-        .map_err(rpc_error_to_reflect)?;
+        let raw = super::identity::connect(&type_name, &constructor, phantom_id, config)?;
         Ok(Self { raw })
     }
 

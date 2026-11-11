@@ -6,7 +6,7 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 import * as AgentIdentity from "./AgentIdentity.js"
 import type { Identity } from "./AgentIdentity.js"
-import { rawPhantomId } from "./AgentIdentity.js"
+import { connectIdentity } from "./internal/agentIdentity.js"
 import type { AgentMetadata } from "./Agent.js"
 import {
   ConfigError,
@@ -516,15 +516,8 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
           )
         }
       }
-      const phantom = yield* Effect.try({
-        try: () => rawPhantomId(identity),
-        catch: (cause) => new ClientBindingError(String(cause)),
-      })
-      const host = yield* RpcClient
       const rpc = yield* Effect.acquireRelease(
-        host
-          .connect(identity.typeName, identity.constructorValue, phantom, entries)
-          .pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
+        connectIdentity(identity, entries, (cause) => new ClientBindingError(String(cause))),
         (connection) => Effect.sync(() => connection.drop()),
       )
       return buildRemote(rpc, compiled, false, options?.scopeCard) as RemoteAgent<Methods>

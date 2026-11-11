@@ -43,7 +43,7 @@ use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
 use desert_rust::BinarySerializer;
 use golem_common::base_model::durable_stream::StreamSessionKey;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::card::CardTransferIndex;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
@@ -144,6 +144,15 @@ pub struct ResolvedAgentIdentity {
     pub agent_mode: AgentMode,
     pub fingerprint: AgentFingerprint,
     pub create_entry: OplogEntry,
+}
+
+impl ResolvedAgentIdentity {
+    pub(crate) fn create_parameters(&self) -> &golem_common::model::oplog::CreateParameters {
+        match &self.create_entry {
+            OplogEntry::Create { parameters, .. } => parameters,
+            _ => unreachable!("resolved identity requires an authoritative Create entry"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]

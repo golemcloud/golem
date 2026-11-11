@@ -612,7 +612,9 @@ fn configure_scope_card_root(
 ) -> anyhow::Result<CardId> {
     let card = component
         .metadata
-        .agent_type_initial_permission_card(&agent_id.agent_type)
+        .agent_type_provision_configs
+        .get(&agent_id.agent_type)
+        .map(|config| &config.initial_permissions)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("missing scope-card test initial card"))?;
     let card = StoredCard::Polymorphic(card);
@@ -817,7 +819,9 @@ async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspectin
     let target_card = StoredCard::Polymorphic(
         component
             .metadata
-            .agent_type_initial_permission_card(&target.agent_type)
+            .agent_type_provision_configs
+            .get(&target.agent_type)
+            .map(|config| &config.initial_permissions)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing sealed-scope test initial card"))?,
     );
@@ -3055,6 +3059,7 @@ async fn tool_card_derivations_freeze_aliases_across_reconstruction(
             .registered_tools
             .get_mut(&ToolName::try_from("tool").unwrap())
             .unwrap()
+            .registration
             .definition
             .commands
             .nodes[0]

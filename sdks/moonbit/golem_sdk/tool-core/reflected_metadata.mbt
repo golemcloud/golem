@@ -4,7 +4,7 @@ pub fn ToolDef::from_wire(
   tool : @toolCommon.Tool,
 ) -> ToolDef raise ToolBuildError {
   try {
-    let graph = (root : Int) => {
+    let graph = (root : Int32) => {
       @model.schema_graph_from_wit({ ..tool.schema, root, })
     }
     let value = (tree : @types.SchemaValueTree) => {

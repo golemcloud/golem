@@ -138,6 +138,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         CreateParameters(
           ts,
           mockAgentId,
+          OwnerKind.ComponentAgent,
           BigInt(1),
           Map("env" -> "val"),
           "golem",
@@ -300,6 +301,13 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("OplogIndex type alias") {
       val idx: OplogIndex = BigInt(99)
       assertTrue(idx == BigInt(99))
+    },
+    test("owner kinds preserve the WIT discriminant") {
+      assertTrue(
+        OwnerKind.fromJs("component-agent") == OwnerKind.ComponentAgent,
+        OwnerKind.fromJs("ephemeral-external-tool") == OwnerKind.EphemeralExternalTool,
+        OwnerKind.fromJs("oplog-processor") == OwnerKind.OplogProcessor
+      )
     }
   )
 }

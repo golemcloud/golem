@@ -431,6 +431,12 @@ const importObject = {
     "parse-agent-id"() {
       throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
     },
+    "make-agent-id"() {
+      throw new Error("unexpected identity creation in SDK unit-test host")
+    },
+    "[static]wasm-rpc.create"() {
+      throw new Error("unexpected RPC connection in SDK unit-test host")
+    },
   },
   "wasi:logging/logging": {
     log() {

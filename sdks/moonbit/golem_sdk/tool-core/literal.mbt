@@ -8,6 +8,12 @@ pub(all) enum ToolLiteral {
 } derive(Eq, Debug)
 
 ///|
+pub extend ToolLiteral with Eq::{equal, not_equal}
+
+///|
+pub extend ToolLiteral with Debug::{to_repr}
+
+///|
 pub fn literal_to_schema_value(
   graph : @model.SchemaGraph,
   literal : ToolLiteral,
@@ -113,14 +119,14 @@ fn interpret_scalar(
     @model.SchemaTypeBody::Bool =>
       @model.SchemaValue::Bool(parse_authored(token, "bool"))
     @model.SchemaTypeBody::S8(_) => {
-      let value : Int = parse_authored(token, "s8")
+      let value : Int32 = parse_authored(token, "s8")
       guard value >= -128 && value <= 127 else {
         raise InvalidLiteral("s8 literal '\{token}' is out of range")
       }
       @model.SchemaValue::S8(value)
     }
     @model.SchemaTypeBody::S16(_) => {
-      let value : Int = parse_authored(token, "s16")
+      let value : Int32 = parse_authored(token, "s16")
       guard value >= -32768 && value <= 32767 else {
         raise InvalidLiteral("s16 literal '\{token}' is out of range")
       }
@@ -131,7 +137,7 @@ fn interpret_scalar(
     @model.SchemaTypeBody::S64(_) =>
       @model.SchemaValue::S64(parse_authored(token, "s64"))
     @model.SchemaTypeBody::U8(_) => {
-      let value : UInt = parse_authored(token, "u8")
+      let value : UInt32 = parse_authored(token, "u8")
       guard value <= 255 else {
         raise InvalidLiteral("u8 literal '\{token}' is out of range")
       }

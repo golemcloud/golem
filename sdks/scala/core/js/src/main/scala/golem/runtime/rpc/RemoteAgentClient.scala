@@ -18,13 +18,13 @@ package golem.runtime.rpc
 
 import golem.Datetime
 import java.util.UUID
-import golem.config.{ConfigOverride, ConfigOverrideEncoder}
+import golem.config.ConfigOverride
 import golem.FutureInterop
 import golem.host.PermissionsApi.ScopeCard
-import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
+import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
+import golem.runtime.rpc.host.WasmRpcApi
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
-import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -132,20 +132,7 @@ object RemoteAgentClient {
     phantom: Option[UUID],
     configOverrides: List[ConfigOverride]
   ): Either[String, RemoteAgentClient] =
-    AgentHostApi
-      .registeredAgentType(agentTypeName)
-      .toRight(s"Agent type '$agentTypeName' is not registered on this host")
-      .flatMap { agentType =>
-        val displayTypeName = agentType.agentType.typeName
-        AgentHostApi.makeAgentId(displayTypeName, constructorPayload, phantom).map { id =>
-          val phantomArg: js.UndefOr[JsUuid] = phantom.fold[js.UndefOr[JsUuid]](js.undefined)(JsUuid.fromUuid)
-          val jsConfig                       =
-            if (configOverrides.isEmpty) js.Array[JsTypedAgentConfigValue]()
-            else ConfigOverrideEncoder.encode(configOverrides)
-          val rpcClient = WasmRpcApi.newClient(displayTypeName, constructorPayload, phantomArg, jsConfig)
-          RemoteAgentClient(displayTypeName, id, agentType, new WasmRpcInvoker(rpcClient))
-        }
-      }
+    AgentIdentity.resolve(agentTypeName, constructorPayload, phantom, configOverrides)
 
   private[rpc] final class WasmRpcInvoker(client: WasmRpcClient) extends RpcInvoker {
 

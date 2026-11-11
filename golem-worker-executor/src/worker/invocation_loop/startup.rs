@@ -274,7 +274,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
 /// Whether an ephemeral start may run guest code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::worker) enum EphemeralStart {
+pub enum EphemeralStart {
     /// The start records `Restart` and runs.
     Begin,
     /// Only scheduled work that is not yet due is pending; nothing may run before it is due.
@@ -287,7 +287,7 @@ pub(in crate::worker) enum EphemeralStart {
 /// constructor and uses it up, so only an agent that began, or one with a method due now, may be
 /// started for an inspection; any other start would come before the agent's accepted work, such
 /// as a schedule whose commit a caller is still repairing.
-pub(in crate::worker) fn ephemeral_inspection_may_start(
+pub fn ephemeral_inspection_may_start(
     status: &AgentStatusRecord,
     initialization_key: &IdempotencyKey,
     now: Timestamp,
@@ -303,7 +303,7 @@ pub(in crate::worker) fn ephemeral_inspection_may_start(
 /// Decides an ephemeral start from the folded status. A begun agent keeps today's behavior. A
 /// never-started agent runs only when it has pending work and that work is not only scheduled
 /// for later: its constructor reservation alone does not make it due.
-pub(in crate::worker) fn ephemeral_start_decision(
+pub fn ephemeral_start_decision(
     status: &AgentStatusRecord,
     initialization_key: &IdempotencyKey,
     now: Timestamp,

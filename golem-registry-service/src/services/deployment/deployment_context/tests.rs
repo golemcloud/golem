@@ -24,6 +24,7 @@ use golem_common::model::tool_release::{
     ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
     ToolReleaseReference,
 };
+use golem_common::schema::RegisteredAgentTypeSchema;
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, InputSchema,
 };
@@ -1453,8 +1454,6 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
                 ..KnownExports::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             tools,
@@ -1836,6 +1835,10 @@ fn routers_do_not_contribute_mcp_capabilities_or_security_schemes() {
 fn compile_mcp_mixes_agents_and_native_tools_and_persists_pinned_definition() {
     let environment = test_environment();
     let (agent_name, agent) = test_registered_agent_type("AgentA");
+    let expected_agent = RegisteredAgentTypeSchema {
+        agent_type: agent.agent_type.clone(),
+        implemented_by: agent.implemented_by.clone(),
+    };
     let definition = executable_test_tool("foo", "bar");
     let component = native_tool_component("owner", "foo", definition.clone());
     let deployment = mcp_deployment(
@@ -1889,6 +1892,7 @@ fn compile_mcp_mixes_agents_and_native_tools_and_persists_pinned_definition() {
         ..record
     })
     .unwrap();
+    assert_eq!(restored.registered_agent_types, vec![expected_agent]);
     assert_eq!(restored.tools.len(), 1);
     assert_eq!(restored.tools[0].owner_component_id, component.id);
     assert_eq!(restored.tools[0].definition, definition);

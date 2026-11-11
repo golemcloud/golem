@@ -78,7 +78,7 @@ test "generated middleware keeps independently authored versions" {
 
 ///|
 #warnings("-unused_async")
-fn counted_source_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
+fn counted_source_stream(drops : Ref[Int32]) -> @async-core.Stream[Byte] {
   let emitted = Ref(false)
   let closed = Ref(false)
   let close = fn() {
@@ -104,8 +104,8 @@ fn counted_source_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
 ///|
 #warnings("-unused_async")
 fn directly_counted_source_stream(
-  read : async (Int) -> FixedArray[Byte]?,
-  close_attempts : Ref[Int],
+  read : async (Int32) -> FixedArray[Byte]?,
+  close_attempts : Ref[Int32],
 ) -> @async-core.Stream[Byte] {
   @async-core.Stream::from_source(
     read,
@@ -155,7 +155,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       )
       match result {
         Ok(result) => {
-          let value : Int = generated_result_value(result)
+          let value : Int32 = generated_result_value(result)
           assert_eq(value, 5)
         }
         Err(error) => fail("generated forwarding failed: \{Repr(error)}")
@@ -211,7 +211,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       )
       match result {
         Ok(result) => {
-          let value : Int = generated_result_value(result)
+          let value : Int32 = generated_result_value(result)
           assert_eq(value, 6)
         }
         Err(error) => fail("generated adapter dispatch failed: \{Repr(error)}")
@@ -245,7 +245,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       )
       match result {
         Ok(result) => {
-          let value : Int = generated_result_value(result)
+          let value : Int32 = generated_result_value(result)
           assert_eq(value, 2)
         }
         Err(error) => fail("generated retry failed: \{Repr(error)}")
@@ -580,7 +580,7 @@ test "transfer-aware stdout closes its source when its producer is cancelled" {
       started.get()
       task.cancel()
       try task.wait() catch {
-        @async-core.Cancelled::Cancelled => ()
+        @async-core.TaskCancelled::TaskCancelled => ()
         _ => fail("unexpected transfer-aware stdout cancellation error")
       } noraise {
         _ => fail("cancelled transfer-aware stdout unexpectedly completed")

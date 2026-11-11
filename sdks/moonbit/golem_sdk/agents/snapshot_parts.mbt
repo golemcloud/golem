@@ -5,10 +5,22 @@ pub(all) struct SnapshotPart {
 } derive(Debug, Eq)
 
 ///|
+pub extend SnapshotPart with Debug::{to_repr}
+
+///|
+pub extend SnapshotPart with Eq::{equal, not_equal}
+
+///|
 pub(all) struct MultipartSnapshot {
   state : Json
   parts : Map[String, SnapshotPart]
 } derive(Debug, Eq)
+
+///|
+pub extend MultipartSnapshot with Debug::{to_repr}
+
+///|
+pub extend MultipartSnapshot with Eq::{equal, not_equal}
 
 ///|
 pub fn[S : ToJson] MultipartSnapshot::from_state(
@@ -73,7 +85,7 @@ fn snapshot_name(name : String) -> Bool {
   }
   for i in 0..<name.length() {
     let c = name[i]
-    if !(c is ('A'..='Z' | 'a'..='z' | '0'..='9' | '_')) &&
+    if !(c is ('A'..<='Z' | 'a'..<='z' | '0'..<='9' | '_')) &&
       !(i > 0 && c is ('.' | '-')) {
       return false
     }
@@ -90,9 +102,9 @@ fn snapshot_content_type(value : String) -> String raise SnapshotCodecError {
     for c in piece {
       snapshot_check(
         c
-        is ('A'..='Z'
-        | 'a'..='z'
-        | '0'..='9'
+        is ('A'..<='Z'
+        | 'a'..<='z'
+        | '0'..<='9'
         | '!'
         | '#'
         | '$'
@@ -116,7 +128,7 @@ fn snapshot_content_type(value : String) -> String raise SnapshotCodecError {
 }
 
 ///|
-fn snapshot_at(data : Bytes, marker : Bytes, pos : Int) -> Bool {
+fn snapshot_at(data : Bytes, marker : Bytes, pos : Int32) -> Bool {
   if pos < 0 || pos + marker.length() > data.length() {
     return false
   }
@@ -133,8 +145,8 @@ fn snapshot_delimiter(
   data : Bytes,
   marker : Bytes,
   newline : Bytes,
-  pos : Int,
-) -> (Int, Bool)? {
+  pos : Int32,
+) -> (Int32, Bool)? {
   if !snapshot_at(data, marker, pos) {
     return None
   }
@@ -174,7 +186,8 @@ fn snapshot_boundary(mime : String) -> String raise SnapshotCodecError {
   } else {
     for c in raw {
       snapshot_check(
-        c is ('A'..='Z' | 'a'..='z' | '0'..='9' | '\'' | '+' | '_' | '.' | '-'),
+        c
+        is ('A'..<='Z' | 'a'..<='z' | '0'..<='9' | '\'' | '+' | '_' | '.' | '-'),
         "Invalid unquoted boundary",
       )
     }
@@ -187,9 +200,9 @@ fn snapshot_boundary(mime : String) -> String raise SnapshotCodecError {
   for c in value {
     snapshot_check(
       c
-      is ('A'..='Z'
-      | 'a'..='z'
-      | '0'..='9'
+      is ('A'..<='Z'
+      | 'a'..<='z'
+      | '0'..<='9'
       | '\''
       | '('
       | ')'
@@ -300,7 +313,7 @@ fn snapshot_parse_parts(
       "Invalid or duplicate part name",
     )
     names[name] = true
-    let mut next : (Int, Int, Bool)? = None
+    let mut next : (Int32, Int32, Bool)? = None
     for i in pos..<data.length() {
       if snapshot_at(data, newline, i) &&
         snapshot_delimiter(data, marker, newline, i + newline.length())
@@ -456,7 +469,7 @@ fn snapshot_raw_object(
 }
 
 ///|
-fn snapshot_string_end(text : String, start : Int) -> Int {
+fn snapshot_string_end(text : String, start : Int32) -> Int32 {
   let mut pos = start + 1
   while text[pos] != '"' {
     if text[pos] == '\\' {

@@ -138,8 +138,12 @@ changes, and the entry was future at the last one, so delivery adds a durable ta
 before `AgentInvocationStarted` must still be recovered. Token cancellation validates the
 incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
 the wake, and shares the instance mutex with the committed pending-to-started transition. If
-cancellation wins, selected-but-not-started work is skipped without a result; if start wins,
-cancellation returns false. A delayed wake cannot recreate cancelled work.
+cancellation wins, selected-but-not-started work is skipped without executing. The
+`CancelPendingInvocation` entry retains the key in invocation-result membership, so a same-key
+schedule retry cannot restore the pending entry, even after restart or recent-index eviction.
+Result lookup reports cancellation rather than a successful execution. Cancelling an invocation
+that is no longer pending does not replace its completed result. If start wins, token cancellation
+returns false. A delayed wake cannot recreate cancelled work.
 An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
 its pending entry is committed like a durable target's. Its first start waits for the due wake; an
 ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in
@@ -286,10 +290,13 @@ The original retry decision, later interrupt arbitration, ephemeral fail-stop co
 cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
-each recorded invocation in `InvocationMode::Replay`, and when there is no further
+each recorded invocation through `invoke_observed_and_traced` without pending admission, and when there is no further
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Live queued invocations use `invoke_live_observed_and_traced`: it commits the pending-to-started
+transition before materializing inputs and returns `None` if admission declines to start. Replay
+and snapshot execution return `InvokeResult` directly, which has no not-started variant.
 Constructor-only replay covers restarts before the accepted invocation ran. An ephemeral agent
 never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
 would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,
@@ -1338,7 +1345,8 @@ that owns open nodes. Cleanup drains those nodes; retaining one across the drain
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
-the complete hidden stage is published atomically into an absent target under its lifecycle guard.
+only `ComponentAgent` sources are accepted. Oplog processors and external-tool owners are rejected before staging.
+The complete hidden stage is published atomically into an absent target under its lifecycle guard.
 Source and target guards are never held together, and publication releases the target guard before
 resuming the child. Before the publication, a `ForkCopy` ticket copies the filesystem snapshots of
 the source into the repository of the stage (`AgentSnapshots::agent(target, stage_id)`), and
@@ -1381,8 +1389,10 @@ generation's error.
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
 underlying classification. Infrastructure failures do not advance the agent's semantic retry policy:
-they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
-activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
+they remain `Retrying` without a semantic attempt limit. Known transient startup failures request
+`RecoveryRequired`, so the durable loop backs off and reconstructs automatically while its callers
+wait. Infrastructure errors that stop the loop instead retry on the next demand (invoke, resume,
+scheduler activation, or shard reassignment).
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
 An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
 terminal, because recovery has no compatible replay fallback. A payload download failure is
@@ -1800,6 +1810,46 @@ prefix verification applies to the in-session `Range` resume after a transient m
 failure. External peers must deduplicate ambiguous writes. Preview 2 HTTP is not supported;
 Rust uses `golem_rust::http`.
 Tests: `tests/http/concurrent_recovery.rs`.
+
+The outgoing request's `body-transmission` result is also a guest input. Its Store task uses
+deferred completion and the transmission `FutureReader` retains the delivery token until its
+terminal observer confirms consumption or discard. Live and replay both use the fresh-block
+delivery gate; replay waits for the recorded marker before resolving the future. A reader retained
+across invocations records its marker in the invocation that consumes it. While an
+`AgentInvocationFinished` lies between the cursor and that marker, the marker wait parks its
+passive progress wait, so the invocation that recorded the `End` can settle and the consuming
+invocation can replay. Its cursor operations stay active. The wait finds that finish in
+`invocation_finishes`, which the recovery metadata scan builds and keeps in step with the replay
+target, so the wait adds no oplog reads. Completing the
+host channel without this boundary can wake the POST continuation early and exchange the import
+ordinals of concurrent response-body consumers. Response trailers share the same
+`HttpFutureDelivery` observer state. Transmission readers returned by request and response
+constructors retain weak identity witnesses in the resident `HttpTransmissionRegistry`.
+Passing one back to either `consume-body` changes its destination to a host consumer before
+Wasmtime pipes it. Host consumption has no guest terminal observer: its markerless recorded
+result settles immediately on replay, without waiting for the recipient's later history.
+Transfer notification also interrupts an already pending guest-delivery wait. Actual recorded
+guest delivery or discard markers cannot be bypassed by transfer.
+
+A request or constructed response consumed with host-created input records its recipient
+transmission after demand and input resolution; guest-written input and resource drop retain
+deterministic passthrough. The recipient parks on its input before opening a durable call.
+Its source may still be an unconsumed resource retained by the guest, even after the recipient
+is consumed. Cancelling and dropping or retaining the recipient reader must not prevent the
+invocation from finishing so a later invocation can release that source. An underlying outgoing
+transmission keeps its own network I/O active; the recipient does not duplicate that ownership.
+Both constructors keep pending wiring in the resident registry until the resource
+is consumed or dropped. Polling and cancelling a response's transmission read cannot start
+active tail work while the unconsumed response remains guest-owned, even when the reader also
+survives into a later invocation. The consume boundary captures the current custom invocation's
+observational owner before spawning; spawned Store tasks do not inherit the guest-task context.
+Transfers can chain: each host-consumed source settles internally and the final guest-facing
+recipient owns the observation marker. An incoming client response has no constructor
+transmission future; its existing body/trailers path owns any guest observation. The shared
+recorder uses the `request::body-transmission` call contract for constructor transmission
+results. The executor invokes Golem exports, not a WASI HTTP handler. A future handler-to-network
+entry point must activate pending response wiring at its ownership-transfer boundary, like
+the existing request-send path, rather than starting recording in the constructor.
 
 Host completion time and guest observation time are different facts. Only the second is a guest
 input, and only the second must recur exactly; the first may vary between runs.
@@ -2345,14 +2395,24 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
 - `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
-- `UPDATE_BLOB_STORAGE_REFUSED`: at the update point, the blob storage refused the executor a read
-  of an initial-file source of the target (`FilesystemError::InitialFileRefused`, from
-  `BlobFailure::Refused` of a `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other
-  than a code that asks for a retry, or `PermissionDenied` of the filesystem backend). The install
-  loads every source before its first change, so the agent runs on its source revision. The text
-  names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`) writes no failed
-  update and retries as a recovery; outside the update point a refused source is a
-  reconstruction error. The guest blob store maps the same refusal to a permanent
+- `UPDATE_BLOB_STORAGE_REFUSED`: the blob storage refused the executor a read of an initial-file
+  source of the target (`FilesystemError::InitialFileRefused`, from `BlobFailure::Refused` of a
+  `BlobRefusedError`: an S3 4xx other than 408, 416 and 429 and other than a code that asks for a
+  retry, or `PermissionDenied` of the filesystem backend). Two places load the files of a target:
+  the update point, and the start of a pending snapshot-based manual update, which replays at the
+  target revision (the row `StartProblem::InitialFileRefused`). The start sends a failed load of
+  its initial files through the outcome table (`end_failed_start`), as it sends a failed restore.
+  The install loads every source before its first change, so the agent runs on its source
+  revision. The text names the `BlobRefusal`. A transient blob error (`InitialFileUnavailable`)
+  writes no failed update and retries as a recovery. An invalid declaration or a missing or
+  corrupt source of the target (`InitialFileFailed`) fails the update without a code. So does an
+  install that would seed a file under another file that it seeds, such as `/a` and `/a/b`: the
+  file at the upper path leaves no directory for the lower one, so `initial_files::install`
+  refuses that plan before any change. Every other
+  start loads the files of the revision that the agent runs, also the source restart after a
+  failed update: there a refused, invalid, missing or corrupt source fails the agent and its
+  waiting invocations with the cause. `InitialFileFailed` does not share the retryable sandbox-I/O
+  classification. The guest blob store maps the same refusal to a permanent
   `BlobStoreError::PermissionDenied`.
 
 Before loading a pending target, Worker validates its cached metadata with
@@ -2384,6 +2444,14 @@ entry; an archive read returns `UnreadableOplog` instead.
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
+
+Transient startup failures use `RecoveryRequired`: the durable invocation loop retains its
+startup attempt and pending callers, releases its permit, backs off and reconstructs without a
+manual resume. This includes transient baseline restores, initial-file downloads, filesystem
+reconstruction and component-service unavailability outside an update. A caller can still reach
+its own deadline; the first failed start does not complete it. Permanent component errors and
+deterministic instantiation errors are not converted into recovery retries. Cleanup failures,
+quota suspension, interrupts, shard retirement and ephemeral fail-stop keep their own paths.
 
 Transient causes write no failed update, and the start retries: for every pending column,
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
@@ -3271,6 +3339,23 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
+
+Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
+`ResolvedOwnerContext::OplogProcessor`. Their Create records durable mode and the owner component,
+but no agent type, canonical key or phantom identity. Internal local delivery and system-only
+remote delivery use dedicated processor admission; the reserved processor namespace is a
+consistency check, not authority. The selected component revision must export the processor
+interface, whether or not it also declares agents. Ordinary agent creation rejects processor
+names and generic non-agent components. No agent constructor is queued for a processor.
+
+Processor batches use the ordinary committed invocation queue, durable results, RunningWorkers
+index and outer-loop reconstruction. Scheduler activation reconstructs only an existing
+incarnation; it cannot recreate a deleted processor through agent admission. Processor owners
+accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
+They retain component-level config, environment defaults, files and permissions, and have no
+attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
+otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
+range and key across retries, independently of a rebuilt per-executor processor cache.
 
 ## Permission-card handles
 

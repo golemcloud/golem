@@ -560,8 +560,9 @@ impl CompletionDelivery {
     /// recovery.
     ///
     /// After the cursor boundary, live and replay both wait for one fresh guest block. This
-    /// guest-driven wait may park across settlement; cursor transactions and marker waits stay
-    /// active. Guest-initiated cancellation with a partial result remains immediate.
+    /// guest-driven wait may park across settlement, and so may a marker wait whose marker lies
+    /// in a later invocation. Cursor transactions and marker waits within the current invocation
+    /// stay active. Guest-initiated cancellation with a partial result remains immediate.
     pub async fn prepare_delivery(
         &mut self,
         activity: Option<&TailActivity>,
@@ -602,7 +603,7 @@ impl CompletionDelivery {
                 let (replay_state, start_index, marker_index) =
                     (replay_state.clone(), *start_index, *marker_index);
                 let barrier = replay_state
-                    .await_completion_delivery(start_index, marker_index)
+                    .await_completion_delivery(start_index, marker_index, activity)
                     .await?;
                 self.state =
                     CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier));
@@ -666,6 +667,29 @@ impl CompletionDelivery {
     /// completion was not *silently* discarded: no marker.
     pub fn suppress(mut self) {
         self.settle();
+    }
+
+    /// A future transferred back into a host operation no longer has a guest terminal.
+    /// Its recipient owns any later guest observation. A marker-bearing replay cannot change
+    /// its destination; a markerless host result must not wait for that recipient's history.
+    pub(crate) fn settle_host_internal(mut self) -> Result<(), WorkerExecutorError> {
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => Self::settle_live_without_marker(*live),
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(_))
+            | CompletionDeliveryState::Unarmed => {}
+            CompletionDeliveryState::ReplayDelivered(replay) => {
+                return Err(
+                    replay.fail("a guest-observed completion was transferred to a host consumer")
+                );
+            }
+            CompletionDeliveryState::ReplayDiscarded => {
+                return Err(WorkerExecutorError::runtime(
+                    "a discarded completion was transferred to a host consumer",
+                ));
+            }
+            CompletionDeliveryState::Done => unreachable!("a completion is settled exactly once"),
+        }
+        Ok(())
     }
 
     /// Consumes the token by arming Wasmtime's terminal-consumption observer for the host

@@ -56,9 +56,9 @@ test "internal_error prefixes and round-trips" {
 
 ///|
 test "custom_error_of round-trips a typed (non-string) value" {
-  let err = custom_error_of_for_test((42 : Int))
+  let err = custom_error_of_for_test((42 : Int32))
   guard err is CustomError(_) else { fail("expected CustomError") }
-  let decoded : Int? = decode_custom_error_for_test(err)
+  let decoded : Int32? = decode_custom_error_for_test(err)
   debug_inspect(decoded, content="Some(42)")
 }
 
@@ -67,12 +67,12 @@ test "failed custom error conversion drops its decoded stream" {
   let handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(90),
   )
-  let stream : @schema.AgentStream[Int] = @schema.from_value_as(
+  let stream : @schema.AgentStream[Int32] = @schema.from_value_as(
     @model.SchemaValue::Stream(handle),
   )
   let error = custom_error_of_for_test(stream)
   let dropped = [0]
-  let result : Result[Int?, _] = try
+  let result : Result[Int32?, _] = try
     decode_custom_error_with_resource_drops(error, {
       drop_secret: fn(_) {  },
       drop_quota_token: fn(_) {  },
@@ -129,7 +129,9 @@ test "decode_custom_error returns None for non-custom errors" {
 ///|
 test "decode_custom_error raises on a type mismatch" {
   let err = custom_error("not a number")
-  let r : Result[Int?, _] = try decode_custom_error_for_test(err) |> Ok catch {
+  let r : Result[Int32?, _] = try
+    decode_custom_error_for_test(err) |> Ok
+  catch {
     e => Err(e)
   }
   guard r is Err(_) else { fail("expected a decode error") }

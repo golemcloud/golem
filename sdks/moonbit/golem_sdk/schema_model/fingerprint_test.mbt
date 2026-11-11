@@ -7,7 +7,7 @@ fn empty_graph() -> SchemaGraph {
 fn assert_vector(
   graph : SchemaGraph,
   element : SchemaType?,
-  length : Int,
+  length : Int32,
   digest : String,
 ) -> Unit raise {
   assert_eq(canonical_schema_bytes_v1(graph, element).length(), length)

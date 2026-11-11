@@ -55,8 +55,12 @@ test "datetime rejects invalid text and years outside 0000..9999" {
     ] {
     assert_true(datetime_rejected(text), msg="accepted \{text}")
   }
-  assert_true((try? Datetime::new(253402300800L, 0U)) is Err(_))
-  assert_true((try? Datetime::new(0L, 1_000_000_000U)) is Err(_))
+  assert_true(
+    (Ok(Datetime::new(253402300800L, 0U)) catch { e => Err(e) }) is Err(_),
+  )
+  assert_true(
+    (Ok(Datetime::new(0L, 1_000_000_000U)) catch { e => Err(e) }) is Err(_),
+  )
 }
 
 ///|
@@ -74,11 +78,17 @@ test "datetime orders by instant and round trips through schema and wire" {
     ],
     root: 0,
   }
-  assert_true((try? (from_wire(out_of_range) : Datetime)) is Err(_))
   assert_true(
-    (try? (
-      from_value_as(Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U, })) :
-      Datetime))
+    (Ok((from_wire(out_of_range) : Datetime)) catch { e => Err(e) }) is Err(_),
+  )
+  assert_true(
+    (Ok(
+      (
+        from_value_as(Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U, })) :
+        Datetime),
+    ) catch {
+      e => Err(e)
+    })
     is Err(_),
   )
 }
@@ -99,7 +109,9 @@ test "Int16 maps to s16 in schema and wire" {
     assert_eq((from_value_as(to_value_as(value)) : Int16), value)
     assert_eq((from_wire(into_wire(value)) : Int16), value)
   }
-  assert_true((try? (from_value_as(S16(32768)) : Int16)) is Err(_))
+  assert_true(
+    (Ok((from_value_as(S16(32768)) : Int16)) catch { e => Err(e) }) is Err(_),
+  )
   let graph = wire_schema(tag)
   assert_eq(graph.type_nodes[graph.root].body, @types.S16Type(None))
 }

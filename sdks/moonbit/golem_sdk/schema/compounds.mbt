@@ -227,7 +227,7 @@ pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V] wi
   match v {
     Map(entries) => {
       let keys : Array[K] = []
-      let last : Map[K, Int] = Map([])
+      let last : Map[K, Int32] = Map([])
       for i, e in entries {
         let key : K = FromSchema::from_value(e.key)
         keys.push(key)

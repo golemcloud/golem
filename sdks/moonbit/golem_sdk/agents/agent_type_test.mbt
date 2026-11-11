@@ -114,7 +114,7 @@ test "constructor input installs type-node-indices and field sources" {
 test "all installed indices point into the single shared pool" {
   let at = sample_agent_type()
   let n = at.schema.type_nodes.length()
-  let in_range = fn(i : Int) -> Bool { i >= 0 && i < n }
+  let in_range = fn(i : Int32) -> Bool { i >= 0 && i < n }
   let @common.InputSchema::Parameters(fields) = at.constructor_.input_schema
   // Every constructor field index resolves within the shared pool.
   for f in fields {

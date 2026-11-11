@@ -1131,6 +1131,9 @@ fn worker_filter_matches() {
     let component_id = ComponentId::new();
     let worker_metadata = AgentMetadata {
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
         agent_id: AgentId {
             agent_id: "worker-1".to_string(),
             component_id,

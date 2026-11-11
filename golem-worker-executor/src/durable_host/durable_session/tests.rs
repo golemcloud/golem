@@ -33,6 +33,7 @@ use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
@@ -2887,7 +2888,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn create_demand(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -2903,7 +2905,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _method_name: String,
@@ -2971,7 +2974,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _method_name: String,

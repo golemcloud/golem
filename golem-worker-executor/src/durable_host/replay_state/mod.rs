@@ -286,6 +286,16 @@ type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIn
 type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 type StartsByInvocationId =
     HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
+type InvocationFinishes = std::collections::BTreeSet<OplogIndex>;
+
+/// The recovery metadata that one scan of a visible oplog range collects.
+struct ScannedRecoveryMetadata {
+    completion_markers: CompletionMarkers,
+    stream_observations: StreamObservationPositions,
+    transaction_markers: TransactionMarkers,
+    start_invocation_ids: StartsByInvocationId,
+    invocation_finishes: InvocationFinishes,
+}
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
 /// is delivered, including host-internal descendants of its imports.
@@ -569,6 +579,11 @@ struct ReplayCursor {
     /// extended by the scan of exactly the newly visible range when the replay target grows. A
     /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
     start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
+    /// The visible `AgentInvocationFinished` positions up to the replay target. Built and kept in
+    /// sync with the visible prefix by the same scans as the delivery markers; an entry in a
+    /// deleted region is not visible. A delivery wait looks up its invocation boundary here
+    /// instead of reading the oplog.
+    invocation_finishes: std::sync::Mutex<InvocationFinishes>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via

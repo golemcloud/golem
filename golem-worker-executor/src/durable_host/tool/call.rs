@@ -443,12 +443,10 @@ where
                     ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                         agent_type_name: agent.agent_type.clone(),
                     },
-                    ResolvedOwnerContext::ComponentWorker
-                    | ResolvedOwnerContext::ComponentBaseline => {
-                        ToolBindingOwner::ComponentBaseline {
-                            component_id: component.id,
-                        }
-                    }
+                    ResolvedOwnerContext::ComponentBaseline
+                    | ResolvedOwnerContext::OplogProcessor => ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
                 }
             });
             let activation_snapshot = if let Some(activation) = pinned_activation {
@@ -909,7 +907,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
             let accessor =
                 accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(|ctx| ctx.durable_ctx_mut());
             let (result, receiver) = oneshot::channel();
-            accessor.spawn(NativeToolTask {
+            let task = NativeToolTask {
                 activation,
                 tool_name,
                 command_path,
@@ -919,7 +917,8 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
                 stderr,
                 principal,
                 result,
-            });
+            };
+            accessor.spawn(async move |accessor| task.run(accessor).await)?;
             receiver
                 .await
                 .map_err(|_| anyhow!("native tool task ended without a result"))

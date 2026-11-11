@@ -163,7 +163,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn create_demand(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -174,6 +175,8 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         debug!("Ensuring remote target worker exists");
 
         let principal = caller_agent_principal(self_agent_id);
@@ -205,7 +208,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -218,6 +222,8 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
 
         let output = self
@@ -253,7 +259,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await_streaming(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: IdempotencyKey,
         method_name: String,
         method_parameters: ProtoSchemaValue,
@@ -270,6 +277,8 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let start = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(owned_agent_id.agent_id().into()),
@@ -514,7 +523,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -526,6 +536,8 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
 
         self.worker_proxy

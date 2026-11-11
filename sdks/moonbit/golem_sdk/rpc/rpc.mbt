@@ -60,12 +60,10 @@ fn make_client(
   phantom_id : @schema.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient {
-  let rpc = @agentHost.WasmRpc::wasm_rpc(
-    agent_type_name,
-    constructor_input,
-    phantom_id.map(@schema.Uuid::to_wit),
-    agent_config,
+  let prepared = @identity.Constructor::from_wire(
+    agent_type_name, constructor_input, phantom_id,
   )
+  let rpc = prepared.connect(agent_config)
   {
     agent_type_name,
     constructor_input,
@@ -97,7 +95,7 @@ pub fn AgentClient::new_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
 ) -> AgentClient {
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   AgentClient::get_phantom(agent_type_name, constructor_input, phantom_id)
 }
 
@@ -107,7 +105,7 @@ pub fn AgentClient::new_phantom_with_config(
   constructor_input : @types.SchemaValueTree,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient {
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   AgentClient::get_phantom_with_config(
     agent_type_name, constructor_input, phantom_id, agent_config,
   )
@@ -160,15 +158,11 @@ pub fn AgentClient::get_phantom_with_config(
 pub fn AgentClient::get_agent_id(
   self : AgentClient,
 ) -> String raise @common.AgentError {
-  match
-    @agentHost.make_agent_id(
-      self.agent_type_name,
-      self.constructor_input,
-      self.phantom_id.map(@schema.Uuid::to_wit),
-    ) {
-    Ok(id) => id
-    Err(e) => raise e
-  }
+  @identity.Constructor::from_wire(
+    self.agent_type_name,
+    self.constructor_input,
+    self.phantom_id,
+  ).agent_id()
 }
 
 ///|

@@ -3,7 +3,7 @@
 /// Named definitions remain references, so recursive graphs are finite.
 pub fn SchemaRef::to_json_schema(
   self : SchemaRef,
-  include_draft_marker? : Bool = true,
+  include_draft_marker~ : Bool = true,
 ) -> Json {
   let root = schema_json(self.graph, self.root)
   let fields : Map[String, Json] = match root {
@@ -66,7 +66,7 @@ fn schema_type(name : String) -> Json {
 }
 
 ///|
-fn schema_number(value : Int) -> Json {
+fn schema_number(value : Int32) -> Json {
   Json::number(value.to_double())
 }
 

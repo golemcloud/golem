@@ -6,9 +6,8 @@ import type { Identity } from "./AgentIdentity.js"
 import type { InvocationMetadata, RemoteCallError } from "./Client.js"
 import { RpcClient } from "./host/RpcClient.js"
 import { AgentIdentityError } from "./internal/agentIdentityError.js"
-import { rawPhantomId } from "./internal/agentIdentityState.js"
+import { connectIdentity } from "./internal/agentIdentity.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
-import { wrapHostThrow } from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 
 export { AgentIdentityError } from "./internal/agentIdentityError.js"
@@ -76,16 +75,8 @@ export const bind = (
   RpcClient | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const phantom = yield* Effect.try({
-      try: () => rawPhantomId(identity),
-      catch: (cause) => new AgentIdentityError(cause),
-    })
-    const rpcHost = yield* RpcClient
     const rpc = yield* Effect.acquireRelease(
-      Effect.mapError(
-        rpcHost.connect(identity.typeName, identity.constructorValue, phantom, []),
-        (error) => wrapHostThrow(error.cause),
-      ),
+      connectIdentity(identity, [], (cause) => new AgentIdentityError(cause)),
       (connection) => Effect.sync(() => connection.drop()),
     )
     return Object.freeze({

@@ -52,7 +52,7 @@ use golem_common::model::agent::{
     ephemeral_invocation_phantom_id,
 };
 use golem_common::model::agent::{
-    AgentMetadataDto, ResolvedRevert, RevertWorkerTarget, ScheduleId,
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -746,7 +746,7 @@ impl WorkerService {
         }
         self.worker_client
             .create(
-                agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 environment_variables,
                 config,
                 true,
@@ -762,7 +762,7 @@ impl WorkerService {
 
     pub async fn create(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -770,13 +770,15 @@ impl WorkerService {
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let component = self
             .component_service
             .get_current_by_id_uncached(agent_id.component_id)
             .await?;
 
         self.create_with_component(
-            agent_id,
+            target,
             component,
             environment_variables,
             config,
@@ -790,7 +792,7 @@ impl WorkerService {
 
     pub async fn create_for_invocation(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: String,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
@@ -799,13 +801,15 @@ impl WorkerService {
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let component = self
             .component_service
             .get_current_by_id_uncached(agent_id.component_id)
             .await?;
 
         self.create_with_component_and_resource(
-            agent_id,
+            target,
             component,
             environment_variables,
             config,
@@ -820,7 +824,7 @@ impl WorkerService {
 
     pub async fn prepare_for_invocation(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: String,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
@@ -831,6 +835,8 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let component = self
             .component_service
             .get_current_by_id_uncached(agent_id.component_id)
@@ -847,7 +853,7 @@ impl WorkerService {
         let (_, fingerprint) = self
             .worker_client
             .prepare(
-                agent_id,
+                target,
                 environment_variables,
                 config,
                 ignore_already_existing,
@@ -867,7 +873,7 @@ impl WorkerService {
     // Like create, but skip fetching the component.
     pub async fn create_with_component(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         component: Component,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
@@ -893,7 +899,7 @@ impl WorkerService {
     #[allow(clippy::too_many_arguments)]
     async fn create_with_component_and_resource(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         component: Component,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
@@ -903,6 +909,8 @@ impl WorkerService {
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
         resource: AgentResourcePattern,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         assert!(component.id == agent_id.component_id);
 
         authorize_agent_permission(&auth_ctx, &component, agent_id, AgentVerb::Invoke, resource)?;
@@ -910,7 +918,7 @@ impl WorkerService {
         let (_, fingerprint) = self
             .worker_client
             .create(
-                agent_id,
+                target,
                 environment_variables,
                 config,
                 ignore_already_existing,
@@ -1863,7 +1871,7 @@ impl WorkerService {
 
     pub async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -1878,6 +1886,8 @@ impl WorkerService {
         known_environment_id: Option<EnvironmentId>,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1886,7 +1896,7 @@ impl WorkerService {
         let account_id = component.account_id;
         self.dispatch_agent_invocation(
             &component,
-            agent_id,
+            target,
             method_name.clone(),
             method_parameters,
             mode,
@@ -2899,7 +2909,7 @@ impl WorkerService {
     async fn dispatch_agent_invocation(
         &self,
         component: &Component,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -2916,6 +2926,7 @@ impl WorkerService {
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         authorize: impl FnOnce(&AgentId) -> WorkerResult<()>,
     ) -> WorkerResult<AgentInvocationOutput> {
+        let AgentTarget::Current(agent_id) = agent_id;
         let observation_only =
             mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
         let seed = if observation_only {
@@ -2984,7 +2995,7 @@ impl WorkerService {
         };
 
         self.dispatch_prepared_agent_invocation(
-            agent_id,
+            AgentTarget::Current(agent_id),
             method_name,
             method_parameters,
             mode,
@@ -3044,7 +3055,7 @@ impl WorkerService {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_prepared_agent_invocation(
         &self,
-        agent_id: AgentId,
+        agent_id: AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -3078,6 +3089,7 @@ impl WorkerService {
                 scope_card,
             )
             .await?;
+        let AgentTarget::Current(agent_id) = agent_id;
         output.agent_id.get_or_insert(agent_id);
         Ok(output)
     }
@@ -3169,7 +3181,7 @@ impl WorkerService {
 
         let (component_revision, _created_at) = self
             .create_with_component(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 component,
                 HashMap::new(),
                 request.config,
@@ -3511,7 +3523,7 @@ impl WorkerService {
             .get(&owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
-            .unwrap_or_else(|| registered.definition.clone());
+            .unwrap_or_else(|| registered.registration.definition.clone());
         Ok(NativeToolDefinition {
             definition,
             component_revision: component.revision,
@@ -3719,7 +3731,7 @@ impl WorkerService {
 
         let output = self
             .dispatch_prepared_agent_invocation(
-                agent_id.clone(),
+                AgentTarget::Current(agent_id.clone()),
                 Some(method_name.clone()),
                 Some(proto_method_parameters),
                 proto_mode,
@@ -3830,7 +3842,7 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
+        AgentConfigEntryDto, AgentMetadataDto, AgentTarget, AgentUpdateMode, ResolvedRevert,
         RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
     };
     use golem_common::model::agent::{
@@ -4584,7 +4596,7 @@ mod tests {
     impl WorkerClient for RecordingWorkerClient {
         async fn prepare(
             &self,
-            agent_id: &AgentId,
+            agent_id: &AgentTarget,
             _: HashMap<String, String>,
             _: Vec<AgentConfigEntryDto>,
             _: bool,
@@ -4596,6 +4608,7 @@ mod tests {
             _: Option<IdempotencyKey>,
             _: InvocationFreshnessDisposition,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            let AgentTarget::Current(agent_id) = agent_id;
             self.prepared_agent_ids
                 .lock()
                 .unwrap()
@@ -4605,7 +4618,7 @@ mod tests {
 
         async fn create(
             &self,
-            agent_id: &AgentId,
+            agent_id: &AgentTarget,
             _: HashMap<String, String>,
             _: Vec<AgentConfigEntryDto>,
             _: bool,
@@ -4615,6 +4628,7 @@ mod tests {
             _: Option<InvocationContext>,
             _: Option<golem_api_grpc::proto::golem::component::Principal>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            let AgentTarget::Current(agent_id) = agent_id;
             self.created_agent_ids
                 .lock()
                 .unwrap()
@@ -4925,7 +4939,7 @@ mod tests {
 
         async fn invoke_agent(
             &self,
-            agent_id: &AgentId,
+            agent_id: &AgentTarget,
             method_name: Option<String>,
             _: Option<golem_schema::proto::golem::schema::SchemaValue>,
             mode: i32,
@@ -4940,6 +4954,7 @@ mod tests {
             _: golem_api_grpc::proto::golem::component::Principal,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         ) -> WorkerResult<AgentInvocationOutput> {
+            let AgentTarget::Current(agent_id) = agent_id;
             let idempotency_key = if mode
                 == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             {
@@ -5123,6 +5138,7 @@ mod tests {
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
+                        type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                         agent_type,
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
@@ -5210,6 +5226,7 @@ mod tests {
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
+                        type_id: golem_common::model::type_id::TypeId::try_from(42u32).unwrap(),
                         agent_type: latest_agent_type,
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
@@ -5444,8 +5461,6 @@ mod tests {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![agent_type],
                 BTreeMap::from([(agent_type_name, provision_config)]),
             ),
@@ -5581,7 +5596,7 @@ mod tests {
         harness
             .worker_service
             .create_for_invocation(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 "run".to_string(),
                 HashMap::new(),
                 Vec::new(),
@@ -5596,7 +5611,7 @@ mod tests {
         harness
             .worker_service
             .prepare_for_invocation(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 "run".to_string(),
                 HashMap::new(),
                 Vec::new(),
@@ -5619,7 +5634,7 @@ mod tests {
             harness
                 .worker_service
                 .create_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     "run".to_string(),
                     HashMap::new(),
                     Vec::new(),
@@ -5635,7 +5650,7 @@ mod tests {
             harness
                 .worker_service
                 .prepare_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     "run".to_string(),
                     HashMap::new(),
                     Vec::new(),
@@ -6624,7 +6639,7 @@ mod tests {
             let result = harness
                 .worker_service
                 .invoke_agent(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     Some("run".to_string()),
                     Some(input.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
@@ -6830,7 +6845,7 @@ mod tests {
             let error = harness
                 .worker_service
                 .invoke_agent(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     Some("run".into()),
                     Some(input.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -6853,7 +6868,7 @@ mod tests {
             harness
                 .worker_service
                 .invoke_agent(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     Some("run".into()),
                     Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
                     golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -7487,20 +7502,23 @@ mod tests {
             },
         };
         let registered = RegisteredTool {
-            deployment_revision: DeploymentRevision::INITIAL,
-            release_id: None,
-            definition: definition.clone(),
-            provision: ToolProvisionConfig::default(),
-            component_bindings: BTreeMap::new(),
-            source: ToolSource::Component {
-                component_id: component.id,
-                component_revision: component.revision,
-                component_name: component.component_name.clone(),
+            type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+            registration: golem_common::model::tool::ToolRegistration {
+                deployment_revision: DeploymentRevision::INITIAL,
+                release_id: None,
+                definition: definition.clone(),
+                provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
+                source: ToolSource::Component {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                    component_name: component.component_name.clone(),
+                },
+                owner_account_id: component.account_id,
+                owner_account_email: component.account_email.clone(),
+                metadata_version: "0.1.0".into(),
+                metadata_digest: Default::default(),
             },
-            owner_account_id: component.account_id,
-            owner_account_email: component.account_email.clone(),
-            metadata_version: "0.1.0".into(),
-            metadata_digest: Default::default(),
         };
         let mut state = ToolDeploymentState {
             deployment_revision: DeploymentRevision::INITIAL,
@@ -7531,7 +7549,7 @@ mod tests {
                 owner: owner.clone(),
                 tool_name: tool_name.clone(),
                 version: definition.version.clone(),
-                metadata_version: registered.metadata_version.clone(),
+                metadata_version: registered.registration.metadata_version.clone(),
                 metadata_digest: Default::default(),
                 account_id: component.account_id,
                 account_email: component.account_email.clone(),
@@ -7540,7 +7558,7 @@ mod tests {
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
-                source: registered.source.clone(),
+                source: registered.registration.source.clone(),
             };
             let mut effective_definition = definition.clone();
             effective_definition.commands.nodes[0].doc.summary = summary.into();

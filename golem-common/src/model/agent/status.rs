@@ -42,6 +42,9 @@ use crate::model::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
+    pub component_id: crate::model::component::ComponentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub canonical_key: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
@@ -60,6 +63,21 @@ pub struct AgentMetadata {
 impl AgentMetadata {
     pub fn owned_agent_id(&self) -> OwnedAgentId {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
+    }
+
+    /// Resolves the persisted type and decodes constructor parameters from the current-format ID.
+    pub fn parse_agent_id(
+        &self,
+        metadata: &crate::model::component_metadata::ComponentMetadata,
+    ) -> Result<super::ParsedAgentId, String> {
+        let name = self
+            .agent_type_name
+            .as_ref()
+            .ok_or_else(|| "Owner has no agent type".to_string())?;
+        let agent_type = metadata
+            .find_agent_type_by_name_ref(name)
+            .ok_or_else(|| format!("Agent type not found: {name}"))?;
+        super::ParsedAgentId::parse(&self.agent_id.agent_id, agent_type)
     }
 }
 

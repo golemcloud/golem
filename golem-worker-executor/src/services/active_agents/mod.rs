@@ -388,6 +388,36 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         Ok(active_agent.primary())
     }
 
+    pub(crate) async fn get_or_add_oplog_processor<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        OwnerKind::OplogProcessor
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+        active_agent
+            .primary
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                InvocationContextStack::fresh(),
+                Principal::anonymous(),
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::OplogProcessor,
+            )
+            .in_current_span()
+            .await?;
+        Ok(active_agent.primary())
+    }
+
     pub async fn get_or_add_ephemeral_external_tool<T>(
         &self,
         deps: &T,

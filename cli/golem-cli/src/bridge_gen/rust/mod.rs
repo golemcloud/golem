@@ -163,6 +163,40 @@ impl RustRuntimeConfig {
 
                     #scalar_checks
 
+                    pub(super) async fn create_agent(
+                        config: &golem_client::bridge::Configuration,
+                        agent_type_name: &str,
+                        constructor_parameters: schema::SchemaValue,
+                        phantom_id: Option<uuid::Uuid>,
+                        agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
+                    ) -> Result<golem_client::model::AgentId, ClientError> {
+                        let client = reqwest_middleware::ClientWithMiddleware::from(
+                            reqwest::Client::builder().build().unwrap()
+                        );
+                        let context = golem_client::Context {
+                            client,
+                            base_url: config.server.url(),
+                            security_token: config.server.token(),
+                        };
+                        let api_client = golem_client::api::AgentClientLive { context };
+                        let response = golem_client::api::AgentClient::create_agent(
+                            &api_client,
+                            &golem_client::model::CreateAgentRequest {
+                                app_name: config.app_name.to_string(),
+                                env_name: config.env_name.to_string(),
+                                agent_type_name: agent_type_name.to_string(),
+                                parameters: schema::ExternalSchemaValue::try_from(
+                                    constructor_parameters,
+                                ).map_err(|__e| ClientError::InvocationFailed {
+                                    message: format!("Failed to validate constructor parameters: {__e}"),
+                                })?,
+                                phantom_id,
+                                config: Some(agent_config),
+                            },
+                        ).await?;
+                        Ok(response.agent_id)
+                    }
+
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationResult<T> {
                         pub agent_id: golem_client::model::AgentId,
@@ -676,7 +710,7 @@ impl RustBridgeGenerator {
             quote! { None }
         };
         let created_fields = if self.agent_type.mode == AgentMode::Durable {
-            quote! { constructor_parameters, phantom_id, agent_id: response.agent_id, session_config }
+            quote! { constructor_parameters, phantom_id, agent_id, session_config }
         } else {
             {
                 quote! { constructor_parameters, phantom_id: None, agent_config, session_config }
@@ -772,30 +806,12 @@ impl RustBridgeGenerator {
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     #ephemeral_local_return
                     let config = CONFIG.get().expect("Configuration has not been set");
-
-                    let client = reqwest_middleware::ClientWithMiddleware::from(
-                        reqwest::Client::builder().build().unwrap()
-                    );
-                    let context = golem_client::Context {
-                        client,
-                        base_url: config.server.url(),
-                        security_token: config.server.token(),
-                    };
-                    let api_client = golem_client::api::AgentClientLive { context };
-                    let response = golem_client::api::AgentClient::create_agent(
-                        &api_client,
-                        &golem_client::model::CreateAgentRequest {
-                            app_name: config.app_name.to_string(),
-                            env_name: config.env_name.to_string(),
-                            agent_type_name: #agent_type_name.to_string(),
-                            parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
-                                constructor_parameters.clone(),
-                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                                message: format!("Failed to validate constructor parameters: {__e}"),
-                            })?,
-                            phantom_id,
-                            config: Some(agent_config),
-                        },
+                    let agent_id = crate::__golem_bridge_runtime::create_agent(
+                        config,
+                        #agent_type_name,
+                        constructor_parameters.clone(),
+                        phantom_id,
+                        agent_config,
                     ).await?;
 
                     Ok(Self { #created_fields })

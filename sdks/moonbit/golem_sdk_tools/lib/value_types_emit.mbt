@@ -15,7 +15,7 @@
 /// (`from_value`) impls for all parsed value types.
 pub fn generate_value_type_impls(
   types : Array[ValueTypeInfo],
-  type_id_prefix? : String = "",
+  type_id_prefix~ : String = "",
 ) -> @list.List[@syntax.Impl] {
   let buf = StringBuilder()
   for t in types {

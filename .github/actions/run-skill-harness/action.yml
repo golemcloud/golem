@@ -160,8 +160,8 @@ runs:
       if: inputs.language == 'moonbit'
       uses: hustcer/setup-moonbit@v1
       with:
-        version: 0.10.11+6ff76a5f9
-        core-version: 0.10.11+6ff76a5f9
+        version: 0.10.18+6c83a7f62
+        core-version: 0.10.18+6c83a7f62
 
     - name: Update MoonBit workspace dependencies
       if: inputs.language == 'moonbit'

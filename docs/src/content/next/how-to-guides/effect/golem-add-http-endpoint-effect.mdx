@@ -379,7 +379,7 @@ httpApi:
           TodoAgent: {}
 ```
 
-Current Golem 1.5 manifests contain deployment configuration only. Do not add legacy
+The `httpApi` section in current Golem manifests contains deployment configuration only. Do not add legacy
 `apiDefinitions`, route lists, OpenAPI extension bindings, or Rib response scripts. Route metadata
 comes from `Http.mount(...)` and the method-level `Http.*(...)` declarations. Golem serves the
 generated OpenAPI document at `/openapi.yaml` after deployment.

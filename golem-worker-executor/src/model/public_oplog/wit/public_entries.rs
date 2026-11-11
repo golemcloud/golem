@@ -66,6 +66,9 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             golem_common::model::agent::OwnerKind::EphemeralExternalTool => {
                 oplog::OwnerKind::EphemeralExternalTool
             }
+            golem_common::model::agent::OwnerKind::OplogProcessor => {
+                oplog::OwnerKind::OplogProcessor
+            }
         },
         agent_mode: match agent_mode {
             golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,

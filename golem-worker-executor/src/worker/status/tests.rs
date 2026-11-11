@@ -1773,7 +1773,13 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
         ),
     ]);
 
-    assert_eq!(results, vec![(denied, OplogIndex::from_u64(4))]);
+    assert_eq!(
+        results,
+        vec![
+            (denied.clone(), OplogIndex::from_u64(2)),
+            (denied, OplogIndex::from_u64(4)),
+        ]
+    );
     assert_eq!(current, Some(running));
 }
 
@@ -4289,6 +4295,9 @@ impl TestCaseBuilder {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
                         agent_id: owned_agent_id.agent_id(),
+                        component_id: owned_agent_id.agent_id.component_id,
+                        agent_type_name: None,
+                        canonical_key: None,
                         owner_kind: OwnerKind::ComponentAgent,
                         agent_mode: AgentMode::Durable,
                         component_revision,
@@ -4639,6 +4648,11 @@ impl TestCaseBuilder {
             status
                 .pending_invocations
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
+            if status.current_idempotency_key.as_ref() != Some(&idempotency_key) {
+                status
+                    .invocation_results
+                    .insert(idempotency_key.clone(), status.oplog_idx);
+            }
             status
         })
     }

@@ -2,7 +2,7 @@
 #derive.config
 pub(all) struct DatabaseConfig {
   host : String
-  port : UInt
+  port : UInt32
   timeout : UInt64
 }
 

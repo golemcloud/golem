@@ -665,7 +665,7 @@ where
     Ctx: WorkerCtx,
 {
     register_tool_admission(accessor, &mut accepted)?;
-    let caller = ToolCaller::capture(accessor);
+    let caller = ToolCaller::capture(accessor)?;
     let execution = ToolExecution::new(
         accepted.operation.clone(),
         accepted.durability.scope().mode() != InvocationExecutionMode::ReplayingCompleted,
@@ -795,7 +795,6 @@ mod finalization_tests {
     use golem_common::model::OplogIndex;
     use golem_common::model::agent::AgentMode;
     use test_r::{test, timeout};
-    use wasmtime::component::AccessorTask;
 
     #[test]
     #[timeout("10s")]
@@ -902,7 +901,7 @@ mod finalization_tests {
 
         type Operation = operation::OwnerToolOperation;
         struct FailTask(Arc<Notify>, anyhow::Error);
-        impl AccessorTask<Operation, HasSelf<Operation>> for FailTask {
+        impl FailTask {
             async fn run(
                 self,
                 _: &Accessor<Operation, HasSelf<Operation>>,
@@ -912,7 +911,7 @@ mod finalization_tests {
             }
         }
         struct ResolveTask(Operation, Arc<Notify>);
-        impl AccessorTask<Operation, HasSelf<Operation>> for ResolveTask {
+        impl ResolveTask {
             async fn run(
                 self,
                 _: &Accessor<Operation, HasSelf<Operation>>,
@@ -963,20 +962,29 @@ mod finalization_tests {
             let mut errors = Vec::new();
             store
                 .run_concurrent(async |accessor| {
-                    accessor.spawn(ResolveTask(sibling.clone(), release.clone()));
-                    accessor.spawn(FailTask(
+                    let task = ResolveTask(sibling.clone(), release.clone());
+                    accessor
+                        .spawn(async move |accessor| task.run(accessor).await)
+                        .unwrap();
+                    let task = FailTask(
                         pending.clone(),
                         anyhow::Error::new(WorkerExecutorError::unexpected_oplog_entry(
                             "secondary",
                             "failure",
                         )),
-                    ));
+                    );
+                    accessor
+                        .spawn(async move |accessor| task.run(accessor).await)
+                        .unwrap();
                     if initial_error {
                         errors.push(failure);
                     } else {
                         let ready = Arc::new(Notify::new());
                         ready.notify_one();
-                        accessor.spawn(FailTask(ready, failure));
+                        let task = FailTask(ready, failure);
+                        accessor
+                            .spawn(async move |accessor| task.run(accessor).await)
+                            .unwrap();
                     }
                 })
                 .await
@@ -1067,7 +1075,7 @@ mod finalization_tests {
         let started = Arc::new(Notify::new());
         type Operation = operation::OwnerToolOperation;
         struct FailTask(Arc<Notify>);
-        impl AccessorTask<Operation, HasSelf<Operation>> for FailTask {
+        impl FailTask {
             async fn run(
                 self,
                 _: &Accessor<Operation, HasSelf<Operation>>,
@@ -1085,8 +1093,11 @@ mod finalization_tests {
         let mut store = wasmtime::Store::new(&engine, operation.clone());
         let task = FailTask(started.clone());
         store
-            .run_concurrent(async move |accessor| accessor.spawn(task))
+            .run_concurrent(async move |accessor| {
+                accessor.spawn(async move |accessor| task.run(accessor).await)
+            })
             .await
+            .unwrap()
             .unwrap();
         let failure = TerminalCallError::new(
             WorkerExecutorError::unexpected_oplog_entry("observation", "disposal"),

@@ -9,6 +9,7 @@ import type { DatabaseSync } from "node:sqlite"
 import { existsSync } from "node:fs"
 import * as AgentIdentity from "../AgentIdentity.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
+import { decodeAgentId } from "./agentIdentity.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
 import { immediateCaller } from "../host/InvocationContextClient.js"
@@ -1484,7 +1485,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
   }
   const agentIdString = agentIdEntry[1]
-  const [agentTypeName, typedConstructor, phantomId] = parseAgentId(agentIdString)
+  const [agentTypeName, typedConstructor, phantomId] = decodeAgentId(
+    { parseAgentId },
+    agentIdString,
+  )
 
   const compiled = registry.get(agentTypeName)
   if (!compiled) {

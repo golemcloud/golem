@@ -557,7 +557,9 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
     for agent_type in ["CardIssuer", "CardReceiver"] {
         let card = component
             .metadata
-            .agent_type_initial_permission_card(&AgentTypeName(agent_type.to_string()))
+            .agent_type_provision_configs
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|config| &config.initial_permissions)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("{agent_type} has no initial card"))?;
         registry.add(StoredCard::Polymorphic(card));

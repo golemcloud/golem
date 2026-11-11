@@ -17,9 +17,9 @@
 use super::{
     AgentInvocation, Arc, AuthCtx, CanStartWorker, DurableStreamRemoteError, HasAll,
     HasComponentService, HasConfig, InvocationFreshnessDisposition, Message, OwnedAgentId,
-    ParsedAgentId, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorImpl,
-    build_durable_streaming_request, decode_invocation_input, extract_owned_agent_id,
-    from_proto_invocation_context, golem, stream_slots,
+    UsesAllDeps, Worker, WorkerCtx, WorkerExecutorImpl, build_durable_streaming_request,
+    decode_invocation_input, extract_owned_agent_id, from_proto_invocation_context, golem,
+    stream_slots,
 };
 use crate::worker;
 use golem_api_grpc::proto::golem::workerexecutor::v1 as proto;
@@ -362,7 +362,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let input_len = proto_input.encoded_len();
         let input =
             decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
-        let parsed = ParsedAgentId::parse(&worker.agent_id().agent_id, &component.metadata)
+        let parsed = worker
+            .get_initial_worker_metadata()
+            .parse_agent_id(&component.metadata)
             .map_err(WorkerExecutorError::invalid_request)?;
         if !crate::worker::invocation::validate_agent_method_invocation(
             &component.metadata,

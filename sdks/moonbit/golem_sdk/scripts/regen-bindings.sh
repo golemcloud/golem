@@ -30,11 +30,11 @@ cd "$(dirname "$0")/.."
 
 wit_bindgen_version="$(wit-bindgen --version)"
 expected_wit_bindgen_version="$(cat .wit-bindgen-version 2>/dev/null || true)"
-if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]] ||
+if [[ ! "$wit_bindgen_version" =~ 0\.63\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]] ||
   [[ "$wit_bindgen_version" != "$expected_wit_bindgen_version" ]]; then
   cat >&2 <<EOF
 ERROR: bindings must be regenerated with the Golem wit-bindgen build installed
-from the wit-bindgen-golem-1.6 branch, but found: $wit_bindgen_version
+from the pinned fork revision, but found: $wit_bindgen_version
 
 Install the generator with:
   scripts/install-wit-bindgen.sh

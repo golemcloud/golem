@@ -16,8 +16,8 @@ use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
-    ToolName,
+    CompiledToolBinding, SecretKeyScope, ToolBindingInput, ToolBindingOwner, ToolName,
+    ToolRegistration,
 };
 use crate::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -110,7 +110,7 @@ pub fn compile_tool_middleware_chain(
 #[allow(clippy::too_many_arguments)]
 pub fn compile_tool_middleware_chains(
     deployment_revision: DeploymentRevision,
-    registered_tools: &[RegisteredTool],
+    registered_tools: &[ToolRegistration],
     tool_bindings: &[CompiledToolBinding],
     middleware_registrations: &[RegisteredToolMiddleware],
     environment_wide_installations: &[ToolMiddlewareInstallation],

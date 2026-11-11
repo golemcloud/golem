@@ -122,56 +122,120 @@ pub(in crate::durable_host::p3::http) enum HttpTrailersResolution {
     },
 }
 
-enum HttpTrailersDeliveryState {
+enum HttpFutureDeliveryState {
     Awaiting,
     Armed(CompletionDelivery),
     Observed(Option<TerminalConsumption>),
+    HostTransferred,
     Done,
 }
 
-pub(super) struct HttpTrailersDelivery {
-    state: Mutex<HttpTrailersDeliveryState>,
+pub(in crate::durable_host::p3::http) struct HttpFutureDelivery {
+    state: Mutex<HttpFutureDeliveryState>,
+    host_transfer: Notify,
 }
 
-impl HttpTrailersDelivery {
-    pub(super) fn new() -> Arc<Self> {
+impl HttpFutureDelivery {
+    pub(in crate::durable_host::p3::http) fn new() -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(HttpTrailersDeliveryState::Awaiting),
+            state: Mutex::new(HttpFutureDeliveryState::Awaiting),
+            host_transfer: Notify::new(),
         })
     }
 
-    pub(super) fn arm(&self, delivery: CompletionDelivery) {
+    pub(in crate::durable_host::p3::http) fn has_reader(&self) -> bool {
+        matches!(
+            *self
+                .state
+                .lock()
+                .expect("HTTP future delivery lock poisoned"),
+            HttpFutureDeliveryState::Awaiting | HttpFutureDeliveryState::Armed(_)
+        )
+    }
+
+    pub(in crate::durable_host::p3::http) fn transfer_to_host(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        let previous = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("HTTP future delivery lock poisoned");
+            std::mem::replace(&mut *state, HttpFutureDeliveryState::HostTransferred)
+        };
+        self.host_transfer.notify_one();
+        match previous {
+            HttpFutureDeliveryState::Armed(delivery) => delivery.settle_host_internal(),
+            HttpFutureDeliveryState::Awaiting => Ok(()),
+            _ => Err(WorkerExecutorError::runtime(
+                "an observed HTTP future cannot be transferred to a host consumer",
+            )),
+        }
+    }
+
+    pub(in crate::durable_host::p3::http) async fn transferred_to_host(&self) {
+        loop {
+            let notified = self.host_transfer.notified();
+            if matches!(
+                *self
+                    .state
+                    .lock()
+                    .expect("HTTP future delivery lock poisoned"),
+                HttpFutureDeliveryState::HostTransferred
+            ) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(in crate::durable_host::p3::http) fn arm(
+        &self,
+        delivery: CompletionDelivery,
+    ) -> Result<(), WorkerExecutorError> {
         let observed = {
-            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            let mut state = self
+                .state
+                .lock()
+                .expect("HTTP future delivery lock poisoned");
             match &*state {
-                HttpTrailersDeliveryState::Awaiting => {
-                    *state = HttpTrailersDeliveryState::Armed(delivery);
-                    return;
+                HttpFutureDeliveryState::Awaiting => {
+                    *state = HttpFutureDeliveryState::Armed(delivery);
+                    return Ok(());
                 }
-                HttpTrailersDeliveryState::Observed(observed) => {
+                HttpFutureDeliveryState::HostTransferred => return delivery.settle_host_internal(),
+                HttpFutureDeliveryState::Observed(observed) => {
                     let observed = *observed;
-                    *state = HttpTrailersDeliveryState::Done;
+                    *state = HttpFutureDeliveryState::Done;
                     observed
                 }
-                HttpTrailersDeliveryState::Armed(_) | HttpTrailersDeliveryState::Done => {
-                    unreachable!("trailers delivery is armed exactly once")
+                HttpFutureDeliveryState::Armed(_) | HttpFutureDeliveryState::Done => {
+                    unreachable!("HTTP future delivery is armed exactly once")
                 }
             }
         };
         Self::settle(delivery, observed);
+        Ok(())
     }
 
-    pub(super) fn observe(&self, consumption: TerminalConsumption) {
+    pub(in crate::durable_host::p3::http) fn observe(&self, consumption: TerminalConsumption) {
         let delivery = {
-            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
-            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
-                HttpTrailersDeliveryState::Awaiting => {
-                    *state = HttpTrailersDeliveryState::Observed(Some(consumption));
+            let mut state = self
+                .state
+                .lock()
+                .expect("HTTP future delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpFutureDeliveryState::Done) {
+                HttpFutureDeliveryState::Awaiting => {
+                    *state = HttpFutureDeliveryState::Observed(Some(consumption));
                     return;
                 }
-                HttpTrailersDeliveryState::Armed(delivery) => delivery,
-                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => {
-                    unreachable!("trailers terminal observer is invoked at most once")
+                HttpFutureDeliveryState::Armed(delivery) => delivery,
+                HttpFutureDeliveryState::HostTransferred => {
+                    *state = HttpFutureDeliveryState::HostTransferred;
+                    return;
+                }
+                HttpFutureDeliveryState::Observed(_) | HttpFutureDeliveryState::Done => {
+                    unreachable!("HTTP future terminal observer is invoked at most once")
                 }
             }
         };
@@ -180,14 +244,21 @@ impl HttpTrailersDelivery {
 
     pub(super) fn abandon(&self) {
         let delivery = {
-            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
-            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
-                HttpTrailersDeliveryState::Awaiting => {
-                    *state = HttpTrailersDeliveryState::Observed(None);
+            let mut state = self
+                .state
+                .lock()
+                .expect("HTTP future delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpFutureDeliveryState::Done) {
+                HttpFutureDeliveryState::Awaiting => {
+                    *state = HttpFutureDeliveryState::Observed(None);
                     return;
                 }
-                HttpTrailersDeliveryState::Armed(delivery) => delivery,
-                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => return,
+                HttpFutureDeliveryState::Armed(delivery) => delivery,
+                HttpFutureDeliveryState::HostTransferred => {
+                    *state = HttpFutureDeliveryState::HostTransferred;
+                    return;
+                }
+                HttpFutureDeliveryState::Observed(_) | HttpFutureDeliveryState::Done => return,
             }
         };
         delivery.suppress();
@@ -198,7 +269,7 @@ impl HttpTrailersDelivery {
             Some(TerminalConsumption::Delivered) => delivery.delivered(),
             Some(TerminalConsumption::NotDelivered) => drop(delivery),
             Some(TerminalConsumption::Superseded) => {
-                tracing::error!("consume-body trailers terminal observer was superseded");
+                tracing::error!("HTTP future terminal observer was superseded");
                 delivery.suppress();
             }
             None => delivery.suppress(),
@@ -206,26 +277,26 @@ impl HttpTrailersDelivery {
     }
 }
 
-pub(super) struct HttpTrailersDeliveryGuard {
-    delivery: Arc<HttpTrailersDelivery>,
+pub(in crate::durable_host::p3::http) struct HttpFutureDeliveryGuard {
+    delivery: Arc<HttpFutureDelivery>,
     observed: bool,
 }
 
-impl HttpTrailersDeliveryGuard {
-    pub(super) fn new(delivery: Arc<HttpTrailersDelivery>) -> Self {
+impl HttpFutureDeliveryGuard {
+    pub(in crate::durable_host::p3::http) fn new(delivery: Arc<HttpFutureDelivery>) -> Self {
         Self {
             delivery,
             observed: false,
         }
     }
 
-    pub(super) fn observe(mut self, consumption: TerminalConsumption) {
+    pub(in crate::durable_host::p3::http) fn observe(mut self, consumption: TerminalConsumption) {
         self.observed = true;
         self.delivery.observe(consumption);
     }
 }
 
-impl Drop for HttpTrailersDeliveryGuard {
+impl Drop for HttpFutureDeliveryGuard {
     fn drop(&mut self) {
         if !self.observed {
             self.delivery.abandon();
@@ -542,7 +613,10 @@ where
                     Ok(None) => Ok(None),
                     Ok(Some(headers)) => {
                         let view = wasi_http_view::<Ctx, U>(store.data_mut());
-                        match view.table.push(FieldMap::new_immutable(headers)) {
+                        match view
+                            .table
+                            .push(FieldMap::new_immutable(view.hooks, headers))
+                        {
                             Ok(resource) => Ok(Some(resource)),
                             Err(err) => {
                                 return Poll::Ready(Err(wasmtime::Error::from(err)

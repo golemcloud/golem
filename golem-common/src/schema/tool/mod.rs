@@ -44,7 +44,7 @@ pub struct DiscoveredTool {
 
 impl From<RegisteredTool> for DiscoveredTool {
     fn from(value: RegisteredTool) -> Self {
-        Self::new(value.definition, value.source)
+        Self::new(value.registration.definition, value.registration.source)
     }
 }
 

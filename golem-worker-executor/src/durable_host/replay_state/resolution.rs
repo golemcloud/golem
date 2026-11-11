@@ -178,8 +178,9 @@ impl ReplayState {
         &self,
         start_index: OplogIndex,
         marker_index: OplogIndex,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(Some(start_index), marker_index, None)
+        self.await_delivery_boundary(Some(start_index), marker_index, None, activity)
             .await
     }
 
@@ -187,7 +188,7 @@ impl ReplayState {
         &self,
         index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, None).await
+        self.await_delivery_boundary(None, index, None, None).await
     }
 
     pub(in crate::durable_host) async fn await_guest_stream_observation(
@@ -195,14 +196,21 @@ impl ReplayState {
         index: OplogIndex,
         order: Option<GuestReadOrder>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, order).await
+        self.await_delivery_boundary(None, index, order, None).await
     }
 
+    /// With `activity`, the passive progress wait parks while an `AgentInvocationFinished` lies
+    /// between the cursor and the boundary: only a later invocation can replay the guest
+    /// progress that reaches it, and that invocation cannot start until this one settles.
+    /// Cursor operations, and waits for a boundary inside the current invocation, stay active.
+    /// The boundary lookup reads the invocation finishes that the recovery metadata scan
+    /// collected, so a wait adds no oplog reads.
     async fn await_delivery_boundary(
         &self,
         start_index: Option<OplogIndex>,
         marker_index: OplogIndex,
         guest_order: Option<GuestReadOrder>,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
@@ -257,8 +265,13 @@ impl ReplayState {
                 ));
             }
 
-            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
-                .await?;
+            let wait = self.wait_while_blocked(BlockedOn::CursorProgress, progress);
+            match activity {
+                Some(activity) if self.invocation_finish_before(marker_index).is_some() => {
+                    activity.park(wait).await?
+                }
+                _ => wait.await?,
+            }
         }
     }
 

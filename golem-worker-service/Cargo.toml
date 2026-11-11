@@ -66,6 +66,7 @@ humantime-serde.workspace = true
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 include_dir = { workspace = true }
+ipnet = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
@@ -119,6 +120,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
+figment = { workspace = true, features = ["test"] }
 h2 = { workspace = true }
 libsqlite3-sys = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -22,7 +22,9 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
@@ -106,6 +108,13 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         expected_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError>;
+
+    async fn enqueue_oplog_processor(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 pub struct LazyWorkerActivator<Ctx: WorkerCtx> {
@@ -326,6 +335,26 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
             .enqueue_exact_existing(owned_agent_id, expected_fingerprint, delivery)
             .await
     }
+
+    async fn enqueue_oplog_processor(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        let activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking processor")
+            })?;
+        activator
+            .enqueue_oplog_processor(owned_agent_id, component_revision, invocation)
+            .await
+    }
 }
 
 #[derive(Clone)]
@@ -462,19 +491,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         // A metadata read that *failed* is not evidence that the worker is gone, so it propagates:
         // only the two outcomes below are conclusive.
         match self.all.worker_service().get(owned_agent_id).await? {
-            Some(_) => {
-                Worker::get_or_create_running(
+            Some(metadata) => {
+                match Worker::get_existing_running_with_fingerprint(
                     &self.all,
                     owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    metadata.initial_worker_metadata.fingerprint,
                 )
-                .await?;
-                Ok(())
+                .await
+                {
+                    Ok(_) | Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(()),
+                    Err(error) => Err(error),
+                }
             }
             // No oplog: the worker was deleted. There is nothing to activate and no retry that
             // could bring it back, so this is a success rather than a failure to report upwards.
@@ -600,5 +627,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         }
         Worker::start_if_needed(worker).await?;
         Ok(true)
+    }
+
+    async fn enqueue_oplog_processor(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+        invocation: AgentInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        Worker::enqueue_oplog_processor(&self.all, owned_agent_id, component_revision, invocation)
+            .await
     }
 }

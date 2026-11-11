@@ -164,7 +164,7 @@ pub(in crate::durable_host::p3::http) struct HttpConsumeBodyTask<Ctx> {
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-    trailers_delivery: Arc<HttpTrailersDelivery>,
+    trailers_delivery: Arc<HttpFutureDelivery>,
     /// Open-response state of the send that produced this response (its
     /// `outgoing-http-request` span, retry properties, and — for a replayed
     /// response — the send rebuild info), taken over from the response
@@ -185,7 +185,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
         demand_signal: Arc<HttpBodyDemandSignal>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-        trailers_delivery: Arc<HttpTrailersDelivery>,
+        trailers_delivery: Arc<HttpFutureDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
         invocation_id: InvocationIdSource,
         activity: TailActivity,
@@ -204,12 +204,14 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpConsumeBodyTask<Ctx>
+impl<Ctx> HttpConsumeBodyTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    pub(super) async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let HttpConsumeBodyTask {
             mut body,
             demand_rx,
@@ -1137,7 +1139,7 @@ where
                     })?;
                 }
             }
-            trailers_delivery.arm(delivery);
+            trailers_delivery.arm(delivery)?;
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
                 // The terminal observer has already settled the delivery token if the guest

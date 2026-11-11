@@ -3425,7 +3425,6 @@
         "$type",
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -3446,9 +3445,6 @@
         },
         "componentId": {
           "type": "string"
-        },
-        "componentVersion": {
-          "type": ["string", "null"]
         },
         "componentRevision": {
           "type": "integer",
@@ -3542,7 +3538,6 @@
       "required": [
         "guestLanguage",
         "componentWasm",
-        "outputWasm",
         "dependencyAgents",
         "dependencyTools",
         "build",
@@ -3560,7 +3555,6 @@
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
         "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
-        "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "dependencyTools": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "buildMergeMode": { "$ref": "#/definitions/VecMergeMode" },
@@ -4606,7 +4600,6 @@
       "required": [
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -4621,7 +4614,6 @@
       "properties": {
         "componentName": { "type": "string" },
         "componentId": { "type": "string" },
-        "componentVersion": { "type": ["string", "null"] },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "componentSize": { "type": "integer", "minimum": 0 },
         "createdAt": { "type": "string" },
@@ -5813,7 +5805,7 @@
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
-        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -6453,9 +6445,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6466,9 +6456,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6960,8 +6948,9 @@
     },
     "DeployedRegisteredAgentType": {
       "type": "object",
-      "required": ["agentType", "implementedBy"],
+      "required": ["typeId", "agentType", "implementedBy"],
       "properties": {
+        "typeId": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
         "agentType": { "$ref": "#/definitions/AgentType" },
         "implementedBy": { "$ref": "#/definitions/RegisteredAgentTypeImplementer" },
         "webhookPrefixAuthorityAndPath": { "type": ["string", "null"] }
@@ -7600,6 +7589,7 @@
     "DeployedRegisteredTool": {
       "type": "object",
       "required": [
+        "typeId",
         "deploymentRevision",
         "releaseId",
         "definition",
@@ -7610,6 +7600,7 @@
         "metadataDigest"
       ],
       "properties": {
+        "typeId": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
         "deploymentRevision": { "type": "integer", "minimum": 0 },
         "releaseId": {
           "oneOf": [

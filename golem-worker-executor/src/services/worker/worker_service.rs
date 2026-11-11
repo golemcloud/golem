@@ -107,6 +107,9 @@ impl WorkerService for DefaultWorkerService {
             )) => {
                 let golem_common::model::oplog::CreateParameters {
                     agent_id,
+                    component_id,
+                    agent_type_name,
+                    canonical_key,
                     owner_kind,
                     agent_mode: persisted_agent_mode,
                     component_revision,
@@ -131,7 +134,7 @@ impl WorkerService for DefaultWorkerService {
                 let agent_mode = persisted_agent_mode;
                 let component_metadata = self
                     .component_service
-                    .get_metadata(agent_id.component_id, Some(component_revision))
+                    .get_metadata(component_id, Some(component_revision))
                     .await
                     .map_or_else(
                         |e| match e {
@@ -146,16 +149,6 @@ impl WorkerService for DefaultWorkerService {
                 let Some(component_metadata) = component_metadata else {
                     return Ok(None);
                 };
-                let agent_type_name = (matches!(
-                    owner_kind,
-                    golem_common::model::agent::OwnerKind::ComponentAgent
-                ) && component_metadata.metadata.is_agent())
-                .then(|| ParsedAgentId::parse_agent_type_name(&agent_id.agent_id))
-                .transpose()
-                .unwrap_or_else(|error| {
-                    panic!("invalid agent type in authoritative owner metadata for {owned_agent_id}: {error}")
-                });
-
                 let config = local_agent_config
                     .into_iter()
                     .map(|lac| {
@@ -172,6 +165,9 @@ impl WorkerService for DefaultWorkerService {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
+                    component_id,
+                    agent_type_name,
+                    canonical_key,
                     owner_kind,
                     env,
                     config,

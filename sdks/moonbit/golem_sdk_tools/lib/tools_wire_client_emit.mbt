@@ -106,20 +106,12 @@ fn emit_client_wire_input(
     cleanup +
     "return Err(@tool.tool_protocol_error(repr(error))) } }\n",
   )
-  let cancel = if asynchronous {
-    "@asyncCore.Cancelled::Cancelled as error => { " +
-    cleanup +
-    "raise error }\n"
-  } else {
-    ""
-  }
   buf.write_string(
-    "  let __golem_value = " +
+    "  let __golem_value = { " +
+    (if cleanup.is_empty() { "" } else { "errdefer { " + cleanup + " }\n" }) +
     encoder +
-    "(__golem_values) catch { " +
-    cancel +
+    "(__golem_values) } catch { " +
     "error => { " +
-    cleanup +
     "return Err(@tool.tool_protocol_error(repr(error))) } }\n",
   )
   for index, field in fields {

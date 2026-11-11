@@ -671,6 +671,9 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
     result: InvocationResult,
 ) -> LookupResult {
     match result {
+        InvocationResult::Cancelled => LookupResult::Complete(Err(
+            WorkerExecutorError::invalid_request("Invocation was cancelled before execution"),
+        )),
         InvocationResult::Cached {
             result: Ok(values), ..
         } => LookupResult::Complete(Ok(values)),
@@ -876,6 +879,11 @@ impl InvocationResult {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
             let entry = services.oplog().read(oplog_idx).await?;
+
+            if matches!(entry, OplogEntry::CancelPendingInvocation { .. }) {
+                *self = Self::Cancelled;
+                return Ok(());
+            }
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {

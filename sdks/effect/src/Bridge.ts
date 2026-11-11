@@ -1,12 +1,13 @@
 /** Effect-native runtime used by generated guest agent bridges. @since 1.6.0 */
 import { Effect, Schema, SchemaGetter, Scope, Stream } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
+import { uuidToString } from "golem:core/types@2.0.0"
 import type { InvocationMetadata, RemoteCallError as ClientRemoteCallError } from "./Client.js"
 import * as Datetime from "./Datetime.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import { prepareRemoteAgent } from "./internal/agentIdentity.js"
 import {
   agentStreamFromHandle as fromStreamHandle,
   agentStreamToHandle as toStreamHandle,
@@ -35,7 +36,6 @@ import {
   restoreEncodedCapabilitiesOnAbort,
   schemaValueFromWit,
   schemaValueToWitAsync,
-  typedSchemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import { QuotaTokenSchema, type QuotaToken } from "./Quota.js"
 import {
@@ -484,31 +484,15 @@ export const resolveRemoteAgent = (
 ): Effect.Effect<RemoteAgentHandle, RemoteCallError, RpcClient | AgentHostClient | Scope.Scope> =>
   Effect.suspend(() =>
     Effect.gen(function* () {
-      const constructorTree = yield* encode(constructor)
-      const phantom =
-        phantomId === undefined
-          ? undefined
-          : yield* Effect.try({ try: () => parseUuid(phantomId), catch: wrapHostThrow })
-      const agentHost = yield* AgentHostClient
-      const agentId =
-        mode === "durable"
-          ? yield* Effect.try({
-              try: () => agentHost.makeAgentId(agentTypeName, constructorTree, phantom),
-              catch: wrapHostThrow,
-            })
-          : agentTypeName
-      const rpcHost = yield* RpcClient
-      const wireConfigs = yield* attempt(() =>
-        configs.map(({ path, value }) => ({
-          path: [...path],
-          value: typedSchemaValueToWit(value),
-        })),
+      const { agentId, connect } = yield* prepareRemoteAgent(
+        agentTypeName,
+        constructor,
+        phantomId,
+        configs,
+        mode,
       )
       const rpc = yield* Effect.acquireRelease(
-        Effect.mapError(
-          rpcHost.connect(agentTypeName, constructorTree, phantom, wireConfigs),
-          (error) => wrapHostThrow(error.cause),
-        ),
+        Effect.mapError(connect, (error) => wrapHostThrow(error.cause)),
         (connection) => Effect.sync(() => connection.drop()),
       )
       return remote(rpc, agentId)

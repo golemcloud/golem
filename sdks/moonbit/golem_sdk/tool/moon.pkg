@@ -8,8 +8,6 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "golemcloud/golem_sdk/tool-core" @toolCore,
-  "moonbitlang/core/ref",
-  "moonbitlang/core/strconv",
 }
 
 import {
@@ -17,6 +15,8 @@ import {
   "golemcloud/golem_sdk/internal/test_support",
 } for "wbtest"
 
-warnings = "-44"
+// Invocation and stream outcomes remain data that callers can collect separately.
+
+warnings = "-44-result_error_return"
 
 supported_targets = "+wasm"

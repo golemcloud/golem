@@ -159,14 +159,14 @@ test "middleware registration rejects every canonical and alias collision transa
 }
 
 ///|
-fn registry_counted_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
+fn registry_counted_stream(drops : Ref[Int32]) -> @async-core.Stream[Byte] {
   @async-core.Stream::produce(_ => (), on_unstarted_drop=fn() {
     drops.val = drops.val + 1
   })
 }
 
 ///|
-fn registry_raw_secret(index : Int) -> @types.TypedSchemaValue raise {
+fn registry_raw_secret(index : Int32) -> @types.TypedSchemaValue raise {
   let unit = @schema.try_into_typed_schema_value(())
   @model.typed_schema_value_to_wit({
     graph: unit.graph,

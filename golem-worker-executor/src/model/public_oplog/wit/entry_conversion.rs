@@ -36,7 +36,7 @@ macro_rules! entry_value {
         Ok(Self::$case(oplog::$wit { $($field: $value),* }))
     };
     (from $case:ident; record ($params:ident) { $($field:ident: $value:expr),* $(,)? }) => {
-        Ok(Self::$case { $($field: $value),* })
+        Ok(golem_common::model::oplog::OplogEntry::$case { $($field: $value),* })
     };
     ($direction:ident $case:ident; override ($pattern:pat) => $value:expr) => { $value };
 }
@@ -70,10 +70,17 @@ macro_rules! generate_entry_conversion {
         generate_entry_conversion!(@from ($source => $target) ($input) [$($arms)*]; $($rest)*);
     };
     (@from ($source:ty => $target:ty) ($input:ident) [$($arms:tt)*];
+        Create { $($mapping:tt)* } $($rest:tt)*) => {
+        generate_entry_conversion!(@from ($source => $target) ($input) [
+            $($arms)*
+            entry_pattern!(from Create; $($mapping)*) => entry_value!(from Create; $($mapping)*),
+        ]; $($rest)*);
+    };
+    (@from ($source:ty => $target:ty) ($input:ident) [$($arms:tt)*];
         $case:ident { $($mapping:tt)* } $($rest:tt)*) => {
         generate_entry_conversion!(@from ($source => $target) ($input) [
             $($arms)*
-            entry_pattern!(from $case; $($mapping)*) => entry_value!(from $case; $($mapping)*),
+            entry_pattern!(from $case; $($mapping)*) => entry_value!(from $case; $($mapping)*).map(Self::Other),
         ]; $($rest)*);
     };
     (

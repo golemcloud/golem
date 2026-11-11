@@ -27,6 +27,7 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::http_server::HttpServerConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
+use ipnet::IpNet;
 use poem::web::websocket::WebSocketConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
@@ -675,9 +676,9 @@ pub struct RouteResolverConfig {
     pub router_cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub router_cache_eviction_period: Duration,
-    /// Direct peer addresses whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
+    /// Direct peer address ranges whose X-Forwarded-Proto and X-Forwarded-Host are authoritative.
     #[serde(default)]
-    pub trusted_ingress_addresses: Vec<IpAddr>,
+    pub trusted_ingress_addresses: Vec<IpNet>,
 }
 
 impl SafeDisplay for RouteResolverConfig {
@@ -1105,6 +1106,7 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 }
 
 #[cfg(test)]
+#[test_r::sequential]
 mod tests {
     use std::time::Duration;
 
@@ -1115,6 +1117,7 @@ mod tests {
         WorkerServiceConfig, make_worker_service_config_loader,
     };
     use crate::mcp::session::{McpSessionStorageConfig, McpSqliteStorageConfig};
+    use figment::Jail;
     use figment::providers::{Format, Toml};
     use golem_common::SafeDisplay;
     use golem_common::config::RedisConfig;
@@ -1346,6 +1349,110 @@ mod tests {
 
         assert!(config.http_session.validate().is_ok());
         assert!(config.route_resolver.trusted_ingress_addresses.is_empty());
+    }
+
+    #[test]
+    fn trusted_ingress_addresses_are_cidr_ranges() {
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [route_resolver]
+                trusted_ingress_addresses = ["172.18.128.0/19", "fd00::/8"]
+                "#,
+            ))
+            .extract()
+            .expect("Failed to load config");
+
+        assert_eq!(
+            config.route_resolver.trusted_ingress_addresses,
+            vec![
+                "172.18.128.0/19".parse::<ipnet::IpNet>().unwrap(),
+                "fd00::/8".parse().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn trusted_ingress_address_without_prefix_length_is_rejected() {
+        let result = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [route_resolver]
+                trusted_ingress_addresses = ["10.0.0.1"]
+                "#,
+            ))
+            .extract::<WorkerServiceConfig>();
+
+        let error = result
+            .expect_err("a bare address must not load")
+            .to_string();
+        assert!(
+            error.contains("route_resolver.trusted_ingress_addresses"),
+            "{error}"
+        );
+    }
+
+    /// Writes the worker-service configuration file into the jail's working directory, where
+    /// the loader expects it, as in the service image.
+    fn with_worker_service_config_file(jail: &mut Jail) -> figment::Result<()> {
+        jail.create_dir("config")?;
+        jail.create_file(
+            super::CONFIG_FILE_NAME,
+            include_str!("../config/worker-service.toml"),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_ingress_addresses_are_read_from_the_environment() {
+        Jail::expect_with(|jail| {
+            with_worker_service_config_file(jail)?;
+            jail.set_env(
+                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                r#"["172.18.128.0/19","172.18.160.0/19","172.18.192.0/19"]"#,
+            );
+
+            let config: WorkerServiceConfig =
+                make_worker_service_config_loader().figment().extract()?;
+
+            assert_eq!(
+                config.route_resolver.trusted_ingress_addresses,
+                vec![
+                    "172.18.128.0/19".parse::<ipnet::IpNet>().unwrap(),
+                    "172.18.160.0/19".parse().unwrap(),
+                    "172.18.192.0/19".parse().unwrap(),
+                ]
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn trusted_ingress_address_without_prefix_length_in_the_environment_is_rejected() {
+        Jail::expect_with(|jail| {
+            with_worker_service_config_file(jail)?;
+            jail.set_env(
+                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                r#"["10.0.0.1"]"#,
+            );
+
+            let error = make_worker_service_config_loader()
+                .figment()
+                .extract::<WorkerServiceConfig>()
+                .expect_err("a bare address must not load")
+                .to_string();
+
+            // Figment names keys from environment variables in upper case.
+            assert!(
+                error
+                    .to_lowercase()
+                    .contains("route_resolver.trusted_ingress_addresses"),
+                "{error}"
+            );
+            Ok(())
+        });
     }
 
     #[test]

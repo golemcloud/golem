@@ -32,6 +32,10 @@ pub use extended_agent_type::*;
 pub use extended_tool_type::*;
 pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
 pub use http::*;
+#[doc(hidden)]
+pub use identity::{
+    __agent_proxy, __agent_proxy_or_panic, __connect_agent, __connect_agent_or_panic,
+};
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
@@ -78,6 +82,7 @@ pub(crate) mod exports;
 mod extended_agent_type;
 mod extended_tool_type;
 mod http;
+mod identity;
 mod multimodal;
 mod principal_serde;
 pub mod reflection;

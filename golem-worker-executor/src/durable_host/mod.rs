@@ -219,9 +219,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
-    materialize_streaming_result,
+    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    load_load_snapshot_guest, lower_invocation, materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
@@ -236,7 +235,6 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
@@ -288,7 +286,6 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use http_body_util::BodyExt;
-use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -309,17 +306,14 @@ use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
-use wasmtime_wasi_http::p3::RequestOptions;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
+use wasmtime_wasi_http::{HttpConnectionPool, RequestOptions, WasiHttpCtx};
 
 /// Hooks providing the custom HTTP request handling needed for durable
 /// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
 /// for `wasmtime-wasi-http`.
+#[derive(Clone)]
 pub struct DurableHttpHooks {
-    /// Connection pool used for outgoing HTTP requests. Mirror of
-    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
-    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
+    /// Connection pool used for outgoing HTTP requests.
     pub connection_pool: Option<HttpConnectionPool>,
     /// Shared replay flag that durable execution toggles when transitioning
     /// between live and replay modes. When `true`, outgoing HTTP requests are
@@ -1172,13 +1166,9 @@ struct PrivateDurableWorkerState {
     pub(crate) open_p3_http_responses:
         HashMap<u32, crate::durable_host::p3::http::OpenP3HttpResponseState>,
 
-    /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
-    /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
-    /// transmission future) and detached by the host call that consumes the request:
-    /// `client::send` records/replays the transmission result durably, while a guest-side
-    /// `consume-body`/`drop` forwards the deterministic value with no recording.
-    pub(crate) pending_p3_http_request_transmissions:
-        HashMap<u32, crate::durable_host::p3::http::PendingHttpRequestBodyTransmission>,
+    /// Transmission wiring and future identities for P3 HTTP bodies. Host transfers preserve
+    /// their recorded result while the recipient owns any later guest delivery boundary.
+    pub(crate) p3_http_transmissions: crate::durable_host::p3::http::HttpTransmissionRegistry,
 
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,

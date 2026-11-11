@@ -8867,6 +8867,151 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
 
 #[test]
 #[timeout("4m")]
+async fn cancelled_schedule_retry_stays_cancelled_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::agent::AgentPrincipal;
+    use golem_common::model::oplog::OplogEntry;
+    use golem_worker_executor::model::LookupResult;
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.hydrated_cache_capacity = 0;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "cancelled-schedule-retry");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "cancelled-schedule-owner"),
+        )
+        .await?;
+    let invocation = |key: &IdempotencyKey, value: u64| AgentInvocation::AgentMethod {
+        idempotency_key: key.clone(),
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(value).into_parts().1,
+        invocation_context: InvocationContextStack::fresh(),
+        principal: Principal::Agent(AgentPrincipal {
+            agent_id: owner.clone(),
+        }),
+        scope_card: None,
+    };
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let key = IdempotencyKey::fresh();
+    let due = Utc::now() + chrono::Duration::seconds(5);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let receipt = worker
+        .schedule_invocation(invocation(&key, 71), due)
+        .await?;
+    assert!(
+        worker
+            .cancel_scheduled_invocation(key.clone(), receipt, &owner)
+            .await?
+    );
+    assert_eq!(
+        worker
+            .schedule_invocation(invocation(&key, 71), due)
+            .await?,
+        receipt
+    );
+    drop(worker);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0
+    );
+    // The read evicts the cancellation from the one-entry recent index. The retry must find it
+    // through the persisted index or oplog, not just a resident cancellation cache.
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    assert_eq!(
+        worker
+            .schedule_invocation(invocation(&key, 71), due)
+            .await?,
+        receipt
+    );
+    assert_eq!(
+        worker.lookup_invocation_result(&key).await,
+        LookupResult::Complete(Err(WorkerExecutorError::invalid_request(
+            "Invocation was cancelled before execution"
+        )))
+    );
+    let fresh_key = IdempotencyKey::fresh();
+    worker
+        .schedule_invocation(invocation(&fresh_key, 29), due)
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let LookupResult::Complete(result) =
+                worker.lookup_invocation_result(&fresh_key).await
+            {
+                break result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert!(Utc::now() >= due);
+    assert_eq!(
+        worker
+            .schedule_invocation(invocation(&key, 71), due)
+            .await?,
+        receipt
+    );
+    // A redundant cancellation must not replace a completed invocation's result.
+    worker.cancel_invocation(fresh_key.clone()).await?;
+    assert_eq!(
+        worker.lookup_invocation_result(&fresh_key).await,
+        LookupResult::Complete(Ok(result))
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        29
+    );
+    let history = executor.stored_oplog(&target).await;
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| matches!(entry,
+        OplogEntry::PendingAgentInvocation { invocation_id, .. } if invocation_id == &key))
+            .count(),
+        1
+    );
+    assert!(!history.iter().any(|entry| matches!(entry,
+        OplogEntry::AgentInvocationStarted { invocation_id, .. } if invocation_id == &key)));
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| matches!(entry,
+        OplogEntry::AgentInvocationStarted { invocation_id, .. } if invocation_id == &fresh_key))
+            .count(),
+        1
+    );
+    drop(worker);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
 async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -81,7 +81,10 @@ fn invocation_agent_id(
 ) -> anyhow::Result<AgentId> {
     let is_ephemeral = component
         .metadata
-        .find_agent_type_by_name_ref(&agent_id.agent_type)
+        .agent_types
+        .iter()
+        .map(|agent| &agent.declaration)
+        .find(|agent| agent.type_name == agent_id.agent_type)
         .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
     let agent_id = if is_ephemeral && agent_id.phantom_id.is_none() {
         agent_id

@@ -16,12 +16,12 @@ pub fn Presented::unit() -> Unit {
 }
 
 ///|
-pub fn Presented::value(value : String) -> Int {
+pub fn Presented::value(value : String) -> Int32 {
   value.length()
 }
 
 ///|
-pub fn Presented::retry(value : String) -> Int {
+pub fn Presented::retry(value : String) -> Int32 {
   value.length()
 }
 
@@ -39,7 +39,7 @@ pub fn Presented::abandon_stdout(output : @asyncCore.Sink[Byte]) -> Unit {
 pub fn Presented::value_stdout(
   value : String,
   output : @asyncCore.Sink[Byte],
-) -> Int {
+) -> Int32 {
   ignore(output)
   value.length()
 }
@@ -143,7 +143,7 @@ pub async fn Policy::unit(
 pub async fn Policy::value(
   underlying : PresentedUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   underlying.value(value)
 }
 
@@ -151,7 +151,7 @@ pub async fn Policy::value(
 pub async fn Policy::retry(
   underlying : PresentedUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   match underlying.retry(value) {
     Ok(_) => underlying.retry(value)
     Err(error) => Err(error)
@@ -200,7 +200,7 @@ pub async fn Policy::value_stdout(
   underlying : PresentedUnderlying,
   value : String,
 ) -> Result[
-  (Int, @asyncCore.Stream[Byte]),
+  (Int32, @asyncCore.Stream[Byte]),
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
   match underlying.start_value_stdout(value) {
@@ -262,7 +262,7 @@ pub async fn Adapter::unit(
 pub async fn Adapter::value(
   underlying : StorageUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   match underlying.fetch(value) {
     Ok(value) => Ok(value.length())
     Err(error) => Err(error)
@@ -273,7 +273,7 @@ pub async fn Adapter::value(
 pub async fn Adapter::retry(
   underlying : StorageUnderlying,
   value : String,
-) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+) -> Result[Int32, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   match underlying.fetch(value) {
     Ok(value) => Ok(value.length())
     Err(error) => Err(error)
@@ -310,7 +310,7 @@ pub async fn Adapter::value_stdout(
   underlying : StorageUnderlying,
   value : String,
 ) -> Result[
-  (Int, @asyncCore.Stream[Byte]),
+  (Int32, @asyncCore.Stream[Byte]),
   @toolMiddleware.ToolInvokeError[@tool.NoToolError],
 ] {
   ignore(underlying)

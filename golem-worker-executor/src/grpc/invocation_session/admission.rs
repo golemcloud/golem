@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
                 let metadata = worker.get_initial_worker_metadata();
-                let final_agent_id = metadata.agent_id;
+                let final_agent_id = metadata.agent_id.clone();
                 let ik = IdempotencyKey::new(
                     request_key
                         .finalize(final_agent_id.clone(), metadata.fingerprint, &method_name)
@@ -200,21 +200,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 });
                 let current_component = self
                     .component_service()
-                    .get_metadata(
-                        owned_agent_id.component_id(),
-                        Some(status.component_revision),
-                    )
+                    .get_metadata(metadata.component_id, Some(status.component_revision))
                     .await?;
                 let (component, streaming) = if let Some(pending_revision) = pending_update_revision
                     && pending_revision != status.component_revision
                     && let Ok(pending_component) = self
                         .component_service()
-                        .get_metadata(owned_agent_id.component_id(), Some(pending_revision))
+                        .get_metadata(metadata.component_id, Some(pending_revision))
                         .await
-                    && let Ok(parsed_agent_id) = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &pending_component.metadata,
-                    )
+                    && let Ok(parsed_agent_id) =
+                        metadata.parse_agent_id(&pending_component.metadata)
                     && let Ok(streaming) = validate_agent_method_invocation(
                         &pending_component.metadata,
                         Some(&parsed_agent_id),
@@ -223,11 +218,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ) {
                     (pending_component, streaming)
                 } else {
-                    let parsed_agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &current_component.metadata,
-                    )
-                    .map_err(WorkerExecutorError::invalid_request)?;
+                    let parsed_agent_id = metadata
+                        .parse_agent_id(&current_component.metadata)
+                        .map_err(WorkerExecutorError::invalid_request)?;
                     let streaming = validate_agent_method_invocation(
                         &current_component.metadata,
                         Some(&parsed_agent_id),
@@ -353,11 +346,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 });
                 let component = self
                     .component_service()
-                    .get_metadata(owned_agent_id.component_id(), component_revision)
+                    .get_metadata(
+                        existing_metadata.as_ref().map_or_else(
+                            || owned_agent_id.component_id(),
+                            |metadata| metadata.component_id,
+                        ),
+                        component_revision,
+                    )
                     .await?;
-                let parsed_agent_id =
-                    ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                        .map_err(WorkerExecutorError::invalid_request)?;
+                let parsed_agent_id = match &existing_metadata {
+                    Some(metadata) => metadata.parse_agent_id(&component.metadata),
+                    None => {
+                        ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                    }
+                }
+                .map_err(WorkerExecutorError::invalid_request)?;
                 let streaming = validate_agent_method_invocation(
                     &component.metadata,
                     Some(&parsed_agent_id),

@@ -68,6 +68,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
@@ -674,7 +675,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     None,
                     acceptance,
                     rpc.invoke_and_await_streaming(
-                        &remote_agent_id,
+                        AgentTarget::Current(remote_agent_id.agent_id()),
+                        remote_agent_id.environment_id,
                         idempotency_key,
                         prepared.method_name.clone(),
                         input.value,

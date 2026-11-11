@@ -175,9 +175,7 @@ mod grpc {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use std::sync::Arc;
 
-    /// Re-wrap a [`RegisteredAgentType`] into the schema-native
-    /// [`RegisteredAgentTypeSchema`]. Both carry an `AgentTypeSchema` now, so
-    /// this only moves the fields across.
+    /// Project a [`RegisteredAgentType`] into the ID-free discovery model.
     fn registered_agent_type_to_schema(
         registered: RegisteredAgentType,
     ) -> Result<RegisteredAgentTypeSchema, WorkerExecutorError> {

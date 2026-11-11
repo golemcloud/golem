@@ -164,23 +164,13 @@ pub fn get_remote_client_for_type(
 
                     #prelude
 
-                    let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value_ident)
-                        .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
-                    let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                    let (#agent_id_ident, wasm_rpc) = golem_rust::agentic::__connect_agent(
                         #type_name,
-                        __golem_constructor,
+                        || golem_rust::encode_schema_value(&#constructor_value_ident)
+                            .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
                         #phantom_wire,
-                    )
-                    .map_err(golem_rust::agentic::reflection::agentic_agent_error_to_reflect)?;
-                    let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value_ident)
-                        .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
-                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
-                        #type_name,
-                        __golem_constructor,
-                        #phantom_wire,
-                        #config,
-                    )
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                        || #config,
+                    )?;
 
                     Ok(#remote_client_type_name {
                         agent_id: #agent_id_ident,
@@ -195,20 +185,12 @@ pub fn get_remote_client_for_type(
 
                     #prelude
 
-                    let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                    let (#agent_id_ident, wasm_rpc) = golem_rust::agentic::__connect_agent_or_panic(
                         #type_name,
-                        #constructor_value_ident(),
+                        #constructor_value_ident,
                         #phantom_wire,
-                    )
-                    .expect("Internal Error: Failed to make agent id");
-
-                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
-                        #type_name,
-                        #constructor_value_ident(),
-                        #phantom_wire,
-                        #config,
-                    )
-                    .unwrap_or_else(|error| panic!("Internal Error: Agent type not registered: {error:?}"));
+                        || #config,
+                    );
 
                     #remote_client_type_name {
                         agent_id: #agent_id_ident,
@@ -382,27 +364,14 @@ pub fn get_remote_client_for_type(
             pub fn #get_agent_id_accessor_ident(&self) -> String { self.agent_id.clone() }
         }
     });
-    let create_bound_transport = if construction_fallible {
-        quote! {
-            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
-                #type_name,
-                golem_rust::encode_schema_value(&parts.constructor_value)
-                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?,
-                parts.phantom_id.map(Into::into),
-                Vec::new(),
-            )
-            .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
-        }
-    } else {
-        quote! {
-            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
-                #type_name,
-                golem_rust::encode_schema_value(&parts.constructor_value)
-                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?,
-                parts.phantom_id.map(Into::into),
-                Vec::new(),
-            );
-        }
+    let create_bound_transport = quote! {
+        let wasm_rpc = golem_rust::agentic::__agent_proxy(
+            #type_name,
+            || golem_rust::encode_schema_value(&parts.constructor_value)
+                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
+            parts.phantom_id.map(Into::into),
+            Vec::new,
+        )?;
     };
     let bind_impl = (construction_fallible
         && agent_is_durable
@@ -537,27 +506,24 @@ fn build_ephemeral_constructor_body(
     if fallible {
         quote! {
             #encode_constructor
-            let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value)
-                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
-            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
+            let wasm_rpc = golem_rust::agentic::__agent_proxy(
                 #type_name,
-                __golem_constructor,
+                || golem_rust::encode_schema_value(&#constructor_value)
+                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
                 #phantom_id,
-                #config,
-            )
-            .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                || #config,
+            )?;
             Ok(#client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() })
         }
     } else {
         quote! {
             #encode_constructor
-            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
+            let wasm_rpc = golem_rust::agentic::__agent_proxy_or_panic(
                 #type_name,
-                #constructor_value(),
+                #constructor_value,
                 #phantom_id,
-                #config,
-            )
-            .unwrap_or_else(|error| panic!("Internal Error: Agent type not registered: {error:?}"));
+                || #config,
+            );
             #client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() }
         }
     }

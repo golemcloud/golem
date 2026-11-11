@@ -35,6 +35,7 @@ use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::AgentInvocation;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -366,7 +367,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let rpc = self.rpc();
             let demand = rpc
                 .create_demand(
-                    &remote_agent_id,
+                    AgentTarget::Current(remote_agent_id.agent_id()),
+                    remote_agent_id.environment_id,
                     &method_name,
                     self.created_by(),
                     self.agent_id(),

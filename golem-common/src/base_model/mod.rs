@@ -60,6 +60,7 @@ pub mod tool;
 pub mod tool_middleware;
 pub mod tool_middleware_release;
 pub mod tool_release;
+pub mod type_id;
 pub mod worker;
 pub mod worker_filter;
 

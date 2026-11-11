@@ -31,6 +31,7 @@ import golem.host.js.schema.{
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
+import golem.runtime.rpc.AgentIdentity
 import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
 import golem.schema.AgentStreamOwnership
@@ -481,7 +482,7 @@ object Guest {
         js.Promise.reject(customError("Agent is already initialized in this container"))
       } else {
         val ambientAgentId = AgentHostApi.getSelfMetadata().agentId.agentId
-        AgentHostApi.parseAgentId(ambientAgentId) match {
+        AgentIdentity.parse(ambientAgentId) match {
           case Left(error)         => js.Promise.reject(invalidAgentId(error))
           case Right(agentIdParts) =>
             AgentRegistry.get(agentIdParts.agentTypeName) match {

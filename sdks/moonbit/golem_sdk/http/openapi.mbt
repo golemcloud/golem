@@ -19,7 +19,7 @@ pub fn openapi_json(document : Json) -> String raise OpenApiJsonError {
 ///|
 fn append_openapi_json(
   out : StringBuilder,
-  bytes : Ref[Int],
+  bytes : Ref[Int32],
   text : String,
 ) -> Unit raise OpenApiJsonError {
   if text.length() > 1048576 {
@@ -52,8 +52,8 @@ fn openapi_string(value : String) -> String raise OpenApiJsonError {
 fn write_openapi_json(
   value : Json,
   out : StringBuilder,
-  bytes : Ref[Int],
-  depth : Int,
+  bytes : Ref[Int32],
+  depth : Int32,
 ) -> Unit raise OpenApiJsonError {
   match value {
     Object(fields) => {
@@ -122,17 +122,17 @@ fn is_json_number(token : String) -> Bool {
   if token[i] == '0' {
     i += 1
   } else {
-    if !(token[i] is ('1'..='9')) {
+    if !(token[i] is ('1'..<='9')) {
       return false
     }
-    while i < n && token[i] is ('0'..='9') {
+    while i < n && token[i] is ('0'..<='9') {
       i += 1
     }
   }
   if i < n && token[i] == '.' {
     i += 1
     let start = i
-    while i < n && token[i] is ('0'..='9') {
+    while i < n && token[i] is ('0'..<='9') {
       i += 1
     }
     if i == start {
@@ -145,7 +145,7 @@ fn is_json_number(token : String) -> Bool {
       i += 1
     }
     let start = i
-    while i < n && token[i] is ('0'..='9') {
+    while i < n && token[i] is ('0'..<='9') {
       i += 1
     }
     if i == start {

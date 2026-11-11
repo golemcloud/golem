@@ -20,19 +20,15 @@ fn Transport::create_with_config(
   phantom_id : @schema.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> Transport raise ReflectError {
-  let constructor_input = @model.schema_value_to_wit(constructor_value) catch {
+  let prepared = @identity.Constructor::from_value(
+    type_name, constructor_value, phantom_id,
+  ) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
-  match
-    @agentHost.WasmRpc::create(
-      type_name,
-      constructor_input,
-      phantom_id.map(@schema.Uuid::to_wit),
-      agent_config,
-    ) {
-    Ok(raw) => { raw, default_scope_card: None, }
-    Err(error) => raise rpc_error(error)
+  let raw = prepared.try_connect(agent_config) catch {
+    error => raise rpc_error(error)
   }
+  { raw, default_scope_card: None, }
 }
 
 ///|
@@ -94,15 +90,9 @@ async fn Transport::invoke_value(
 async fn encode_awaited_input(
   input : @model.SchemaValue,
 ) -> @types.SchemaValueTree {
+  errdefer input.rollback_input_resources(@model_host.resource_drops())
   let wire = @model.schema_value_to_wit_async(input) catch {
-    @async-core.Cancelled::Cancelled as error => {
-      input.rollback_input_resources(@model_host.resource_drops())
-      raise error
-    }
-    error => {
-      input.rollback_input_resources(@model_host.resource_drops())
-      raise Schema("failed to encode invocation input: \{repr(error)}")
-    }
+    error => raise Schema("failed to encode invocation input: \{repr(error)}")
   }
   wire
 }
