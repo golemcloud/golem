@@ -405,6 +405,7 @@ Path|Method|Protected
 
 Interrupts the execution of a worker.
 The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+With recover-immediately, a failed or exited worker is refused, because it does not recover.
 An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
 For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
 
