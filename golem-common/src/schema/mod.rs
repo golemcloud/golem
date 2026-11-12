@@ -21,6 +21,8 @@
 
 pub mod agent;
 mod common_impls;
+#[cfg(feature = "full")]
+pub mod config;
 pub mod external;
 #[cfg(feature = "full")]
 pub mod protobuf;

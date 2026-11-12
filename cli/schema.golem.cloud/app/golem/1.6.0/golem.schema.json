@@ -98,6 +98,11 @@
     "bridge": {
       "$ref": "#/definitions/bridgeSdks"
     },
+    "config": {
+      "type": "object",
+      "description": "Environment catalogs. Owner fields select exact rooted names with $config or $secret. Parsing never provisions resources.",
+      "additionalProperties": { "$ref": "#/definitions/configCatalog" }
+    },
     "secretDefaults": {
       "type": "object",
       "description": "Secret defaults by environment name, using nested config-style object paths.",
@@ -151,6 +156,92 @@
     }
   },
   "definitions": {
+    "configCatalog": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_-][A-Za-z0-9_-]*$" },
+      "additionalProperties": { "$ref": "#/definitions/configCatalogEntry" }
+    },
+    "configCatalogEntry": {
+      "oneOf": [
+        { "type": ["null", "boolean", "number", "string"] },
+        { "type": "array", "items": { "$ref": "#/definitions/configDescriptorValue" } },
+        { "$ref": "#/definitions/configCatalog" },
+        { "$ref": "#/definitions/configSecretSelector" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$kind"],
+          "properties": {
+            "$kind": { "const": "shared" },
+            "$init": { "$ref": "#/definitions/configDescriptorValue" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$kind"],
+          "not": { "required": ["$init", "$oauth"] },
+          "properties": {
+            "$kind": { "const": "secret" },
+            "$init": { "$ref": "#/definitions/configDataValue" },
+            "$oauth": { "$ref": "#/definitions/configOAuth" },
+            "$destinations": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["$kind"],
+          "properties": {
+            "$kind": { "const": "resource" },
+            "$init": { "$ref": "#/definitions/resourceDefinitionCreation" }
+          }
+        }
+      ]
+    },
+    "configSecretSelector": {
+      "type": "object",
+      "required": ["$secret"],
+      "additionalProperties": false,
+      "properties": {
+        "$secret": { "type": "string", "pattern": "^[A-Za-z_-][A-Za-z0-9_-]*(\\.[A-Za-z_-][A-Za-z0-9_-]*)*$" }
+      }
+    },
+    "configDataValue": {
+      "oneOf": [
+        { "type": ["null", "boolean", "number", "string"] },
+        { "type": "array", "items": { "$ref": "#/definitions/configDataValue" } },
+        {
+          "type": "object",
+          "propertyNames": { "not": { "pattern": "^\\$" } },
+          "additionalProperties": { "$ref": "#/definitions/configDataValue" }
+        }
+      ]
+    },
+    "configDescriptorValue": {
+      "oneOf": [
+        { "type": ["null", "boolean", "number", "string"] },
+        { "type": "array", "items": { "$ref": "#/definitions/configDescriptorValue" } },
+        { "$ref": "#/definitions/configSecretSelector" },
+        {
+          "type": "object",
+          "propertyNames": { "not": { "pattern": "^\\$" } },
+          "additionalProperties": { "$ref": "#/definitions/configDescriptorValue" }
+        }
+      ]
+    },
+    "configOAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorizationServer", "clientId", "scopes", "resource"],
+      "properties": {
+        "authorizationServer": { "type": "string", "minLength": 1 },
+        "clientId": { "type": "string", "minLength": 1 },
+        "clientSecret": { "$ref": "#/definitions/configSecretSelector" },
+        "scopes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "resource": { "type": "string", "minLength": 1 }
+      }
+    },
     "lenientTokenList": {
       "oneOf": [
         {

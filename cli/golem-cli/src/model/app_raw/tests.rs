@@ -51,6 +51,80 @@ fn node_http_router_ports_match_manifest_schema() {
     }
 }
 
+#[test]
+fn config_catalog_grammar_matches_manifest_schema() {
+    for (catalog, valid) in [
+        (
+            serde_json::json!({"public":{"count":7,"flag":false,"items":[1,null,3]}}),
+            true,
+        ),
+        (
+            serde_json::json!({"live":{"$kind":"shared"},"key":{"$kind":"secret","$init":"{{ KEY }}","$destinations":[]}}),
+            true,
+        ),
+        (
+            serde_json::json!({"model":{"$kind":"shared","$init":{"key":{"$secret":"keys.api"}}},"keys":{"api":{"$kind":"secret"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"token":{"$kind":"secret","$oauth":{"authorizationServer":"https://login.test","clientId":"client","scopes":["read"],"resource":"https://resource.test","clientSecret":{"$secret":"keys.client"}}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":{"limit":{"type":"Capacity","value":17},"enforcementAction":"reject","unit":"call","units":"calls"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"_name":1,"-other":2,"Exact_Name":3}),
+            true,
+        ),
+        (serde_json::json!({"with.dot":1}), false),
+        (serde_json::json!({"0name":1}), false),
+        (serde_json::json!({"alias":{"$config":"public"}}), false),
+        (
+            serde_json::json!({"live":{"$kind":"shared","$init":{"$kind":"shared"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$init":{"$secret":"other"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$destinations":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$oauth":{"authorizationServer":"x","clientId":"c","scopes":[],"resource":"r","clientSecret":null}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"key":{"$kind":"secret","$init":null,"$oauth":{}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":null}}),
+            false,
+        ),
+        (
+            serde_json::json!({"budget":{"$kind":"resource","$init":{"limit":{"type":"Capacity","value":17,"typo":5},"enforcementAction":"reject","unit":"call","units":"calls"}}}),
+            false,
+        ),
+        (serde_json::json!({"wrong":{"$kind":"other"}}), false),
+    ] {
+        let document = serde_json::json!({"config":{"local":catalog}});
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            valid,
+            "serde: {document}"
+        );
+        assert_eq!(
+            JSON_SCHEMA_VALIDATOR.is_valid(&document),
+            valid,
+            "schema: {document}"
+        );
+    }
+}
+
 fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
     strategy: BoxedStrategy<T>,
 ) -> BoxedStrategy<Option<T>> {
@@ -1710,6 +1784,7 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                 environments,
                 version,
                 bridge,
+                config: Default::default(),
                 secret_defaults,
                 retry_policy_defaults,
                 resource_defaults,

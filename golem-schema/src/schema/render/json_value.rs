@@ -454,7 +454,7 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    if !rule_matches(&branch.discriminator, &rendered)? {
+    if !matches_discriminator(&branch.discriminator, &rendered)? {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -980,7 +980,7 @@ fn decode_union(
     // time; a runtime safety net catches the case where the value is bad.
     let mut matched: Vec<&UnionBranch> = Vec::new();
     for branch in spec.branches.iter() {
-        if rule_matches(&branch.discriminator, json)? {
+        if matches_discriminator(&branch.discriminator, json)? {
             matched.push(branch);
         }
     }
@@ -1006,7 +1006,7 @@ fn decode_union(
 // ----------------------------------------------------------- discriminators
 
 /// Whether a [`DiscriminatorRule`] matches a raw JSON value.
-fn rule_matches(rule: &DiscriminatorRule, json: &Value) -> Result<bool, RenderError> {
+pub fn matches_discriminator(rule: &DiscriminatorRule, json: &Value) -> Result<bool, RenderError> {
     Ok(match rule {
         DiscriminatorRule::Prefix { prefix } => json
             .as_str()
