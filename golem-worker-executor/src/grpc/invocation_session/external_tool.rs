@@ -100,25 +100,44 @@ where
                 })?
                 .into();
             response.idempotency_key = Some(key.clone());
-            let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
-            let Some(metadata) = metadata else {
-                if request.expected_callee_fingerprint.is_some() {
-                    return Err(WorkerExecutorError::worker_not_found(owned.agent_id()));
+            let (worker, metadata, _response_lease) = if let Some(expected) =
+                request.expected_callee_fingerprint
+            {
+                // The guard pins the named incarnation, and the response describes that worker,
+                // so a delete or re-create between reads cannot answer for another incarnation.
+                let expected = golem_common::model::AgentFingerprint(expected.into());
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned,
+                    principal,
+                    Some(expected),
+                )
+                .await?;
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned)
+                    .await?
+                    .filter(|metadata| metadata.fingerprint == expected)
+                    .ok_or_else(|| WorkerExecutorError::worker_not_found(owned.agent_id()))?;
+                (worker, metadata, response_lease)
+            } else {
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
+                let Some(metadata) = metadata else {
+                    response.invocation_status = Some(InvocationStatus::Unknown);
+                    publish_acceptance(acceptance_committed, accepted, &key, None)?;
+                    return Ok(response);
+                };
+                if !tool.fresh_owner {
+                    require_expected_callee_fingerprint(
+                        None,
+                        metadata.fingerprint,
+                        &owned.agent_id,
+                    )?;
                 }
-                response.invocation_status = Some(InvocationStatus::Unknown);
-                publish_acceptance(acceptance_committed, accepted, &key, None)?;
-                return Ok(response);
+                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                    self, &owned, principal, None,
+                )
+                .await?;
+                (worker, metadata, response_lease)
             };
-            if !tool.fresh_owner || request.expected_callee_fingerprint.is_some() {
-                require_expected_callee_fingerprint(
-                    request.expected_callee_fingerprint,
-                    metadata.fingerprint,
-                    &owned.agent_id,
-                )?;
-            }
-            let (worker, _response_lease) =
-                Worker::get_exact_existing_suspended_for_response(self, &owned, principal, None)
-                    .await?;
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
             match worker.lookup_invocation_result(&key).await {

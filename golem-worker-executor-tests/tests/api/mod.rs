@@ -11337,3 +11337,91 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
     assert!(failures.is_empty(), "{failures:#?}");
     Ok(())
 }
+
+// An external-tool lookup that names an incarnation is answered by the existing-only guard for
+// that incarnation: the matching incarnation is looked up, another one is not found, and one whose
+// deletion is running gets the deletion's refusal rather than a lookup of the deleting generation.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn expected_fingerprint_external_tool_lookup_is_guarded(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_agent(&component.id, agent_id!("Counter", "tool-lookup"))
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let lookup =
+        |fingerprint: AgentFingerprint| golem_api_grpc::proto::golem::worker::InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            expected_callee_fingerprint: Some(fingerprint.0.into()),
+            external_tool: Some(
+                golem_api_grpc::proto::golem::worker::ExternalToolInvocation {
+                    tool_name: "tool".into(),
+                    command_path: vec!["run".into()],
+                    fresh_owner: false,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+    let answer = |result: anyhow::Result<_>| match result {
+        Ok(_) => "admitted".to_string(),
+        Err(error) => format!("{error:#}"),
+    };
+
+    let matching = answer(executor.invoke_agent_session(lookup(fingerprint)).await);
+    assert_eq!(matching, "admitted");
+    let stale = answer(
+        executor
+            .invoke_agent_session(lookup(AgentFingerprint::new()))
+            .await,
+    );
+    assert!(stale.contains("NOT_FOUND"), "{stale}");
+
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::ExecutionFenced),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    hook.wait_until_gated().await;
+    let during_deletion = answer(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.invoke_agent_session(lookup(fingerprint)),
+        )
+        .await?,
+    );
+    hook.release();
+    let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
+    assert!(
+        during_deletion.contains("VALIDATION") && during_deletion.contains("being deleted"),
+        "{during_deletion}"
+    );
+    drop(executor);
+    Ok(())
+}
