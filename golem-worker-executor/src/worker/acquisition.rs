@@ -467,10 +467,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_agent_id,
             deps: All::from_other(deps),
             card_interest_index,
-            instance: Arc::new(Mutex::new(WorkerInstance::Unresolved)),
+            instance: Arc::new(Mutex::new(WorkerLifecycle::unresolved())),
             unload_cleanup: StdMutex::new(None),
             resolved: OnceCell::new(),
-            initialization_complete: AtomicBool::new(false),
             initialization_request: StdMutex::new(None),
         })
     }
@@ -619,12 +618,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn initialize_with(
         self: &Arc<Self>,
-        build: BoxFuture<'static, Result<WorkerInstance, WorkerExecutorError>>,
+        build: BoxFuture<'static, Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError>>,
     ) -> (bool, Result<(), WorkerExecutorError>) {
         let (started, completion) = {
             let mut instance = self.instance.lock().await;
-            match &*instance {
-                WorkerInstance::Unresolved => {
+            match instance.transition() {
+                LifecycleTransition::Unresolved(unresolved) => {
                     let (sender, receiver) = oneshot::channel();
                     let completion = async move {
                         receiver.await.unwrap_or_else(|_| {
@@ -635,22 +634,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     .boxed()
                     .shared();
-                    *instance = WorkerInstance::Initializing(completion.clone());
+                    let initializing = unresolved.begin_initialization(completion.clone());
                     let worker = self.clone();
                     let invocation_loops = self.active_agents().invocation_loops();
                     let construction = async move {
                         let result = crate::worker::invocation::with_invocation_stack(build).await;
-                        let published = result.as_ref().map(|_| ()).map_err(Clone::clone);
                         let mut instance = worker.instance.lock().await;
-                        *instance = match result {
-                            Ok(instance) => {
-                                worker.initialization_request.lock().unwrap().take();
-                                worker
-                                    .initialization_complete
-                                    .store(true, Ordering::Release);
-                                instance
-                            }
-                            Err(_) => WorkerInstance::Unresolved,
+                        let published = match instance.transition() {
+                            LifecycleTransition::Initializing(initializing) => match result {
+                                Ok((data, reconstructed_ephemeral)) => {
+                                    worker.initialization_request.lock().unwrap().take();
+                                    initializing.complete_initialization(
+                                        reconstructed_ephemeral
+                                            .then(inactive_ephemeral_agent_error),
+                                    );
+                                    // Publish immutable data last: cache readers use this cell as
+                                    // their lock-free initialization-completion boundary.
+                                    worker.resolved.set(data).map_err(|_| {
+                                        WorkerExecutorError::runtime("Worker initialized twice")
+                                    })
+                                }
+                                Err(error) => {
+                                    initializing.construction_failed();
+                                    Err(error)
+                                }
+                            },
+                            _ => Err(WorkerExecutorError::runtime(
+                                "Worker initialization no longer owns its lifecycle phase",
+                            )),
                         };
                         if published.is_ok() {
                             Self::start_durable_stream_attachment_reconciler(&worker);
@@ -666,7 +677,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     };
                     if !invocation_loops.spawn_construction(construction) {
-                        *instance = WorkerInstance::Unresolved;
+                        initializing.construction_failed();
                         return (
                             false,
                             Err(WorkerExecutorError::runtime(
@@ -676,8 +687,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     (true, completion)
                 }
-                WorkerInstance::Initializing(completion) => (false, completion.clone()),
-                WorkerInstance::CleanupFailed(error) => return (false, Err(error.clone())),
+                LifecycleTransition::Initializing(initializing) => {
+                    (false, initializing.completion())
+                }
+                LifecycleTransition::CleanupFailed(error) => return (false, Err(error.clone())),
                 _ if self.resolved.get().is_some() => return (false, Ok(())),
                 _ => {
                     return (
@@ -714,7 +727,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         start: std::time::Instant,
         metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
         initialization: Option<(InvocationContextStack, Principal)>,
-    ) -> Result<WorkerInstance, WorkerExecutorError> {
+    ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
         let mut metadata = match metadata {
             Ok(result) => result,
             Err(err) => {
@@ -744,15 +757,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return Err(error);
                 }
             };
-        assert!(
-            self.resolved.set(worker).is_ok(),
-            "Worker initialized twice"
-        );
         crate::metrics::wasm::record_create_worker(start.elapsed());
 
-        Ok(WorkerInstance::Unloaded {
-            startup_failure: reconstructed_ephemeral.then(inactive_ephemeral_agent_error),
-        })
+        Ok((worker, reconstructed_ephemeral))
     }
     pub(in crate::worker) async fn prepare_worker_data(
         self: &Arc<Self>,
@@ -1027,7 +1034,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocation_entry(
                     &worker.oplog,
                     AgentInvocation::AgentInitialization {
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
                         principal,

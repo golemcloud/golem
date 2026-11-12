@@ -11,7 +11,7 @@ impl ReplayState {
         let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
         let (original, boundary) = index
             .logical_observations
-            .get(&(attachment, invocation.clone(), ordinal))
+            .get(&(attachment, *invocation, ordinal))
             .copied()?;
         Some((
             original,

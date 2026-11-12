@@ -2041,13 +2041,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         let agent_id = agent_id.clone();
-        let idempotency_key = idempotency_key.clone();
+        let idempotency_key = *idempotency_key;
         let canceled = self.call_worker_executor(
             agent_id.clone(),
             "cancel_invocation",
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
-                let idempotency_key = idempotency_key.clone();
                 Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(agent_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
@@ -2719,7 +2718,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             agent_id: Some(target_agent_id.into()),
                             environment_id: Some(environment_id.into()),
                             component_revision: component_revision.into(),
-                            idempotency_key: Some(idempotency_key.clone().into()),
+                            idempotency_key: Some(idempotency_key.into()),
                             account_id: Some(account_id.into()),
                             config: config.clone(),
                             metadata: Some(metadata.clone()),

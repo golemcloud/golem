@@ -71,7 +71,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
 
         // The running loop must not wait for a stopping instance to join this loop.
         let instance = self.instance.lock().await;
-        if !matches!(&*instance, super::WorkerInstance::Running(_))
+        if !matches!(instance.state(), super::WorkerInstance::Running(_))
             || self.owner_retirement_requested.is_cancelled()
         {
             return Ok(None);

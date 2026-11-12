@@ -106,7 +106,7 @@ fn request_identity(
     match request.request.as_ref() {
         Some(invocation_request::Request::Start(start)) => (None, start.agent_id.clone()),
         Some(invocation_request::Request::ResumeAttach(resume)) => {
-            (resume.idempotency_key.clone(), resume.agent_id.clone())
+            (resume.idempotency_key, resume.agent_id.clone())
         }
         _ => (None, None),
     }

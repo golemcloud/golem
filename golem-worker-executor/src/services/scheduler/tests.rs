@@ -1201,7 +1201,7 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
             owned_agent_id: owned_agent_id.clone(),
             target_agent_fingerprint: fingerprint,
             public_session_id: "public-id".into(),
-            session_key: session_key.clone(),
+            session_key,
             expected_deadline_millis: 1_689_577_500_000,
         },
     )

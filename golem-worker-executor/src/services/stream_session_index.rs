@@ -627,7 +627,7 @@ impl StreamSessionIndexService {
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
-        let key = key.clone();
+        let key = *key;
         join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(&id, mode, fingerprint, &key, SessionLookup::Exact(horizon))
                 .await
@@ -648,7 +648,7 @@ impl StreamSessionIndexService {
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
-        let key = key.clone();
+        let key = *key;
         join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(
                 &id,
@@ -672,7 +672,7 @@ impl StreamSessionIndexService {
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
-        let key = key.clone();
+        let key = *key;
         join_or_park_at_runtime_shutdown(spawn_with_activity(async move {
             this.lookup_inner(&id, mode, fingerprint, &key, SessionLookup::Latest)
                 .await
@@ -1046,7 +1046,7 @@ impl StreamSessionIndexService {
                                 )
                                 .await?;
                             if let Some(old) = old.transpose()? {
-                                updates.insert(idempotency_key.clone(), old);
+                                updates.insert(*idempotency_key, old);
                             }
                         }
                         if let Some(status) = updates.get_mut(idempotency_key) {
@@ -1086,18 +1086,18 @@ impl StreamSessionIndexService {
                     if let StreamSessionRecord::ExportForkInitialized(record) = record {
                         metadata
                             .export_fork_initialized_sessions
-                            .insert(record.session_key.clone());
+                            .insert(record.session_key);
                     }
                     if let StreamSessionRecord::ForkCut(cut) = record {
                         for key in metadata.export_fork_initialized_sessions.clone() {
-                            if !updates.contains_key(&key) {
+                            if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key) {
                                 let status: Option<DurableStreamSessionStatus> = self
                                     .kv
                                     .with_entity("stream_session_index", "read", "session")
                                     .get(namespace.clone(), &Self::field(&key))
                                     .await?;
                                 if let Some(status) = status {
-                                    updates.insert(key.clone(), status);
+                                    entry.insert(status);
                                 }
                             }
                             if let Some(status) = updates.get_mut(&key) {
@@ -1122,7 +1122,7 @@ impl StreamSessionIndexService {
                                 let mut projected = old.for_fork(cut)?;
                                 projected.assign_recovery_slot(old.recovery_slot());
                                 controls.insert(key.clone(), projected);
-                                if !updates.contains_key(&key.idempotency_key) {
+                                if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key.idempotency_key) {
                                     let status: Option<DurableStreamSessionStatus> = self
                                         .kv
                                         .with_entity(
@@ -1133,7 +1133,7 @@ impl StreamSessionIndexService {
                                         .get(namespace.clone(), &Self::field(&key.idempotency_key))
                                         .await?;
                                     if let Some(status) = status {
-                                        updates.insert(key.idempotency_key.clone(), status);
+                                        entry.insert(status);
                                     }
                                 }
                                 if let Some(status) = updates.get_mut(&key.idempotency_key) {
@@ -1204,7 +1204,7 @@ impl StreamSessionIndexService {
                                 callee_environment_id: id.environment_id,
                                 callee: id.agent_id.clone(),
                                 callee_fingerprint: producer_fingerprint,
-                                idempotency_key: record.session_key.clone(),
+                                idempotency_key: record.session_key,
                             },
                             record.attempt.attempt_id,
                         )?;
@@ -1278,13 +1278,13 @@ impl StreamSessionIndexService {
                     let Some(key) = record.local_session_key().cloned() else {
                         continue;
                     };
-                    if !updates.contains_key(&key) {
+                    if let std::collections::hash_map::Entry::Vacant(entry) = updates.entry(key) {
                         let old: Option<Result<DurableStreamSessionStatus, String>> = self
                             .kv
                             .with_entity("stream_session_index", "read", "session")
                             .get_attempt_deserialize(namespace.clone(), &Self::field(&key))
                             .await?;
-                        updates.insert(key.clone(), old.transpose()?.unwrap_or_default());
+                        entry.insert(old.transpose()?.unwrap_or_default());
                     }
                     let status = updates.get_mut(&key).unwrap();
                     if let StreamSessionRecord::Attached(attached) = record

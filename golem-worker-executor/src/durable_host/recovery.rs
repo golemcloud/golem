@@ -84,7 +84,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         wallet_pin,
                     })) => {
                         let agent_invocation = AgentInvocation::from_parts(
-                            idempotency_key.clone(),
+                            idempotency_key,
                             invocation_payload,
                             invocation_context.clone(),
                         );
@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .set_current_idempotency_key(idempotency_key.clone())
+                            .set_current_idempotency_key(idempotency_key)
                             .await;
 
                         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -196,7 +196,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.
-                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                        if store.as_context().data().durable_ctx().state.replay_state.at_replay_tail()
                             && let Err(error) = store
                                 .as_context_mut()
                                 .data_mut()
@@ -263,7 +263,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     && store.as_context().data().durable_ctx().is_live()
                                 {
                                     let worker = worker.clone();
-                                    let idempotency_key = idempotency_key.clone();
                                     let result = store.run_concurrent(async move |_accessor| {
                                         worker.complete_durable_streaming_session(&idempotency_key).await
                                     }).await;

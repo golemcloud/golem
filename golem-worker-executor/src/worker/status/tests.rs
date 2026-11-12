@@ -89,7 +89,7 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id().clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
     };
     let attempt = AttemptId::fresh();
     for pending in [
@@ -99,18 +99,18 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     ] {
         let mut baseline = AgentStatusRecord::default();
         baseline.durable_stream_sessions.insert(
-            key.clone(),
+            key,
             golem_common::model::DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(10)),
                 prepared: Some(OplogIndex::from_u64(10)),
-                session_key: Some(session_key.idempotency_key.clone()),
+                session_key: Some(session_key.idempotency_key),
                 prepared_attempt_id: Some(attempt),
                 ..Default::default()
             },
         );
         let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -1065,7 +1065,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
     let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key.clone())
+        .agent_invocation_started("a", vec![], idempotency_key)
         .add(
             OplogEntry::log(
                 None,
@@ -1080,7 +1080,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::TransientError("failed".to_string()),
                 retry_from,
                 None,
@@ -1118,12 +1118,12 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
     let retry_from = OplogIndex::from_u64(2);
     let retry_state = RetryPolicyState::Counter(56);
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key.clone())
+        .agent_invocation_started("a", vec![], idempotency_key)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1157,12 +1157,12 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
         on_right: true,
     };
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key.clone())
+        .agent_invocation_started("a", vec![], idempotency_key)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1228,7 +1228,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::TransientError("semantic failure".to_string()),
                 retry_from,
                 Some(exhausted.clone()),
@@ -1290,7 +1290,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1303,7 +1303,6 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 wallet_pin: Box::new(test_invocation_wallet_pin()),
             },
             {
-                let idempotency_key = idempotency_key.clone();
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
                     status.current_invocation_started_at = Some(status.oplog_idx);
@@ -1314,14 +1313,13 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision: ComponentRevision::INITIAL,
             },
             {
-                let idempotency_key = idempotency_key.clone();
                 move |mut status| {
                     status.invocation_results.insert(
                         idempotency_key,
@@ -1526,7 +1524,7 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::PermanentError("application failed".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1578,7 +1576,7 @@ async fn invocation_results() {
     let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .agent_invocation_finished(
@@ -1586,7 +1584,7 @@ async fn invocation_results() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1602,7 +1600,7 @@ async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations()
     let completed = InvocationId(Uuid::new_v4());
     let pending = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("completed", vec![], completed.clone())
+        .agent_invocation_started("completed", vec![], completed)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             completed,
@@ -1637,7 +1635,7 @@ fn recovery_errors_are_not_invocation_results() {
             OplogIndex::from_u64(1),
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: key.clone(),
+                invocation_id: key,
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1669,7 +1667,7 @@ fn recovery_errors_are_not_invocation_results() {
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |key, position| results.push((key.clone(), position)),
+        |key, position| results.push((*key, position)),
     );
 
     assert!(results.is_empty());
@@ -1680,7 +1678,7 @@ fn recovery_errors_are_not_invocation_results() {
 fn started_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
-        invocation_id: key.clone(),
+        invocation_id: *key,
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
@@ -1697,7 +1695,7 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
 fn finished_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
-        invocation_id: key.clone(),
+        invocation_id: *key,
         result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
         method_name: None,
         consumed_fuel: 0,
@@ -1722,7 +1720,7 @@ fn fold_results(
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |key, position| results.push((key.clone(), position)),
+        |key, position| results.push((*key, position)),
     );
     (results, requests.current)
 }
@@ -1737,7 +1735,7 @@ fn result(terminal: u64, request: Option<u64>) -> InvocationResultPosition {
 fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
     OplogEntry::pending_agent_invocation(
         None,
-        key.clone(),
+        *key,
         OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
@@ -1754,7 +1752,7 @@ fn invocation_error(invocation_id: &InvocationId) -> OplogEntry {
     OplogEntry::error(
         None,
         OplogErrorKind::Invocation,
-        Some(invocation_id.clone()),
+        Some(*invocation_id),
         AgentError::TransientError("failed".to_string()),
         OplogIndex::INITIAL,
         None,
@@ -1780,10 +1778,10 @@ fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
         results,
         vec![
             (finished, result(2, Some(1))),
-            (running.clone(), result(5, Some(3))),
+            (running, result(5, Some(3))),
         ]
     );
-    assert_eq!(current, Some(running.clone()));
+    assert_eq!(current, Some(running));
 
     let (results, current) = fold_results(vec![
         started_invocation(&running),
@@ -1803,7 +1801,7 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
     let (results, current) = fold_results(vec![
         pending_invocation_entry(&denied),
         started_invocation(&running),
-        OplogEntry::cancel_pending_invocation(denied.clone()),
+        OplogEntry::cancel_pending_invocation(denied),
         OplogEntry::log(
             None,
             golem_common::model::oplog::LogLevel::Stderr,
@@ -1814,7 +1812,7 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
         OplogEntry::error(
             None,
             OplogErrorKind::Invocation,
-            Some(denied.clone()),
+            Some(denied),
             AgentError::PermissionDenied("permission denied".to_string()),
             OplogIndex::INITIAL,
             None,
@@ -1823,10 +1821,7 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
 
     assert_eq!(
         results,
-        vec![
-            (denied.clone(), result(3, Some(1))),
-            (denied, result(5, Some(1))),
-        ]
+        vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
     );
     assert_eq!(current, Some(running));
 }
@@ -1845,7 +1840,7 @@ fn invocation_results_point_at_their_request_entry() {
         pending_invocation_entry(&queued),
         pending_invocation_entry(&cancelled),
         finished_invocation(&running),
-        OplogEntry::cancel_pending_invocation(cancelled.clone()),
+        OplogEntry::cancel_pending_invocation(cancelled),
         started_invocation(&queued),
         OplogEntry::exited(),
     ]);
@@ -1855,7 +1850,7 @@ fn invocation_results_point_at_their_request_entry() {
         vec![
             (running, result(4, Some(1))),
             (cancelled, result(5, Some(3))),
-            (queued.clone(), result(7, Some(6))),
+            (queued, result(7, Some(6))),
         ]
     );
     assert_eq!(current, Some(queued));
@@ -1867,7 +1862,7 @@ async fn invocation_results_with_jump() {
     let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .jump(OplogIndex::from_u64(2))
@@ -1876,7 +1871,7 @@ async fn invocation_results_with_jump() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1893,7 +1888,7 @@ async fn invocation_results_with_revert() {
     let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .agent_invocation_finished(
@@ -1901,7 +1896,7 @@ async fn invocation_results_with_revert() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1921,7 +1916,7 @@ async fn single_auto_update_for_running() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1958,7 +1953,7 @@ async fn auto_update_for_running_with_jump() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1999,7 +1994,7 @@ async fn single_manual_update() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2023,7 +2018,7 @@ async fn single_manual_update() {
         )
         .pending_update(&update1, |status| status.total_linear_memory_size = 200)
         .successful_update(update1, 2000, &HashSet::new())
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2059,7 +2054,7 @@ async fn single_manual_failed_update() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2083,7 +2078,7 @@ async fn single_manual_failed_update() {
         )
         .pending_update(&update1, |_| {})
         .failed_update(update1)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2106,7 +2101,7 @@ async fn single_manual_failed_update_during_snapshot() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2118,7 +2113,7 @@ async fn single_manual_failed_update_during_snapshot() {
             target_revision: ComponentRevision::new(2).unwrap(),
         })
         .failed_update(update2)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2504,7 +2499,7 @@ async fn auto_update_for_running_with_jump_and_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2546,7 +2541,7 @@ async fn single_manual_update_with_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2570,7 +2565,7 @@ async fn single_manual_update_with_revert() {
         )
         .pending_update(&update1, |_| {})
         .successful_update(update1, 2000, &HashSet::new())
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2600,7 +2595,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2624,7 +2619,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
         )
         .pending_update(&update1, |_| {})
         .failed_update(update1)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
         })
@@ -2662,7 +2657,7 @@ async fn two_successful_manual_updates() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .host_call(
             "b",
             HostRequest::NoInput(HostRequestNoInput {}),
@@ -2677,7 +2672,7 @@ async fn two_successful_manual_updates() {
         .pending_update(&update1, |_| {})
         .successful_update(update1, 1000, &HashSet::new())
         // The suffix the second update has to replay.
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .host_call(
             "d",
             HostRequest::NoInput(HostRequestNoInput {}),
@@ -2708,7 +2703,7 @@ async fn a_revert_across_an_update_drops_its_name_from_the_status() {
     };
 
     let updated = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k1,
@@ -2786,11 +2781,11 @@ async fn multiple_reverts() {
     let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k2.clone(),
+            idempotency_key: k2,
             method_name: "b".to_string(),
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
@@ -2801,13 +2796,13 @@ async fn multiple_reverts() {
         })
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            k1.clone(),
+            k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            k2.clone(),
+            k2,
             ComponentRevision::INITIAL,
         )
         .revert(OplogIndex::from_u64(5))
@@ -2816,7 +2811,7 @@ async fn multiple_reverts() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2835,7 +2830,7 @@ async fn cancel_pending_invocation() {
 
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k1.clone(),
+            idempotency_key: k1,
             method_name: "a".to_string(),
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
@@ -2845,7 +2840,7 @@ async fn cancel_pending_invocation() {
             scope_card: None,
         })
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k2.clone(),
+            idempotency_key: k2,
             method_name: "b".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
@@ -2863,14 +2858,14 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
     let idempotency_key = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key,
             method_name: "denied".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
             scope_card: None,
         })
-        .permission_denied_pending_invocation(idempotency_key.clone())
+        .permission_denied_pending_invocation(idempotency_key)
         .build();
     let expected = test_case.entries.last().unwrap().expected_status.clone();
     let pending_baseline = test_case.entries[1].expected_status.clone();
@@ -2909,7 +2904,7 @@ async fn snapshot_tracking() {
     let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .snapshot()
         .grow_memory(100)
@@ -3804,7 +3799,7 @@ async fn snapshot_tracking_with_revert() {
     let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .snapshot()
         .grow_memory(100)
@@ -3862,13 +3857,13 @@ fn jump_repair_fixture(
 
     let test_case = TestCase::builder(0)
         .agent_mode(agent_mode)
-        .agent_invocation_started("a", vec![], k1.clone()) // idx 2
+        .agent_invocation_started("a", vec![], k1) // idx 2
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k1,
             ComponentRevision::INITIAL,
         ) // idx 3 (clean idle boundary)
-        .agent_invocation_started("b", vec![], k2.clone()) // idx 4
+        .agent_invocation_started("b", vec![], k2) // idx 4
         .grow_memory(10) // idx 5
         .grow_memory(100) // idx 6
         .jump(OplogIndex::from_u64(4)) // idx 7, deletes region [4, 7]
@@ -4438,7 +4433,7 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(Box::new(payload)),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -4466,7 +4461,7 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 result: OplogPayload::Inline(Box::new(result)),
                 method_name: None,
                 consumed_fuel: 0,
@@ -4722,7 +4717,7 @@ impl TestCaseBuilder {
                 timestamp: entry.timestamp(),
                 not_before: None,
                 oplog_index: oplog_idx,
-                idempotency_key: ref_idempotency_key.clone(),
+                idempotency_key: ref_idempotency_key,
                 manual_update_target_revision,
             });
             status
@@ -4730,7 +4725,7 @@ impl TestCaseBuilder {
     }
 
     pub fn cancel_pending_invocation(self, idempotency_key: InvocationId) -> Self {
-        let entry = OplogEntry::cancel_pending_invocation(idempotency_key.clone()).rounded();
+        let entry = OplogEntry::cancel_pending_invocation(idempotency_key).rounded();
         self.add(entry.clone(), move |mut status| {
             let request = status
                 .pending_invocations
@@ -4742,7 +4737,7 @@ impl TestCaseBuilder {
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
             if status.current_idempotency_key.as_ref() != Some(&idempotency_key) {
                 status.invocation_results.insert(
-                    idempotency_key.clone(),
+                    idempotency_key,
                     InvocationResultPosition {
                         terminal: status.oplog_idx,
                         request,
@@ -4754,11 +4749,11 @@ impl TestCaseBuilder {
     }
 
     pub fn permission_denied_pending_invocation(self, idempotency_key: InvocationId) -> Self {
-        self.cancel_pending_invocation(idempotency_key.clone()).add(
+        self.cancel_pending_invocation(idempotency_key).add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(idempotency_key.clone()),
+                Some(idempotency_key),
                 AgentError::PermissionDenied("permission denied".to_string()),
                 OplogIndex::INITIAL,
                 None,
@@ -5527,7 +5522,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
         format_version: 1,
         public_session_id: session_key.idempotency_key.to_string(),
         route_scope: None,
-        session_key: session_key.idempotency_key.clone(),
+        session_key: session_key.idempotency_key,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {

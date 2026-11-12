@@ -437,7 +437,7 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(constructor.clone()),
+            idempotency_key: Some(constructor),
             manual_update_target_revision: None,
         }],
         ..Default::default()

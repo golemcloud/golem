@@ -191,7 +191,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                 let (result, pending) = oneshot::channel();
                 let task = PrepareAttachmentObservation {
                     attachment: self.attachment,
-                    invocation: self.invocation.clone(),
+                    invocation: self.invocation,
                     ordinal,
                     attempt: self.attempt.clone(),
                     parent: ctx.entity_parent_start_index(),
@@ -552,7 +552,7 @@ impl NativeAttachmentInput {
                 let (result, prepared) = oneshot::channel();
                 let preparation = ctx.with_ctx(|ctx| PrepareAttachmentObservation {
                     attachment: *attachment,
-                    invocation: invocation.clone(),
+                    invocation: *invocation,
                     ordinal: self.ordinal,
                     attempt: self.attempt.clone(),
                     parent: ctx.entity_parent_start_index(),

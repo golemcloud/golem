@@ -1169,10 +1169,7 @@ async fn initialize_entity(
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
     let init_key = InvocationId(uuid::Uuid::new_v4());
-    store
-        .data_mut()
-        .set_current_idempotency_key(init_key.clone())
-        .await;
+    store.data_mut().set_current_idempotency_key(init_key).await;
     store
         .data_mut()
         .set_current_invocation_context(InvocationContextStack::fresh())
@@ -1210,7 +1207,7 @@ async fn invoke_sleep_p3(
     let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1243,7 +1240,7 @@ async fn invoke_entity_method(
     let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1554,7 +1551,7 @@ async fn stage_entity_boundary(
                 HostRequest::EntityInvocation(HostRequestEntityInvocation {
                     metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
                     input: empty,
-                    stream_session_idempotency_key: scope.stream_session_idempotency_key().clone(),
+                    stream_session_idempotency_key: *scope.stream_session_idempotency_key(),
                 }),
             ))),
             durable_function_type: DurableFunctionType::WriteLocal,

@@ -106,7 +106,6 @@ async fn phase<T>(
 fn session_key(report: &SessionCheckpoint) -> anyhow::Result<InvocationId> {
     report
         .idempotency_key
-        .clone()
         .context("missing accepted invocation key")
 }
 
@@ -124,7 +123,7 @@ fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<In
                     .map_err(anyhow::Error::msg)?
         {
             ensure!(finished.result.is_ok(), "producer session failed");
-            keys.push(finished.session_key.idempotency_key().clone());
+            keys.push(*finished.session_key.idempotency_key());
         }
     }
     Ok(keys)

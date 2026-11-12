@@ -273,8 +273,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = InvocationId(Uuid::new_v4());
-            ctx.set_current_idempotency_key(idempotency_key.clone())
-                .await;
+            ctx.set_current_idempotency_key(idempotency_key).await;
             idempotency_key
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
@@ -470,7 +469,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let idempotency_key = InvocationId(Uuid::new_v4());
         self.store
             .data_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 

@@ -285,7 +285,7 @@ impl DurableStreamStore {
         let result_offset = index.invocation_results.get(&session_key).copied();
         let result_session_key = session_key.clone();
         let result_session_reference =
-            StreamRegistrationInvocation::Local(session_key.idempotency_key.clone());
+            StreamRegistrationInvocation::Local(session_key.idempotency_key);
         if outputs
             .iter()
             .any(|output| output.cancellation_epoch == Some(0))
@@ -593,7 +593,7 @@ impl DurableStreamStore {
                             golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                                 session_key: invocation_result.session_key.clone(),
-                                consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
+                                consumer_invocation: *invocation_result.session_key.idempotency_key(),
                                 source: source.clone(),
                                 epoch,
                                 role: StreamCancelRole::OutputConsumer,
@@ -627,7 +627,7 @@ impl DurableStreamStore {
                                     intent: golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                                         session_key: invocation_result.session_key.clone(),
-                                        consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
+                                        consumer_invocation: *invocation_result.session_key.idempotency_key(),
                                         source,
                                         epoch,
                                         role: StreamCancelRole::OutputConsumer,
@@ -838,7 +838,7 @@ pub(super) fn registration_record(
                             && invocation_id.idempotency_key == *key,
                         "local stream registration coordinate must identify the registering owner"
                     );
-                    StreamRegistrationInvocation::Local(key.clone())
+                    StreamRegistrationInvocation::Local(*key)
                 }
                 StreamRegistrationInvocation::Remote(_) => {
                     StreamRegistrationInvocation::Remote(invocation_id)

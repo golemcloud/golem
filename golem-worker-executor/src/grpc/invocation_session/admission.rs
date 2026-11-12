@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let accepted_revision =
                     (worker.agent_mode() == AgentMode::Ephemeral).then_some(component.revision);
                 let invocation = AgentInvocation::AgentMethod {
-                    idempotency_key: ik.clone(),
+                    idempotency_key: ik,
                     method_name: method_name.clone(),
                     input: method_parameters,
                     invocation_context,
@@ -269,7 +269,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let streams = acceptance.streams;
                     accepted
                         .send(AcceptedInvocation {
-                            idempotency_key: ik.clone(),
+                            idempotency_key: ik,
                             component_revision: Some(component.revision),
                             durable_streams: Some(streams.clone()),
                             prepared: Some(acceptance.prepared),
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 error.into_worker_executor_error(WorkerExecutorError::runtime)
                             })?;
                     }
-                    worker.await_enqueued_invocation(ik.clone()).await?
+                    worker.await_enqueued_invocation(ik).await?
                 } else {
                     let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
                     let invocation =
@@ -391,7 +391,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .finalize(final_agent_id.clone(), metadata.fingerprint, &method_name)
                     .id();
                 let invocation = AgentInvocation::AgentMethod {
-                    idempotency_key: ik.clone(),
+                    idempotency_key: ik,
                     method_name,
                     input: method_parameters,
                     invocation_context,
@@ -491,7 +491,7 @@ pub(super) fn publish_acceptance(
     let _ = acceptance_committed.send(());
     accepted
         .send(AcceptedInvocation {
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key: *idempotency_key,
             component_revision,
             durable_streams: None,
             prepared: None,

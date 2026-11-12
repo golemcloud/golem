@@ -1061,7 +1061,7 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(
                 PrivateResumeAttach {
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     attachment_id: Some(

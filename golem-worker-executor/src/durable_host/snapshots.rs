@@ -127,7 +127,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .as_context_mut()
             .data_mut()
             .durable_ctx_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
 
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
@@ -407,7 +407,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .as_context_mut()
             .data_mut()
             .durable_ctx_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
 
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {

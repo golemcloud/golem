@@ -15343,12 +15343,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
     DurableStreamSlotOptions:
@@ -16920,6 +16914,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
     HttpMethod:
@@ -17017,6 +17013,13 @@ components:
         openapiProviderMethod:
           type: string
           description: The name of a parameterless router method that returns the OpenAPI document as a string.
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
     ImpliesC:
       type: object
       required:

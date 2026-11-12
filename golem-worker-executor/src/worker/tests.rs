@@ -1028,7 +1028,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
     let second = InvocationId(Uuid::from_u128(2));
     let mut cache = HydratedInvocationResultCache::new(1);
     cache.insert(
-        first.clone(),
+        first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
         },
@@ -1037,7 +1037,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
     );
 
     cache.insert(
-        second.clone(),
+        second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
         },
@@ -1068,24 +1068,24 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             invocation_status: None,
             component_revision: Some(ComponentRevision::INITIAL),
             agent_id: None,
-            idempotency_key: Some(key.clone()),
+            idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);
-    cache.insert(key.clone(), result.clone(), generation, index);
+    cache.insert(key, result.clone(), generation, index);
     let (first, found_index) = cache.get_valid(&key, &status).unwrap();
     assert_eq!(found_index, index);
     assert!(Arc::ptr_eq(first, &result));
     let follower = first.clone();
-    cache.insert(key.clone(), follower.clone(), generation, index);
+    cache.insert(key, follower.clone(), generation, index);
     assert!(Arc::ptr_eq(
         cache.get_valid(&key, &status).unwrap().0,
         &follower
     ));
 
-    cache.insert(key.clone(), result.clone(), generation + 1, index);
+    cache.insert(key, result.clone(), generation + 1, index);
     assert!(cache.get_valid(&key, &status).is_none());
     cache.remove(&key);
     assert!(cache.get_valid(&key, &status).is_none());
@@ -1265,7 +1265,7 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
 fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(key.clone()),
+        current_idempotency_key: Some(*key),
         ..AgentStatusRecord::default()
     }
 }
@@ -1378,7 +1378,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(still_pending.clone()),
+            idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
         }],
         ..AgentStatusRecord::default()
@@ -1663,7 +1663,7 @@ fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocati
         timestamp: Timestamp::from(1_000),
         not_before,
         oplog_index: OplogIndex::from_u64(2),
-        idempotency_key: Some(key.clone()),
+        idempotency_key: Some(*key),
         manual_update_target_revision: None,
     }
 }
@@ -1750,7 +1750,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             false,
             vec![pending(&init, None), pending(&method, later)]
         )),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(false, vec![pending(&init, None)])),
@@ -1805,7 +1805,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             &pending_status(false, vec![pending(&method, later)]),
             None
         ),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(

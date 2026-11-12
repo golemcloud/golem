@@ -600,23 +600,27 @@ fn component_file_node_reports_the_write_permission_of_a_file() {
 
 #[test]
 fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
-    assert!(!store_is_live(None, false, false));
-    assert!(store_is_live(None, false, true));
+    let primary = StoreReplayState::new(None);
+    assert!(!primary.is_live(false));
+    assert!(primary.is_live(true));
 
-    let completed = Some(InvocationExecutionMode::ReplayingCompleted);
-    assert!(!store_is_live(completed, false, false));
-    assert!(!store_is_live(completed, false, true));
-    assert!(!store_is_live(completed, true, true));
+    let completed = StoreReplayState::new(Some(InvocationExecutionMode::ReplayingCompleted));
+    assert!(!completed.is_live(false));
+    assert!(!completed.is_live(true));
 
-    let incomplete = Some(InvocationExecutionMode::ReplayingIncomplete);
-    assert!(!store_is_live(incomplete, false, false));
-    assert!(!store_is_live(incomplete, false, true));
-    assert!(store_is_live(incomplete, true, true));
-    assert!(store_is_live(
-        Some(InvocationExecutionMode::Live),
-        true,
-        false
-    ));
+    let gate = Arc::new(AtomicBool::new(false));
+    let incomplete = StoreReplayState::incomplete_entity_for_test(gate.clone());
+    let captured = incomplete.clone();
+    assert!(!incomplete.is_live(false));
+    assert!(!incomplete.is_live(true));
+    gate.store(true, Ordering::Release);
+    assert!(incomplete.is_live(true));
+    assert!(captured.is_live(false));
+    assert_eq!(
+        captured.initial_entity_mode(),
+        Some(InvocationExecutionMode::ReplayingIncomplete)
+    );
+    assert!(StoreReplayState::new(Some(InvocationExecutionMode::Live)).is_live(false));
 }
 
 #[test]
@@ -624,13 +628,14 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
     let memory = replay_usage_tracker();
     let _body = memory.begin_guest_body();
     let local_live_tail = Arc::new(AtomicBool::new(false));
+    let StoreReplayState::IncompleteEntityReplay(continuation) =
+        StoreReplayState::incomplete_entity_for_test(local_live_tail.clone())
+    else {
+        unreachable!()
+    };
     let pending = PendingReplayToLive {
         replay_target: OplogIndex::from_u64(42),
-        role: ReplayToLiveRole::NonPrimary,
-        replaying_incomplete_entity: false,
-        tool_entity: false,
-        tool_operation: None,
-        local_live_tail: local_live_tail.clone(),
+        finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: memory.clone(),
     };
 
@@ -647,17 +652,44 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
     let dropped_tail = Arc::new(AtomicBool::new(false));
     let dropped_memory = replay_usage_tracker();
     let _dropped_body = dropped_memory.begin_guest_body();
+    let StoreReplayState::IncompleteEntityReplay(continuation) =
+        StoreReplayState::incomplete_entity_for_test(dropped_tail.clone())
+    else {
+        unreachable!()
+    };
     drop(PendingReplayToLive {
         replay_target: OplogIndex::from_u64(43),
-        role: ReplayToLiveRole::NonPrimary,
-        replaying_incomplete_entity: false,
-        tool_entity: false,
-        tool_operation: None,
-        local_live_tail: dropped_tail.clone(),
+        finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: dropped_memory.clone(),
     });
     assert!(!dropped_tail.load(Ordering::Acquire));
     assert!(!dropped_memory.usage_is_live());
+}
+
+#[test]
+async fn completed_entity_settlement_keeps_the_store_non_live() {
+    let completed = StoreReplayState::new(Some(InvocationExecutionMode::ReplayingCompleted));
+    let memory = replay_usage_tracker();
+    let _body = memory.begin_guest_body();
+    let pending = PendingReplayToLive {
+        replay_target: OplogIndex::from_u64(42),
+        finalization: LiveFinalization::CompletedEntityReplay,
+        linear_memory: memory.clone(),
+    };
+
+    assert_eq!(pending.role(), ReplayToLiveRole::NonPrimary);
+    assert!(!memory.usage_is_live());
+    assert_eq!(
+        pending.finish_at(None).await.unwrap(),
+        FinishReplayToLive::Live
+    );
+    assert!(memory.usage_is_live());
+    assert!(!completed.is_live(false));
+    assert!(!completed.is_live(true));
+    assert_eq!(
+        completed.initial_entity_mode(),
+        Some(InvocationExecutionMode::ReplayingCompleted)
+    );
 }
 
 pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {

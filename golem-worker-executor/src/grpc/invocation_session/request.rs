@@ -165,7 +165,7 @@ pub(crate) fn build_durable_streaming_request(
         callee_environment_id: environment_id,
         callee: callee.clone(),
         callee_fingerprint,
-        idempotency_key: idempotency_key.clone(),
+        idempotency_key,
     };
     let attachment_id = AttachmentId::primary(environment_id, &callee, &idempotency_key)
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
@@ -240,7 +240,7 @@ pub(crate) fn build_durable_streaming_request(
                         },
                         source_kind: StreamSourceKind::ExternalInlineInput,
                         source_invocation: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         component_revision,
                         element_schema_fingerprint,
@@ -377,7 +377,7 @@ pub(crate) fn build_durable_streaming_request(
                         },
                         source_kind: StreamSourceKind::InvocationOutput,
                         source_invocation: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         component_revision,
                         element_schema_fingerprint: schema_fingerprint_v1(
@@ -554,7 +554,6 @@ pub(super) fn build_resume_attempt(
         .map_err(WorkerExecutorError::invalid_request)?;
     let idempotency_key: golem_common::model::InvocationId = request
         .idempotency_key
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume requires an idempotency key"))?
         .into();
     let expected_callee_fingerprint = golem_common::model::AgentFingerprint(
@@ -905,7 +904,7 @@ pub(super) fn request_idempotency_key(
                 .ok()
                 .map(Into::into)
         }
-        Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key.clone(),
+        Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key,
         _ => None,
     }
 }

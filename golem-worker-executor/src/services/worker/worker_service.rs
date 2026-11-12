@@ -671,7 +671,7 @@ impl WorkerService for DefaultWorkerService {
                         &status.deleted_regions,
                         &entries,
                         |key, position| {
-                            mappings.insert(key.clone(), position);
+                            mappings.insert(*key, position);
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();

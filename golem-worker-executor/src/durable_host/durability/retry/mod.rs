@@ -947,7 +947,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
             OplogErrorKind::Invocation,
-            self.invocation_id.clone(),
+            self.invocation_id,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state.clone(),

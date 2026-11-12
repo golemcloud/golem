@@ -149,7 +149,7 @@ fn registration() -> StreamRegisteredRecord {
 pub(crate) fn prepared(key: &StreamSessionKey) -> StreamSessionPreparedRecord {
     StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
-        session_key: key.idempotency_key.clone(),
+        session_key: key.idempotency_key,
         public_session_id: key.idempotency_key.to_string(),
         route_scope: None,
         expiry_policy: StreamSessionExpiryPolicy::None,

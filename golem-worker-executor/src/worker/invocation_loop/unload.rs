@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 return true;
             }
             if matches!(kind, InterruptKind::Interrupt(_))
-                && let Some(key) = status.current_idempotency_key.clone()
+                && let Some(key) = status.current_idempotency_key
             {
                 self.parent
                     .store_invocation_failure(&key, &TrapType::Interrupt(kind))
@@ -139,7 +139,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
         self.parent
             .stop_internal(
-                true,
+                crate::worker::StopOrigin::InvocationLoop,
                 failure_for_waiters,
                 UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                 FinalWorkerState::Unloaded { startup_failure },
@@ -159,7 +159,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let pending_failure = error.clone();
         self.parent
             .stop_internal(
-                true,
+                crate::worker::StopOrigin::InvocationLoop,
                 Some(pending_failure),
                 UnloadRequest::ordinary(UnloadReason::Failure),
                 FinalWorkerState::CleanupFailed(error),

@@ -2311,7 +2311,6 @@ fn translate_accepted(
         .unwrap_or_else(|| deterministic_uuid(b"non-durable-callee"));
     let idempotency_key: InvocationId = accepted
         .idempotency_key
-        .clone()
         .ok_or_else(|| AdapterError::protocol("accepted response has no idempotency key"))?
         .into();
     let agent_id: golem_common::model::AgentId = accepted

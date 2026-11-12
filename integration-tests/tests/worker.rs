@@ -1315,7 +1315,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
             PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
                 match &pending.invocation {
                     PublicAgentInvocation::AgentMethodInvocation(method) => {
-                        Some(method.invocation_id.clone())
+                        Some(method.invocation_id)
                     }
                     _ => None,
                 }

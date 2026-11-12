@@ -765,12 +765,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .state
                 .oplog
                 .add_pair(
-                    OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
+                    OplogEntry::cancel_pending_invocation(*idempotency_key),
                     Box::new({
                         let error = error.clone();
                         let retry_policy_state = retry_policy_state.clone();
                         let retry_from = *retry_from;
-                        let invocation_id = idempotency_key.clone();
+                        let invocation_id = *idempotency_key;
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
@@ -840,7 +840,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
                 OplogErrorKind::Invocation,
-                current_idempotency_key.clone(),
+                current_idempotency_key,
                 error.clone(),
                 *retry_from,
                 retry_policy_state,
@@ -982,7 +982,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live && !self.state.durability_is_suppressed() {
-            if self.state.entity_execution_mode.is_none() {
+            if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
                 self.state
                     .replay_state
                     .release_retained_starts_at_live_invocation_end()

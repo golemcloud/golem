@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
 
@@ -28,9 +28,7 @@ pub(crate) struct EntitySettlementContext<Ctx: WorkerCtx> {
     pub(super) authoritative_failure: Arc<std::sync::atomic::AtomicBool>,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     public_state: PublicDurableWorkerState<Ctx>,
-    role: ReplayToLiveRole,
-    local_live_tail: Arc<std::sync::atomic::AtomicBool>,
-    replaying_incomplete_entity: bool,
+    store_replay_state: StoreReplayState,
     tool_entity: bool,
     operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     suppressed: bool,
@@ -85,14 +83,7 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
                 authoritative_failure: ctx.state.authoritative_replay_failure.clone(),
                 linear_memory: ctx.linear_memory.clone(),
                 public_state: ctx.public_state.clone(),
-                role: if ctx.runtime == OwnerRuntime::Agent {
-                    ReplayToLiveRole::PrimaryAgent
-                } else {
-                    ReplayToLiveRole::NonPrimary
-                },
-                local_live_tail: ctx.state.local_live_tail(),
-                replaying_incomplete_entity: ctx.state.entity_execution_mode
-                    == Some(InvocationExecutionMode::ReplayingIncomplete),
+                store_replay_state: ctx.state.store_replay_state.clone(),
                 tool_entity: matches!(
                     ctx.runtime,
                     OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
@@ -102,7 +93,9 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
                 replay_application: None,
             }
         });
-        if captured.role == ReplayToLiveRole::PrimaryAgent && !captured.suppressed {
+        if captured.store_replay_state.role() == ReplayToLiveRole::PrimaryAgent
+            && !captured.suppressed
+        {
             let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
             let task = ApplyEntityReplay {
                 get_ctx,
@@ -120,14 +113,12 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
         start: OplogIndex,
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
         let pending = match crate::durable_host::begin_replay_to_live(
-            self.replaying_incomplete_entity,
+            &self.store_replay_state,
             self.tool_entity,
             self.operation.clone(),
             &self.public_state,
             &self.linear_memory,
             &self.replay,
-            self.role,
-            self.local_live_tail.clone(),
         )
         .await?
         {

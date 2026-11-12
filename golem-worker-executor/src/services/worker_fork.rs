@@ -891,7 +891,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     invocation_id: idempotency_key,
                     ..
                 } if manual_update.is_none() => {
-                    pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
+                    pending_invocation_keys.push((*idempotency_key, oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
                     invocation_id: idempotency_key,

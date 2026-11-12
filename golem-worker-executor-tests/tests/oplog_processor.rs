@@ -244,11 +244,11 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     let key = accepted
         .iter()
         .find_map(|entry| match entry {
-            OplogEntry::PendingAgentInvocation { invocation_id, .. } => Some(invocation_id.clone()),
+            OplogEntry::PendingAgentInvocation { invocation_id, .. } => Some(*invocation_id),
             _ => None,
         })
         .expect("local dispatch must durably accept the batch");
-    request.idempotency_key = Some(key.clone().into());
+    request.idempotency_key = Some(key.into());
     let OplogEntry::Create { parameters, .. } = &accepted[0] else {
         panic!("missing Create")
     };
@@ -309,7 +309,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     deliver(&executor, request.clone()).await?;
     let fresh_key = InvocationId(Uuid::new_v4());
     let mut fresh = request.clone();
-    fresh.idempotency_key = Some(fresh_key.clone().into());
+    fresh.idempotency_key = Some(fresh_key.into());
     deliver(&executor, fresh).await?;
     let next = tokio::time::timeout(Duration::from_secs(30), callbacks.recv())
         .await?
@@ -338,7 +338,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     deliver(&executor, request.clone()).await?;
     let after_restart_key = InvocationId(Uuid::new_v4());
     let mut after_restart = request;
-    after_restart.idempotency_key = Some(after_restart_key.clone().into());
+    after_restart.idempotency_key = Some(after_restart_key.into());
     deliver(&executor, after_restart).await?;
     let after_restart_callback = tokio::time::timeout(Duration::from_secs(30), callbacks.recv())
         .await?
@@ -434,7 +434,6 @@ async fn processor_committed_admission_survives_owner_retirement(
     let activator = seed.all().worker_activator();
     let admission = tokio::spawn({
         let target_owned = target_owned.clone();
-        let key = key.clone();
         async move {
             activator
                 .enqueue_oplog_processor(

@@ -136,13 +136,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            if let crate::worker::WorkerInstance::Running(running) =
-                self.parent.instance.lock().await.deletion_runtime_mut()
             {
-                if running.owner_generation_started {
+                let mut lifecycle = self.parent.instance.lock().await;
+                if lifecycle.begin_store_attempt() {
                     *self.parent.release_scope.lock().unwrap() = Default::default();
                 }
-                running.owner_generation_started = false;
             }
             self.permit_state.release_scope = self.parent.release_scope();
             permit.observe_release(&self.permit_state.release_scope);
@@ -257,7 +255,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     };
                     self.parent
                         .stop_internal(
-                            true,
+                            crate::worker::StopOrigin::InvocationLoop,
                             Some(err),
                             UnloadRequest::ordinary(UnloadReason::Failure),
                             final_state,

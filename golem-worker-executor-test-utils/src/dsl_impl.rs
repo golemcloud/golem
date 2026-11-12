@@ -1258,7 +1258,7 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .cancel_invocation(CancelInvocationRequest {
                 agent_id: Some(agent_id.clone().into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
+                idempotency_key: Some((*idempotency_key).into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,

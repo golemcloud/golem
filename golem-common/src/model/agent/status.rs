@@ -326,7 +326,7 @@ impl InvocationResultMembership {
                 if let Some(previous) = recent_by_key.remove(&key) {
                     recent_by_index.remove(&previous.terminal);
                 }
-                recent_by_key.insert(key.clone(), position);
+                recent_by_key.insert(key, position);
                 recent_by_index.insert(position.terminal, key);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
@@ -445,14 +445,14 @@ impl InvocationResultMembership {
             .iter()
             .map(|(key, position)| {
                 bloom.insert(key);
-                (*position, key.clone())
+                (*position, *key)
             })
             .collect();
         by_index.sort_unstable_by_key(|(position, _)| position.terminal);
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
         for (position, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_key.insert(key.clone(), position);
+            recent_by_key.insert(key, position);
             recent_by_index.insert(position.terminal, key);
         }
         self.state = InvocationResultMembershipState::Indexed {
@@ -468,9 +468,8 @@ impl InvocationResultMembership {
         recent_by_index: &mut OrdMap<OplogIndex, InvocationId>,
     ) {
         while recent_by_key.len() > capacity {
-            let Some((oldest_index, oldest_key)) = recent_by_index
-                .get_min()
-                .map(|(index, key)| (*index, key.clone()))
+            let Some((oldest_index, oldest_key)) =
+                recent_by_index.get_min().map(|(index, key)| (*index, *key))
             else {
                 break;
             };
@@ -916,7 +915,7 @@ impl DurableStreamSessionStatus {
             {
                 return;
             }
-            self.session_key.get_or_insert_with(|| record_key.clone());
+            self.session_key.get_or_insert(*record_key);
         } else if let Some(record_key) = relative_record_key {
             let Some(key) = self.session_key.as_ref() else {
                 return;
@@ -1073,13 +1072,13 @@ impl DurableStreamPublicBinding {
         match record {
             StreamSessionRecord::Prepared(record) => match current {
                 None => Some(Self::Live {
-                    session_key: record.session_key.clone(),
+                    session_key: record.session_key,
                     expiry_policy: record.expiry_policy,
                     expiry_deadline_millis: record.expiry_deadline_millis,
                 }),
                 Some(Self::Retired { session_key }) if session_key != &record.session_key => {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: record.expiry_policy,
                         expiry_deadline_millis: record.expiry_deadline_millis,
                     })
@@ -1088,13 +1087,13 @@ impl DurableStreamPublicBinding {
             },
             StreamSessionRecord::ExportForkInitialized(record) => match current {
                 None => Some(Self::Live {
-                    session_key: record.session_key.clone(),
+                    session_key: record.session_key,
                     expiry_policy: record.expiry_policy,
                     expiry_deadline_millis: record.expiry_deadline_millis,
                 }),
                 Some(Self::Retired { session_key }) if session_key != &record.session_key => {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: record.expiry_policy,
                         expiry_deadline_millis: record.expiry_deadline_millis,
                     })
@@ -1114,7 +1113,7 @@ impl DurableStreamPublicBinding {
                     ) =>
                 {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: *expiry_policy,
                         expiry_deadline_millis: Some(record.deadline_millis),
                     })
@@ -1130,7 +1129,7 @@ impl DurableStreamPublicBinding {
                     && *deadline == record.expected_deadline_millis =>
                 {
                     Some(Self::Retired {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                     })
                 }
                 _ => current.cloned(),
@@ -1166,7 +1165,7 @@ impl DurableStreamSessionIndex {
             if let Some(status) = self.get(invocation_id).cloned() {
                 let mut status = status;
                 status.apply_pending_invocation(index, invocation_id);
-                self.insert(invocation_id.clone(), status);
+                self.insert(*invocation_id, status);
             }
             return Ok(());
         }
@@ -1241,7 +1240,7 @@ impl DurableStreamSessionIndex {
             None => return,
         };
         status.apply_record(index, record);
-        self.insert(key.clone(), status);
+        self.insert(*key, status);
     }
 
     pub fn insert(&mut self, key: InvocationId, status: DurableStreamSessionStatus) {
@@ -1261,7 +1260,7 @@ impl DurableStreamSessionIndex {
         let mut completed: Vec<_> = self
             .sessions
             .iter()
-            .filter_map(|(key, status)| status.finished.map(|finished| (finished, key.clone())))
+            .filter_map(|(key, status)| status.finished.map(|finished| (finished, *key)))
             .collect();
         if completed.len() > DURABLE_STREAM_SESSION_RECENT_CAPACITY {
             completed.sort_unstable();

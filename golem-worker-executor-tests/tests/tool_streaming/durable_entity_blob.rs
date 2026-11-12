@@ -108,7 +108,7 @@ async fn invoke_blob_tool(
         .primary()
         .invoke_external_tool(
             fingerprint,
-            key.clone(),
+            *key,
             ToolName::try_from("clock-race").unwrap(),
             vec!["write-blob".into()],
             input.clone(),
@@ -254,7 +254,6 @@ async fn write_and_reconstruct(
     let mut invocation = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let owner = owner.clone();
-        let key = key.clone();
         let input = input.clone();
         let principal = principal.clone();
         async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await }
@@ -1216,7 +1215,7 @@ fn oracle_fixture() -> OplogSnapshot {
     let raw = vec![
         OplogEntry::AgentInvocationStarted {
             timestamp,
-            invocation_id: key.clone(),
+            invocation_id: key,
             payload: OplogPayload::Inline(Box::new(payload.clone())),
             trace_id: trace_id.clone(),
             trace_states: Vec::new(),

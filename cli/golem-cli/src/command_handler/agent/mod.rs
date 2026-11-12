@@ -725,10 +725,7 @@ impl AgentCommandHandler {
             })?;
 
         // The key the server accepted the invocation under, which cancels and looks it up.
-        let accepted_key = result
-            .idempotency_key
-            .parse::<golem_common::model::InvocationId>()
-            .context("the server returned an invalid invocation ID")?;
+        let accepted_key = golem_common::model::InvocationId(result.idempotency_key);
         if let Some((goal, handle)) = connect_handle.take() {
             if let Some(goal) = goal {
                 goal.set_target(accepted_key);
@@ -844,23 +841,19 @@ impl AgentCommandHandler {
         .await?;
 
         // The REPL writes the accepted invocation ID to stdin once the call returns.
-        let invocation_target = if let Some(goal) = connection.invocation_goal() {
-            Some(async move {
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-                if let Ok(Some(line)) = lines.next_line().await {
-                    goal.set_target(
-                        line.trim()
-                            .parse::<golem_common::model::InvocationId>()
-                            .context("stdin contains an invalid invocation ID")?,
-                    );
-                    goal.set_output_written();
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        } else {
-            None
-        };
+        let invocation_target = connection.invocation_goal().map(|goal| async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            if let Ok(Some(line)) = lines.next_line().await {
+                goal.set_target(
+                    line.trim()
+                        .parse::<golem_common::model::InvocationId>()
+                        .context("stdin contains an invalid invocation ID")?,
+                );
+                goal.set_output_written();
+            }
+            Ok::<_, anyhow::Error>(())
+        });
 
         if let Some(target) = invocation_target {
             let connection = connection.run_forever();
@@ -3861,34 +3854,6 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
-    }
-
-    /// The host fills an auto-injected principal, so the CLI neither asks for
-    /// it nor sends a value for it.
-    #[test]
-    fn method_arguments_skip_the_auto_injected_principal() {
-        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
-        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
-            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
-            golem_common::schema::agent::NamedField::auto_injected(
-                "principal",
-                golem_common::schema::agent::AutoInjectedKind::Principal,
-                SchemaType::record(vec![]),
-            ),
-        ]);
-        let parsed = parse_method_parameters_with_error_table(
-            &agent_type,
-            "run",
-            vec!["5".into()],
-            &SourceLanguage::Rust,
-        )
-        .unwrap();
-        assert_eq!(
-            parsed,
-            SchemaValue::Record {
-                fields: vec![SchemaValue::S64(5)]
-            }
-        );
     }
 
     #[test]

@@ -347,7 +347,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 creation_intent,
             )
             .await?;
-        let key = admission.invocation_key().clone();
+        let key = *admission.invocation_key();
         request.idempotency_key =
             Some(golem_common::model::IdempotencyKey::from_uuid(key.0).into());
         let revision = worker.stream_session_revision(&key).await?;
@@ -384,7 +384,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
+            idempotency_key: key,
             method_name,
             input,
             invocation_context: from_proto_invocation_context(&request.context)

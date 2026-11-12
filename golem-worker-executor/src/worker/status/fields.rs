@@ -68,7 +68,7 @@ pub(super) fn calculate_pending_invocations(
                     let idempotency_key = if manual_update_target_revision.is_some() {
                         None
                     } else {
-                        Some(idempotency_key.clone())
+                        Some(*idempotency_key)
                     };
                     result.push(PendingInvocationRef {
                         timestamp: *timestamp,
@@ -630,7 +630,7 @@ pub(super) fn calculate_invocation_results(
                 .and_then(|known| known.request)
         });
         invocation_results.insert(
-            key.clone(),
+            *key,
             InvocationResultPosition {
                 terminal: position.terminal,
                 request,
@@ -658,7 +658,7 @@ impl InvocationRequests {
     /// The requests at `status`, whose pending invocations still hold their request entries.
     pub fn of_status(status: &AgentStatusRecord) -> Self {
         Self {
-            current: status.current_idempotency_key.clone(),
+            current: status.current_idempotency_key,
             current_started_at: status.current_invocation_started_at,
             pending: status
                 .pending_invocations
@@ -666,7 +666,6 @@ impl InvocationRequests {
                 .filter_map(|pending| {
                     pending
                         .idempotency_key
-                        .clone()
                         .map(|key| (key, pending.oplog_index))
                 })
                 .collect(),
@@ -706,7 +705,7 @@ pub(crate) fn fold_invocation_result_entries(
         // regions too.
         let pending_request = match entry {
             OplogEntry::PendingAgentInvocation { invocation_id, .. } => {
-                requests.pending.insert(invocation_id.clone(), *oplog_idx);
+                requests.pending.insert(*invocation_id, *oplog_idx);
                 None
             }
             OplogEntry::AgentInvocationStarted { invocation_id, .. }
@@ -727,7 +726,7 @@ pub(crate) fn fold_invocation_result_entries(
         };
         match entry {
             OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
-                requests.current = Some(invocation_id.clone());
+                requests.current = Some(*invocation_id);
                 requests.current_started_at = Some(*oplog_idx);
             }
             OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
@@ -740,8 +739,7 @@ pub(crate) fn fold_invocation_result_entries(
             OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
                 if requests.current.as_ref() != Some(invocation_id) {
                     observe_result(invocation_id, position(pending_request));
-                    requests.cancelled =
-                        pending_request.map(|request| (invocation_id.clone(), request));
+                    requests.cancelled = pending_request.map(|request| (*invocation_id, request));
                 }
             }
             OplogEntry::Error {

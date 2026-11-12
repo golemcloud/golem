@@ -7171,9 +7171,13 @@
         }
       ]
     },
+    "HttpRouteMode": {
+      "type": "string",
+      "enum": ["durableStreams", "plain", "sse", "webSocket"]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "mode", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
@@ -7181,18 +7185,16 @@
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "mode": { "oneOf": [{ "$ref": "#/definitions/HttpRouteMode" }, { "type": "null" }] },
         "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "DurableStreamRouteOptions": {
       "type": "object",
-      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "required": ["slots", "load"],
       "properties": {
         "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
-        "allowExternalWrites": { "type": ["boolean", "null"] },
-        "allowStreamDelete": { "type": ["boolean", "null"] },
-        "allowInvocationDelete": { "type": ["boolean", "null"] },
         "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false

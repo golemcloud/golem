@@ -143,7 +143,7 @@ fn create_entry(
 }
 
 fn local_registration(key: &StreamInvocationId) -> StreamRegistrationInvocation {
-    StreamRegistrationInvocation::Local(key.idempotency_key.clone())
+    StreamRegistrationInvocation::Local(key.idempotency_key)
 }
 
 fn remote_registration(key: &StreamInvocationId) -> StreamRegistrationInvocation {
@@ -173,7 +173,7 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     let intent = StreamConsumerCancelIntentRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: remote_registration(&key),
-        consumer_invocation: key.idempotency_key.clone(),
+        consumer_invocation: key.idempotency_key,
         source: StreamRecordReference::Foreign(handle),
         epoch: 3,
         role: StreamCancelRole::OutputConsumer,
@@ -344,7 +344,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         oplog.as_ref(),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: key.idempotency_key.clone(),
+            session_key: key.idempotency_key,
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -377,7 +377,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
         session_key: remote_registration(&key),
-        consumer_invocation: key.idempotency_key.clone(),
+        consumer_invocation: key.idempotency_key,
         source: StreamRecordReference::Foreign(mapping.handle.clone()),
         epoch: 1,
         role: StreamCancelRole::OutputConsumer,
@@ -406,7 +406,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: key.idempotency_key.clone(),
+            session_key: key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -603,7 +603,7 @@ fn session_key(id: &OwnedAgentId, key: &InvocationId) -> StreamInvocationId {
         callee_environment_id: id.environment_id,
         callee: id.agent_id.clone(),
         callee_fingerprint: test_fingerprint(),
-        idempotency_key: key.clone(),
+        idempotency_key: *key,
     }
 }
 
@@ -613,7 +613,7 @@ fn prepared_record(id: &OwnedAgentId, key: &InvocationId) -> StreamSessionRecord
         format_version: 1,
         public_session_id: key.to_string(),
         route_scope: Some(test_route_scope()),
-        session_key: key.clone(),
+        session_key: *key,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
@@ -1482,7 +1482,7 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &InvocationId) -> Opl
     oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            key.clone(),
+            *key,
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
             Vec::new(),
@@ -2034,7 +2034,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             StreamSessionRecord::ResumeAttempt(
                 golem_common::model::durable_stream::StreamSessionResumeAttemptRecord {
                     format_version: 1,
-                    session_key: key.idempotency_key.clone(),
+                    session_key: key.idempotency_key,
                     attempt: golem_common::model::durable_stream::ResumeAttemptDescriptor {
                         format_version: 1,
                         operation:
@@ -2355,7 +2355,7 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
 fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session() {
     let mut index = DurableStreamSessionIndex::default();
     let old = test_invocation_id("oldest".into());
-    index.insert(old.clone(), completed(1, 2));
+    index.insert(old, completed(1, 2));
     for n in 0..140 {
         index.insert(
             test_invocation_id(format!("completed-{n}")),
@@ -2364,7 +2364,7 @@ fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session()
     }
     let unfinished = test_invocation_id("unfinished".into());
     index.insert(
-        unfinished.clone(),
+        unfinished,
         DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(500)),
             prepared: Some(OplogIndex::from_u64(501)),
@@ -2425,7 +2425,7 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: keys[0].clone(),
+            session_key: keys[0],
             public_session_id: public.into(),
             route_scope: scopes[0].clone(),
             expected_deadline_millis: 10_000,
@@ -2444,7 +2444,7 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: keys[0].clone(),
+            session_key: keys[0],
             public_session_id: public.into(),
             route_scope: scopes[0].clone(),
             expected_deadline_millis: 10_000,
@@ -2519,7 +2519,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
@@ -2533,7 +2533,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
@@ -2545,7 +2545,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
@@ -2560,7 +2560,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
             format_version: 1,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
-            session_key: second.clone(),
+            session_key: second,
             source_invocation: session_key(&id, &first),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::None,
@@ -2571,7 +2571,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: second.clone(),
+        session_key: second,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
     };
@@ -2632,7 +2632,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
             format_version: 1,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
-            session_key: key.clone(),
+            session_key: key,
             source_invocation: session_key(&id, &key),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
@@ -2643,7 +2643,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
         initialize(10_000),
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
@@ -2653,7 +2653,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
         initialize(10_000),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             public_session_id: public.into(),
             route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
@@ -2724,7 +2724,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: key.clone(),
+        session_key: key,
         expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
         expiry_deadline_millis: Some(40_000),
     };
@@ -2927,7 +2927,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: key.clone(),
+        session_key: key,
         expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
         expiry_deadline_millis: Some(40_000),
     };
@@ -3075,9 +3075,7 @@ fn stream_session_index_survives_cache_and_checkpoint_binary_roundtrip() {
     let key = test_invocation_id("roundtrip".into());
     let expected = completed(7, 11);
     let mut status = AgentStatusRecord::default();
-    status
-        .durable_stream_sessions
-        .insert(key.clone(), expected.clone());
+    status.durable_stream_sessions.insert(key, expected.clone());
 
     let bytes = serialize(&status).unwrap();
     let decoded: AgentStatusRecord = deserialize(&bytes).unwrap();
@@ -3639,7 +3637,7 @@ async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -3698,7 +3696,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
         oplog.as_ref(),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(old.clone()),
+            session_key: StreamRegistrationInvocation::Local(old),
             result: vec![1],
             stream_mappings: vec![],
         }),
@@ -3708,7 +3706,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(old.clone()),
+            session_key: StreamRegistrationInvocation::Local(old),
             result: Ok(()),
         }),
     )
@@ -3724,7 +3722,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
             oplog.as_ref(),
             StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
-                session_key: StreamRegistrationInvocation::Local(key.clone()),
+                session_key: StreamRegistrationInvocation::Local(key),
                 result: Ok(()),
             }),
         )
@@ -3770,7 +3768,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
             oplog.as_ref(),
             StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
-                session_key: StreamRegistrationInvocation::Local(other.clone()),
+                session_key: StreamRegistrationInvocation::Local(other),
                 result: Ok(()),
             }),
         )
@@ -3813,7 +3811,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         oplog.as_ref(),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: vec![2],
             stream_mappings: vec![],
         }),
@@ -3823,7 +3821,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: Ok(()),
         }),
     )
@@ -3886,13 +3884,13 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         prepared_record(&id, &key),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: vec![],
             stream_mappings: vec![],
         }),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: Ok(()),
         }),
     ];
@@ -3957,7 +3955,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog.as_ref(),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session.idempotency_key.clone(),
+            session_key: session.idempotency_key,
             attachment_id,
             attempt_id: first_attempt,
             epoch: 1,
@@ -3982,7 +3980,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let old = StreamSession::new(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(session.idempotency_key),
         [],
     )
     .with_attachment(1, first_attempt);
@@ -3991,7 +3989,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let takeover_attempt = AttemptId::fresh();
     let resume = StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
         format_version: 1,
-        session_key: session.idempotency_key.clone(),
+        session_key: session.idempotency_key,
         attempt: ResumeAttemptDescriptor {
             format_version: 1,
             operation: StreamResumeOperation::Takeover,
@@ -4018,7 +4016,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let new = StreamSession::new(
         producer,
         oplog.clone(),
-        StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(session.idempotency_key),
         [],
     )
     .with_attachment(2, takeover_attempt);
@@ -4048,7 +4046,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog.as_ref(),
         StreamSessionRecord::Detached(StreamSessionDetachedRecord {
             format_version: 1,
-            session_key: session.idempotency_key.clone(),
+            session_key: session.idempotency_key,
             attachment_id,
             owner_attempt_id: takeover_attempt,
             epoch: 2,
@@ -4099,7 +4097,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -4204,7 +4202,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
         second.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,

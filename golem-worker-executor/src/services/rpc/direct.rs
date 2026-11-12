@@ -721,7 +721,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .id();
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key,
             method_name,
             input,
             invocation_context: self_stack,

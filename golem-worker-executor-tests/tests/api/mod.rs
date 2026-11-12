@@ -4139,15 +4139,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(parameters) => {
                 started_invocation_id = match &parameters.invocation {
-                    PublicAgentInvocation::AgentInitialization(init) => {
-                        Some(init.invocation_id.clone())
-                    }
+                    PublicAgentInvocation::AgentInitialization(init) => Some(init.invocation_id),
                     PublicAgentInvocation::AgentMethodInvocation(method) => {
-                        Some(method.invocation_id.clone())
+                        Some(method.invocation_id)
                     }
-                    PublicAgentInvocation::ExternalTool(tool) => Some(tool.invocation_id.clone()),
+                    PublicAgentInvocation::ExternalTool(tool) => Some(tool.invocation_id),
                     PublicAgentInvocation::ProcessOplogEntries(process) => {
-                        Some(process.invocation_id.clone())
+                        Some(process.invocation_id)
                     }
                     PublicAgentInvocation::SaveSnapshot(_)
                     | PublicAgentInvocation::LoadSnapshot(_)
@@ -8029,7 +8027,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
     let deadline = Utc::now() + chrono::Duration::hours(1);
     let request =
         |key: &golem_common::model::InvocationId, value, scope_card| AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
+            idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
             input: data_value!(value).into_parts().1,
             invocation_context: InvocationContextStack::fresh(),
@@ -8246,7 +8244,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             while let Some(response) = responses.message().await? {
                 match response.response {
                     Some(invocation_response::Response::Accepted(acceptance)) => {
-                        assert_eq!(acceptance.idempotency_key, Some(key.clone().into()));
+                        assert_eq!(acceptance.idempotency_key, Some(key.into()));
                         assert_eq!(acceptance.callee_fingerprint, None);
                         accepted = true;
                     }
@@ -8716,15 +8714,12 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
     let cancelled_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let started_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
 
-    for (key, value, cancel_wins) in [
-        (cancelled_key.clone(), 71u64, true),
-        (started_key.clone(), 29u64, false),
-    ] {
+    for (key, value, cancel_wins) in [(cancelled_key, 71u64, true), (started_key, 29u64, false)] {
         let due = Utc::now() + chrono::Duration::seconds(5);
         let receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
-                    idempotency_key: key.clone(),
+                    idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(value).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),
@@ -8773,7 +8768,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             assert!(
                 tokio::time::timeout(
                     Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(key.clone(), receipt, &owner),
+                    worker.cancel_scheduled_invocation(key, receipt, &owner),
                 )
                 .await
                 .context("cancelling the selected invocation before Started timed out")??
@@ -8840,7 +8835,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 PublicOplogEntry::AgentInvocationStarted(parameters) => {
                     current_key = match parameters.invocation {
                         PublicAgentInvocation::AgentMethodInvocation(method) => {
-                            pairs.entry(method.invocation_id.clone()).or_default().0 += 1;
+                            pairs.entry(method.invocation_id).or_default().0 += 1;
                             Some(method.invocation_id)
                         }
                         _ => None,
@@ -8901,7 +8896,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     let invocation =
         |key: &golem_common::model::InvocationId, value: u64| AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
+            idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
             input: data_value!(value).into_parts().1,
             invocation_context: InvocationContextStack::fresh(),
@@ -8919,7 +8914,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(key.clone(), receipt, &owner)
+            .cancel_scheduled_invocation(key, receipt, &owner)
             .await?
     );
     assert_eq!(
@@ -8977,7 +8972,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         receipt
     );
     // A redundant cancellation must not replace a completed invocation's result.
-    worker.cancel_invocation(fresh_key.clone()).await?;
+    worker.cancel_invocation(fresh_key).await?;
     assert_eq!(
         worker.lookup_invocation_result(&fresh_key).await,
         LookupResult::Complete(Ok(result))
@@ -9061,7 +9056,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         .filter(|pending| pending.not_before.is_some())
         .collect::<Vec<_>>();
     assert_eq!(scheduled.len(), 1);
-    let key = scheduled[0].idempotency_key().unwrap().clone();
+    let key = *scheduled[0].idempotency_key().unwrap();
     assert_eq!(
         scheduled[0].not_before.unwrap().to_millis(),
         due.timestamp() as u64 * 1000
@@ -9094,7 +9089,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
                     .enqueue_exact_existing(
                         &owned,
                         fingerprint,
-                        ExactExistingDelivery::WakeInvocation(key.clone()),
+                        ExactExistingDelivery::WakeInvocation(key),
                     )
                     .await?
             );
@@ -9128,7 +9123,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         let successor_receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
-                    idempotency_key: key.clone(),
+                    idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(91u64).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),

@@ -92,9 +92,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(
-                                self.parent.cancel_invocation(idempotency_key.clone()),
-                            )
+                            .run_until_cancelled(self.parent.cancel_invocation(*idempotency_key))
                             .await
                         {
                             Some(Ok(())) => CommandOutcome::Continue,
@@ -157,7 +155,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let kind = invocation.invocation.kind();
         let display_name = invocation.invocation.display_name();
-        let invocation_idempotency_key = idempotency_key.clone();
+        let invocation_idempotency_key = idempotency_key;
         self.uses_streams = invocation_uses_streams(
             &invocation.invocation,
             &self.store.data().component_metadata().metadata,
@@ -168,7 +166,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         if admission != MonthlyResourceAdmission::Admit {
             self.store
                 .data_mut()
-                .set_current_idempotency_key(idempotency_key.clone())
+                .set_current_idempotency_key(idempotency_key)
                 .await;
         }
         match admission {
@@ -262,7 +260,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
-                .set_current_idempotency_key(idempotency_key.clone())
+                .set_current_idempotency_key(idempotency_key)
                 .await;
 
             Self::extend_invocation_context(
@@ -360,7 +358,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(()) => {
                 if self.uses_streams {
                     let parent = self.parent.clone();
-                    let idempotency_key = idempotency_key.clone();
+                    let idempotency_key = *idempotency_key;
                     // Host stream operations can retain session locks across a pending poll.
                     // Keep driving the Store while protocol-only completion acquires them.
                     let result = self

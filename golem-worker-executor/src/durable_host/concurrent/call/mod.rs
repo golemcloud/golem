@@ -23,7 +23,7 @@ use crate::workerctx::ReplayAdmissionStage;
 use futures::future::BoxFuture;
 use golem_common::SafeDisplay;
 use golem_common::model::card::PermissionTarget;
-use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
@@ -317,12 +317,10 @@ pub(crate) struct BegunCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx
     requires_agent_authority: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
-    primary_runtime: bool,
-    replaying_incomplete_entity: bool,
+    store_replay_state: StoreReplayState,
     tool_entity: bool,
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     admission_boundary: Option<SerializableToolAdmissionRefusal>,
-    local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,

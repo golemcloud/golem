@@ -105,7 +105,7 @@ where
                         "invalid invocation identity: {error}"
                     ))
                 })?;
-            response.idempotency_key = Some(key.clone());
+            response.idempotency_key = Some(key);
             let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
             let Some(metadata) = metadata else {
                 response.invocation_status = Some(InvocationStatus::Unknown);
@@ -273,9 +273,9 @@ where
             let key = request_key
                 .finalize(metadata.agent_id, metadata.fingerprint, &operation)
                 .id();
-            response.idempotency_key = Some(key.clone());
+            response.idempotency_key = Some(key);
             let invocation = AgentInvocation::ExternalTool {
-                idempotency_key: key.clone(),
+                idempotency_key: key,
                 tool_name,
                 command_path: tool.command_path.clone(),
                 input: Box::new(TypedSchemaValue::new(graph, value)),
@@ -323,7 +323,7 @@ where
         let key = request_key
             .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)
             .id();
-        response.idempotency_key = Some(key.clone());
+        response.idempotency_key = Some(key);
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);
         if streaming && let Some((prepared, _)) = worker.native_tool_session(&key).await? {
@@ -337,7 +337,7 @@ where
             .map_err(WorkerExecutorError::invalid_request)?;
         let invocation = worker
             .prepare_external_tool_invocation(
-                key.clone(),
+                key,
                 tool.tool_name
                     .clone()
                     .try_into()
@@ -364,7 +364,7 @@ where
                 response.component_revision,
             )?;
             if mode == Mode::Await {
-                let mut output = worker.await_enqueued_invocation(key.clone()).await?;
+                let mut output = worker.await_enqueued_invocation(key).await?;
                 output.agent_id = response.agent_id;
                 output.idempotency_key = Some(key);
                 return Ok(output);
@@ -397,7 +397,7 @@ where
                 .await?;
             accepted
                 .send(AcceptedInvocation {
-                    idempotency_key: key.clone(),
+                    idempotency_key: key,
                     component_revision: response.component_revision,
                     durable_streams: Some(acceptance.streams),
                     prepared: Some(acceptance.prepared),
@@ -448,7 +448,7 @@ where
                 return Ok(response);
             }
         }
-        let mut output = worker.await_enqueued_invocation(key.clone()).await?;
+        let mut output = worker.await_enqueued_invocation(key).await?;
         output.agent_id = response.agent_id;
         output.idempotency_key = Some(key);
         Ok(output)

@@ -147,12 +147,12 @@ fn scope_card_handles_are_owned_by_the_minting_invocation() {
     );
 
     assert_eq!(
-        resolve_owned_scope_card(Some((card.clone(), Some(owner.clone()))), &owner).unwrap(),
+        resolve_owned_scope_card(Some((card.clone(), Some(owner))), &owner).unwrap(),
         card
     );
     assert!(
         resolve_owned_scope_card(
-            Some((card.clone(), Some(owner.clone()))),
+            Some((card.clone(), Some(owner))),
             &Uuid::from_u128(2).into(),
         )
         .is_err()

@@ -3763,7 +3763,6 @@ impl WorkerService {
         let response_agent_id = output.agent_id.clone().unwrap_or_else(|| agent_id.clone());
         let response_idempotency_key = output
             .idempotency_key
-            .clone()
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
 
         match output.result {
@@ -5416,6 +5415,7 @@ mod tests {
                     cors_options: golem_common::model::agent::CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    mode: None,
                     durable_streams: None,
                 }],
                 read_only: None,
@@ -6761,7 +6761,7 @@ mod tests {
                 fields: vec![SchemaValue::String("new schema".into())],
             };
             let behaviour = CallAgentBehaviour {
-                route_mode: AgentRouteMode::Rest,
+                route_mode: AgentRouteMode::Plain,
                 base_path_variables: 0,
                 durable_streams: None,
                 component_id: a.id,

@@ -143,7 +143,7 @@ async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery(
     let streams = StreamSession::open(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         vec![binding],
     )
     .await

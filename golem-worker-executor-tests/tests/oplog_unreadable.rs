@@ -1005,7 +1005,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id => Some((idempotency_key.clone(), result.is_ok())),
+            } if agent_id == &agent.agent_id => Some((*idempotency_key, result.is_ok())),
             _ => None,
         })
         .await?;

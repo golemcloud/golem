@@ -65,7 +65,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         self.state.current_span_id = current_span_id;
                     }
                     self.state
-                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                        .set_current_idempotency_key(*scope.idempotency_key());
                     self.state.entity_logical_key_position =
                         scope.logical_key_positions().then_some(OplogIndex::INITIAL);
                 } else {

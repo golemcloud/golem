@@ -93,7 +93,7 @@ fn scheduled_invocation_wake_roundtrips_without_payload() {
     let key = InvocationId(Uuid::new_v4());
     let action = ScheduledAction::WakeInvocation {
         owned_agent_id: owned_agent_id.clone(),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
         target_worker_fingerprint: fingerprint,
     };
     let decoded = deserialize::<ScheduledAction>(&serialize(&action).unwrap()).unwrap();

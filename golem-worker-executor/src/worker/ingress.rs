@@ -189,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // (`populate_read_only_cache`), so it needs the live atomic.
             let read_only_cache_epoch = self.read_only_cache_epoch.clone();
             let agent_id = self.owned_agent_id.agent_id.clone();
-            let idem = idempotency_key.clone();
+            let idem = idempotency_key;
             tokio::spawn(async move {
                 let wait_result = obs_sub
                     .wait_for(|event| match event {
@@ -596,7 +596,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let ro_for_closure = ro.clone();
             let worker = self.clone();
             let invocation_for_closure = invocation.clone();
-            let idem_for_closure = idempotency_key.clone();
+            let idem_for_closure = idempotency_key;
 
             // The owner future is spawned and deliberately survives this caller, so
             // it cannot run inside the caller's span - that would hold the gRPC span
@@ -610,7 +610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // execution is the honest originator.
             let origin = TraceOrigin::capture_current();
             let owner_agent_id = self.owned_agent_id.agent_id.clone();
-            let owner_idempotency_key = idempotency_key.clone();
+            let owner_idempotency_key = idempotency_key;
 
             let pending_or_final = async {
                 self.read_only_cache
@@ -1167,7 +1167,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .state_actor
                         .append_invocation_if_version(
                             entry.clone(),
-                            idempotency_key.clone(),
+                            *idempotency_key,
                             status.invocation_results.change_generation(),
                             status.invocation_results.revert_generation(),
                             instance_guard,
@@ -1207,7 +1207,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(instance_guard) = caller_instance_guard.as_ref()
-                && let WorkerInstance::Running(running) = &**instance_guard
+                && let WorkerInstance::Running(running) = instance_guard.state()
             {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
@@ -1279,7 +1279,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let scheduled = status
             .pending_invocations
             .iter()
-            .filter_map(|pending| Some((pending.idempotency_key()?.clone(), pending.not_before?)))
+            .filter_map(|pending| Some((*pending.idempotency_key()?, pending.not_before?)))
             .collect::<Vec<_>>();
         for (key, deadline) in scheduled {
             self.register_invocation_wake(key, deadline).await;
@@ -1387,11 +1387,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(invocation);
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
-        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
+        let needs_start = matches!(instance_guard.state(), WorkerInstance::Unloaded { .. });
         drop(instance_guard);
         if needs_start {
             Self::start_if_needed(self.clone()).await?;
@@ -1418,7 +1418,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::GetWalletCards { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -1475,7 +1475,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // and this method must not start one: the worker already reached a stopped state, which is
         // exactly the "not processing anything until the next explicit start" condition callers
         // wait for.
-        if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
+        if matches!(instance_guard.state(), WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
 
@@ -1486,7 +1486,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -1588,7 +1588,7 @@ impl EphemeralInvocationState {
     ) -> Result<(), WorkerExecutorError> {
         match self {
             Self::Available => {
-                *self = Self::Accepted(Some(idempotency_key.clone()));
+                *self = Self::Accepted(Some(*idempotency_key));
                 Ok(())
             }
             Self::Accepted(Some(accepted_key)) if accepted_key == idempotency_key => Ok(()),

@@ -169,7 +169,7 @@ impl DurableStreamsHandler {
                         0,
                         0,
                         golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::Continuation,
-                        success.invocation_key.clone(),
+                        success.invocation_key,
                     )
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("fork succeeded without stream metadata"))?;

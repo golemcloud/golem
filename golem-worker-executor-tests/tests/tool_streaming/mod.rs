@@ -15230,7 +15230,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     resumed_sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: accepted.idempotency_key.clone(),
+                idempotency_key: accepted.idempotency_key,
                 agent_id: start.agent_id,
                 environment_id: start.environment_id,
                 attachment_id: accepted.attachment_id,
@@ -15372,7 +15372,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     completed_sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: accepted.idempotency_key.clone(),
+                idempotency_key: accepted.idempotency_key,
                 agent_id: accepted.agent_id.clone(),
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,

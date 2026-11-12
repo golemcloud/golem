@@ -416,9 +416,7 @@ fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<golem_common::mo
     oplog.iter().find_map(|entry| match &entry.entry {
         PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
             match &pending.invocation {
-                PublicAgentInvocation::AgentMethodInvocation(method) => {
-                    Some(method.invocation_id.clone())
-                }
+                PublicAgentInvocation::AgentMethodInvocation(method) => Some(method.invocation_id),
                 _ => None,
             }
         }

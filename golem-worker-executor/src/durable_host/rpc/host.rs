@@ -467,7 +467,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
+            let live_streaming_origin = current_streaming_origin(self, parent_key);
             let call_target = RpcCallTarget::new(
                 begun.idempotency_key_position(self),
                 &prepared.logical_remote_agent_id,
@@ -1161,7 +1161,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
+            let live_streaming_origin = current_streaming_origin(self, parent_key);
             let call_target = RpcCallTarget::new(
                 begun.idempotency_key_position(self),
                 &logical_remote_agent_id,

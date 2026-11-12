@@ -81,7 +81,7 @@ pub(super) async fn session<Ctx: WorkerCtx>(
         callee_environment_id: owner.environment_id,
         callee: owner.agent_id,
         callee_fingerprint: owner.fingerprint,
-        idempotency_key: scope.stream_session_idempotency_key().clone(),
+        idempotency_key: *scope.stream_session_idempotency_key(),
     };
     let mut consumer = key.clone();
     consumer.idempotency_key =

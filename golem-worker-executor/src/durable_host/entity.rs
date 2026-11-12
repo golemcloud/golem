@@ -161,8 +161,8 @@ impl EntityInvocationKeyContext {
         };
         let stream_parent_key = ctx
             .entity_invocation_scope()
-            .map(|scope| scope.stream_session_idempotency_key().clone())
-            .unwrap_or_else(|| caller_key.clone());
+            .map(|scope| *scope.stream_session_idempotency_key())
+            .unwrap_or(caller_key);
         let stream_session_idempotency_key =
             derive_entity_stream_session_key(&stream_parent_key, logical_position, attempt_ordinal);
         Ok(Self {
@@ -382,7 +382,7 @@ impl EntityInvocationDurability {
             get_ctx,
             parent,
             key_context,
-            key_context.stream_session_idempotency_key.clone(),
+            key_context.stream_session_idempotency_key,
             handle,
             metadata,
             started_input,
@@ -734,9 +734,9 @@ impl EntityInvocationDurability {
             scope.activation().clone(),
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
-            scope.idempotency_key().clone(),
+            *scope.idempotency_key(),
             scope.logical_key_positions(),
-            scope.stream_session_idempotency_key().clone(),
+            *scope.stream_session_idempotency_key(),
         )
         .map_err(WorkerExecutorError::runtime)?
         .with_authority_wallet(scope.authority_wallet().to_vec())

@@ -206,7 +206,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = StreamSession::open(
             self.durable_stream_producer().await?,
             self.oplog.clone(),
-            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
+            StreamRegistrationInvocation::Local(prepared.session_key),
             prepared.stream_mappings.iter().cloned(),
         )
         .await
@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(invocation);
         }
         let producer = self.durable_stream_producer().await?;
-        let session_reference = StreamRegistrationInvocation::Local(prepared.session_key.clone());
+        let session_reference = StreamRegistrationInvocation::Local(prepared.session_key);
         let _ = self
             .recover_durable_stream_topologies(
                 false,
@@ -765,37 +765,37 @@ pub(crate) fn stream_session_record_key(
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ExpiryRefreshed(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Expired(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Attached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ResumeAttempt(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Detached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Mapping(record) => Some(record.session_key.qualify(
             owner_environment_id,
@@ -865,7 +865,7 @@ pub(crate) fn stream_session_record_key(
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
             callee_fingerprint: owner_fingerprint,
-            idempotency_key: record.session_key.clone(),
+            idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ProducerDeleting(_)
         | StreamSessionRecord::ConsumerDeleting(_)
@@ -907,7 +907,7 @@ pub(crate) fn stream_session_record_reference(
             return usize::try_from(reader_id.binding_slot)
                 .ok()
                 .filter(|slot| *slot < record.stream_mappings.len())
-                .map(|_| StreamRegistrationInvocation::Local(record.session_key.clone()));
+                .map(|_| StreamRegistrationInvocation::Local(record.session_key));
         }
         StreamSessionRecord::Mapping(record) => {
             (&record.session_key, std::slice::from_ref(&record.mapping))

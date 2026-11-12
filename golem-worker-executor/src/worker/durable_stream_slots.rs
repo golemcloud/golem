@@ -400,7 +400,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .durable_stream_session_status(invocation_key)
             .await?
             .and_then(|status| status.export_source_invocation)
-            .map_or_else(|| invocation_key.clone(), |source| source.idempotency_key))
+            .map_or_else(|| *invocation_key, |source| source.idempotency_key))
     }
 
     async fn commit_stream_session_expiry_owned(
@@ -587,7 +587,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let transition = self
             .expire_stream_session_transition(
                 public_session_id.clone(),
-                invocation_key.clone(),
+                invocation_key,
                 expected_deadline_millis,
             )
             .await?;
@@ -637,11 +637,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
         match self
-            .deliver_stream_session_expiry(
-                public_session_id.to_owned(),
-                session_key.clone(),
-                deadline,
-            )
+            .deliver_stream_session_expiry(public_session_id.to_owned(), session_key, deadline)
             .await
         {
             Ok(()) => Ok(()),
@@ -912,7 +908,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request.expiry_deadline_millis = admission.expiry_deadline_millis;
         let component_revision = request.attempt.invocation.target_component_revision;
         let public_session_id = admission.public_session_id.clone();
-        let invocation_key = admission.invocation_key.clone();
+        let invocation_key = admission.invocation_key;
         let expiry_policy = admission.expiry_policy;
         let expiry_deadline_millis = admission.expiry_deadline_millis;
         let acceptance = self
@@ -1158,7 +1154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         Ok(Some(StreamSessionExpiryRefreshedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: binding.invocation_key.clone(),
+            session_key: binding.invocation_key,
             public_session_id: public_session_id.to_owned(),
             route_scope: binding.route_scope.clone(),
             expected_deadline_millis,
@@ -1235,7 +1231,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker
                     .schedule_stream_session_expiry(
                         public_session_id.clone(),
-                        current.invocation_key.clone(),
+                        current.invocation_key,
                         Some(deadline_millis),
                     )
                     .await?;
@@ -1310,7 +1306,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 PublicStreamSessionBinding {
                     route_scope: request.route_scope.clone(),
-                    invocation_key: invocation_key.clone(),
+                    invocation_key: *invocation_key,
                     expiry_policy: status.expiry_policy,
                     expiry_deadline_millis: status.expiry_deadline_millis,
                 }
@@ -1407,7 +1403,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })
                 .await?
                 .clone(),
-            invocation_key: binding.invocation_key.clone(),
+            invocation_key: binding.invocation_key,
             expiry_policy: binding.expiry_policy,
             expiry_deadline_millis: binding.expiry_deadline_millis,
         };
@@ -1552,7 +1548,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(ExportStreamControlResult::NotFound);
         };
         let session_key = admitted.invocation_key;
-        let expected_invocation_key = session_key.clone();
+        let expected_invocation_key = session_key;
         let content_key = self.stream_session_content_key(&session_key).await?;
         let Some(prepared) = self.prepared_stream_session(&content_key).await? else {
             return Ok(ExportStreamControlResult::NotFound);
@@ -1565,7 +1561,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
+            StreamRegistrationInvocation::Local(prepared.session_key),
             prepared.stream_mappings.iter().cloned(),
         )
         .await
@@ -1685,7 +1681,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             producer.qualify_session(&StreamRegistrationInvocation::Local(prepared.session_key));
         let public_session_id = request.session.clone();
         let expiry_policy = binding.expiry_policy;
-        let invocation_key = binding.invocation_key.clone();
+        let invocation_key = binding.invocation_key;
         let (outcome, expiry_deadline_millis, stream_metadata, expired_session) = producer
             .run_admitted(
                 None,
@@ -1807,7 +1803,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker
                             .schedule_stream_session_expiry(
                                 public_session_id.clone(),
-                                current.invocation_key.clone(),
+                                current.invocation_key,
                                 Some(refresh.deadline_millis),
                             )
                             .await?;

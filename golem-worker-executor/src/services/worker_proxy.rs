@@ -1018,7 +1018,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("cancel_invocation", move |client| {
                 Box::pin(client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(agent_id.clone().into()),
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     scheduled: None,
                 }))
@@ -1048,7 +1048,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("cancel_invocation", move |client| {
                 Box::pin(client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(target.agent_id().into()),
-                    idempotency_key: Some(key.clone().into()),
+                    idempotency_key: Some(key.into()),
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
@@ -1143,7 +1143,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(target_agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     component_revision: component_revision.into(),
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     account_id: Some(account_id.into()),
                     config: config.clone().into_iter().collect(),
                     metadata: Some(metadata.clone()),
@@ -1431,7 +1431,7 @@ mod tests {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
                                 agent_id: resume.agent_id.clone(),
-                                idempotency_key: resume.idempotency_key.clone(),
+                                idempotency_key: resume.idempotency_key,
                                 component_revision: Some(0),
                                 attachment_id: resume.attachment_id,
                                 attempt_id: resume.attempt_id,

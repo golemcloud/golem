@@ -3863,13 +3863,13 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         format_version: 1,
                         coordinate: StreamRegistrationRecordCoordinate::Root {
                             invocation: StreamRegistrationInvocation::Local(
-                                invocation_id.idempotency_key.clone(),
+                                invocation_id.idempotency_key,
                             ),
                             root_kind: StreamRootKind::MethodResult,
                             recursive_value_path: Vec::new(),
                         },
                         source_invocation: StreamRegistrationInvocation::Local(
-                            invocation_id.idempotency_key.clone(),
+                            invocation_id.idempotency_key,
                         ),
                         component_revision: ComponentRevision::INITIAL,
                         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
@@ -4193,7 +4193,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
         idempotency_key: test_invocation_id("blocked-terminal-session".to_string()),
     };
     let observed = consumer_item_record(
-        StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(session_key.idempotency_key),
         LocalStreamReaderId {
             introducing_oplog_index: OplogIndex::INITIAL,
             binding_slot: 0,
@@ -5333,7 +5333,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
-                idempotency_key: invocation_id.clone(),
+                idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("request".to_string())],
@@ -5657,7 +5657,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
             AttributeValue::String("invoke-exported-function".to_string()),
         );
         executing_context.push(invocation_span.clone());
-        let idempotency_key = invocation.idempotency_key().unwrap().clone();
+        let idempotency_key = *invocation.idempotency_key().unwrap();
         let start_index = oplog
             .add_agent_invocation_started_with_index(
                 invocation,
@@ -5824,7 +5824,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let pending = oplog
             .add(OplogEntry::pending_agent_invocation(
                 None,
-                key.clone(),
+                key,
                 payload,
                 pending_context.trace_id,
                 pending_context.trace_states,
@@ -5852,7 +5852,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let pin = invocation_wallet_pin();
         let started = oplog
             .add_agent_invocation_started_from_pending(
-                key.clone(),
+                key,
                 payload.clone(),
                 executing_context.clone(),
                 pin.clone(),
@@ -5974,7 +5974,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry2 = oplog
         .add_agent_invocation_started(
             AgentInvocation::AgentMethod {
-                idempotency_key: invocation_id.clone(),
+                idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::Binary(BinaryValuePayload {

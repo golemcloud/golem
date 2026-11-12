@@ -325,7 +325,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: *key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             })),
@@ -346,7 +346,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at + 1),
         OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: *key,
             result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
             method_name: None,
             consumed_fuel: 0,
@@ -379,7 +379,7 @@ fn invocation_status(
 ) -> AgentStatusRecord {
     let mut invocation_results = InvocationResultMembership::new(capacity, 128, 3);
     for (key, index) in results {
-        invocation_results.insert((*key).clone(), result_at(*index));
+        invocation_results.insert(*(*key), result_at(*index));
     }
     invocation_results.set_revert_generation(revert_generation);
     AgentStatusRecord {
@@ -1191,8 +1191,7 @@ fn cold_reconcile_deletes_stale_transfer_fields() {
 async fn invocation_result_index_resumes_across_calls_and_chunks() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(2, 2, &[], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1253,8 +1252,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
 async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(3, 2, &[(&first, 3)], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1363,13 +1361,8 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
     let fourth = idempotency_key("fourth");
     let fifth = idempotency_key("fifth");
     let missing = idempotency_key("missing");
-    let (service, _oplog, owned_agent_id) = index_test_service(invocation_entries(&[
-        first.clone(),
-        second.clone(),
-        third.clone(),
-        fourth.clone(),
-        fifth.clone(),
-    ]));
+    let (service, _oplog, owned_agent_id) =
+        index_test_service(invocation_entries(&[first, second, third, fourth, fifth]));
     let indexed = invocation_status(
         9,
         2,
@@ -1422,7 +1415,7 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
 async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result() {
     let repeated = idempotency_key("repeated");
     let (service, _oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[repeated.clone(), repeated.clone()]));
+        index_test_service(invocation_entries(&[repeated, repeated]));
     let partial = invocation_status(3, 0, &[(&repeated, 3)], 0, DeletedRegions::new());
     service
         .catch_up_invocation_result_index(

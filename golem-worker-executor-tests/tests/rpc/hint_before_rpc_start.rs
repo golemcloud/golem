@@ -365,7 +365,7 @@ async fn repair_after_stdout_hint_executes_target_once(
                 PublicAgentInvocation::AgentMethodInvocation(method)
                     if method.method_name == "inc_by" =>
                 {
-                    Some((entry.oplog_index, method.invocation_id.clone()))
+                    Some((entry.oplog_index, method.invocation_id))
                 }
                 _ => None,
             },

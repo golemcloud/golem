@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut map = self.hydrated_invocation_results.write().await;
         map.release_projected_completions(&status, self.last_known_status_detached());
         map.insert_unprojected_completion(
-            key.clone(),
+            *key,
             cached,
             status.invocation_results.revert_generation(),
             output.oplog_index.unwrap_or(status.oplog_idx),
@@ -201,7 +201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) {
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
-            idempotency_key: key.clone(),
+            idempotency_key: *key,
             result: Box::new(result),
         });
     }
@@ -225,7 +225,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // poller sees the same `Pending` state that reconstructing this status from the oplog does.
         for key in &keys_to_fail {
             map.insert(
-                key.clone(),
+                *key,
                 InvocationResult::Cached {
                     result: Err(FailedInvocationResult {
                         trap_type: trap_type.clone(),
@@ -466,7 +466,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return LookupResult::Complete(Err(error.into()));
             }
             self.hydrated_invocation_results.write().await.insert(
-                key.clone(),
+                *key,
                 result.clone(),
                 status.invocation_results.revert_generation(),
                 result_oplog_idx,
@@ -768,7 +768,7 @@ impl HydratedInvocationResultCache {
         oplog_idx: OplogIndex,
     ) {
         self.unprojected_completions.insert(
-            key.clone(),
+            key,
             UnprojectedCompletion {
                 revert_generation,
                 oplog_idx,
@@ -818,7 +818,7 @@ impl HydratedInvocationResultCache {
         oplog_idx: OplogIndex,
     ) {
         if !self.values.contains_key(&key) {
-            self.insertion_order.push_back(key.clone());
+            self.insertion_order.push_back(key);
         }
         self.values.insert(
             key,

@@ -644,7 +644,7 @@ async fn append_target_initialization(
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             public_session_id: candidate.export.session.clone(),
             route_scope: candidate.export.route_scope.clone(),
-            session_key: candidate.target_session_key.clone(),
+            session_key: candidate.target_session_key,
             source_invocation: candidate.source_invocation.clone(),
             request_hash: request_hash.to_vec(),
             expiry_policy: candidate.expiry_policy,
@@ -687,7 +687,7 @@ async fn schedule_expiry<Ctx: WorkerCtx>(
                 owned_agent_id: target.clone(),
                 target_agent_fingerprint: fingerprint,
                 public_session_id: candidate.export.session.clone(),
-                session_key: candidate.target_session_key.clone(),
+                session_key: candidate.target_session_key,
                 expected_deadline_millis: deadline_millis,
             },
         )
@@ -883,7 +883,7 @@ pub(crate) fn response(
             .unwrap_or_default(),
         sub_offset: export.sub_offset,
         oplog_index: cut.as_u64(),
-        invocation_key: Some(invocation_key.clone().into()),
+        invocation_key: Some((*invocation_key).into()),
     }
 }
 

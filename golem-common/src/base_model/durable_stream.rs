@@ -505,7 +505,7 @@ impl StreamRegistrationInvocation {
                 callee_environment_id: owner_environment_id,
                 callee: owner.clone(),
                 callee_fingerprint: owner_fingerprint,
-                idempotency_key: idempotency_key.clone(),
+                idempotency_key: *idempotency_key,
             },
             Self::Remote(invocation) => invocation.clone(),
         }
@@ -2230,7 +2230,7 @@ mod tests {
         };
         let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             public_session_id: session_key.idempotency_key.to_string(),
             route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
@@ -2297,7 +2297,7 @@ mod tests {
         let argument = handle(6);
         let mut prepared = StreamSessionPreparedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             public_session_id: session_key.idempotency_key.to_string(),
             route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,

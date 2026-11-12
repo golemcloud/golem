@@ -329,7 +329,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
                 "route",
             ),
             public_session_id: "public-stream".to_string(),
-            session_key: session_key.idempotency_key().clone(),
+            session_key: *session_key.idempotency_key(),
             expected_deadline_millis: 100,
             expired_at_millis: 100,
         });
@@ -342,7 +342,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
                 "route",
             ),
             public_session_id: "public-stream".to_string(),
-            session_key: session_key.idempotency_key().clone(),
+            session_key: *session_key.idempotency_key(),
             expected_deadline_millis: 100,
             refreshed_at_millis: 50,
             deadline_millis: 200,

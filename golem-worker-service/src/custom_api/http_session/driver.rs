@@ -695,7 +695,7 @@ fn make_resume(
         .collect::<Vec<_>>();
     cursors.sort_by_key(|cursor| uuid_pair(cursor.stream_id.as_ref().unwrap()));
     ResumeAttach {
-        idempotency_key: identity.accepted.idempotency_key.clone(),
+        idempotency_key: identity.accepted.idempotency_key,
         agent_id: identity.accepted.agent_id.clone(),
         environment_id: identity.accepted.environment_id,
         attachment_id: identity.accepted.attachment_id,

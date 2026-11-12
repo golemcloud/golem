@@ -132,7 +132,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request: DurableStreamingInvocationRequest,
         acceptance_match: DurableStreamingAcceptanceMatch,
         producer: Arc<DurableStreamStore>,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         route_scope: Option<String>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
@@ -227,7 +227,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let guard = producer.session_lock(&session_key).lock_owned().await;
             self.schedule_stream_session_expiry(
                 request.public_session_id.clone(),
-                session_key.idempotency_key.clone(),
+                session_key.idempotency_key,
                 request.expiry_deadline_millis,
             )
             .await?;
@@ -354,7 +354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .collect();
             let prepared = StreamSessionPreparedRecord {
                 format_version: 1,
-                session_key: session_key.idempotency_key.clone(),
+                session_key: session_key.idempotency_key,
                 public_session_id: request.public_session_id.clone(),
                 route_scope: route_scope.clone(),
                 expiry_policy: request.expiry_policy,
@@ -368,7 +368,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let streams = StreamSession::new(
                 producer.clone(),
                 self.oplog.clone(),
-                StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+                StreamRegistrationInvocation::Local(session_key.idempotency_key),
                 std::iter::empty(),
             );
             let topologies = foreign_mappings
@@ -422,7 +422,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             let attempt = request.attempt.clone();
-            let local_session_key = session_key.idempotency_key.clone();
+            let local_session_key = session_key.idempotency_key;
             let public_session_id = request.public_session_id.clone();
             let expiry_policy = request.expiry_policy;
             let expiry_deadline_millis = request.expiry_deadline_millis;
@@ -505,7 +505,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+            StreamRegistrationInvocation::Local(session_key.idempotency_key),
             prepared.stream_mappings.iter().cloned(),
         )
         .await
@@ -638,7 +638,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .map_err(|refusal| self.refused_by(refusal))?;
         }
-        if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
+        if !retained_acceptance && let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);
@@ -792,7 +792,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let base_streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            StreamRegistrationInvocation::Local(attempt.session_key.idempotency_key.clone()),
+            StreamRegistrationInvocation::Local(attempt.session_key.idempotency_key),
             mappings.iter().cloned(),
         )
         .await
@@ -914,7 +914,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         current_streams
             .commit_resume_attempt(StreamSessionResumeAttemptRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: attempt.session_key.idempotency_key.clone(),
+                session_key: attempt.session_key.idempotency_key,
                 attempt: attempt.clone(),
                 accepted_epoch,
             })
