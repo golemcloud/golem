@@ -26,8 +26,9 @@ mod tests {
     use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
-        CachePolicy, DurableStreamSlotSource, Snapshotting, SnapshottingConfig,
+        CachePolicy, Snapshotting, SnapshottingConfig,
     };
+    use golem_rust::golem_schema::http::wit::wire::{DurableStreamSlotSource, HttpRouteMode};
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, FromWire, IntoSchema,
@@ -1485,6 +1486,7 @@ mod tests {
 
         #[endpoint(
             get = "/greet?l={location}&n={name}",
+            mode = "sse",
             durable_streams(
                 input("location", name = "messages"),
                 output(
@@ -1492,9 +1494,6 @@ mod tests {
                     name = "results",
                     content_type = "application/vnd.golem.events"
                 ),
-                allow_external_writes = true,
-                allow_stream_delete = false,
-                allow_invocation_delete = false,
                 max_concurrent_readers_per_stream = 8,
                 max_append_requests_per_second_per_stream = 25,
             )
@@ -1593,9 +1592,7 @@ mod tests {
             options.slots[1].content_type.as_deref(),
             Some("application/vnd.golem.events")
         );
-        assert_eq!(options.allow_external_writes, Some(true));
-        assert_eq!(options.allow_stream_delete, Some(false));
-        assert_eq!(options.allow_invocation_delete, Some(false));
+        assert_eq!(greet1.http_endpoint[0].mode, Some(HttpRouteMode::Sse));
         let load = options.load.as_ref().unwrap();
         assert_eq!(load.max_concurrent_readers_per_stream, Some(8));
         assert_eq!(load.max_append_requests_per_second_per_stream, Some(25));
@@ -1609,7 +1606,7 @@ mod tests {
             greet2
                 .http_endpoint
                 .iter()
-                .all(|endpoint| endpoint.durable_streams.is_none())
+                .all(|endpoint| endpoint.durable_streams.is_none() && endpoint.mode.is_none())
         );
     }
 

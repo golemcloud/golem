@@ -1488,6 +1488,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),

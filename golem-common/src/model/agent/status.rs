@@ -580,6 +580,10 @@ pub struct AgentStatusRecord {
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
+    /// Set by the first `Restart` entry. An ephemeral agent appends and commits `Restart` before
+    /// any of its guest code runs, so a set bit means the agent may have executed and must never
+    /// be started again.
+    pub ephemeral_execution_begun: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
@@ -648,6 +652,7 @@ impl Default for AgentStatusRecord {
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
+            ephemeral_execution_begun: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
@@ -1279,8 +1284,11 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
-    pub fn has_pending_work(&self) -> bool {
-        !self.pending_invocations.is_empty() || !self.pending_updates.is_empty()
+    pub fn has_pending_work(&self, now: Timestamp) -> bool {
+        self.pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(now))
+            || !self.pending_updates.is_empty()
     }
 }
 

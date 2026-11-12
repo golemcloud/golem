@@ -106,6 +106,10 @@ pub enum DeploymentWriteError {
     #[error("Duplicate remote tool name '{0}'")]
     DuplicateRemoteToolName(golem_common::model::tool::ToolName),
     #[error(transparent)]
+    ToolPublication(#[from] ToolReleaseError),
+    #[error(transparent)]
+    ToolMiddlewarePublication(#[from] ToolMiddlewareReleaseError),
+    #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -130,6 +134,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
             Self::AmbientToolConflict(_) => self.to_string(),
             Self::DuplicateRemoteToolName(_) => self.to_string(),
+            Self::ToolPublication(inner) => inner.to_safe_string(),
+            Self::ToolMiddlewarePublication(inner) => inner.to_safe_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -148,9 +154,7 @@ error_forwarding!(
     ResourceDefinitionError,
     RetryPolicyError,
     EnvironmentToolGrantError,
-    ToolReleaseError,
-    EnvironmentToolMiddlewareGrantError,
-    ToolMiddlewareReleaseError
+    EnvironmentToolMiddlewareGrantError
 );
 
 pub struct DeploymentWriteService {
@@ -170,6 +174,7 @@ pub struct DeploymentWriteService {
     tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
     mcp_import_resolver: Arc<McpImportResolver>,
+    stream_limits: crate::config::DurableStreamRouteLimits,
 }
 
 impl DeploymentWriteService {
@@ -190,6 +195,7 @@ impl DeploymentWriteService {
         tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
         mcp_import_resolver: Arc<McpImportResolver>,
+        stream_limits: crate::config::DurableStreamRouteLimits,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -208,6 +214,7 @@ impl DeploymentWriteService {
             tool_middleware_release_service,
             native_tool_catalog,
             mcp_import_resolver,
+            stream_limits,
         }
     }
 
@@ -465,6 +472,7 @@ impl DeploymentWriteService {
             &security_schemes_map,
             &mut errors,
             &mut warnings,
+            &self.stream_limits,
         );
         for (index, import, _) in &mcp_imports {
             if let Some(security_scheme) = &import.security_scheme

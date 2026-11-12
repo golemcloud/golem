@@ -1689,6 +1689,7 @@ mod tests {
     fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
@@ -1858,6 +1859,7 @@ mod tests {
     fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
@@ -1929,6 +1931,7 @@ mod tests {
 
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(

@@ -29,6 +29,7 @@ import "golem/worker/worker_id.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/worker_metadata.proto";
+import "golem/worker/scheduled_invocation_cancellation.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerService {
@@ -205,6 +206,7 @@ message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
   golem.worker.IdempotencyKey idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
 }
 
 message CancelInvocationResponse {

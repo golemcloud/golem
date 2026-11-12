@@ -18,20 +18,15 @@ use crate::services::oplog::{ArchiveWait, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::{ExactExistingDelivery, WorkerActivator};
 use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
-use crate::worker::{CreateIntent, INACTIVE_EPHEMERAL_AGENT_ERROR, Worker};
+use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
 use golem_common::model::RetryConfig;
-use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::Principal;
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocation, IdempotencyKey, OwnedAgentId, ScheduleId, ScheduledAction,
-    ShardId,
+    AgentFingerprint, IdempotencyKey, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
 };
 use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
@@ -92,31 +87,12 @@ pub trait SchedulerWorkerAccess {
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError>;
 
-    // enqueue an invocation to the worker
-    async fn enqueue_invocation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
-        component_revision: Option<ComponentRevision>,
-        worker_parent: Option<golem_common::model::AgentId>,
-        worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError>;
-
     async fn enqueue_exact_existing(
         &self,
         owned_agent_id: &OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError>;
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
@@ -169,38 +145,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             .await
     }
 
-    async fn enqueue_invocation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
-        component_revision: Option<ComponentRevision>,
-        worker_parent: Option<golem_common::model::AgentId>,
-        worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        let worker = self
-            .get_or_create_suspended(
-                owned_agent_id,
-                worker_env,
-                worker_agent_config,
-                component_revision,
-                worker_parent,
-                &InvocationContextStack::fresh(),
-                worker_creation_principal,
-                CreateIntent::Invocation {
-                    idempotency_key: invocation.idempotency_key().cloned(),
-                },
-            )
-            .await?;
-
-        worker.clone().invoke(invocation).await?;
-
-        Worker::start_if_needed(worker).await?;
-
-        Ok(())
-    }
-
     async fn enqueue_exact_existing(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -209,17 +153,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
     ) -> Result<bool, WorkerExecutorError> {
         self.deref()
             .enqueue_exact_existing(owned_agent_id, target_worker_fingerprint, delivery)
-            .await
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        self.deref()
-            .enqueue_ephemeral_external_tool(owned_agent_id, component_revision, invocation)
             .await
     }
 }
@@ -617,10 +550,9 @@ impl SchedulerServiceDefault {
                 }
                 true
             }
-            ScheduledAction::Invoke {
-                account_id: _,
+            ScheduledAction::WakeInvocation {
                 owned_agent_id,
-                invocation,
+                idempotency_key,
                 target_worker_fingerprint,
             } => {
                 match self
@@ -628,7 +560,7 @@ impl SchedulerServiceDefault {
                     .enqueue_exact_existing(
                         &owned_agent_id,
                         target_worker_fingerprint,
-                        ExactExistingDelivery::Invoke(invocation),
+                        ExactExistingDelivery::WakeInvocation(idempotency_key),
                     )
                     .await
                 {
@@ -640,64 +572,21 @@ impl SchedulerServiceDefault {
                         );
                         true
                     }
-                    Err(error) => {
-                        error!(
-                            agent_id = %owned_agent_id,
-                            error = %error,
-                            "Failed to enqueue scheduled invocation"
-                        );
-                        false
-                    }
-                }
-            }
-            ScheduledAction::InvokeEphemeral {
-                account_id: _,
-                owned_agent_id,
-                invocation,
-                component_revision,
-                env: worker_env,
-                config: worker_agent_config,
-                parent: worker_parent,
-                creation_principal: worker_creation_principal,
-            } => {
-                let result = if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
-                    self.worker_access
-                        .enqueue_ephemeral_external_tool(
-                            &owned_agent_id,
-                            *invocation,
-                            component_revision,
-                        )
-                        .await
-                } else {
-                    self.worker_access
-                        .enqueue_invocation(
-                            &owned_agent_id,
-                            *invocation,
-                            Some(worker_env),
-                            worker_agent_config,
-                            Some(component_revision),
-                            worker_parent,
-                            *worker_creation_principal,
-                        )
-                        .await
-                };
-
-                match result {
-                    Ok(()) => true,
+                    // An ephemeral agent that began executing never starts again.
                     Err(WorkerExecutorError::InvalidRequest { details })
                         if details == INACTIVE_EPHEMERAL_AGENT_ERROR =>
                     {
                         info!(
-                            agent_id = owned_agent_id.to_string(),
-                            error = details,
-                            "Dropping terminally failed scheduled ephemeral invocation"
+                            agent_id = %owned_agent_id,
+                            "Dropping scheduled invocation of an inactive ephemeral agent"
                         );
                         true
                     }
                     Err(error) => {
                         error!(
-                            agent_id = owned_agent_id.to_string(),
-                            "Failed to invoke worker with scheduled ephemeral invocation: {error}"
+                            agent_id = %owned_agent_id,
+                            error = %error,
+                            "Failed to enqueue scheduled invocation"
                         );
                         false
                     }

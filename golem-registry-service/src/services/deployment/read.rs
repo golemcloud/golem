@@ -36,7 +36,7 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
-use golem_common::model::tool_middleware::RegisteredToolMiddleware;
+use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareName};
 use golem_common::schema::AgentTypeKind;
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -56,6 +56,8 @@ pub enum DeploymentError {
     AgentTypeNotFound(String),
     #[error("Tool {0} not found")]
     ToolNotFound(ToolName),
+    #[error("Tool middleware {0} not found")]
+    ToolMiddlewareNotFound(ToolMiddlewareName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -69,6 +71,7 @@ impl SafeDisplay for DeploymentError {
             Self::DeploymentNotFound(_) => self.to_string(),
             Self::AgentTypeNotFound(_) => self.to_string(),
             Self::ToolNotFound(_) => self.to_string(),
+            Self::ToolMiddlewareNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

@@ -183,6 +183,7 @@ before (value) {}
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok(M::PendingAgentInvocation {
                         timestamp: timestamp_from_datetime(params.timestamp),
+                        not_before: params.not_before.map(timestamp_from_datetime),
                         idempotency_key: golem_common::model::IdempotencyKey::new(
                             params.idempotency_key,
                         ),
@@ -648,6 +649,7 @@ before (value) {}
     Exited { override (M::Exited { timestamp }) => Ok(Self::Exited(timestamp.into())) }
     PendingAgentInvocation { record () => RawPendingAgentInvocationParameters {
         timestamp: timestamp.into(),
+        not_before: not_before.map(Into::into),
         idempotency_key: idempotency_key.value,
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),

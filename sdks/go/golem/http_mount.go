@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -119,6 +120,7 @@ type Endpoint struct {
 
 	streams      *StreamRoute // nil = Durable Streams defaults
 	streamsCount int          // how many times DurableStreams was applied (>1 is a misuse)
+	mode         RouteMode
 }
 
 // wireBind maps a wire name (a header or query-parameter name) to the input
@@ -634,6 +636,20 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		auth = witTypes.Some(common.AuthDetails{Required: *ep.auth})
 	}
 
+	mode := witTypes.None[coreHTTP.HttpRouteMode]()
+	switch ep.mode {
+	case "":
+	case RouteDurableStreams:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeDurableStreams)
+	case RoutePlain:
+		mode = witTypes.Some(coreHTTP.HttpRouteModePlain)
+	case RouteSSE:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeSse)
+	case RouteWebSocket:
+		mode = witTypes.Some(coreHTTP.HttpRouteModeWebSocket)
+	default:
+		errs = append(errs, fmt.Sprintf("unknown HTTP route mode %q", ep.mode))
+	}
 	det := common.HttpEndpointDetails{
 		HttpMethod:  witMethod(ep.method),
 		PathSuffix:  witSegments(pp.segs),
@@ -643,6 +659,7 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		CorsOptions: common.CorsOptions{AllowedPatterns: ep.cors},
 
 		DurableStreams: streams,
+		Mode:           mode,
 	}
 	return det, errs
 }

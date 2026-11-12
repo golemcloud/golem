@@ -586,7 +586,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
         let lifecycle = self.instance.lock().await;
-        if !target.matches_running_owner(&lifecycle, &self.monthly_window) {
+        if !target.matches_running_owner(lifecycle.state(), &self.monthly_window) {
             return;
         }
         let active = target.active.lock().unwrap();

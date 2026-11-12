@@ -1375,7 +1375,6 @@ fn external_streaming_generation_compiles_recursive_streams_and_config() {
     );
 }
 
-// Compiler-backed generator checks live in the integration target.
 #[test]
 fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -1437,17 +1436,17 @@ fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     assert!(
         lib_rs.contains("impl crate::__golem_bridge_runtime::agentic::AllowedMimeTypes"),
-        "the relocated prelude test must still exercise the generated MIME restriction API"
+        "missing generated MIME restriction impl:\n{lib_rs}"
     );
     assert!(
         lib_rs.contains("UnstructuredBinary<String>"),
-        "the relocated prelude test no longer exercises unrestricted binary values"
+        "missing unrestricted binary parameter:\n{lib_rs}"
     );
     assert!(
         lib_rs.contains("::__golem_bridge_runtime::agentic::UnstructuredText as")
             && lib_rs.contains("golem_rust::schema::wit::direct::IntoWire")
             && lib_rs.contains("::write_wire(__source, __writer)"),
-        "the relocated prelude test no longer exercises unrestricted text encoding:\n{lib_rs}"
+        "missing unrestricted text wire encoding:\n{lib_rs}"
     );
 
     cargo_check(&target_path);
@@ -1774,7 +1773,7 @@ fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
 }
 
 #[test]
-fn guest_generation_compiles_when_method_name_matches_removed_agent_id_field() {
+fn guest_generation_compiles_when_method_name_matches_agent_id() {
     let dir = tempfile::TempDir::new().unwrap();
     let target_path =
         Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -2421,7 +2420,7 @@ fn guest_agent_and_tool_bridges_use_the_selected_sdk_source() {
 }
 
 #[test]
-fn rust_tool_generation_compiles_unchanged() {
+fn grep_tool_generation_decodes_error_cases_and_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");

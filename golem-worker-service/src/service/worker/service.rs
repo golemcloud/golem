@@ -52,7 +52,7 @@ use golem_common::model::agent::{
     ephemeral_invocation_phantom_id,
 };
 use golem_common::model::agent::{
-    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -77,7 +77,9 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
-use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, ScanCursor,
+};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::public_json::{
@@ -1681,10 +1683,43 @@ impl WorkerService {
                 idempotency_key,
                 component.environment_id,
                 auth_ctx,
+                None,
             )
             .await?;
 
         Ok(canceled)
+    }
+
+    /// Internal token control uses the recorded scheduling principal, not operator permission.
+    pub async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: &IdempotencyKey,
+        receipt: ScheduleId,
+        owner: &AgentId,
+        auth: AuthCtx,
+    ) -> WorkerResult<bool> {
+        if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(WorkerExecutorError::invalid_request(
+                "schedule cancellation requires an authenticated internal caller",
+            )
+            .into());
+        }
+        self.worker_client
+            .cancel_invocation(
+                &target.agent_id(),
+                key,
+                target.environment_id,
+                auth,
+                Some(
+                    golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
+                        owner_agent_id: Some(owner.clone().into()),
+                        schedule_id: Some(receipt.id.into()),
+                        target_environment_id: Some(target.environment_id.into()),
+                    },
+                ),
+            )
+            .await
     }
 
     pub async fn process_oplog_entries(
@@ -4759,6 +4794,7 @@ mod tests {
             _: &IdempotencyKey,
             _: EnvironmentId,
             _: AuthCtx,
+            _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
         ) -> WorkerResult<bool> {
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
@@ -5190,6 +5226,7 @@ mod tests {
                     cors_options: golem_common::model::agent::CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    mode: None,
                     durable_streams: None,
                 }],
                 read_only: None,
@@ -6504,7 +6541,7 @@ mod tests {
                 fields: vec![SchemaValue::String("new schema".into())],
             };
             let behaviour = CallAgentBehaviour {
-                route_mode: AgentRouteMode::Rest,
+                route_mode: AgentRouteMode::Plain,
                 base_path_variables: 0,
                 durable_streams: None,
                 component_id: a.id,

@@ -9790,6 +9790,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        mode: None,
         durable_streams: None,
     };
     let router = AgentTypeSchema {

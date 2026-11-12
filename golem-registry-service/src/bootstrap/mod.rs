@@ -505,6 +505,7 @@ impl Services {
             tool_middleware_release_service.clone(),
             native_tool_catalog.clone(),
             mcp_import_resolver.clone(),
+            config.durable_stream_routes.clone(),
         ));
 
         let deployed_routes_service =

@@ -21,6 +21,10 @@ use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
 use crate::schema::AgentTypeSchema;
+pub use golem_schema::http::{
+    DurableStreamInputSlotSource, DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions,
+    DurableStreamRouteOptions, DurableStreamSlotOptions, DurableStreamSlotSource, HttpRouteMode,
+};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -674,86 +678,8 @@ pub struct HttpEndpointDetails {
     pub query_vars: Vec<QueryVariable>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub cors_options: CorsOptions,
+    pub mode: Option<HttpRouteMode>,
     pub durable_streams: Option<DurableStreamRouteOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamRouteOptions {
-    pub slots: Vec<DurableStreamSlotOptions>,
-    pub allow_external_writes: Option<bool>,
-    pub allow_stream_delete: Option<bool>,
-    pub allow_invocation_delete: Option<bool>,
-    pub load: Option<DurableStreamRouteLoadOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamSlotOptions {
-    pub source: DurableStreamSlotSource,
-    pub name: Option<String>,
-    pub content_type: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(
-    feature = "full",
-    oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")
-)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum DurableStreamSlotSource {
-    Input(DurableStreamInputSlotSource),
-    Output(DurableStreamOutputSlotSource),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct DurableStreamInputSlotSource {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct DurableStreamOutputSlotSource {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamRouteLoadOptions {
-    pub max_concurrent_readers_per_stream: Option<u32>,
-    pub max_append_requests_per_second_per_stream: Option<u32>,
 }
 
 #[derive(
@@ -1308,6 +1234,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
+            mode: None,
             durable_streams: None,
         };
 
@@ -1316,9 +1243,6 @@ mod tests {
             HttpEndpointDetails {
                 durable_streams: Some(DurableStreamRouteOptions {
                     slots: Vec::new(),
-                    allow_external_writes: Some(false),
-                    allow_stream_delete: None,
-                    allow_invocation_delete: Some(true),
                     load: Some(DurableStreamRouteLoadOptions {
                         max_concurrent_readers_per_stream: None,
                         max_append_requests_per_second_per_stream: None,
@@ -1346,9 +1270,6 @@ mod tests {
                             content_type: Some("application/octet-stream".to_string()),
                         },
                     ],
-                    allow_external_writes: None,
-                    allow_stream_delete: Some(false),
-                    allow_invocation_delete: None,
                     load: Some(DurableStreamRouteLoadOptions {
                         max_concurrent_readers_per_stream: Some(8),
                         max_append_requests_per_second_per_stream: Some(25),

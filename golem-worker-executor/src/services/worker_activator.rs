@@ -32,7 +32,7 @@ use tracing::warn;
 
 /// Work delivered only to the already existing scheduling incarnation.
 pub enum ExactExistingDelivery {
-    Invoke(Box<AgentInvocation>),
+    WakeInvocation(IdempotencyKey),
     Resume,
     CompletePromise(PromiseId),
 }
@@ -109,13 +109,6 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         expected_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError>;
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        component_revision: ComponentRevision,
-        invocation: AgentInvocation,
-    ) -> Result<(), WorkerExecutorError>;
 
     async fn enqueue_oplog_processor(
         &self,
@@ -343,26 +336,6 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
             })?;
         activator
             .enqueue_exact_existing(owned_agent_id, expected_fingerprint, delivery)
-            .await
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        component_revision: ComponentRevision,
-        invocation: AgentInvocation,
-    ) -> Result<(), WorkerExecutorError> {
-        let activator = self
-            .worker_activator
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|w| w.upgrade())
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking instance")
-            })?;
-        activator
-            .enqueue_ephemeral_external_tool(owned_agent_id, component_revision, invocation)
             .await
     }
 
@@ -597,20 +570,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         expected_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        let principal = match &delivery {
-            ExactExistingDelivery::Invoke(invocation) => invocation
-                .principal()
-                .cloned()
-                .unwrap_or_else(Principal::anonymous),
-            _ => Principal::anonymous(),
-        };
         let worker = match self
             .all
             .active_agents()
             .get_existing_with_fingerprint(
                 &self.all,
                 owned_agent_id,
-                principal,
+                Principal::anonymous(),
                 Some(expected_fingerprint),
             )
             .await
@@ -623,8 +589,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             return Ok(false);
         }
         match delivery {
-            ExactExistingDelivery::Invoke(invocation) => {
-                worker.clone().invoke(*invocation).await?;
+            ExactExistingDelivery::WakeInvocation(key) => {
+                let status = worker.get_last_known_status().await;
+                let now = golem_common::model::Timestamp::now_utc();
+                let pending = status.pending_invocations.iter().find(|pending| {
+                    pending.has_idempotency_key(&key) && pending.not_before.is_some()
+                });
+                let Some(pending) = pending else {
+                    return Ok(false);
+                };
+                if !pending.is_due(now) {
+                    return Err(WorkerExecutorError::runtime(
+                        "scheduled invocation wake arrived before its committed deadline",
+                    ));
+                }
+                // The recovery index follows status changes, and this entry was not yet due at
+                // the last one. The wake is acknowledged once the start begins, so the index must
+                // hold the target first: otherwise a crash before the invocation starts loses it.
+                self.all
+                    .worker_service()
+                    .set_assignment_tracking(owned_agent_id, expected_fingerprint, &status)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
             }
             ExactExistingDelivery::Resume => {}
             ExactExistingDelivery::CompletePromise(promise_id) => {
@@ -647,45 +633,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         }
         Worker::start_if_needed(worker).await?;
         Ok(true)
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        component_revision: ComponentRevision,
-        invocation: AgentInvocation,
-    ) -> Result<(), WorkerExecutorError> {
-        let idempotency_key: IdempotencyKey =
-            invocation.idempotency_key().cloned().ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "external tool invocation has no idempotency key",
-                )
-            })?;
-        let context = invocation.invocation_context();
-        let principal = invocation.principal().cloned().ok_or_else(|| {
-            WorkerExecutorError::invalid_request("external tool invocation has no principal")
-        })?;
-        let worker = self
-            .all
-            .active_agents()
-            .get_or_add_ephemeral_external_tool_pinned(
-                &self.all,
-                owned_agent_id.agent_id.component_id,
-                owned_agent_id.environment_id,
-                &idempotency_key,
-                component_revision,
-                &context,
-                principal,
-            )
-            .await?;
-        if worker.owned_agent_id() != owned_agent_id {
-            return Err(WorkerExecutorError::invalid_request(
-                "scheduled external tool owner does not match its reserved identity",
-            ));
-        }
-        worker.clone().invoke(invocation).await?;
-        Worker::start_if_needed(worker).await?;
-        Ok(())
     }
 
     async fn enqueue_oplog_processor(

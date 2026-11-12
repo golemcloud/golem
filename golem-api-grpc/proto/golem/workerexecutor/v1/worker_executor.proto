@@ -23,6 +23,7 @@ import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/worker/scheduled_invocation_cancellation.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/update_mode.proto";
@@ -509,6 +510,7 @@ message CancelInvocationRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
 }
 
 message CancelInvocationResponse {
