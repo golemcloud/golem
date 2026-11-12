@@ -427,10 +427,10 @@ pub const AGENT_ID_READ_GRANT: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT
 
 /// Returns whether the initial permissions let their holder read its own [`AGENT_ID_ENV_VAR`].
 ///
-/// The permissions are the only card in the wallet of a representative agent of the holder: an
-/// agent of the type with no constructor arguments, or an agent named after the component for the
-/// component's tool owner. The card algebra then authorizes the read in the same way as when the
-/// executor filters the environment of the agent.
+/// The check evaluates the initial card alone, for a representative agent of the type (an agent
+/// with no constructor arguments), with the same card algebra the executor uses to filter the
+/// environment of the agent. At runtime the wallet of the agent can also hold other cards, so the
+/// result is an approximation: it can report no access when another card grants the read.
 pub fn initial_permission_allows_agent_id_read(
     permissions: &AgentTypeInitialPermissions,
     context: &RecipientMonomorphizationContext,
@@ -730,8 +730,7 @@ mod tests {
     use super::{
         AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard,
         agent_type_reads_agent_id_from_env, app_raw, initial_permission_allows_agent_id_read,
-        resolve_component_initial_permission, resolve_initial_permission,
-        show_exported_agent_constructors,
+        resolve_initial_permission, show_exported_agent_constructors,
     };
     use golem_common::model::Empty;
     use golem_common::model::account::AccountEmail;
@@ -1156,36 +1155,6 @@ mod tests {
 
         assert!(initial_permission_allows_agent_id_read(
             &permissions,
-            &context
-        ));
-    }
-
-    #[test]
-    fn component_card_is_checked_for_the_component_tool_owner() {
-        let mut context = test_context();
-        context.owner = RecipientOwnerContext::ComponentExternalToolOwner;
-        let without_grant = resolve_component_initial_permission(
-            Some(parsed_card(&[FILESYSTEM_READ], &[], &[], &[])),
-            &[],
-            &context,
-        );
-        let with_grant = resolve_component_initial_permission(
-            Some(parsed_card(
-                &[FILESYSTEM_READ, AGENT_ID_READ_GRANT],
-                &[],
-                &[],
-                &[],
-            )),
-            &[],
-            &context,
-        );
-
-        assert!(!initial_permission_allows_agent_id_read(
-            &without_grant,
-            &context
-        ));
-        assert!(initial_permission_allows_agent_id_read(
-            &with_grant,
             &context
         ));
     }

@@ -40,7 +40,7 @@ use crate::model::component::{
     SelectedComponents, ToolManifestDeploymentConfig, ToolManifestProvisionConfig,
     agent_type_reads_agent_id_from_env, component_initial_permission_recipient_context,
     initial_permission_allows_agent_id_read, initial_permission_from_manifest_card,
-    initial_permission_recipient_context, resolve_component_initial_permission,
+    initial_permission_recipient_context,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -3692,19 +3692,18 @@ fn collect_unused_agent_config_paths(
     unused
 }
 
-/// Warns about each explicit initial card that does not let the agent read
-/// [`AGENT_ID_ENV_VAR`]. The card replaces the default card, and the SDKs that read the
-/// variable make the agent fail without it. A card of a component that has no agent type
-/// reading the variable gets no warning.
+/// Warns about each agent type whose explicit initial card does not let the agent read
+/// [`AGENT_ID_ENV_VAR`]. The card replaces the default card, and the Golem SDKs make the agent
+/// fail without that read.
 fn warn_about_initial_cards_without_agent_id_read(
     environment: &ResolvedEnvironmentIdentity,
     component_name: &ComponentName,
     properties: &ComponentDeployProperties,
 ) {
     let warning = format!(
-        "the initialCard does not allow the agent to read {AGENT_ID_ENV_VAR}. The Golem SDKs read it \
-         (Rust and TypeScript at the first call; Go, MoonBit and Effect at snapshot load), so the \
-         agent fails. Add {AGENT_ID_READ_GRANT} to the card."
+        "the initialCard does not allow the agent to read {AGENT_ID_ENV_VAR}, which the Golem SDKs \
+         need, so the agent fails at its first call or at snapshot load. Add {AGENT_ID_READ_GRANT} \
+         to the card."
     );
 
     for agent_type in &properties.agent_types {
@@ -3729,26 +3728,6 @@ fn warn_about_initial_cards_without_agent_id_read(
                     "{}: {warning}",
                     agent_type.type_name.0.log_color_highlight()
                 ),
-            );
-        }
-    }
-
-    if let Some(initial_card) = &properties.component_initial_card
-        && properties
-            .agent_types
-            .iter()
-            .any(agent_type_reads_agent_id_from_env)
-    {
-        let context = component_initial_permission_recipient_context(environment, component_name);
-        let permissions = resolve_component_initial_permission(
-            Some(initial_card.clone()),
-            &properties.component_files,
-            &context,
-        );
-        if !initial_permission_allows_agent_id_read(&permissions, &context) {
-            log_warn_action(
-                "Component",
-                format!("{}: {warning}", component_name.0.log_color_highlight()),
             );
         }
     }

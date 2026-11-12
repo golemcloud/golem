@@ -5,7 +5,7 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
 
-const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID";
+const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID, which the Golem SDKs need, so the agent fails at its first call or at snapshot load. Add env(?agent) @ ?agent : read : GOLEM_AGENT_ID to the card.";
 const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
 const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
 const AGENT_ID_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
