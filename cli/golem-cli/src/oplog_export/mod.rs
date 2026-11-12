@@ -17,5 +17,6 @@
 //!
 //! The module uses no other item of this crate, so it can move into a shared CLI core crate.
 
+pub mod export;
 pub mod model;
 pub mod obfuscator;

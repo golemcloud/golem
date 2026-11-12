@@ -396,3 +396,116 @@ pub struct SchemaLessRpcValueRef {
     pub index: u64,
     pub path: String,
 }
+
+/// The first document of an export: the keep flags, the root reference and the provenance of
+/// the report. It never holds the query text, an agent ID or a component.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OplogExportHeader {
+    pub obfuscate: bool,
+    pub keep_scalars: bool,
+    pub keep_shape: bool,
+    pub keep_error_text: bool,
+    /// `true` when the export read only the entries that matched a query.
+    pub filtered: bool,
+    pub root: ReportAgentRef,
+    pub cli_version: String,
+    pub generated_at: String,
+}
+
+/// The number of items each coverage list shows; `discovered` counts every item.
+pub const COVERAGE_LIST_CAP: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageList<T> {
+    pub shown: Vec<T>,
+    pub discovered: u64,
+}
+
+impl<T> Default for CoverageList<T> {
+    fn default() -> Self {
+        Self {
+            shown: Vec::new(),
+            discovered: 0,
+        }
+    }
+}
+
+impl<T> CoverageList<T> {
+    pub fn push(&mut self, item: T) {
+        self.discovered += 1;
+        if self.shown.len() < COVERAGE_LIST_CAP {
+            self.shown.push(item);
+        }
+    }
+
+    pub fn merge(&mut self, other: CoverageList<T>) {
+        self.discovered += other.discovered;
+        let room = COVERAGE_LIST_CAP.saturating_sub(self.shown.len());
+        self.shown.extend(other.shown.into_iter().take(room));
+    }
+}
+
+/// An omitted entry that the report shows without its body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OmittedEntryRef {
+    pub index: u64,
+    pub kind: String,
+    pub size: u64,
+    pub reason: OmittedReason,
+}
+
+/// An `End` or `Cancelled` whose `Start` function is unknown, so its value stayed a token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartUnknownRef {
+    pub index: u64,
+    pub start_index: u64,
+}
+
+/// The last document of an export: what the report does not show in full.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OplogExportCoverage {
+    pub incomplete: bool,
+    pub hydration_failures: CoverageList<OmittedEntryRef>,
+    pub start_unknown: CoverageList<StartUnknownRef>,
+    pub schema_less_rpc_values: CoverageList<SchemaLessRpcValueRef>,
+    pub notes: Vec<String>,
+}
+
+/// The note of `--keep-scalars` without `--keep-shape`.
+pub const KEEP_SCALARS_WITHOUT_SHAPE_NOTE: &str = "Numbers inside lists, maps, variants, options, results and unions stay inside the token of their container; add --keep-shape to show them.";
+
+impl OplogExportCoverage {
+    pub fn new(notes: Vec<String>) -> Self {
+        Self {
+            incomplete: false,
+            hydration_failures: CoverageList::default(),
+            start_unknown: CoverageList::default(),
+            schema_less_rpc_values: CoverageList::default(),
+            notes,
+        }
+    }
+
+    /// Adds the lists of `other`, keeping the cap, and the notes that `self` does not hold yet.
+    pub fn merge(&mut self, other: OplogExportCoverage) {
+        self.hydration_failures.merge(other.hydration_failures);
+        self.start_unknown.merge(other.start_unknown);
+        self.schema_less_rpc_values
+            .merge(other.schema_less_rpc_values);
+        for note in other.notes {
+            if !self.notes.contains(&note) {
+                self.notes.push(note);
+            }
+        }
+        self.update_incomplete();
+    }
+
+    pub fn update_incomplete(&mut self) {
+        self.incomplete =
+            self.hydration_failures.discovered > 0 || self.start_unknown.discovered > 0;
+    }
+}
