@@ -2939,7 +2939,7 @@ async fn simulated_crash(
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let _ = executor.simulated_crash(&worker_id).await;
+    executor.simulated_crash(&worker_id).await?;
     let result = fiber.await?;
 
     let mut events = vec![];
@@ -10068,7 +10068,7 @@ async fn a_retry_scheduled_before_a_revoke_does_not_resume_the_agent(
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // The crash schedules the loop's restart; the revoke lands while it is pending.
-    let _ = executor.simulated_crash(&worker_id).await;
+    executor.simulated_crash(&worker_id).await?;
     revoke_shard_zero(&executor).await?;
 
     // Given up, so the pending retry must not bring it back: the agent leaves the cache and stays

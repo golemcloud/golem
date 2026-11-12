@@ -9583,7 +9583,7 @@ async fn callee_recovery_continues_output_after_committed_item(
     .await
     .map_err(|_| anyhow::anyhow!("callee did not commit its first output item"))??;
 
-    let _ = executor.simulated_crash(&target).await;
+    executor.simulated_crash(&target).await?;
     executor.complete_promise(&gate, Vec::new()).await?;
 
     let result = invocation
