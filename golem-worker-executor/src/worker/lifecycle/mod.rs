@@ -1097,7 +1097,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// method on a never-started ephemeral target also owns the constructor reservation.
     async fn withdraw_pending_invocation(
         &self,
-        instance_guard: &tokio::sync::MutexGuard<'_, WorkerInstance>,
+        instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
         idempotency_key: IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
