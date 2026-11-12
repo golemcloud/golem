@@ -3505,7 +3505,9 @@ fn invocation_finished() -> OplogEntry {
 async fn read_invocation_finished(
     rs: &ReplayState,
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-    rs.get_oplog_entry_agent_invocation_finished().await
+    rs.get_oplog_entry_agent_invocation_finished()
+        .await
+        .map(|finished| finished.map(|(_, result)| result))
 }
 
 #[test]

@@ -1885,6 +1885,63 @@ async fn automatic_snapshot_periodic_skips_idle_and_read_only_periods(
 }
 
 #[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_snapshot_periodic_takes_pending_snapshot_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const PERIOD: Duration = Duration::from_millis(500);
+    const IDLE: Duration = Duration::from_secs(4);
+
+    let context = TestContext::new(last_unique_id);
+    // The first executor takes no snapshot, so the restart comes before the snapshot of the
+    // increments.
+    let executor = start_with_snapshot_policy(deps, &context, SnapshotPolicy::Disabled).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("JsonSnapshotCounter", "periodic-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    drop(executor);
+
+    let executor =
+        start_with_snapshot_policy(deps, &context, SnapshotPolicy::Periodic { period: PERIOD })
+            .await?;
+    for _ in 0..3 {
+        let peeked = executor
+            .invoke_and_await_agent(&component, &agent_id, "peek", data_value!())
+            .await?;
+        assert_eq!(peeked.into_typed::<u32>()?, 3);
+    }
+    tokio::time::sleep(IDLE).await;
+    // The period has passed when the agent starts again, so the snapshot can come between the
+    // read-only invocations; only the first executor's increments can need it.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .count(),
+        1,
+        "The increments replayed after the restart take one periodic snapshot, and no more"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn snapshot_based_recovery(
     last_unique_id: &LastUniqueId,
