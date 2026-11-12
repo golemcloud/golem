@@ -3375,17 +3375,25 @@ async fn promise_of_a_deleted_incarnation_does_not_reach_the_recreated_agent(
         .ok_or_else(|| anyhow!("expected return value"))?;
     let new_promise_id = promise_id_from_value(&new_promise_value);
     assert_eq!(new_promise_id.agent_id, old_promise_id.agent_id);
-    assert_eq!(new_promise_id.oplog_idx, old_promise_id.oplog_idx);
     assert_ne!(new_promise_id.fingerprint, old_promise_id.fingerprint);
 
-    let error = executor
-        .complete_promise(&old_promise_id, vec![1])
-        .await
-        .expect_err("the old promise ID must not complete the new incarnation's promise");
-    assert!(
-        format!("{error:?}").contains("PromiseNotFound"),
-        "unexpected error: {error:?}"
-    );
+    // The new incarnation restarts its oplog, so its promises can reuse the deleted
+    // incarnation's oplog indexes. An ID that differs from the new promise only in the
+    // fingerprint must not reach it.
+    let colliding_promise_id = PromiseId {
+        fingerprint: old_promise_id.fingerprint,
+        ..new_promise_id.clone()
+    };
+    for promise_id in [&old_promise_id, &colliding_promise_id] {
+        let error = executor
+            .complete_promise(promise_id, vec![1])
+            .await
+            .expect_err("an old incarnation's promise ID must not complete the new promise");
+        assert!(
+            format!("{error:?}").contains("PromiseNotFound"),
+            "unexpected error for {promise_id}: {error:?}"
+        );
+    }
 
     let executor_clone = executor.clone();
     let component_clone = component.clone();
