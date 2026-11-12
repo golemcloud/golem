@@ -166,11 +166,15 @@ On a command line, an enum value is matched without regard to letter case when t
 
 ### Pick an exit code for a declared error
 
-A declared error needs an exit code from 1 to 255. Code 0 is refused, because it means success. In Go, an `ErrorSpec` without `ExitCode` has code 0, so it is refused too. `golem build` reports the error only when it runs `discover-tools` for the app, for example when it generates a client for the tool; otherwise the deployment reports it. The rule also applies to a tool that is already deployed: the next deployment of its environment is refused until the tool declares another code.
+A declared error needs an exit code from 1 to 255. Code 0 is refused, because it means success. The Go SDK uses 1 when an `ErrorSpec` does not set `ExitCode`. `golem build` reports a code 0 only when it runs `discover-tools` for the app, for example when it generates a client for the tool; otherwise the deployment reports it.
 
-The built-in Bash tool returns the declared code as the status of the failed command, so `if`, `&&`, `||` and `$?` see the failure.
+The rule also applies to tools that are already deployed:
 
-In a shell, some codes already have a meaning: 124 is a time-out (the Bash tool's own time limit uses it), 126 is "cannot run", 127 is "not found", and 128 + N is "stopped by signal N" (130 is Ctrl+C, 137 is KILL). A tool can use them, for example to copy `timeout` or `git`, but a script that reads the code cannot tell them apart from these causes.
+- The next deployment of an environment that has such a tool is refused until the tool declares another code.
+- A component update checks the component's own tools again, so a component with such a tool cannot be updated until the tool declares another code.
+- A tool release with such an error case blocks the deployments of every environment that uses the release, until a new release fixes it.
+
+The built-in Bash tool returns the declared code as the status of the failed command, so `if`, `&&`, `||` and `$?` see the failure. The Bash tool also uses some codes itself: 1 for an undeclared or internal failure, 2 for invalid input or a bad command line, 3 for a denied call, 124 when its time limit stops the call, 127 for a tool that is not found, and 130 for a cancelled call. In a shell, 126 means "cannot run" and 128 + N means "stopped by signal N" (130 is Ctrl+C, 137 is KILL). A tool can use any of these codes, for example to copy `timeout` or `git`, but a script that reads the code cannot tell them apart from these causes.
 
 ### Give a tool the caller's directory
 
