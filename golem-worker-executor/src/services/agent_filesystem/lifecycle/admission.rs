@@ -179,14 +179,18 @@ impl AdmissionTransition {
 
 impl GenerationRegistry {
     pub(super) fn begin_transition(self: &Arc<Self>) -> Result<AdmissionTransition, AccessError> {
-        self.state.lock().unwrap().admission.begin_transition()?;
-        Ok(AdmissionTransition {
-            registry: Arc::clone(self),
-        })
+        self.begin_admission_transition(Admission::begin_transition)
     }
 
     pub(super) fn begin_replay_drain(self: &Arc<Self>) -> Result<AdmissionTransition, AccessError> {
-        self.state.lock().unwrap().admission.begin_replay_drain()?;
+        self.begin_admission_transition(Admission::begin_replay_drain)
+    }
+
+    fn begin_admission_transition(
+        self: &Arc<Self>,
+        begin: fn(&mut Admission) -> Result<(), AccessError>,
+    ) -> Result<AdmissionTransition, AccessError> {
+        begin(&mut self.state.lock().unwrap().admission)?;
         Ok(AdmissionTransition {
             registry: Arc::clone(self),
         })
