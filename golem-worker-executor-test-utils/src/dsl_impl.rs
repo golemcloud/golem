@@ -934,9 +934,9 @@ impl TestDsl for TestWorkerExecutor {
         match response.result {
             Some(interrupt_worker_response::Result::Success(_)) => Ok(()),
             Some(interrupt_worker_response::Result::Failure(error)) => {
-                panic!("Failed to interrupt worker: {error:?}")
+                Err(anyhow!("Failed to interrupt worker: {error:?}"))
             }
-            _ => panic!("Failed to interrupt worker: unknown error"),
+            None => Err(anyhow!("No response from interrupt worker")),
         }
     }
 
