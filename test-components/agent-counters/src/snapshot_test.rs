@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
@@ -192,6 +192,8 @@ trait JsonSnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    #[read_only(cache = "no_cache")]
+    fn peek(&self) -> u32;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -213,6 +215,10 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
     }
 
     fn get(&self) -> u32 {
+        self.count
+    }
+
+    fn peek(&self) -> u32 {
         self.count
     }
 }

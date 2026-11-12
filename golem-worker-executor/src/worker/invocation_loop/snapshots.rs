@@ -67,8 +67,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         CommandOutcome::WaitForWakeup
     }
 
-    pub(super) async fn on_external_invocation_completed(&mut self) -> bool {
+    /// Counts a completed external invocation, which changes the state of the agent when
+    /// `changes_state` is set, and gives whether a snapshot is the next action.
+    pub(super) async fn on_external_invocation_completed(&mut self, changes_state: bool) -> bool {
         self.invocations_since_snapshot += 1;
+        if changes_state {
+            *self.last_state_change = Some(self.parent.oplog.current_oplog_index().await);
+        }
         match self.parent.snapshot_policy() {
             SnapshotPolicy::EveryNInvocation { count } => {
                 if self.invocations_since_snapshot >= *count as u64 {
@@ -102,6 +107,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         let SnapshotPolicy::Periodic { period } = self.parent.snapshot_policy() else {
             return PeriodicSnapshotAction::NotNeeded;
         };
+        if !state_changed_since_snapshot(
+            *self.last_state_change,
+            status
+                .last_automatic_snapshot
+                .as_ref()
+                .map(|last| last.index),
+        ) {
+            return PeriodicSnapshotAction::NotNeeded;
+        }
 
         let created_at = self.parent.get_initial_worker_metadata().created_at;
         let last_snapshot_timestamp = snapshot_baseline_timestamp(
@@ -577,6 +591,17 @@ pub(super) fn snapshot_baseline_timestamp(
         .chain(last_attempt)
         .max()
         .unwrap_or(created_at)
+}
+
+/// Whether the state changed at `last_state_change` after the last automatic snapshot record at
+/// `last_snapshot`. An agent whose state did not change since its last record needs no periodic
+/// snapshot, so an idle agent writes none. A snapshot that wrote no record, such as a skipped one,
+/// leaves the change in place, and the next period tries again.
+pub(super) fn state_changed_since_snapshot(
+    last_state_change: Option<OplogIndex>,
+    last_snapshot: Option<OplogIndex>,
+) -> bool {
+    last_state_change.is_some_and(|change| last_snapshot.is_none_or(|snapshot| change > snapshot))
 }
 
 pub(super) fn snapshot_action_at(
