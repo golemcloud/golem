@@ -2117,21 +2117,27 @@ is still a mismatch. Transaction-protocol reads remain strict.
 
 Three different facts are involved, each with its own owner:
 
-1. **Cursor exhaustion** — the recorded history has been consumed. An observation only.
+1. **Cursor exhaustion** — `ReplayState::at_replay_tail()` observes that the recorded history
+   has been consumed; `has_replay_remaining()` observes the opposite. Neither grants live authority.
 2. **Shared primary publication** — `transition_phase` moves Replaying → Settling → Live
-   (`replay_state/cursor.rs`). `ReplayState::switch_to_live` with `ReplayToLiveRole::PrimaryAgent`
+   (`replay_state/cursor/settling.rs`). `ReplayState::publish_primary_live(linear_memory)`
    runs `begin_primary_settling`, then `finish_settling_to_live` loops until every
    `HistoricalReconstruction` fence has validated and `CursorTx::finish_primary_settling`
    publishes Live (or reports `ReplayResumed` when new history appeared).
-3. **Entity-local liveness** — `store_is_live(mode, local_live_tail, shared_live_published)`
-   (`durable_host/mod.rs`): the primary Store is live iff (2) has published; a
-   `ReplayingCompleted` entity Store is never live; a `ReplayingIncomplete`/`Live` entity Store is
-   live iff its own `local_live_tail` is set by `PendingReplayToLive::finish_at` (`#[must_use]`).
-   For `ReplayToLiveRole::NonPrimary`, `switch_to_live` skips (2): the entity Store goes live for
-   its own invocation scope (after attachment admission) without waiting for the primary.
+3. **Store liveness** — `StoreReplayState::is_live(primary_live_published)`
+   (`durable_host/replay_to_live.rs`): `Primary` reads (2); `CompletedEntityReplay` is always
+   false; `IncompleteEntityReplay` reads its shared `EntityContinuation` gate; `LiveEntity`
+   is always true. Clones share the incomplete entity's gate. The non-primary path calls
+   `exhaust_replay_prefix`, not primary publication, and switches its own linear memory to live.
+   An incomplete entity can continue its own invocation scope without waiting for the primary.
+
+`PendingReplayToLive` holds a flat `LiveFinalization` payload: `Primary`, `CompletedEntityReplay`, `IncompleteBody`, `IncompleteTool`, or `AlreadyLiveEntity`. `finish_at` consumes the pending value. It publishes an incomplete body's continuation gate directly; for an incomplete tool it publishes only after attachment memory admission returns `Admitted`. Refusal, cancellation and fencing leave that gate closed. Primary, completed-replay and already-live entity finalization need no local gate publication. Successful finalization activates live usage only inside a guest body.
+
+Completed entity replay can settle an incomplete child through the non-primary path without making the parent Store live. The parent's guest still cannot continue with unrecorded calls.
 
 Tests: `entity_store_liveness_is_scoped_to_its_invocation_mode`,
 `pending_replay_to_live_is_fail_closed_until_finished`,
+`completed_entity_settlement_keeps_the_store_non_live`,
 `replay_state/tests.rs::switch_to_live_wakes_parked_awaiter_as_incomplete`,
 `replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
 `tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`.
@@ -3391,7 +3397,7 @@ incomplete decision decides at its own `Start`. Tests:
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
 | "HashMap iteration / poll order makes the guest nondeterministic, so replay must tolerate different calls." | Guest inputs are recorded; same inputs ⇒ same calls. Different calls = executor bug. | `no matching Start` / `unexpected_oplog_entry` errors in replay tests |
-| "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
+| "Cursor reached the end, so I can do the live effect now." | `StoreReplayState` separates authority from cursor position: `Primary` reads shared publication after `publish_primary_live`; `CompletedEntityReplay` stays false; `IncompleteEntityReplay` needs its continuation gate; `LiveEntity` is always true. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
@@ -3471,7 +3477,7 @@ table and tests: `reference/retries.md`.
      differed (missing recording, wrong request-identity match, delivery at wrong boundary).
    - Hang in replay → an awaiter waiting for a terminal that is not in history or a delivery
      gate never released; check `ReplayDeliveryBarrier` and `switch_to_live_wakes_parked_awaiter`.
-   - Live effect during replay → liveness read from the wrong place; check `store_is_live`.
+   - Live effect during replay → liveness read from the wrong place; check `StoreReplayState::is_live`.
    - Duplicate side effect → key derivation or acceptance ordering; compare keys across attempts.
 3. Reproduce with a real reconstruction (`simulated_crash`, or executor drop + restart via
    `start_with_overrides`), injecting the failure at the exact window with

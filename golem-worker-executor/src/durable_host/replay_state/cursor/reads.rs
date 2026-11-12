@@ -153,7 +153,7 @@ impl CursorTx<'_> {
             self.st.skip_hints_after_delivery = false;
         }
         loop {
-            if self.cursor.is_live() {
+            if self.cursor.at_replay_tail() {
                 // No further entries to read: nothing to drain, condition cannot match.
                 return Ok(None);
             }
@@ -393,7 +393,7 @@ impl CursorTx<'_> {
         &self,
         reader: PositionalReader,
     ) -> Result<(), WorkerExecutorError> {
-        if self.blocked_on_completion_delivery || self.cursor.is_live() {
+        if self.blocked_on_completion_delivery || self.cursor.at_replay_tail() {
             return Ok(());
         }
         let Some((head_idx, head)) = self.st.replay_buffer.front() else {
@@ -952,7 +952,7 @@ impl ReplayState {
             {
                 return Ok(entry);
             }
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Err(self.end_of_replay_error());
             }
             // An unconditional reader returns `None` during replay only at a reserved
@@ -1025,7 +1025,7 @@ impl ReplayState {
                     .await?;
                 Ok(match entry {
                     Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
-                    None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
+                    None if tx.cursor.at_replay_tail() => Some(PositionalRead::ReplayEnded),
                     None => {
                         tx.check_parked_positional_read(PositionalReader::Ordinary)
                             .await?;
@@ -1108,7 +1108,7 @@ impl ReplayState {
         &self,
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
-            if self.is_replay() {
+            if self.has_replay_remaining() {
                 let (oplog_index, oplog_entry) = self.get_oplog_entry(None).await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
@@ -1174,7 +1174,7 @@ impl ReplayState {
         // reproduce.
         let mut abandoned = AbandonedStarts::default();
         loop {
-            if self.is_replay() {
+            if self.has_replay_remaining() {
                 let Some((_, oplog_entry)) = self
                     .get_oplog_entry_at_invocation_boundary(&mut abandoned)
                     .await?
@@ -1241,7 +1241,7 @@ impl ReplayState {
             {
                 return Ok(Some(entry));
             }
-            if self.is_live() {
+            if self.at_replay_tail() {
                 // An acknowledged guest boundary defers hint skipping until this read. Those
                 // hints can exhaust an incomplete invocation's tail without a Finished entry.
                 return Ok(None);
