@@ -188,7 +188,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// (interrupts / sleep-suspend), where `TrapType::from_error` ignores the marker anyway, and for
     /// tests.
     pub(crate) fn abandon_for_trap(&mut self) {
-        self.finished = true;
+        self.state.abandon_for_trap();
     }
 
     /// The call-owned trap classification for a hard error escaping this call: its own retry point,

@@ -393,7 +393,7 @@ async fn start_invocation(
             let message = expect_string(get_field(response, "message"))
             if !expect_bool(get_field(response, "retryable")) ||
               code == "invalid-attachment-state" {
-              raise BridgeError(message)
+              raise reported_failure(response)
             }
             clock.failed("\{code}: \{message}")
             attempt_id = fresh_id()
@@ -485,7 +485,7 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
                 (!takeover && code == "invalid-attachment-state") ||
                 (retryable && code != "invalid-attachment-state")
               ) {
-              raise BridgeError(message)
+              raise reported_failure(response)
             }
             session.clock.failed("\{code}: \{message}")
             takeover = takeover || code == "invalid-attachment-state"
@@ -784,12 +784,40 @@ fn validate_message_fields(
     }
   }
   message.each((field, _) => {
-    let optional = (kind == "invocationRejected" && field == "attemptId") ||
+    let optional = (
+        kind == "invocationRejected" &&
+        (field == "attemptId" || field == "stderr")
+      ) ||
       (kind == "outputStreamEnd" && field == "cursorToken")
     if !required.contains(field) && !optional {
       raise BridgeError("malformed-message: unknown field \{field}")
     }
   })
+}
+
+///|
+/// The error for the server-reported failure `report`, a rejection or the
+/// failure outcome of `invocationFinished`: a failure of the agent carries its
+/// code, message and stderr; any other failure is its message.
+fn reported_failure(report : Map[String, Json]) -> BridgeError raise {
+  let code = expect_string(get_field(report, "code"))
+  let message = expect_string(get_field(report, "message"))
+  let stderr = match field_opt(report, "stderr") {
+    Some(value) => Some(expect_string(value))
+    None => None
+  }
+  match code {
+    "invocation-failed" | "previous-invocation-failed" =>
+      InvocationFailed(code~, message~, stderr~)
+    _ => BridgeError(message)
+  }
+}
+
+///|
+/// Validates the failure outcome of `invocationFinished` and returns its error.
+fn failure_outcome(outcome : Map[String, Json]) -> BridgeError raise {
+  validate_object_fields(outcome, ["kind", "code", "message"], ["stderr"])
+  reported_failure(outcome)
 }
 
 ///|
@@ -1805,7 +1833,7 @@ async fn dispatch_server_message(
       let text = expect_string(get_field(message, "message"))
       if !expect_bool(get_field(message, "retryable")) ||
         code == "invalid-attachment-state" {
-        raise BridgeError(text)
+        raise reported_failure(message)
       }
       session.socket.close()
       resume_session(session, rejection="\{code}: \{text}")
@@ -1815,12 +1843,9 @@ async fn dispatch_server_message(
       match expect_string(get_field(outcome, "kind")) {
         "success" => validate_object_fields(outcome, ["kind"], [])
         "failure" => {
-          validate_object_fields(outcome, ["kind", "code", "message"], [])
+          let error = failure_outcome(outcome)
           if !session.result_seen {
-            session.result_queue.close(
-              error=BridgeError(expect_string(get_field(outcome, "message"))),
-              clear=true,
-            )
+            session.result_queue.close(error~, clear=true)
           }
         }
         _ => raise BridgeError("malformed-message: invalid invocation outcome")

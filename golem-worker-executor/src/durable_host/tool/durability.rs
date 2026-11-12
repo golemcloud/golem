@@ -1401,7 +1401,7 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
 pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     operation: &super::operation::OwnerToolOperation,
-) {
+) -> Result<(), WorkerExecutorError> {
     use crate::durable_host::concurrent::{
         DropEvent, LiveCallPermit, MarkerReceipt, prepare_access_terminal_effect,
     };
@@ -1525,7 +1525,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
             trap_context: trap,
             live_call_permit: Some(permit),
         });
-    }));
+    }))
 }
 
 fn publication_failure<Ctx: WorkerCtx, Access: DurableContext<Ctx>>(
@@ -1610,14 +1610,11 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                 operations.select_primary_infrastructure(error).await
             };
             if let Some(cleanup) = cleanup {
-                let winner = operations
-                    .selected_owner_failure()
-                    .expect("failure cleanup has an owner winner");
+                let winner = cleanup.winner().clone();
                 let interrupt = worker.current_execution_interrupt_signal();
                 let primary_interrupt = operation.is_none().then(|| interrupt.clone()).flatten();
                 let cleanup_operations = operations.clone();
-                let cleanup = operations.start_owner_failure_cleanup(
-                    cleanup,
+                let cleanup = cleanup.start(
                     async move {
                         if let Some(active) = active {
                             active.fence_entity_bodies(winner).await;
@@ -1626,7 +1623,7 @@ impl<Ctx: WorkerCtx> PublicationFailureContext<Ctx> {
                             cleanup_operations.drain_owner_failure_lanes().await;
                         }
                         if let Some(operation) = operation {
-                            operation.settle().await;
+                            operation.settle().await?;
                         }
                         Ok(())
                     },

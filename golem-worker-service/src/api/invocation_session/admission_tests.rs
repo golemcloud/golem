@@ -125,6 +125,7 @@ async fn oversized_rejection_keeps_its_identity_with_a_bounded_safe_message() {
             code: PublicErrorCode::ProtocolError,
             message: "x".repeat(CONTROL_BYTE_BUDGET),
             retryable: true,
+            stderr: None,
             version: 1,
         },
     )
@@ -142,6 +143,7 @@ async fn oversized_rejection_keeps_its_identity_with_a_bounded_safe_message() {
             code: PublicErrorCode::ProtocolError,
             message: safe_rejection_message(PublicErrorCode::ProtocolError),
             retryable: true,
+            stderr: None,
             version: 1,
         }
     );

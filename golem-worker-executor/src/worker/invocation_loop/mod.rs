@@ -41,7 +41,7 @@ use crate::worker::filesystem_snapshots::{
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
     InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
-    invoke_observed_and_traced, lower_invocation, materialize_streaming_result,
+    invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::monthly_limits::ExecutionWindow;
 use crate::worker::status_checkpointer;

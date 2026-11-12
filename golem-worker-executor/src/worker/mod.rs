@@ -158,8 +158,8 @@ use crate::worker::invocation_loop::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
-    revert_validation_regions, update_status_with_new_entries,
+    InvocationRequests, calculate_last_known_status_with_checkpoint,
+    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -206,9 +206,9 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey,
+    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;

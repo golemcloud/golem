@@ -11427,3 +11427,204 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
     drop(executor);
     Ok(())
 }
+
+/// A duplicate request is compared with the accepted one by reading the request entry that the
+/// status or the result index points at. It must not search the oplog for it, so the reads of a
+/// duplicate check do not grow with the body of the invocation: while it runs, after it
+/// completed and left the in-memory result index, and after a restart.
+#[test]
+#[timeout("4m")]
+async fn duplicate_request_checks_do_not_read_more_for_longer_invocations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            // A suspension while the invocation waits would replay it, which reads the oplog.
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+            // Every entry of the running body is committed, so the test sees it grow.
+            config.oplog.max_operations_before_commit = 1;
+            // Completed results leave the exact in-memory index after a few more results and
+            // are found through the persisted index instead.
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.bloom_bits = 64;
+            config.invocation_results.hydrated_cache_capacity = 0;
+            // A search of the oplog would read it in many small chunks.
+            config.invocation_results.physical_index_catch_up_chunk_size = 16;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let request = |calls: u64, promise_id: &SchemaValue| {
+        crate::raw_params(vec![SchemaValue::U64(calls), promise_id.clone()])
+    };
+
+    let mut agents = Vec::new();
+    let mut reads = Vec::new();
+    for calls in [5u64, 400] {
+        let agent_id = agent_id!("GolemHostApi", format!("duplicate-reads-{calls}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        let promise_id = executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .expect("create_promise must return an id");
+        let SchemaValue::Record { fields } = &promise_id else {
+            panic!("expected promise id record")
+        };
+        let SchemaValue::U64(promise_index) = fields[1] else {
+            panic!("expected promise id oplog index")
+        };
+        let key = IdempotencyKey::fresh();
+        let started = executor.oplog_max_index(&worker_id).await?;
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "local_calls_then_await_promise",
+                request(calls, &promise_id),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while executor.oplog_max_index(&worker_id).await?.as_u64() < started.as_u64() + calls {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let before = executor.oplog_entries_read(&worker_id);
+        executor
+            .invoke_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "local_calls_then_await_promise",
+                request(calls, &promise_id),
+            )
+            .await?;
+        let running = executor.oplog_entries_read(&worker_id) - before;
+        let conflict = executor
+            .invoke_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "local_calls_then_await_promise",
+                request(calls + 1, &promise_id),
+            )
+            .await
+            .expect_err("a changed request must conflict while the invocation runs");
+        assert!(
+            conflict.to_string().contains("IdempotencyConflict"),
+            "{conflict}"
+        );
+
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: worker_id.clone(),
+                    oplog_idx: OplogIndex::from_u64(promise_index),
+                },
+                vec![5],
+            )
+            .await?;
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "local_calls_then_await_promise",
+                request(calls, &promise_id),
+            )
+            .await?;
+        assert_eq!(result.into_typed::<Vec<u8>>()?, vec![5]);
+        // Later results move this one out of the exact in-memory index.
+        for _ in 0..3 {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+                .await?;
+        }
+        let completed = measured_duplicate_reads(
+            &executor,
+            &component,
+            (&agent_id, &worker_id),
+            &key,
+            calls,
+            &promise_id,
+        )
+        .await?;
+        reads.push((running, completed));
+        agents.push((agent_id, worker_id, key, calls, promise_id));
+    }
+    assert_eq!(reads[0], reads[1], "running and completed duplicate reads");
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let mut restarted = Vec::new();
+    for (agent_id, worker_id, key, calls, promise_id) in &agents {
+        restarted.push(
+            measured_duplicate_reads(
+                &executor,
+                &component,
+                (agent_id, worker_id),
+                key,
+                *calls,
+                promise_id,
+            )
+            .await?,
+        );
+    }
+    assert_eq!(
+        restarted[0], restarted[1],
+        "duplicate reads after a restart"
+    );
+    Ok(())
+}
+
+/// The oplog entries one duplicate of a completed invocation reads. A first duplicate loads the
+/// agent and may fold the oplog into the persisted result index; only the second is measured. A
+/// changed request must still conflict.
+async fn measured_duplicate_reads(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    (agent_id, worker_id): (
+        &golem_common::model::agent::ParsedAgentId,
+        &golem_common::model::AgentId,
+    ),
+    key: &IdempotencyKey,
+    calls: u64,
+    promise_id: &SchemaValue,
+) -> anyhow::Result<u64> {
+    let duplicate = async |calls: u64| {
+        executor
+            .invoke_and_await_agent_with_key(
+                component,
+                agent_id,
+                key,
+                "local_calls_then_await_promise",
+                crate::raw_params(vec![SchemaValue::U64(calls), promise_id.clone()]),
+            )
+            .await
+    };
+    duplicate(calls).await?;
+    let before = executor.oplog_entries_read(worker_id);
+    assert_eq!(duplicate(calls).await?.into_typed::<Vec<u8>>()?, vec![5]);
+    let reads = executor.oplog_entries_read(worker_id) - before;
+    let conflict = duplicate(calls + 1)
+        .await
+        .expect_err("a changed request must conflict after the invocation completed");
+    assert!(
+        conflict.to_string().contains("IdempotencyConflict"),
+        "{conflict}"
+    );
+    Ok(reads)
+}

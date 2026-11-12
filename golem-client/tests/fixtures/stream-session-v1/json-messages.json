@@ -50,6 +50,12 @@
       "type": "invocationRejected"
     },
     {
+      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"code\":\"previous-invocation-failed\",\"message\":\"intentional invocation failure\",\"retryable\":false,\"stderr\":\"intentional failure stderr\\n\",\"type\":\"invocationRejected\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-rejected-previous-invocation-failed",
+      "type": "invocationRejected"
+    },
+    {
       "canonical": "{\"mappings\":[{\"channel\":2,\"direction\":\"output\",\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEEREREREREREhEREREREREQiAAAADW1lZGlhL2VuY29kZXIjAAAAEDMzMzMzM0MzgzMzMzMzMzMkAAAACAAAAAAAAAAqJQAAACCgoaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-vyYAAAABAicAAAAQVVVVVVVVRVWFVVVVVVVVVTZdibUL3La5UMpvnhbF5tDUvjLrbRqWXjg8DA0t6PMl\"}],\"result\":{\"graph\":{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{}}}}}},\"kind\":\"value\",\"value\":{\"kind\":\"stream\",\"value\":{\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEEREREREREREhEREREREREQiAAAADW1lZGlhL2VuY29kZXIjAAAAEDMzMzMzM0MzgzMzMzMzMzMkAAAACAAAAAAAAAAqJQAAACCgoaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-vyYAAAABAicAAAAQVVVVVVVVRVWFVVVVVVVVVTZdibUL3La5UMpvnhbF5tDUvjLrbRqWXjg8DA0t6PMl\"}}},\"type\":\"invocationResult\",\"version\":1}",
       "direction": "server",
       "name": "invocation-result-value",
@@ -113,6 +119,12 @@
       "canonical": "{\"outcome\":{\"code\":\"invocation-failed\",\"kind\":\"failure\",\"message\":\"invocation failed\"},\"type\":\"invocationFinished\",\"version\":1}",
       "direction": "server",
       "name": "invocation-finished-failure",
+      "type": "invocationFinished"
+    },
+    {
+      "canonical": "{\"outcome\":{\"code\":\"invocation-failed\",\"kind\":\"failure\",\"message\":\"intentional invocation failure\",\"stderr\":\"intentional failure stderr\\n\"},\"type\":\"invocationFinished\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-finished-failure-with-stderr",
       "type": "invocationFinished"
     }
   ]
