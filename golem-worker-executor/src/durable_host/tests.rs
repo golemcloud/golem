@@ -666,6 +666,32 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
     assert!(!dropped_memory.usage_is_live());
 }
 
+#[test]
+async fn completed_entity_settlement_keeps_the_store_non_live() {
+    let completed = StoreReplayState::new(Some(InvocationExecutionMode::ReplayingCompleted));
+    let memory = replay_usage_tracker();
+    let _body = memory.begin_guest_body();
+    let pending = PendingReplayToLive {
+        replay_target: OplogIndex::from_u64(42),
+        finalization: LiveFinalization::CompletedEntityReplay,
+        linear_memory: memory.clone(),
+    };
+
+    assert_eq!(pending.role(), ReplayToLiveRole::NonPrimary);
+    assert!(!memory.usage_is_live());
+    assert_eq!(
+        pending.finish_at(None).await.unwrap(),
+        FinishReplayToLive::Live
+    );
+    assert!(memory.usage_is_live());
+    assert!(!completed.is_live(false));
+    assert!(!completed.is_live(true));
+    assert_eq!(
+        completed.initial_entity_mode(),
+        Some(InvocationExecutionMode::ReplayingCompleted)
+    );
+}
+
 pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
     LinearMemoryTracker::new_with_metering(
         0,

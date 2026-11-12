@@ -2072,15 +2072,13 @@ Three different facts are involved, each with its own owner:
    `exhaust_replay_prefix`, not primary publication, and switches its own linear memory to live.
    An incomplete entity can continue its own invocation scope without waiting for the primary.
 
-`PendingReplayToLive` holds a flat `LiveFinalization` payload: `Primary`, `IncompleteBody`,
-`IncompleteTool`, or `AlreadyLiveEntity`. `finish_at` consumes the pending value. It publishes
-an incomplete body's continuation gate directly; for an incomplete tool it publishes only after
-attachment memory admission returns `Admitted`. Refusal, cancellation and fencing leave that
-gate closed. Primary and already-live entity finalization need no local gate publication.
-Successful finalization activates live usage only inside a guest body.
+`PendingReplayToLive` holds a flat `LiveFinalization` payload: `Primary`, `CompletedEntityReplay`, `IncompleteBody`, `IncompleteTool`, or `AlreadyLiveEntity`. `finish_at` consumes the pending value. It publishes an incomplete body's continuation gate directly; for an incomplete tool it publishes only after attachment memory admission returns `Admitted`. Refusal, cancellation and fencing leave that gate closed. Primary, completed-replay and already-live entity finalization need no local gate publication. Successful finalization activates live usage only inside a guest body.
+
+Completed entity replay can settle an incomplete child through the non-primary path without making the parent Store live. The parent's guest still cannot continue with unrecorded calls.
 
 Tests: `entity_store_liveness_is_scoped_to_its_invocation_mode`,
 `pending_replay_to_live_is_fail_closed_until_finished`,
+`completed_entity_settlement_keeps_the_store_non_live`,
 `replay_state/tests.rs::switch_to_live_wakes_parked_awaiter_as_incomplete`,
 `replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
 `tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`.

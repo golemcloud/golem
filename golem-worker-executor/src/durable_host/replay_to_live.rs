@@ -88,9 +88,8 @@ impl StoreReplayState {
     ) -> Result<LiveFinalization, WorkerExecutorError> {
         match self {
             Self::Primary => Ok(LiveFinalization::Primary),
-            Self::CompletedEntityReplay => Err(WorkerExecutorError::runtime(
-                "Completed entity replay cannot continue live",
-            )),
+            // A completed parent can settle an incomplete child without becoming live itself.
+            Self::CompletedEntityReplay => Ok(LiveFinalization::CompletedEntityReplay),
             Self::IncompleteEntityReplay(continuation) if tool_entity => {
                 Ok(LiveFinalization::IncompleteTool {
                     continuation: continuation.clone(),
@@ -111,6 +110,7 @@ impl StoreReplayState {
 
 pub(super) enum LiveFinalization {
     Primary,
+    CompletedEntityReplay,
     IncompleteBody(EntityContinuation),
     IncompleteTool {
         continuation: EntityContinuation,
@@ -392,7 +392,9 @@ impl PendingReplayToLive {
             LiveFinalization::IncompleteBody(continuation) => {
                 continuation.live_published.store(true, Ordering::Release);
             }
-            LiveFinalization::Primary | LiveFinalization::AlreadyLiveEntity => {}
+            LiveFinalization::Primary
+            | LiveFinalization::CompletedEntityReplay
+            | LiveFinalization::AlreadyLiveEntity => {}
         }
         self.linear_memory.activate_live_usage_if_guest_body();
         Ok(FinishReplayToLive::Live)
