@@ -97,7 +97,6 @@ fn render_template(title: &str, json: &str) -> anyhow::Result<String> {
 /// dropped before `finish` deletes its temporary file and leaves the target unchanged.
 pub struct OplogExportHtmlWriter {
     path: PathBuf,
-    parent: PathBuf,
     file: tempfile::NamedTempFile,
     suffix: &'static str,
     entries: usize,
@@ -127,7 +126,6 @@ impl OplogExportHtmlWriter {
         file.write_all(&template.as_bytes()[..split])?;
         Ok(Self {
             path: path.to_path_buf(),
-            parent,
             file,
             suffix: &VIEWER_TEMPLATE[suffix_start..],
             entries: 0,
@@ -167,9 +165,6 @@ impl OplogExportHtmlWriter {
         self.file
             .persist(&self.path)
             .map_err(|error| anyhow!("failed to write {}: {}", self.path.display(), error.error))?;
-        std::fs::File::open(&self.parent)
-            .and_then(|dir| dir.sync_all())
-            .with_context(|| format!("failed to sync {}", self.parent.display()))?;
         Ok(())
     }
 }
