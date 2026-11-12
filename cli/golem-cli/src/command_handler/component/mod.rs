@@ -3702,8 +3702,8 @@ fn warn_about_initial_cards_without_agent_id_read(
 ) {
     let warning = format!(
         "the initialCard does not allow the agent to read {AGENT_ID_ENV_VAR}, which the Golem SDKs \
-         need, so the agent fails at its first call or at snapshot load. Add {AGENT_ID_READ_GRANT} \
-         to the card."
+         need, so the agent fails at its first call or at snapshot load. Grant \
+         {AGENT_ID_READ_GRANT} in the card, and do not exclude it in the upper bound."
     );
 
     for agent_type in &properties.agent_types {
