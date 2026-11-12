@@ -210,6 +210,136 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(WorkerExecutorError::invalid_request(
+                "schedule cancellation requires an authenticated internal caller",
+            )
+            .into());
+        }
+        let target = &self
+            .canonicalize_owned_agent_id(
+                AgentTarget::Current(target.agent_id()),
+                target.environment_id,
+            )
+            .await?;
+        if self.shard_service().check_worker(&target.agent_id).is_err() {
+            return self
+                .remote_rpc
+                .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+                .await;
+        }
+        let worker = match Worker::get_exact_existing_suspended(
+            self,
+            target,
+            Principal::anonymous(),
+        )
+        .await
+        {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        worker
+            .cancel_scheduled_invocation(key, receipt, owner)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        let owned_agent_id = &self
+            .canonicalize_owned_agent_id(
+                AgentTarget::Current(owned_agent_id.agent_id()),
+                owned_agent_id.environment_id,
+            )
+            .await?;
+        if self
+            .shard_service()
+            .check_worker(&owned_agent_id.agent_id)
+            .is_err()
+        {
+            return self
+                .remote_rpc
+                .schedule_invocation(
+                    owned_agent_id,
+                    expected_fingerprint,
+                    invocation,
+                    scheduled_at,
+                    auth_ctx,
+                )
+                .await;
+        }
+        let AgentInvocation::AgentMethod {
+            method_name,
+            input,
+            principal,
+            ..
+        } = &invocation
+        else {
+            return Err(RpcError::ProtocolError {
+                details: "guest scheduling requires an agent method invocation".to_string(),
+            });
+        };
+        self.direct_invocation_auth
+            .check(
+                auth_ctx.actor_account_id(),
+                owned_agent_id,
+                AgentVerb::Invoke,
+                AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+                auth_ctx,
+            )
+            .await?;
+        let worker = self
+            .active_agents()
+            .get_existing_with_fingerprint(
+                self,
+                owned_agent_id,
+                principal.clone(),
+                Some(expected_fingerprint),
+            )
+            .await?;
+        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint {
+            return Err(WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into());
+        }
+        let status = worker.get_last_known_status().await;
+        let component = self
+            .component_service()
+            .get_metadata(worker.component_id(), Some(status.component_revision))
+            .await?;
+        let parsed_agent_id = worker
+            .get_initial_worker_metadata()
+            .parse_agent_id(&component.metadata)
+            .map_err(|details| RpcError::ProtocolError { details })?;
+        if validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed_agent_id),
+            method_name,
+            input,
+        )? {
+            return Err(RpcError::ProtocolError {
+                details: "live streams cannot be used in scheduled invocations".to_string(),
+            });
+        }
+        worker
+            .schedule_invocation(invocation, scheduled_at)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,

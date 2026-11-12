@@ -1099,17 +1099,17 @@ mod tests {
         }
     }
 
-    fn generate(tool: Tool, dir_name: &str) -> Utf8PathBuf {
-        let dir = tempfile::TempDir::new().unwrap().keep();
-        let target_path = Utf8PathBuf::from_path_buf(dir.join(dir_name)).unwrap();
+    fn generate(tool: Tool, dir_name: &str) -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path = Utf8PathBuf::from_path_buf(dir.path().join(dir_name)).unwrap();
         let mut generator = RustToolBridgeGenerator::new(tool, &target_path, true).unwrap();
         generator.generate().unwrap();
-        target_path
+        (dir, target_path)
     }
 
     #[test]
     fn tool_generation_emits_expected_api() {
-        let target_path = generate(grep_tool(), "grep-tool-guest-client");
+        let (_dir, target_path) = generate(grep_tool(), "grep-tool-guest-client");
         let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
         for shape in [
             "pub struct GrepClient",
@@ -1124,8 +1124,9 @@ mod tests {
 
     #[test]
     fn presented_tool_generation_keeps_rpc_lookup_identity() {
-        let dir = tempfile::TempDir::new().unwrap().keep();
-        let target_path = Utf8PathBuf::from_path_buf(dir.join("lookup-tool-guest-client")).unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("lookup-tool-guest-client")).unwrap();
         let mut generator = RustToolBridgeGenerator::new_with_rpc_tool_name(
             grep_tool(),
             "lookup-tool".to_string(),

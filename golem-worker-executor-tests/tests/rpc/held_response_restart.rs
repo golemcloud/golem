@@ -19,16 +19,64 @@ inherit_test_dep!(
 
 /// Records the idempotency key of every `inc_by` dispatch. The dispatch at position `held` reaches
 /// the target, which runs its effect and returns, but the caller never receives the response: the
-/// call stays pending until the executor is dropped.
+/// call stays pending until the executor is dropped. With `hold_first_cancel`, the first scheduled
+/// invocation cancellation is held the same way after the target commits it.
 struct HoldResponseRpc {
     inner: Arc<dyn Rpc>,
     held: usize,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
     effect_applied: Arc<tokio::sync::Notify>,
+    hold_first_cancel: bool,
+    cancel_results: Arc<Mutex<Vec<bool>>>,
 }
 
 #[async_trait]
 impl Rpc for HoldResponseRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        let result = self
+            .inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await;
+        let hold = {
+            let mut results = self.cancel_results.lock().unwrap();
+            if let Ok(cancelled) = &result {
+                results.push(*cancelled);
+            }
+            self.hold_first_cancel && results.len() == 1
+        };
+        if hold {
+            self.effect_applied.notify_one();
+            std::future::pending::<()>().await;
+        }
+        result
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         agent: AgentTarget,
@@ -233,6 +281,8 @@ async fn held_response_restart_case(
                     held,
                     attempts: attempts.clone(),
                     effect_applied: effect_applied.clone(),
+                    hold_first_cancel: false,
+                    cancel_results: Arc::default(),
                 })
             }
         })),
@@ -319,6 +369,149 @@ async fn held_response_restart_case(
     assert_eq!(
         count, expected_count,
         "the target must apply each effect once; {context}"
+    );
+    Ok(())
+}
+
+/// The target removes the pending entry of a scheduled invocation, but the caller crashes before
+/// the token cancellation records its `End`. Recovery repairs the incomplete cancellation in
+/// place: the target reports nothing left to cancel and the scheduled invocation never runs.
+#[test]
+#[timeout("3m")]
+async fn committed_scheduled_cancellation_completes_after_caller_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let effect_applied = Arc::new(tokio::sync::Notify::new());
+    let cancel_results = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let effect_applied = effect_applied.clone();
+            let cancel_results = cancel_results.clone();
+            move |rpc| {
+                Arc::new(HoldResponseRpc {
+                    inner: rpc,
+                    held: 0,
+                    attempts: Arc::default(),
+                    effect_applied: effect_applied.clone(),
+                    hold_first_cancel: true,
+                    cancel_results: cancel_results.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let server_name = "held-cancellation-target";
+    let server = agent_id!("ScheduledInvocationServer", server_name);
+    let caller_id = agent_id!("ScheduledInvocationClient", "held-cancellation-owner");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let due = chrono::Utc::now() + chrono::Duration::hours(1);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "schedule_at",
+            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+        )
+        .await?;
+    let scheduled_key = executor
+        .attached_agent_status(&target)
+        .await?
+        .pending_invocations
+        .iter()
+        .find(|pending| pending.not_before.is_some())
+        .and_then(|pending| pending.idempotency_key().cloned())
+        .expect("the schedule must commit a future pending invocation on the target");
+
+    let key = IdempotencyKey::fresh();
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        let key = key.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &caller_id,
+                    &key,
+                    "cancel_scheduled",
+                    data_value!(),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(30), effect_applied.notified()).await?;
+    assert_eq!(*cancel_results.lock().unwrap(), vec![true]);
+    invocation.abort();
+    let _ = invocation.await;
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &caller_id,
+            &key,
+            "cancel_scheduled",
+            data_value!(),
+        ),
+    )
+    .await??;
+
+    assert_eq!(
+        *cancel_results.lock().unwrap(),
+        vec![true, false],
+        "recovery must repeat the committed cancellation once and find nothing left to cancel"
+    );
+    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let cancel_starts = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::cancellation-token::cancel")
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cancel_starts.len(),
+        1,
+        "the repair must complete the original Start"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end)
+                if end.start_index == cancel_starts[0]))
+            .count(),
+        1,
+        "the cancellation Start must have exactly one End"
+    );
+    assert!(
+        executor
+            .attached_agent_status(&target)
+            .await?
+            .pending_invocations
+            .iter()
+            .all(|pending| !pending.has_idempotency_key(&scheduled_key))
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0
     );
     Ok(())
 }

@@ -22,13 +22,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         stage: WorkerDeletionStage,
     ) -> bool {
-        matches!(&*self.instance.lock().await, WorkerInstance::Deleting(deleting) if deleting.completed_stage >= stage)
+        matches!(self.instance.lock().await.state(), WorkerInstance::Deleting(deleting) if deleting.completed_stage >= stage)
     }
     pub(in crate::worker) async fn complete_deletion_stage(&self, stage: WorkerDeletionStage) {
-        let mut instance = self.instance.lock().await;
-        if let WorkerInstance::Deleting(deleting) = &mut *instance {
-            deleting.completed_stage = deleting.completed_stage.max(stage);
-        }
+        self.instance.lock().await.complete_deletion_stage(stage);
     }
     /// Atomically claims worker-owned deletion and starts an executor-owned attempt. Overlapping
     /// callers share the retained result; after failure, the next explicit call claims one retry.
@@ -55,34 +52,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             instance.deletion_runtime(),
             WorkerInstance::CleanupFailed(_)
         );
-        let (outcome, sender) = match &mut *instance {
-            WorkerInstance::Deleting(deleting) => match deleting.handle.result() {
-                None | Some(Ok(())) => (
-                    DeleteOutcome::AlreadyDeleting(deleting.handle.clone()),
-                    None,
-                ),
-                Some(Err(_)) => {
-                    let (handle, sender) = DeletionHandle::new();
-                    deleting.handle = handle.clone();
-                    (DeleteOutcome::Started(handle), Some(sender))
-                }
-            },
-            _ => {
-                let (handle, sender) = DeletionHandle::new();
-                let runtime = std::mem::replace(
-                    &mut *instance,
-                    WorkerInstance::Unloaded {
-                        startup_failure: None,
-                    },
-                );
-                *instance = WorkerInstance::Deleting(DeletingWorker {
-                    runtime: Box::new(runtime),
-                    handle: handle.clone(),
-                    completed_stage: WorkerDeletionStage::Claimed,
-                });
-                (DeleteOutcome::Started(handle), Some(sender))
-            }
-        };
+        let (outcome, sender) = instance.claim_deletion();
         let started = matches!(outcome, DeleteOutcome::Started(_));
         drop(instance);
         drop(cleanup);
@@ -163,7 +133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let retirement = self.retire_durable_stream_producer();
             let error = WorkerExecutorError::invalid_request("Worker is being deleted");
             self.stop_internal(
-                false,
+                StopOrigin::External,
                 Some(error),
                 UnloadRequest::ordinary(UnloadReason::Deleting),
                 FinalWorkerState::Deleting,
@@ -190,8 +160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let retry = cleanup.retry();
                 *self.unload_cleanup.lock().unwrap() = Some(retry.clone());
                 retry.wait().await?;
-                *self.instance.lock().await.deletion_runtime_mut() =
-                    WorkerInstance::StoppedForDeletion;
+                self.instance.lock().await.deletion_cleanup_completed();
             }
             self.wait_for_unload_cleanup().await?;
             self.complete_deletion_stage(WorkerDeletionStage::RuntimeStopped)
@@ -405,7 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether this generation holds a deletion whose last attempt failed, with nothing running.
     pub(in crate::worker) async fn deletion_failed(&self) -> bool {
         matches!(
-            &*self.instance.lock().await,
+            self.instance.lock().await.state(),
             WorkerInstance::Deleting(deleting) if matches!(deleting.handle.result(), Some(Err(_)))
         )
     }
@@ -593,13 +562,6 @@ impl WorkerInstance {
     pub(in crate::worker) fn deletion_runtime(&self) -> &Self {
         match self {
             Self::Deleting(deleting) => &deleting.runtime,
-            instance => instance,
-        }
-    }
-
-    pub(in crate::worker) fn deletion_runtime_mut(&mut self) -> &mut Self {
-        match self {
-            Self::Deleting(deleting) => &mut deleting.runtime,
             instance => instance,
         }
     }

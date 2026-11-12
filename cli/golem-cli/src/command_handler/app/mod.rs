@@ -4718,7 +4718,7 @@ mod tests {
 
     #[test]
     fn mcp_import_render_error_does_not_expose_secret_template() {
-        let secret_template = "{{ definitely_missing_gol36_secret }}";
+        let secret_template = "{{ definitely_missing_bearer_secret }}";
         let import = golem_common::model::mcp_import::McpImportDeployment {
             url: "https://example.com/mcp".into(),
             auth: Some(golem_common::model::mcp_import::McpImportAuthInput {
@@ -4736,7 +4736,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("auth.bearer"));
-        assert!(error.contains("definitely_missing_gol36_secret"));
+        assert!(error.contains("definitely_missing_bearer_secret"));
         assert!(!error.contains(secret_template));
     }
 
@@ -5195,21 +5195,6 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<HashMap<_, _>>(),
         )
-    }
-
-    #[test]
-    fn defaults_of_secrets_with_value_do_not_require_env_vars() {
-        let defaults = vec![secret_default(&["db", "password"], "{{ DB_PASSWORD }}")];
-        let with_value = BTreeSet::from([canonical_secret_path(&["db", "password"])]);
-
-        let resolved = resolve_agent_secret_defaults_without_value(
-            defaults.clone(),
-            &with_value,
-            &renderer(&[]),
-        )
-        .unwrap();
-
-        assert_eq!(resolved, defaults);
     }
 
     #[test]

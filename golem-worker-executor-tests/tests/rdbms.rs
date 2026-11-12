@@ -202,6 +202,12 @@ async fn rdbms_postgres_snapshot_changes_transaction_drop_schedule(
                 .invoke_and_await_agent(&component, &id, "inspect", data_value!())
                 .await?;
         }
+        crate::hot_update::wait_for_snapshot_after(
+            &executor,
+            &worker,
+            before.last().unwrap().oplog_index,
+        )
+        .await?;
         let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         assert!(
             after

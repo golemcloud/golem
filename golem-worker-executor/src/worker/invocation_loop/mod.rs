@@ -40,8 +40,8 @@ use crate::worker::filesystem_snapshots::{
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, LoweredInvocation, invocation_uses_streams,
-    invoke_observed_and_traced, lower_invocation, materialize_streaming_result,
+    InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
+    invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::monthly_limits::ExecutionWindow;
 use crate::worker::status_checkpointer;
@@ -119,6 +119,7 @@ mod invocation;
 mod permits;
 mod snapshots;
 mod startup;
+pub use startup::{EphemeralStart, ephemeral_inspection_may_start, ephemeral_start_decision};
 mod unload;
 
 use commands::apply_delayed_retry_commands_after_unload;
@@ -215,6 +216,9 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
+    /// An ephemeral agent that never started has no due work; it stays unloaded with its
+    /// pending entries.
+    NotRunnable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -516,7 +520,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         None,
                         self.oom_retry_count,
                         pending_startup_attempt,
@@ -594,6 +598,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 CreateInstanceResult::Failed => {
                     // early return, can't retry a failed instance creation
                     self.release_concurrent_agent_permit();
+                    break;
+                }
+                CreateInstanceResult::NotRunnable => {
+                    self.release_concurrent_agent_permit();
+                    self.parent.complete_startup(self.start_attempt, Ok(()));
+                    // Queued inspection requests would otherwise wait for a start that comes at the
+                    // deadline at the earliest, and never once the scheduled work was withdrawn.
+                    self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                        .await;
+                    self.parent
+                        .restart_if_ephemeral_start_became_runnable()
+                        .await;
                     break;
                 }
             };
@@ -1180,7 +1196,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         delay,
                         self.oom_retry_count + 1,
                         pending_startup_attempt,

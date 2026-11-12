@@ -2881,7 +2881,7 @@ fn validate_tool_binding_references<'a>(
                 ToolValidationCode::ReservedMiddleware,
                 path,
                 source.map(std::path::Path::to_path_buf),
-                "Tool middleware bindings are reserved for GOL-39",
+                "Tool name `middleware` is reserved for tool middleware declarations and cannot be bound as a tool",
             ));
             continue;
         }
