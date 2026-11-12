@@ -156,7 +156,7 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
 use crate::worker::lifecycle::state::{
-    LifecycleTransition, StopOrigin, WaitingPhase, WorkerLifecycle,
+    LifecycleTransition, StartupFailure, StopOrigin, WaitingPhase, WorkerLifecycle,
 };
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
@@ -845,9 +845,13 @@ impl Drop for WorkerStatusMetric {
 enum WorkerInstance {
     Unresolved,
     Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
+    /// admission returns it until the next start, which runs the agent again.
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    /// An ephemeral agent that must never start again (`StartupFailure::Inactive`).
+    Inactive(WorkerExecutorError),
     CleanupFailed(WorkerExecutorError),
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
@@ -866,6 +870,7 @@ enum WorkerRuntime {
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
+    Inactive(WorkerExecutorError),
 }
 
 impl WorkerInstance {
@@ -874,6 +879,7 @@ impl WorkerInstance {
             Self::Unloaded {
                 startup_failure: Some(err),
             }
+            | Self::Inactive(err)
             | Self::CleanupFailed(err) => Some(err),
             _ => None,
         }
@@ -1086,6 +1092,7 @@ pub(crate) enum FinalWorkerState {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    Inactive(WorkerExecutorError),
     CleanupFailed(WorkerExecutorError),
     Deleting,
 }

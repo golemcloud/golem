@@ -640,10 +640,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             LifecycleTransition::Initializing(initializing) => match result {
                                 Ok((data, reconstructed_ephemeral)) => {
                                     worker.initialization_request.lock().unwrap().take();
-                                    initializing.complete_initialization(
-                                        reconstructed_ephemeral
-                                            .then(inactive_ephemeral_agent_error),
-                                    );
+                                    if reconstructed_ephemeral {
+                                        initializing
+                                            .complete_inactive(inactive_ephemeral_agent_error());
+                                    } else {
+                                        initializing.complete_initialization();
+                                    }
                                     // Publish immutable data last: cache readers use this cell as
                                     // their lock-free initialization-completion boundary.
                                     worker.resolved.set(data).map_err(|_| {

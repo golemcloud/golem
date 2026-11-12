@@ -31,8 +31,53 @@ pub enum StopOrigin {
     External,
 }
 
+/// What a failed start leaves on an unloaded worker. The agent mode decides it: an ephemeral
+/// agent is fail-stop, so a failed start leaves it inactive, while a durable agent runs again at
+/// its next start.
+#[derive(Debug)]
+pub enum StartupFailure {
+    /// The last start of a durable agent failed. Admission returns the error until the next
+    /// start, which runs the agent again.
+    Retryable(WorkerExecutorError),
+    /// The ephemeral agent never starts again. Every start and admission returns the error;
+    /// recorded results stay observable.
+    Inactive(WorkerExecutorError),
+}
+
+impl StartupFailure {
+    pub fn new(agent_mode: AgentMode, error: WorkerExecutorError) -> Self {
+        match agent_mode {
+            AgentMode::Durable => Self::Retryable(error),
+            AgentMode::Ephemeral => Self::Inactive(error),
+        }
+    }
+}
+
+impl From<StartupFailure> for FinalWorkerState {
+    fn from(failure: StartupFailure) -> Self {
+        match failure {
+            StartupFailure::Retryable(error) => Self::Unloaded {
+                startup_failure: Some(error),
+            },
+            StartupFailure::Inactive(error) => Self::Inactive(error),
+        }
+    }
+}
+
+impl From<StartupFailure> for WorkerRuntime {
+    fn from(failure: StartupFailure) -> Self {
+        match failure {
+            StartupFailure::Retryable(error) => Self::Unloaded {
+                startup_failure: Some(error),
+            },
+            StartupFailure::Inactive(error) => Self::Inactive(error),
+        }
+    }
+}
+
 pub enum StopPhase<'a> {
     Unloaded(UnloadedStop<'a>),
+    Inactive(InactiveStop<'a>),
     CleanupFailed(CleanupFailedStop<'a>),
     WaitingForPermit(WaitingStop<'a>),
     Running(RunningStop<'a>),
@@ -53,6 +98,7 @@ pub enum LifecycleTransition<'a> {
     Unresolved(UnresolvedPhase<'a>),
     Initializing(InitializingPhase<'a>),
     Unloaded(UnloadedPhase<'a>),
+    Inactive(&'a WorkerExecutorError),
     WaitingForPermit(WaitingPhase<'a>),
     Running(&'a RunningWorker),
     Stopping,
@@ -100,8 +146,16 @@ impl InitializingPhase<'_> {
         self.lifecycle.phase = WorkerInstance::Unresolved;
     }
 
-    pub fn complete_initialization(self, startup_failure: Option<WorkerExecutorError>) {
-        self.lifecycle.phase = WorkerInstance::Unloaded { startup_failure };
+    pub fn complete_initialization(self) {
+        self.lifecycle.phase = WorkerInstance::Unloaded {
+            startup_failure: None,
+        };
+    }
+
+    /// Completes the initialization of an ephemeral agent that is reconstructed only for
+    /// observation and invocation result lookup.
+    pub fn complete_inactive(self, error: WorkerExecutorError) {
+        self.lifecycle.phase = WorkerInstance::Inactive(error);
     }
 }
 
@@ -110,10 +164,8 @@ impl UnloadedPhase<'_> {
         self.lifecycle
     }
 
-    pub fn startup_failed(self, error: WorkerExecutorError) {
-        self.lifecycle.phase = WorkerInstance::Unloaded {
-            startup_failure: Some(error),
-        };
+    pub fn startup_failed(self, failure: StartupFailure) {
+        self.lifecycle.phase = WorkerRuntime::from(failure).into();
     }
 
     pub fn wait_for_permit(self, waiting: WaitingWorker) {
@@ -126,10 +178,8 @@ impl WaitingPhase<'_> {
         self.start_attempt
     }
 
-    pub fn startup_failed(self, error: WorkerExecutorError) {
-        self.lifecycle.phase = WorkerInstance::Unloaded {
-            startup_failure: Some(error),
-        };
+    pub fn startup_failed(self, failure: StartupFailure) {
+        self.lifecycle.phase = WorkerRuntime::from(failure).into();
     }
 
     pub fn install_running(self, running: RunningWorker) {
@@ -148,6 +198,8 @@ impl WorkerLifecycle {
         &self.phase
     }
 
+    /// The error that refuses admission: a retryable startup failure, inactivity or a cleanup
+    /// failure.
     pub fn startup_failure(&self) -> Option<&WorkerExecutorError> {
         self.phase.startup_failure()
     }
@@ -167,6 +219,7 @@ impl WorkerLifecycle {
             WorkerInstance::Unloaded { .. } => {
                 LifecycleTransition::Unloaded(UnloadedPhase { lifecycle: self })
             }
+            WorkerInstance::Inactive(ref error) => LifecycleTransition::Inactive(error),
             WorkerInstance::WaitingForPermit(ref waiting) => {
                 let start_attempt = waiting.start_attempt;
                 LifecycleTransition::WaitingForPermit(WaitingPhase {
@@ -291,8 +344,11 @@ impl WorkerLifecycle {
             {
                 WorkerRuntime::CleanupFailed(error.clone())
             }
-            _ => WorkerRuntime::Unloaded {
-                startup_failure: None,
+            _ => match self.phase.inactivity() {
+                Some(error) => WorkerRuntime::Inactive(error.clone()),
+                None => WorkerRuntime::Unloaded {
+                    startup_failure: None,
+                },
             },
         };
         let previous = self.phase.replace_runtime(fallback)?;
@@ -301,6 +357,9 @@ impl WorkerLifecycle {
         };
         let previous = match previous {
             WorkerRuntime::Unloaded { .. } => StopPhase::Unloaded(UnloadedStop { transition }),
+            WorkerRuntime::Inactive(error) => {
+                StopPhase::Inactive(InactiveStop { transition, error })
+            }
             WorkerRuntime::CleanupFailed(error) => {
                 StopPhase::CleanupFailed(CleanupFailedStop { transition, error })
             }
@@ -385,6 +444,7 @@ impl WorkerInstance {
             FinalWorkerState::Unloaded { startup_failure } => {
                 WorkerRuntime::Unloaded { startup_failure }
             }
+            FinalWorkerState::Inactive(error) => WorkerRuntime::Inactive(error),
             FinalWorkerState::CleanupFailed(error) => WorkerRuntime::CleanupFailed(error),
             FinalWorkerState::Deleting => {
                 if let Self::Deleting(deleting) = self {
@@ -443,6 +503,18 @@ impl WorkerInstance {
         }
     }
 
+    /// The error of an inactive ephemeral runtime, also while a deletion retains it.
+    fn inactivity(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::Inactive(error)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Inactive(error)),
+                ..
+            }) => Some(error),
+            _ => None,
+        }
+    }
+
     /// A cleanup failure that a stopped runtime reports, or that a stop in progress will leave.
     pub(in crate::worker) fn retained_cleanup_failure(&self) -> Option<&WorkerExecutorError> {
         match self {
@@ -492,6 +564,11 @@ impl WorkerInstance {
                 runtime: DeletionRuntime::Stopped,
                 ..
             }) => Some(FinalWorkerState::Deleting),
+            Self::Inactive(error)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Inactive(error)),
+                ..
+            }) => Some(FinalWorkerState::Inactive(error.clone())),
             phase => phase
                 .cleanup_failure()
                 .map(|error| FinalWorkerState::CleanupFailed(error.clone())),
@@ -504,6 +581,7 @@ impl From<WorkerRuntime> for WorkerInstance {
         match runtime {
             WorkerRuntime::Unloaded { startup_failure } => Self::Unloaded { startup_failure },
             WorkerRuntime::CleanupFailed(error) => Self::CleanupFailed(error),
+            WorkerRuntime::Inactive(error) => Self::Inactive(error),
             WorkerRuntime::WaitingForPermit(waiting) => Self::WaitingForPermit(waiting),
             WorkerRuntime::Running(running) => Self::Running(running),
             WorkerRuntime::Stopping(stopping) => Self::Stopping(stopping),
@@ -520,6 +598,7 @@ impl TryFrom<WorkerInstance> for WorkerRuntime {
         match phase {
             WorkerInstance::Unloaded { startup_failure } => Ok(Self::Unloaded { startup_failure }),
             WorkerInstance::CleanupFailed(error) => Ok(Self::CleanupFailed(error)),
+            WorkerInstance::Inactive(error) => Ok(Self::Inactive(error)),
             WorkerInstance::WaitingForPermit(waiting) => Ok(Self::WaitingForPermit(waiting)),
             WorkerInstance::Running(running) => Ok(Self::Running(running)),
             WorkerInstance::Stopping(stopping) => Ok(Self::Stopping(stopping)),
@@ -551,6 +630,22 @@ pub struct UnloadedStop<'a> {
 impl UnloadedStop<'_> {
     pub fn complete(self, final_state: FinalWorkerState) -> FinalWorkerState {
         self.transition.complete(final_state)
+    }
+}
+
+pub struct InactiveStop<'a> {
+    transition: StopTransition<'a>,
+    error: WorkerExecutorError,
+}
+
+impl InactiveStop<'_> {
+    /// The agent stays inactive unless the stop requests deletion or reports a cleanup failure.
+    pub fn complete(self, final_state: FinalWorkerState) -> FinalWorkerState {
+        self.transition
+            .complete(super::stop::merge_final_worker_state(
+                FinalWorkerState::Inactive(self.error),
+                final_state,
+            ))
     }
 }
 

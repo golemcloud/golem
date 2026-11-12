@@ -1173,7 +1173,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
             match worker.lock_non_stopping_worker().await.state() {
-                WorkerInstance::Unloaded { .. } => {}
+                WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {}
                 WorkerInstance::CleanupFailed(error) => return Err(error.clone()),
                 _ => {
                     return Err(WorkerExecutorError::runtime(

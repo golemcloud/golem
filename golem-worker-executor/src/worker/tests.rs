@@ -907,9 +907,7 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
 
 #[test]
 fn reconstructed_ephemeral_agent_is_terminal() {
-    let instance = WorkerInstance::Unloaded {
-        startup_failure: Some(inactive_ephemeral_agent_error()),
-    };
+    let instance = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
 
     assert!(matches!(
         instance.startup_failure(),
