@@ -69,6 +69,7 @@ mod gc_timed_cleanup;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
+mod kept_handle_deleting_child;
 mod replay_barrier_probe;
 mod websocket_crash_probe;
 
@@ -10608,6 +10609,61 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_after_restart(
                 .is_none(),
             "re-activating a recorded RPC target in {method} must not create the deleted child"
         );
+    }
+
+    Ok(())
+}
+
+// A kept handle is answered for its pinned incarnation before the method is validated, so a
+// deleted child stays not found even when the deployed revision no longer has the method.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_to_a_deleted_child_is_not_found_after_its_component_changes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "kept-handle-updated-caller");
+    let counter = agent_id!("Counter", "kept-handle-updated-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("Counter", "kept-handle-updated-child", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+
+    let counter_worker =
+        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&counter_worker).await?;
+    // The new deployed revision still has a `Counter` agent type, but without `increment`.
+    executor
+        .update_component(&counter_component.id, &agent_rpc_rust.wasm_name)
+        .await?;
+
+    for method in KEPT_RPC_CALLS {
+        assert_kept_rpc_call_is_not_found(&executor, &caller_component, &caller, method).await?;
     }
 
     Ok(())

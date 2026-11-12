@@ -1276,7 +1276,7 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::require_expected_tool_deployment_revision;
+pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
 use ingress::{
     inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
 };

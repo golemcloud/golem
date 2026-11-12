@@ -317,7 +317,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
                     let invocation =
                         worker.invoke_and_await_with_notifier(invocation, Some(admission_tx));
-                    await_scalar_invocation(invocation, admission_rx, || {
+                    crate::worker::await_scalar_invocation(invocation, admission_rx, || {
                         publish_acceptance(acceptance_committed, accepted, &ik, accepted_revision)
                     })
                     .await?
@@ -535,45 +535,6 @@ pub(super) fn publish_acceptance(
             joined_origin_observer: false,
         })
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
-}
-
-async fn await_scalar_invocation<T>(
-    invocation: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
-    mut admission: tokio::sync::oneshot::Receiver<crate::worker::read_only_cache::AdmissionSignal>,
-    on_admitted: impl FnOnce() -> Result<(), WorkerExecutorError>,
-) -> Result<T, WorkerExecutorError> {
-    use crate::worker::read_only_cache::AdmissionSignal;
-
-    tokio::pin!(invocation);
-    tokio::select! {
-        result = &mut invocation => {
-            // Polling the invocation can both publish admission and complete. Preserve
-            // that admission even if its completed result is an execution failure.
-            let admitted = matches!(
-                admission.try_recv(),
-                Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)
-            );
-            if admitted || result.is_ok() {
-                on_admitted()?;
-            }
-            result
-        }
-        signal = &mut admission => match signal {
-            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => {
-                on_admitted()?;
-                invocation.await
-            }
-            Ok(AdmissionSignal::Failure(error)) => Err(error),
-            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
-            Err(_) => {
-                let result = invocation.await;
-                if result.is_ok() {
-                    on_admitted()?;
-                }
-                result
-            }
-        }
-    }
 }
 
 pub(super) async fn race_invocation_acceptance<A, O, R, I, F>(

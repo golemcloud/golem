@@ -2289,13 +2289,17 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
    targets carry none. Local dispatch (`services/rpc/direct.rs`) resolves the callee only through
    `get_existing_with_fingerprint`, never get-or-create, and the local streaming path uses the
-   exact-existing lookup too. A deleted or re-created child therefore fails the call with
-   `RpcError::NotFound`, which is permanent and recorded in the call's `End`; the method never
-   runs on another incarnation, and an executor restart does not create a local deleted child
-   again. The worker-service invocation request has no fingerprint field yet, so a call to a target
-   on another executor first prepares it (`RemoteInvocationRpc::ensure_expected_incarnation`): that
-   prepare can create a new incarnation, and the call then fails as `NotFound` without running the
-   method there.
+   exact-existing lookup too. Local dispatch holds no task-scope bind, so a deletion can still
+   finish between the lookup and the enqueue; a refusal before admission is therefore answered
+   with `Worker::deleted_incarnation_as_not_found`, which applies the same
+   `pinned_deletion_refusal` rule as admission. Remote dispatch sends the fingerprint in
+   `InvokeAgentRequest.expected_callee_fingerprint`; the worker service checks the incarnation
+   before it validates the method, and the target executor applies the same existing-only check.
+   Both pin the incarnation before they validate the method against its revision. A deleted
+   or re-created child therefore fails the call with `RpcError::NotFound`, which is permanent
+   and recorded in the call's `End`; a call that meets a deletion still running gets the
+   refusal an unpinned caller gets. The method never runs on another incarnation, and an
+   executor restart does not create the deleted child again.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
