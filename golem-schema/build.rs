@@ -20,6 +20,7 @@ fn main() -> miette::Result<()> {
         [
             "proto/golem/common/empty.proto",
             "proto/golem/common/uuid.proto",
+            "proto/golem/http/http.proto",
             "proto/golem/schema/schema.proto",
             "proto/golem/tool/tool.proto",
         ],

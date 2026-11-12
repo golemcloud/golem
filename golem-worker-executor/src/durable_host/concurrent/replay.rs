@@ -22,9 +22,7 @@ use tokio::sync::watch;
 /// to the awaiting [`DurableCallSession`].
 ///
 /// `tokio::sync::oneshot` already supports send-before-await, which is all this currently needs.
-/// The only "resolve happened before the awaiter registered" case is handled by the resolver's
-/// `buffered` map, not by the channel. This is kept behind a type alias so it can later be swapped
-/// for a dedicated replayable primitive.
+/// Registration precedes resolution. The replay cursor owns the per-Start lifecycle.
 pub type ReplayableOneshot<T> = oneshot::Sender<T>;
 pub type ReplayableOneshotReceiver<T> = oneshot::Receiver<T>;
 
@@ -120,37 +118,6 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Incomplete(DurableCallSession<Pair, P>),
 }
 
-/// Matches replayed `End`/`Cancelled` entries back to the [`DurableCallSession`]s awaiting them, keyed by
-/// the `OplogIndex` of the call's `Start`.
-///
-/// Lives inside the replay state behind its lock. It is fed **only** from the committed-consume
-/// hook (see [`crate::durable_host::replay_state::ReplayState`]); speculative cursor reads that
-/// roll back must never reach it.
-#[derive(Debug)]
-pub struct ConcurrentReplayResolver {
-    /// Awaiters that have registered but whose resolution has not been observed yet.
-    pending: HashMap<OplogIndex, PendingClaim>,
-    /// Marked successful completions whose payload has been read ahead and delivered to their host
-    /// continuation without advancing the positional cursor. The matching terminal still has to
-    /// be auto-drained when the cursor reaches its recorded index.
-    prefetched_terminals: HashMap<OplogIndex, OplogIndex>,
-    /// Resolutions observed before their awaiter registered. The await-resolution guard
-    /// guarantees a call's `Start` is claimed before its `End`/`Cancelled` is consumed, so on the
-    /// replay path this stays empty; it covers the resolver's own unit tests and any future entry
-    /// point that resolves without that ordering guarantee.
-    buffered: HashMap<OplogIndex, ResolutionOutcome>,
-    reconstruction_claims: Arc<ReconstructionClaimState>,
-}
-
-/// A registered awaiter of a claimed `Start`, with the `parent_start_index` the claimed entry
-/// recorded. The parent lets replay find the entity body that encloses a nested call while the
-/// call is claimed, without reading its `Start` again.
-#[derive(Debug)]
-struct PendingClaim {
-    tx: ReplayableOneshot<ResolutionOutcome>,
-    parent_start_index: Option<OplogIndex>,
-}
-
 #[derive(Debug)]
 pub(crate) struct ReconstructionClaimState {
     active_fences: watch::Sender<HashSet<OplogIndex>>,
@@ -170,24 +137,19 @@ struct HistoricalReconstructionInner {
     wallet: Option<Weak<OwnerWallet>>,
 }
 
-impl Default for ConcurrentReplayResolver {
+impl Default for ReconstructionClaimState {
     fn default() -> Self {
         let (active_fences, _) = watch::channel(HashSet::new());
         let (active_bodies, _) = watch::channel(HashSet::new());
         Self {
-            pending: HashMap::new(),
-            prefetched_terminals: HashMap::new(),
-            buffered: HashMap::new(),
-            reconstruction_claims: Arc::new(ReconstructionClaimState {
-                active_fences,
-                active_bodies,
-            }),
+            active_fences,
+            active_bodies,
         }
     }
 }
 
 impl ReconstructionClaimState {
-    fn register(
+    pub(crate) fn register(
         self: &Arc<Self>,
         start_index: OplogIndex,
         wallet: Option<Weak<OwnerWallet>>,
@@ -224,7 +186,7 @@ impl ReconstructionClaimState {
         }
     }
 
-    fn release_incomplete(&self, start_index: OplogIndex) {
+    pub(crate) fn release_incomplete(&self, start_index: OplogIndex) {
         let mut removed = false;
         let mut remaining = 0;
         self.active_fences.send_modify(|fences| {
@@ -332,192 +294,6 @@ impl Drop for HistoricalReconstructionInner {
         if let Some(wallet) = self.wallet.as_ref().and_then(Weak::upgrade) {
             wallet.finish_replayed_entity(self.start_index);
         }
-    }
-}
-
-impl ConcurrentReplayResolver {
-    pub(crate) fn reconstruction_claims(&self) -> Arc<ReconstructionClaimState> {
-        self.reconstruction_claims.clone()
-    }
-
-    pub(crate) fn register_reconstruction(
-        &self,
-        start_index: OplogIndex,
-        wallet: Option<Weak<OwnerWallet>>,
-    ) -> HistoricalReconstruction {
-        self.reconstruction_claims.register(start_index, wallet)
-    }
-
-    /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should
-    /// await on. If the resolution was already observed (buffered), the returned receiver is
-    /// pre-resolved.
-    pub fn register(
-        &mut self,
-        start_idx: OplogIndex,
-        parent_start_index: Option<OplogIndex>,
-    ) -> ReplayableOneshotReceiver<ResolutionOutcome> {
-        let (tx, rx) = oneshot::channel();
-        if let Some(resolution) = self.buffered.remove(&start_idx) {
-            let _ = tx.send(resolution);
-        } else {
-            // A `Start` index is claimed (and thus registered) exactly once: claiming advances the
-            // positional cursor past that `Start`. A second registration for the same index would
-            // mean two awaiters for one call, silently dropping the first.
-            debug_assert!(
-                !self.pending.contains_key(&start_idx),
-                "duplicate awaiter registered for Start at {start_idx}"
-            );
-            self.pending.insert(
-                start_idx,
-                PendingClaim {
-                    tx,
-                    parent_start_index,
-                },
-            );
-        }
-        rx
-    }
-
-    /// Resolves a registered awaiter, or buffers the resolution if none is registered yet.
-    ///
-    /// Test-only seam exercising the buffered (resolve-before-register) branch directly. The
-    /// production replay path uses [`Self::resolve_if_pending`] instead, so that resolutions for
-    /// calls nobody is awaiting are dropped rather than accumulating in `buffered`.
-    #[cfg(test)]
-    pub fn resolve(&mut self, start_idx: OplogIndex, resolution: Resolution) {
-        let outcome = ResolutionOutcome::Resolved(resolution);
-        if let Some(claim) = self.pending.remove(&start_idx) {
-            let _ = claim.tx.send(outcome);
-        } else {
-            self.buffered.insert(start_idx, outcome);
-        }
-    }
-
-    /// Resolves a registered awaiter if (and only if) one exists, returning whether it did.
-    ///
-    /// This is the only entry point used by the committed-consume replay hook: an `End`/`Cancelled`
-    /// for a call nobody is awaiting is silently ignored rather than buffered forever.
-    pub fn resolve_if_pending(
-        &mut self,
-        start_idx: OplogIndex,
-        terminal_idx: OplogIndex,
-        resolution: Resolution,
-    ) -> bool {
-        if let Some(claim) = self.pending.remove(&start_idx) {
-            let _ = claim.tx.send(ResolutionOutcome::Resolved(resolution));
-            true
-        } else if self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx) {
-            self.prefetched_terminals.remove(&start_idx);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Resolves an already-registered marked completion from a non-consuming oplog lookahead.
-    /// The terminal index remains registered so the positional cursor auto-drains that exact entry
-    /// later instead of exposing it to another reader.
-    pub fn resolve_prefetched(
-        &mut self,
-        start_idx: OplogIndex,
-        terminal_idx: OplogIndex,
-        resolution: Resolution,
-    ) {
-        let claim = self
-            .pending
-            .remove(&start_idx)
-            .expect("a completion is prefetched only while registering its claimed Start");
-        self.prefetched_terminals.insert(start_idx, terminal_idx);
-        let _ = claim.tx.send(ResolutionOutcome::Resolved(resolution));
-    }
-
-    /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
-    ///
-    /// Called when replay reaches the end of the oplog ([`crate::durable_host::replay_state::ReplayState::switch_to_live`]):
-    /// any call whose `Start` was committed but whose `End`/`Cancelled` never was is, by definition,
-    /// incomplete. Waking the awaiters here (rather than relying on each to notice end-of-replay
-    /// itself) is what lets a call that is *suspended* waiting for the cursor to advance — because a
-    /// concurrently-replaying sibling call owns the cursor head — make progress once replay finishes
-    /// instead of hanging forever.
-    pub fn fail_all_pending_incomplete(&mut self) {
-        for (start_idx, claim) in self.pending.drain() {
-            self.reconstruction_claims.release_incomplete(start_idx);
-            let _ = claim.tx.send(ResolutionOutcome::Incomplete);
-        }
-        self.prefetched_terminals.clear();
-    }
-
-    /// Removes a registered awaiter without resolving it. Used when a claimed call turns out to be
-    /// incomplete on replay (its `Start` is committed but its `End` never was): the awaiter is
-    /// switched to live completion, so its pending registration must not linger in the resolver.
-    pub fn unregister(&mut self, start_idx: OplogIndex) {
-        self.pending.remove(&start_idx);
-    }
-
-    pub fn unregister_incomplete(&mut self, start_idx: OplogIndex) {
-        self.pending.remove(&start_idx);
-        self.reconstruction_claims.release_incomplete(start_idx);
-    }
-
-    /// Returns whether the terminal at `terminal_idx` belongs to an active resolver claim. This is
-    /// true both for an unresolved awaiter and for a marked completion that was prefetched without
-    /// consuming its terminal.
-    ///
-    /// The replay cursor uses this to decide which `End`/`Cancelled` entries are *awaited
-    /// terminals* it may auto-drain (and route back to their awaiter) versus the ones it must leave
-    /// for their own positional consumer: scope `End`s, unclaimed `Start`s, and deterministic
-    /// markers.
-    pub fn owns_terminal(&self, start_idx: OplogIndex, terminal_idx: OplogIndex) -> bool {
-        self.pending.contains_key(&start_idx)
-            || self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx)
-    }
-
-    #[cfg(test)]
-    pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
-        self.pending.contains_key(&start_idx)
-    }
-
-    /// The `parent_start_index` recorded by the claimed `Start` at `start_idx`, while its awaiter
-    /// is registered.
-    pub fn claimed_parent(&self, start_idx: OplogIndex) -> Option<OplogIndex> {
-        self.pending
-            .get(&start_idx)
-            .and_then(|claim| claim.parent_start_index)
-    }
-
-    pub fn has_claim(&self, start_idx: OplogIndex) -> bool {
-        self.pending.contains_key(&start_idx) || self.prefetched_terminals.contains_key(&start_idx)
-    }
-
-    pub(crate) fn pending_reconstruction_starts(&self) -> HashSet<OplogIndex> {
-        let fences = self.reconstruction_claims.active_fences.borrow();
-        self.pending
-            .keys()
-            .filter(|start_index| fences.contains(start_index))
-            .copied()
-            .collect()
-    }
-
-    pub(crate) fn only_pending_reconstruction_fences_remain(
-        &self,
-        incomplete: &HashSet<OplogIndex>,
-    ) -> bool {
-        self.reconstruction_claims
-            .active_fences
-            .borrow()
-            .iter()
-            .all(|start_index| {
-                incomplete.contains(start_index) && self.pending.contains_key(start_index)
-            })
-    }
-
-    /// Returns whether the registered resolution receiver is still alive. A dropped replay handle
-    /// remains pending so its eventual terminal can be drained, but it cannot make further body
-    /// progress and therefore is not an active consumer for structural-divergence detection.
-    pub fn is_awaited(&self, start_idx: OplogIndex) -> bool {
-        self.pending
-            .get(&start_idx)
-            .is_some_and(|claim| !claim.tx.is_closed())
     }
 }
 

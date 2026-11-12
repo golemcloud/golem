@@ -31,7 +31,7 @@ pub trait StreamingAgent {
 
     #[endpoint(
         put = "/echo",
-        durable_streams(input("input"), output("$result"), allow_external_writes = true,)
+        durable_streams(input("input"), output("$result"))
     )]
     fn durable_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 

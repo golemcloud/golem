@@ -53,8 +53,6 @@ trait WeatherAgent extends BaseAgent {
     contentType = "application/vnd.golem.events"
   )
   @durableStreams(
-    allowStreamDelete = false,
-    allowInvocationDelete = false,
     maxConcurrentReadersPerStream = 8
   )
   @description("Returns a byte stream using customized durable stream routing")
