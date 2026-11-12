@@ -67,9 +67,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         CommandOutcome::WaitForWakeup
     }
 
-    /// Counts a completed external invocation, which changes the state of the agent when
-    /// `changes_state` is set, and gives whether a snapshot is the next action.
-    pub(super) async fn on_external_invocation_completed(&mut self, changes_state: bool) -> bool {
+    /// Counts a completed external invocation and gives whether a snapshot is the next action.
+    pub(super) async fn on_external_invocation_completed(&mut self) -> bool {
         self.invocations_since_snapshot += 1;
         match self.parent.snapshot_policy() {
             SnapshotPolicy::EveryNInvocation { count } => {
@@ -82,10 +81,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
             SnapshotPolicy::Periodic { .. } => {
+                self.last_state_change = self
+                    .store
+                    .lock()
+                    .await
+                    .data()
+                    .durable_ctx()
+                    .last_state_change();
                 let status = self.parent.get_last_known_status().await;
-                if changes_state {
-                    *self.last_state_change = Some(status.oplog_idx);
-                }
                 if matches!(
                     self.periodic_snapshot_action(&status),
                     PeriodicSnapshotAction::DueNow
@@ -108,7 +111,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             return PeriodicSnapshotAction::NotNeeded;
         };
         if !state_changed_since_snapshot(
-            *self.last_state_change,
+            self.last_state_change,
             status
                 .last_automatic_snapshot
                 .as_ref()

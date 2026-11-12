@@ -398,7 +398,6 @@ impl RunningWorker {
             filesystem_activity,
             filesystem_snapshot_slot,
             last_periodic_attempt: None,
-            last_state_change: None,
             unload_request,
             idle_since_millis,
             start_attempt,

@@ -465,13 +465,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             pickup_span.record("idempotency_key", tracing::field::display(idempotency_key));
         }
 
-        // The same classification as the read-only cache: only a `read_only` agent method
-        // leaves the state of the agent unchanged.
-        let changes_state = self
-            .parent
-            .read_only_context_for(&timestamped_invocation.invocation)
-            .is_none();
-
         let outcome = async {
             let mut store = self.store.lock().await;
             let mut invocation = Invocation {
@@ -492,7 +485,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         match outcome {
             CommandOutcome::Continue => {
-                if self.on_external_invocation_completed(changes_state).await {
+                if self.on_external_invocation_completed().await {
                     return CommandOutcome::Continue;
                 }
                 // Fairness: after completing one external durable
