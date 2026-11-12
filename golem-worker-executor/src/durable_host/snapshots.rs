@@ -122,7 +122,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId::from(Uuid::new_v4());
         store
             .as_context_mut()
             .data_mut()
@@ -402,7 +402,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId::from(Uuid::new_v4());
         store
             .as_context_mut()
             .data_mut()

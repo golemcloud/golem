@@ -22,7 +22,6 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     SessionStreamRole, StreamRegistrationInvocation, StreamSessionKey,
@@ -86,7 +85,7 @@ pub(super) async fn session<Ctx: WorkerCtx>(
     };
     let mut consumer = key.clone();
     consumer.idempotency_key =
-        IdempotencyKey::derived_from_bytes(&key.idempotency_key, b"golem:tool-result-consumer:v1");
+        uuid::Uuid::new_v5(&key.idempotency_key.0, b"golem:tool-result-consumer:v1").into();
     Ok(StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),

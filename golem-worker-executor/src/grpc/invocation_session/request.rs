@@ -15,8 +15,8 @@
 use super::{
     AgentId, AgentInvocation, Arc, AttachmentId, AttemptId, ComponentRevision,
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
-    HashMap, HashSet, IdempotencyKey, InputStreamAck, IntoTypedSchemaValue, InvocationRequest,
-    InvocationResponse, InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
+    HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
+    InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
     MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentId,
     PersistedInvocationTarget, PersistedStreamInvocationDescriptor, Principal,
     ProducerRegistrationRequest, ResumeAttach, ResumeAttemptDescriptor, ResumeOperation,
@@ -62,7 +62,7 @@ pub(crate) fn build_durable_streaming_request(
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
-    let idempotency_key: IdempotencyKey =
+    let idempotency_key: golem_common::model::InvocationId =
         invocation.idempotency_key().cloned().ok_or_else(|| {
             WorkerExecutorError::invalid_request(
                 "durable streaming invocations require an admitted invocation key",
@@ -328,10 +328,7 @@ pub(crate) fn build_durable_streaming_request(
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         if fingerprint.is_nil()
-            || origin
-                .idempotency_key
-                .as_ref()
-                .is_none_or(|key| key.value.is_empty())
+            || origin.idempotency_key.is_none()
             || !matches!(principal, Principal::Agent(agent) if agent.agent_id == parent)
         {
             return Err(invalid());
@@ -476,7 +473,7 @@ pub(crate) fn build_durable_streaming_request(
         })?,
     };
     Ok(DurableStreamingInvocationRequest {
-        public_session_id: idempotency_key.value.clone(),
+        public_session_id: idempotency_key.to_string(),
         expiry_policy: golem_common::base_model::durable_stream::StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt,
@@ -555,7 +552,7 @@ pub(super) fn build_resume_attempt(
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
-    let idempotency_key: IdempotencyKey = request
+    let idempotency_key: golem_common::model::InvocationId = request
         .idempotency_key
         .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume requires an idempotency key"))?
@@ -894,9 +891,20 @@ fn erase_streams(value: SchemaValue) -> SchemaValue {
 
 pub(super) fn request_idempotency_key(
     request: &InvocationRequest,
-) -> Option<golem_api_grpc::proto::golem::worker::IdempotencyKey> {
+) -> Option<golem_schema::proto::golem::common::Uuid> {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => start.idempotency_key.clone(),
+        Some(invocation_request::Request::Start(start))
+            if start.mode
+                == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32 =>
+        {
+            start
+                .idempotency_key
+                .as_ref()?
+                .value
+                .parse::<golem_common::model::InvocationId>()
+                .ok()
+                .map(Into::into)
+        }
         Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key.clone(),
         _ => None,
     }

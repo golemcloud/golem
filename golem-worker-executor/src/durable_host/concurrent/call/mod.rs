@@ -22,7 +22,6 @@ use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
 use futures::future::BoxFuture;
 use golem_common::SafeDisplay;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
@@ -188,7 +187,7 @@ pub(super) struct BegunCallExecutionScope {
     pub(super) logical_key_position: Option<OplogIndex>,
     /// The agent invocation that runs when the call begins. The call's retry errors name it, also
     /// when the call outlives it.
-    pub(super) agent_invocation: Option<IdempotencyKey>,
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -224,7 +223,7 @@ pub(super) struct CallExecutionScope {
     /// See [`BegunCallExecutionScope::logical_key_position`].
     pub(super) logical_key_position: Option<OplogIndex>,
     /// See [`BegunCallExecutionScope::agent_invocation`].
-    pub(super) agent_invocation: Option<IdempotencyKey>,
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl CallExecutionScope {

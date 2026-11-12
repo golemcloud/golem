@@ -76,7 +76,7 @@ fn tool_attachment_read_contract_roundtrips() {
         AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
         ToolAttachmentReadOutcome, ToolAttachmentSlot,
     };
-    use golem_common::model::{IdempotencyKey, OplogIndex};
+    use golem_common::model::OplogIndex;
     for (outcome, reobserves, payload) in [
         (
             ToolAttachmentReadOutcome::RawBytes {
@@ -107,7 +107,7 @@ fn tool_attachment_read_contract_roundtrips() {
                 creation_start: OplogIndex::from_u64(3),
                 slot: ToolAttachmentSlot::Stdout,
             },
-            logical_invocation: IdempotencyKey::fresh(),
+            logical_invocation: uuid::Uuid::new_v4().into(),
             observation: StreamConsumerObservation::Guest {
                 parent_start_index: Some(OplogIndex::from_u64(8)),
             },
@@ -870,9 +870,9 @@ fn test_entity_request(
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
         input,
-        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
-            "entity-stream-session".to_string(),
-        ),
+        stream_session_idempotency_key: golem_common::model::InvocationId(uuid::Uuid::from_u128(
+            601,
+        )),
     }
     .into()
 }
@@ -1124,9 +1124,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .add(OplogEntry::error(
             Some(tool_start),
             golem_common::model::oplog::OplogErrorKind::Invocation,
-            Some(golem_common::model::IdempotencyKey::new(
-                "invocation".to_string(),
-            )),
+            Some(uuid::Uuid::from_u128(602).into()),
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             None,
@@ -1974,9 +1972,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_request: HostRequest = HostRequestEntityInvocation {
         metadata: vec![1, 2, 3],
         input: entity_input.clone(),
-        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
-            "entity-stream-session".to_string(),
-        ),
+        stream_session_idempotency_key: golem_common::model::InvocationId(uuid::Uuid::from_u128(
+            601,
+        )),
     }
     .into();
     let entity_response: HostResponse = HostResponseEntityInvocation {

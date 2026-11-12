@@ -193,9 +193,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         activation,
         principal.clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::fresh(),
+        golem_common::model::InvocationId(uuid::Uuid::new_v4()),
         false,
-        IdempotencyKey::fresh(),
+        golem_common::model::InvocationId(uuid::Uuid::new_v4()),
     )
     .unwrap()
     .with_authority_wallet(authority_wallet);
@@ -214,7 +214,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             );
             let parsed = store.data().parsed_agent_id().unwrap();
             let metadata = store.data().component_metadata().metadata.clone();
-            let init_key = IdempotencyKey::fresh();
+            let init_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
             store
                 .data_mut()
                 .set_current_idempotency_key(init_key.clone())
@@ -244,7 +244,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             );
             drop(result);
             assert!(store.data().durable_ctx().total_linear_memory_size() > 0);
-            let method_key = IdempotencyKey::fresh();
+            let method_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
             store
                 .data_mut()
                 .set_current_idempotency_key(method_key.clone())

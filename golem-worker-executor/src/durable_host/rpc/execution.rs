@@ -43,10 +43,10 @@ use futures::future::Either;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::InvocationId;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::RetryContext;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -87,7 +87,7 @@ pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
 
 pub(super) fn current_streaming_origin<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
-    idempotency_key: IdempotencyKey,
+    idempotency_key: golem_common::model::InvocationId,
 ) -> StreamInvocationId {
     let caller = ctx.public_state.worker().get_initial_worker_metadata();
     StreamInvocationId {
@@ -102,7 +102,7 @@ pub(super) async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     remote_agent_id: &OwnedAgentId,
     remote_fingerprint: AgentFingerprint,
-    child_key: IdempotencyKey,
+    child_key: golem_common::model::InvocationId,
     logical_streaming_origin: StreamInvocationId,
     auth_ctx: AuthCtx,
 ) -> Result<
@@ -165,7 +165,7 @@ pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
     auth_ctx: Option<&AuthCtx>,
     idempotency_key: IdempotencyKey,
     freshness_disposition: InvocationFreshnessDisposition,
-) -> Result<Result<(InvocationId, AgentFingerprint), InternalRpcError>, Error> {
+) -> Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>, Error> {
     let auth_ctx = auth_ctx.cloned().unwrap_or_else(|| ctx.agent_auth_ctx());
     let identity = prepare_rpc_invocation_identity(
         ctx,

@@ -10,7 +10,7 @@ const TIMED_RECEIVE: &str = "golem:websocket/client::receive-with-timeout";
 async fn establish_reader_order(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
     id: &AgentId,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<()> {
     let entries = tokio::time::timeout(Duration::from_secs(10), async {
         loop {

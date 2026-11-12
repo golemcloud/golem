@@ -23,7 +23,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
+    AgentFingerprint, AgentId, AgentInvocation, InvocationId, OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
@@ -32,7 +32,7 @@ use tracing::warn;
 
 /// Work delivered only to the already existing scheduling incarnation.
 pub enum ExactExistingDelivery {
-    WakeInvocation(IdempotencyKey),
+    WakeInvocation(InvocationId),
     Resume,
     CompletePromise(PromiseId),
 }
@@ -74,7 +74,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -170,7 +170,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         let activator = self
@@ -399,7 +399,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         let worker = match self

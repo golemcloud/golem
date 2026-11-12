@@ -1380,7 +1380,7 @@ mod tests {
         ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
         PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
-    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::model::{Empty, InvocationId};
     use golem_common::schema::{
         IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
@@ -1499,7 +1499,7 @@ mod tests {
 
     fn agent_initialization() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            invocation_id: IdempotencyKey::new("init-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(1)),
             constructor_parameters: typed_string_value("constructor"),
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
@@ -1509,7 +1509,7 @@ mod tests {
 
     fn agent_method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            invocation_id: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -1533,7 +1533,7 @@ mod tests {
 
     fn process_oplog_entries() -> PublicAgentInvocation {
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-            invocation_id: IdempotencyKey::new("process-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(3)),
         })
     }
 
@@ -1783,7 +1783,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "INVOKE initialize",
-                    "invocation id:     init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1792,7 +1792,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "INVOKE generated-method",
-                    "invocation id:     method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1810,7 +1810,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "INVOKE process oplog entries",
-                    "invocation id:     process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (
@@ -1837,7 +1837,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "ENQUEUED AGENT INITIALIZATION",
-                    "invocation id:     init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1846,7 +1846,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "ENQUEUED INVOCATION generated-method",
-                    "invocation id:     method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1864,7 +1864,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "ENQUEUED PROCESS OPLOG ENTRIES",
-                    "invocation id:     process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (

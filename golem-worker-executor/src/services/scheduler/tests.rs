@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use crate::services::oplog::tests::ReadCountingIndexedStorage;
 use crate::services::oplog::{ArchiveWait, OplogService, PrimaryOplogService};
 use crate::services::promise::{PromiseService, PromiseServiceMock};
@@ -35,8 +37,8 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScheduleId,
-    ScheduledAction, ShardAssignment, ShardEpoch, ShardId,
+    AgentFingerprint, AgentId, OwnedAgentId, PromiseId, RetryConfig, ScheduleId, ScheduledAction,
+    ShardAssignment, ShardEpoch, ShardId,
 };
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -59,7 +61,7 @@ struct SchedulerWorkerAccessMock {
     promise_service: Arc<PromiseServiceMock>,
 }
 
-type ExpiryDelivery = (OwnedAgentId, AgentFingerprint, String, IdempotencyKey, u64);
+type ExpiryDelivery = (OwnedAgentId, AgentFingerprint, String, InvocationId, u64);
 
 struct ExpiryWorkerAccessMock {
     deliveries: Arc<Mutex<Vec<ExpiryDelivery>>>,
@@ -99,7 +101,7 @@ impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         self.deliveries.lock().unwrap().push((
@@ -129,7 +131,7 @@ impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -199,7 +201,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -244,7 +246,10 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         let ExactExistingDelivery::WakeInvocation(idempotency_key) = delivery else {
             unreachable!()
         };
-        self.executions.lock().unwrap().push(idempotency_key.value);
+        self.executions
+            .lock()
+            .unwrap()
+            .push(idempotency_key.to_string());
         Ok(true)
     }
 }
@@ -264,7 +269,7 @@ impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -325,7 +330,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -405,7 +410,7 @@ impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -468,7 +473,7 @@ impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
         _owned_agent_id: &OwnedAgentId,
         _target_agent_fingerprint: AgentFingerprint,
         _public_session_id: String,
-        _session_key: IdempotencyKey,
+        _session_key: InvocationId,
         _expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
@@ -907,7 +912,7 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
         },
         ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
         ScheduledAction::Resume {
@@ -1113,7 +1118,7 @@ async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_l
             DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
             ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                idempotency_key: IdempotencyKey::fresh(),
+                idempotency_key: InvocationId(Uuid::new_v4()),
                 target_worker_fingerprint,
             },
         )
@@ -1152,7 +1157,7 @@ async fn scheduled_invoke_delivery_failure_is_not_acknowledged() {
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("delivery-failure")),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
@@ -1189,7 +1194,7 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
     );
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("expiry"));
     let fingerprint = AgentFingerprint::new();
-    let session_key = IdempotencyKey::new("internal-key".into());
+    let session_key = test_invocation_id("internal-key".into());
     svc.schedule(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
         ScheduledAction::ExpireDurableStreamSession {
@@ -1388,7 +1393,7 @@ async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
             due_at,
             ScheduledAction::WakeInvocation {
                 owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
-                idempotency_key: IdempotencyKey::fresh(),
+                idempotency_key: InvocationId(Uuid::new_v4()),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1434,7 +1439,7 @@ async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
             due_at,
             ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                idempotency_key: IdempotencyKey::fresh(),
+                idempotency_key: InvocationId(Uuid::new_v4()),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1504,19 +1509,19 @@ proptest! {
                     EnvironmentId::new(),
                     &agent(&format!("agent-{agent_index}")),
                 );
-                for action_index in 0..*action_count {
-                    let execution_id = format!("{agent_index}-{action_index}");
+                for _ in 0..*action_count {
+                    let execution_id = InvocationId(Uuid::new_v4());
                     let schedule_id = svc
                         .schedule(
                             due_at,
                             ScheduledAction::WakeInvocation {
                                 owned_agent_id: owned_agent_id.clone(),
-                                idempotency_key: IdempotencyKey::new(execution_id.clone()),
+                                idempotency_key: execution_id,
                                 target_worker_fingerprint: fingerprint,
                             },
                         )
                         .await;
-                    scheduled.insert(schedule_id.id, (owned_agent_id.clone(), execution_id));
+                    scheduled.insert(schedule_id.id, (owned_agent_id.clone(), execution_id.to_string()));
                     schedule_ids.push(schedule_id.id);
                 }
             }
@@ -1654,7 +1659,7 @@ async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
@@ -1698,7 +1703,7 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
@@ -1957,7 +1962,7 @@ fn exact_actions(
     vec![
         ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
             target_worker_fingerprint: fingerprint,
         },
         ScheduledAction::Resume {
@@ -2089,4 +2094,8 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
             }
         }
     }
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

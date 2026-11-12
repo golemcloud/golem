@@ -5,7 +5,7 @@ impl ReplayState {
     pub(crate) fn tool_attachment_observation(
         &self,
         attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
-        invocation: &golem_common::model::IdempotencyKey,
+        invocation: &golem_common::model::InvocationId,
         ordinal: u64,
     ) -> Option<(OplogIndex, Option<(OplogIndex, u64)>)> {
         let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();

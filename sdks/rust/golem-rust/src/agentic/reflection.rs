@@ -1003,7 +1003,10 @@ impl TestReflectedTransport {
         Invocation {
             metadata: InvocationMetadata {
                 agent_id: ParsedAgentId::new("test-agent"),
-                invocation_id: InvocationId::new(ParsedAgentId::new("test-agent"), Uuid::nil()),
+                invocation_id: OwnedInvocationId::new(
+                    ParsedAgentId::new("test-agent"),
+                    InvocationId(Uuid::nil()),
+                ),
             },
             value: self.value.clone(),
         }
@@ -1369,34 +1372,52 @@ impl DynamicAgentMethod {
     }
 }
 
-/// Identifies one invocation. Its text form is `<agent-id>.<uuid>`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct InvocationId {
-    agent_id: ParsedAgentId,
-    uuid: Uuid,
+/// The UUID assigned to an accepted invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InvocationId(pub Uuid);
+
+impl Display for InvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
 }
 
-impl InvocationId {
-    pub fn new(agent_id: ParsedAgentId, uuid: Uuid) -> Self {
-        Self { agent_id, uuid }
+impl std::str::FromStr for InvocationId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+/// Identifies an invocation and its agent. Its text form is `<agent-id>.<uuid>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OwnedInvocationId {
+    agent_id: ParsedAgentId,
+    id: InvocationId,
+}
+
+impl OwnedInvocationId {
+    pub fn new(agent_id: ParsedAgentId, id: InvocationId) -> Self {
+        Self { agent_id, id }
     }
 
     pub fn agent_id(&self) -> &ParsedAgentId {
         &self.agent_id
     }
 
-    pub fn uuid(&self) -> Uuid {
-        self.uuid
+    pub fn id(&self) -> InvocationId {
+        self.id
     }
 }
 
-impl Display for InvocationId {
+impl Display for OwnedInvocationId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.agent_id, self.uuid)
+        write!(f, "{}.{}", self.agent_id, self.id)
     }
 }
 
-impl std::str::FromStr for InvocationId {
+impl std::str::FromStr for OwnedInvocationId {
     type Err = String;
 
     /// Splits off the last 37 characters (`.` and the UUID), because the agent ID can contain `.`.
@@ -1412,14 +1433,14 @@ impl std::str::FromStr for InvocationId {
         if agent_id.is_empty() {
             return Err(invalid());
         }
-        Ok(Self::new(ParsedAgentId::new(agent_id), uuid))
+        Ok(Self::new(ParsedAgentId::new(agent_id), InvocationId(uuid)))
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct InvocationMetadata {
     pub agent_id: ParsedAgentId,
-    pub invocation_id: InvocationId,
+    pub invocation_id: OwnedInvocationId,
 }
 
 impl From<crate::golem_agentic::golem::agent::host::InvocationMetadata> for InvocationMetadata {
@@ -1432,9 +1453,9 @@ impl InvocationMetadata {
     fn from_host(agent_id: String, invocation_id: crate::schema::wit::wire::InvocationId) -> Self {
         let agent_id = ParsedAgentId::new(agent_id);
         Self {
-            invocation_id: InvocationId::new(
+            invocation_id: OwnedInvocationId::new(
                 agent_id.clone(),
-                crate::wire_uuid_to_schema(invocation_id.id),
+                InvocationId(crate::wire_uuid_to_schema(invocation_id.id)),
             ),
             agent_id,
         }
@@ -1983,23 +2004,31 @@ mod tests {
     fn invocation_id_text_form_splits_off_the_trailing_uuid() {
         let agent_id = super::ParsedAgentId::new(r#"shop.v2/cart("a.b", "x/y")"#);
         let uuid = crate::Uuid::parse_str("0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c").unwrap();
-        let id = super::InvocationId::new(agent_id.clone(), uuid);
+        let id = super::OwnedInvocationId::new(agent_id.clone(), super::InvocationId(uuid));
         let text = id.to_string();
         assert_eq!(
             text,
             r#"shop.v2/cart("a.b", "x/y").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"#
         );
-        let parsed: super::InvocationId = text.parse().unwrap();
+        let parsed: super::OwnedInvocationId = text.parse().unwrap();
         assert_eq!(parsed.agent_id(), &agent_id);
-        assert_eq!(parsed.uuid(), uuid);
+        assert_eq!(parsed.id(), super::InvocationId(uuid));
+        assert_eq!(
+            parsed
+                .id()
+                .to_string()
+                .parse::<super::InvocationId>()
+                .unwrap(),
+            parsed.id()
+        );
         assert!(
             ".0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
-                .parse::<super::InvocationId>()
+                .parse::<super::OwnedInvocationId>()
                 .is_err()
         );
         assert!(
             "agent-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
-                .parse::<super::InvocationId>()
+                .parse::<super::OwnedInvocationId>()
                 .is_err()
         );
     }

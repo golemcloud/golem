@@ -113,6 +113,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val invDesc = p.invocation match {
           case OplogApi.AgentInvocation.ExportedFunction(params) => s"func(${params.functionName})"
           case OplogApi.AgentInvocation.AgentInitialization(key) => s"agent-init(key=$key)"
+          case OplogApi.AgentInvocation.ExternalTool(id)         => s"external-tool(id=$id)"
           case OplogApi.AgentInvocation.SaveSnapshot             => "save-snapshot"
           case OplogApi.AgentInvocation.LoadSnapshot             => "load-snapshot"
           case OplogApi.AgentInvocation.ProcessOplogEntries(key) => s"process-oplog(key=$key)"

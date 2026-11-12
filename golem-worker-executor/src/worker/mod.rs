@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 mod acquisition;
 mod ingress;
 mod persistence;
@@ -206,9 +208,9 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey,
-    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
-    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
+    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
+    ShardAssignment, ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -480,7 +482,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Holds captured origins rather than `tracing::Span`s: a durable invocation can
     /// be picked up long after the request that enqueued it returned. See
     /// [`TraceOrigin`].
-    external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
+    external_invocation_origins: Arc<RwLock<HashMap<InvocationId, TraceOrigin>>>,
 
     hydrated_invocation_results: Arc<RwLock<HydratedInvocationResultCache>>,
     ephemeral_invocation: StdMutex<EphemeralInvocationState>,
@@ -1095,14 +1097,14 @@ enum InvocationResult {
 /// Bounded cache of invocation result payloads loaded from the oplog. The status membership only
 /// stores result oplog indexes; this cache avoids repeatedly loading and decoding those entries.
 struct HydratedInvocationResultCache {
-    values: HashMap<IdempotencyKey, HydratedInvocationResultCacheEntry>,
-    insertion_order: VecDeque<IdempotencyKey>,
+    values: HashMap<InvocationId, HydratedInvocationResultCacheEntry>,
+    insertion_order: VecDeque<InvocationId>,
     capacity: usize,
     /// Committed completions the published status may not include yet, by the oplog index of
     /// their result. The early commit receipt publishes a completion before its fold, and a failed
     /// fold leaves the status detached with the key still current. Payload eviction must not make
     /// such a key look unresolved, or terminal cleanup would fail an invocation that succeeded.
-    unprojected_completions: HashMap<IdempotencyKey, UnprojectedCompletion>,
+    unprojected_completions: HashMap<InvocationId, UnprojectedCompletion>,
 }
 
 struct UnprojectedCompletion {
@@ -1257,7 +1259,7 @@ pub(crate) const INACTIVE_EPHEMERAL_AGENT_ERROR: &str =
 #[derive(Debug)]
 enum EphemeralInvocationState {
     Available,
-    Accepted(Option<IdempotencyKey>),
+    Accepted(Option<InvocationId>),
 }
 
 #[derive(Debug)]

@@ -33,7 +33,7 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
-    AgentFingerprint, DurableStreamPublicBinding, DurableStreamSessionStatus, IdempotencyKey,
+    AgentFingerprint, DurableStreamPublicBinding, DurableStreamSessionStatus, InvocationId,
     OwnedAgentId,
 };
 use golem_common::serialization::{deserialize, serialize};
@@ -86,7 +86,7 @@ pub(super) struct Metadata {
     pub(super) producer_fingerprint: Option<AgentFingerprint>,
     pub(super) lineage_discovered_through: OplogIndex,
     pub(super) stream_fork_lineage: StreamForkLineage,
-    pub(super) export_fork_initialized_sessions: HashSet<IdempotencyKey>,
+    pub(super) export_fork_initialized_sessions: HashSet<InvocationId>,
 }
 
 /// Producer identity read from the same projection as stream metadata. `covered_through` is at
@@ -623,7 +623,7 @@ impl StreamSessionIndexService {
         mode: AgentMode,
         fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
@@ -644,7 +644,7 @@ impl StreamSessionIndexService {
         mode: AgentMode,
         fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
@@ -668,7 +668,7 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let this = self.clone();
         let id = id.clone();
@@ -748,8 +748,8 @@ impl StreamSessionIndexService {
         }
     }
 
-    pub(super) fn field(key: &IdempotencyKey) -> String {
-        format!("{SESSION_FIELD_PREFIX}{}", key.value)
+    pub(super) fn field(key: &InvocationId) -> String {
+        format!("{SESSION_FIELD_PREFIX}{key}")
     }
 
     pub(super) fn public_binding_field(route_scope: &str, public_session_id: &str) -> String {
@@ -1024,7 +1024,7 @@ impl StreamSessionIndexService {
                 } else {
                     ProducerMetadataProjection::default()
                 };
-                let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
+                let mut updates = HashMap::<InvocationId, DurableStreamSessionStatus>::new();
                 let mut public_bindings =
                     HashMap::<String, Option<DurableStreamPublicBinding>>::new();
                 let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
@@ -1477,7 +1477,7 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-        key: &IdempotencyKey,
+        key: &InvocationId,
         lookup: SessionLookup,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         let horizon = match lookup {

@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -754,9 +758,9 @@ pub(in crate::worker) fn complete_stopping_worker(
 
 pub(in crate::worker) fn invocation_keys_to_fail(
     status: &AgentStatusRecord,
-    first_key: Option<&IdempotencyKey>,
+    first_key: Option<&InvocationId>,
     include_pending_and_current: bool,
-) -> Vec<IdempotencyKey> {
+) -> Vec<InvocationId> {
     let mut keys = Vec::new();
 
     if let Some(key) = first_key {

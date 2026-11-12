@@ -415,7 +415,7 @@ fn prepared_unkeyed_identity(
     start: &InvocationStart,
 ) -> Option<(
     golem_common::model::AgentId,
-    golem_common::model::IdempotencyKey,
+    golem_common::model::InvocationId,
 )> {
     let request_key =
         golem_common::model::InvocationRequestKey::try_from(start.request_key.clone()?).ok()?;
@@ -423,5 +423,5 @@ fn prepared_unkeyed_identity(
         return None;
     };
     let agent = golem_common::model::AgentId::try_from(start.agent_id.clone()?).ok()?;
-    Some((agent, golem_common::model::IdempotencyKey::from_uuid(uuid)))
+    Some((agent, golem_common::model::InvocationId(uuid)))
 }

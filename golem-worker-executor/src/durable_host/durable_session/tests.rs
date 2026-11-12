@@ -166,10 +166,7 @@ async fn forwarded_input(
     let origin = StreamSession::new(
         session.producer.clone(),
         session.oplog.clone(),
-        StreamRegistrationInvocation::Local(IdempotencyKey::new(format!(
-            "forwarded-{}",
-            handle.stream_id
-        ))),
+        StreamRegistrationInvocation::Local(handle.stream_id.0.into()),
         [],
     );
     let mapping = StreamSessionMappingRecord {
@@ -932,9 +929,14 @@ async fn assert_local_source_wait_provenance(source_kind: StreamSourceKind, expe
                     handle: handle.clone(),
                     role: SessionStreamRole::Input,
                 };
-                let key = StreamRegistrationInvocation::Local(IdempotencyKey::new(format!(
-                    "provenance-{reconstructed}-{forwarded}-{index}"
-                )));
+                let key = StreamRegistrationInvocation::Local(
+                    uuid::Uuid::from_u128(
+                        1000 + index as u128
+                            + 100 * u128::from(forwarded)
+                            + 200 * u128::from(reconstructed),
+                    )
+                    .into(),
+                );
                 let binding = if forwarded {
                     StreamBindingRecord::foreign(&mapping)
                 } else {
@@ -1778,7 +1780,7 @@ async fn append_prepared_pending(
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: identity.invocation.idempotency_key.value.clone(),
+                public_session_id: identity.invocation.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -2809,7 +2811,7 @@ impl Rpc for AttachedProducerRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: golem_common::model::IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &golem_common::model::AgentId,
         _auth: &AuthCtx,
@@ -4736,8 +4738,7 @@ async fn session_cancellation_retains_history_and_is_idempotent_under_backpressu
     }
 
     let mut unknown_key = streams.session_key.clone();
-    unknown_key.idempotency_key =
-        golem_common::model::IdempotencyKey::new("unknown-session".into());
+    unknown_key.idempotency_key = uuid::Uuid::from_u128(401).into();
     let unknown = StreamSession::new(
         producer,
         streams.oplog.clone(),
@@ -5354,7 +5355,7 @@ async fn attached_preexisting_journal_lag_counts_committed_source_events() {
         callee_environment_id: consumer_environment_id,
         callee: consumer.clone(),
         callee_fingerprint: consumer_fingerprint,
-        idempotency_key: IdempotencyKey::new("journal-lag-consumer-invocation".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(402).into(),
     };
     let attachment = StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
@@ -6711,8 +6712,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
             }
             "open" => {
                 let mut unrelated = identity.invocation.clone();
-                unrelated.idempotency_key =
-                    IdempotencyKey::new("unrelated-finished-session".into());
+                unrelated.idempotency_key = uuid::Uuid::from_u128(403).into();
                 producer
                     .finish_session(None, unrelated, None, Ok(()), StreamCancelReason::GuestDrop)
                     .await
@@ -6819,9 +6819,8 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                             StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(99)))
                     }
                     "session" => {
-                        *session = StreamRegistrationInvocation::Local(IdempotencyKey::new(
-                            "different-session".into(),
-                        ))
+                        *session =
+                            StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(404).into())
                     }
                     "role" => *role = StreamCancelRole::OutputConsumer,
                     _ => unreachable!(),
@@ -9044,7 +9043,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: identity.invocation.idempotency_key.value.clone(),
+                public_session_id: identity.invocation.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -9602,7 +9601,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
                 agent_id: "remote-producer".to_string(),
             },
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(23)),
-            idempotency_key: IdempotencyKey::new("remote-invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(405).into(),
         },
     };
     let producer_oplog = Arc::new(TestOplog::default());
@@ -9686,7 +9685,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: consumer.invocation.idempotency_key.value.clone(),
+                public_session_id: consumer.invocation.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: consumer.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -10139,7 +10138,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
                 agent_id: "remote-producer".to_string(),
             },
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(23)),
-            idempotency_key: IdempotencyKey::new("remote-invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(405).into(),
         },
     };
     let remote_producer = DurableStreamStore::load(
@@ -10184,7 +10183,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: identity.invocation.idempotency_key.value.clone(),
+                public_session_id: identity.invocation.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: identity.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -10641,7 +10640,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: session_key.idempotency_key.value.clone(),
+                public_session_id: session_key.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: session_key.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -10857,7 +10856,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: session_key.idempotency_key.value.clone(),
+                public_session_id: session_key.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: session_key.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -11268,7 +11267,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
                 agent_id: "resumed-foreign-producer".to_string(),
             },
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(73)),
-            idempotency_key: IdempotencyKey::new("resumed-foreign-producer-invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(406).into(),
         },
     };
     let producer_oplog = Arc::new(TestOplog::default());
@@ -11383,7 +11382,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: consumer.invocation.idempotency_key.value.clone(),
+                public_session_id: consumer.invocation.idempotency_key.to_string(),
                 route_scope: None,
                 session_key: consumer.invocation.idempotency_key.clone(),
                 expiry_policy: StreamSessionExpiryPolicy::None,
@@ -11560,7 +11559,7 @@ fn session_control_metadata_keeps_cancellation_scoped_to_its_session() {
     let identity = identity();
     let key = identity.invocation.clone();
     let mut other = key.clone();
-    other.idempotency_key = golem_common::model::IdempotencyKey::new("other-session".into());
+    other.idempotency_key = uuid::Uuid::from_u128(407).into();
     let mut metadata = SessionControlMetadata::default();
     let owner = golem_common::model::OwnedAgentId::new(key.callee_environment_id, &key.callee);
     metadata.set_finished_for_test(OplogIndex::INITIAL);
@@ -12076,7 +12075,7 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
             schema_fingerprint_v1(&graph, Some(&SchemaType::u8())).unwrap();
         let handle = producer.register(None, request).await.unwrap().value;
         let mut target = owner.invocation.clone();
-        target.idempotency_key = IdempotencyKey::new("forward-target".into());
+        target.idempotency_key = uuid::Uuid::from_u128(408).into();
         let destination = StreamSession::new(
             producer.clone(),
             oplog.clone(),
@@ -12166,7 +12165,7 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
                 StreamSession::new(
                     producer.clone(),
                     oplog.clone(),
-                    StreamRegistrationInvocation::Local(IdempotencyKey::new("conflict".into())),
+                    StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(409).into()),
                     [],
                 )
             } else {
@@ -12272,7 +12271,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                 .await
                 .unwrap();
                 let mut target = owner.invocation.clone();
-                target.idempotency_key = IdempotencyKey::new("forward-target".into());
+                target.idempotency_key = uuid::Uuid::from_u128(408).into();
                 let destination_reference = if remote {
                     StreamRegistrationInvocation::Remote(target)
                 } else {
@@ -12557,7 +12556,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     .reader_id(&source_binding)
                     .unwrap();
                 let mut target = owner.invocation.clone();
-                target.idempotency_key = IdempotencyKey::new("output-destination".into());
+                target.idempotency_key = uuid::Uuid::from_u128(410).into();
                 let destination_reference = if nested {
                     StreamRegistrationInvocation::Remote(target.clone())
                 } else {
@@ -13667,8 +13666,7 @@ async fn recovered_forward_reservation_does_not_publish_or_reallocate_its_slot()
         },
     )
     .await;
-    let destination =
-        StreamRegistrationInvocation::Local(IdempotencyKey::new("reserved-destination".into()));
+    let destination = StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(411).into());
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 47,
         handle: handles[0].clone(),

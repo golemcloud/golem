@@ -25,7 +25,7 @@
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use golem_common::base_model::Empty;
-use golem_common::base_model::IdempotencyKey;
+use golem_common::base_model::InvocationId;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocation;
@@ -170,7 +170,7 @@ fn method_input_value() -> SchemaValue {
 
 fn agent_method_invocation() -> AgentInvocation {
     AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::new("bench-key".to_string()),
+        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
         method_name: METHOD_NAME.to_string(),
         input: method_input_value(),
         invocation_context: InvocationContextStack::fresh(),

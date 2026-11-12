@@ -32,7 +32,7 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, IdempotencyKey, PromiseId};
+use golem_common::model::{AgentId, InvocationId, PromiseId};
 use golem_common::schema::FromSchema;
 #[cfg(test)]
 use golem_common::schema::{SchemaGraph, SchemaType};
@@ -103,7 +103,7 @@ async fn phase<T>(
         .map_err(|e| error(name, format!("{e:#}")))
 }
 
-fn session_key(report: &SessionCheckpoint) -> anyhow::Result<IdempotencyKey> {
+fn session_key(report: &SessionCheckpoint) -> anyhow::Result<InvocationId> {
     report
         .idempotency_key
         .clone()
@@ -115,7 +115,7 @@ fn worker(iteration: &RecoveryIteration, index: usize) -> anyhow::Result<AgentId
         .map_err(anyhow::Error::msg)
 }
 
-fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<IdempotencyKey>> {
+fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<InvocationId>> {
     let mut keys = Vec::new();
     for entry in history {
         if let PublicOplogEntry::StreamSession(session) = &entry.entry
@@ -133,7 +133,7 @@ fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<Id
 async fn wait_finished(
     iteration: &RecoveryIteration,
     index: usize,
-    expected: &[IdempotencyKey],
+    expected: &[InvocationId],
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
     let id = worker(iteration, index)?;
     loop {
@@ -269,7 +269,7 @@ fn validate_report(
 
 fn validate_execution(
     history: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &InvocationId,
 ) -> anyhow::Result<()> {
     let starts = history
         .iter()

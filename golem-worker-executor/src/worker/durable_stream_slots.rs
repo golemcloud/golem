@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::durable_host::durable_stream::{
     CommittedProducerStreamEventPayload, DurableStreamStore, ExternalAppendOutcome,
     ExternalProducer, SessionError, StreamHandleReadResult, StreamStoreError, StreamWriteAdmission,
 };
 use golem_common::model::DurableStreamPublicBinding;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::ScheduledAction;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, DurableStreamReadRequest,
@@ -39,7 +44,7 @@ pub struct CreateStreamSessionResult {
     pub session: String,
     pub replayed: bool,
     pub component_revision: ComponentRevision,
-    pub invocation_key: IdempotencyKey,
+    pub invocation_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
 }
@@ -54,7 +59,7 @@ pub struct StreamSessionCreationAdmission {
     _guard: OwnedMutexGuard<()>,
     public_session_id: String,
     pub(super) route_scope: String,
-    invocation_key: IdempotencyKey,
+    invocation_key: InvocationId,
     expiry_policy: StreamSessionExpiryPolicy,
     expiry_deadline_millis: Option<u64>,
 }
@@ -62,7 +67,7 @@ pub struct StreamSessionCreationAdmission {
 #[derive(Clone)]
 struct PublicStreamSessionBinding {
     route_scope: String,
-    invocation_key: IdempotencyKey,
+    invocation_key: InvocationId,
     expiry_policy: StreamSessionExpiryPolicy,
     expiry_deadline_millis: Option<u64>,
 }
@@ -75,7 +80,7 @@ enum StreamSessionExpiryTransition {
 }
 
 impl StreamSessionCreationAdmission {
-    pub fn invocation_key(&self) -> &IdempotencyKey {
+    pub fn invocation_key(&self) -> &InvocationId {
         &self.invocation_key
     }
 }
@@ -96,7 +101,7 @@ pub struct ReadStreamSlotRequest {
 pub enum StreamSlotReadAdmission {
     TouchingOriginGet,
     Head,
-    Continuation(IdempotencyKey),
+    Continuation(InvocationId),
 }
 
 /// One domain item returned by a stream-slot read.
@@ -126,7 +131,7 @@ pub struct ReadStreamSlotResult {
     pub tombstoned: bool,
     pub writable: bool,
     pub fork: Option<golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotSuccess>,
-    pub invocation_key: IdempotencyKey,
+    pub invocation_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
 }
@@ -190,7 +195,7 @@ pub enum AppendStreamSlotOutcome {
 
 pub struct AppendToStreamSlotResult {
     pub outcome: AppendStreamSlotOutcome,
-    pub invocation_key: Option<IdempotencyKey>,
+    pub invocation_key: Option<InvocationId>,
     pub expiry_policy: Option<StreamSessionExpiryPolicy>,
     pub expiry_deadline_millis: Option<u64>,
     pub stream_head_offset: Option<StreamOffset>,
@@ -389,8 +394,8 @@ impl SlotSchema {
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn stream_session_content_key(
         &self,
-        invocation_key: &IdempotencyKey,
-    ) -> Result<IdempotencyKey, WorkerExecutorError> {
+        invocation_key: &InvocationId,
+    ) -> Result<InvocationId, WorkerExecutorError> {
         Ok(self
             .durable_stream_session_status(invocation_key)
             .await?
@@ -403,7 +408,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owner: &Arc<DurableStreamStore>,
         admission: &Arc<StreamWriteAdmission>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
         expired_at_millis: u64,
     ) -> Result<(), AdmittedTouchError> {
@@ -466,7 +471,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn schedule_stream_session_expiry(
         &self,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         deadline_millis: Option<u64>,
     ) -> Result<(), WorkerExecutorError> {
         let Some(deadline_millis) = deadline_millis else {
@@ -514,7 +519,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn expire_stream_session_transition(
         self: &Arc<Self>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<StreamSessionExpiryTransition, WorkerExecutorError> {
         let Some(route_scope) = self
@@ -576,7 +581,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn deliver_stream_session_expiry(
         self: &Arc<Self>,
         public_session_id: String,
-        invocation_key: IdempotencyKey,
+        invocation_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         let transition = self
@@ -683,7 +688,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         route_scope: &str,
         public_session_id: &str,
-    ) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+    ) -> Result<Option<InvocationId>, WorkerExecutorError> {
         Ok(self
             .resolve_public_stream_session_binding(route_scope, public_session_id)
             .await?
@@ -728,15 +733,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 scope: route_scope.clone(),
                 key: generation,
             };
-            IdempotencyKey::from_uuid(
-                prepared
-                    .finalize(
-                        self.agent_id().clone(),
-                        self.initial_worker_metadata.fingerprint,
-                        operation,
-                    )
-                    .uuid(),
-            )
+            prepared
+                .finalize(
+                    self.agent_id().clone(),
+                    self.initial_worker_metadata.fingerprint,
+                    operation,
+                )
+                .id()
         };
         let (invocation_key, expiry_policy, expiry_deadline_millis) = match binding {
             Some(DurableStreamPublicBinding::Live {
@@ -765,7 +768,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
                 StreamSessionCreationIntent::ExplicitPut => (
-                    fresh_key(IdempotencyKey::new(uuid::Uuid::new_v4().to_string())),
+                    fresh_key(IdempotencyKey::from_uuid(Uuid::new_v4())),
                     requested_expiry_policy,
                     new_deadline()?,
                 ),
@@ -774,7 +777,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 fresh_key(if self.agent_mode() == AgentMode::Ephemeral {
                     IdempotencyKey::new(public_session_id.clone())
                 } else {
-                    IdempotencyKey::new(uuid::Uuid::new_v4().to_string())
+                    IdempotencyKey::from_uuid(Uuid::new_v4())
                 }),
                 requested_expiry_policy,
                 new_deadline()?,
@@ -871,7 +874,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Resolves the pinned revision for a stream-slot session before transport decoding.
     pub async fn stream_session_revision(
         &self,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<ComponentRevision, WorkerExecutorError> {
         let producer = self.durable_stream_producer().await?;
         let pinned = producer
@@ -946,7 +949,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resolve_stream_slot_by_key(
         &self,
-        session_key: &IdempotencyKey,
+        session_key: &InvocationId,
         name: &str,
         expected_method: Option<&str>,
     ) -> Result<Option<Slot>, WorkerExecutorError> {
@@ -1927,7 +1930,7 @@ mod tests {
                 "1",
                 "route",
             ),
-            invocation_key: IdempotencyKey::new("invocation".into()),
+            invocation_key: InvocationId(Uuid::from_u128(1)),
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
             expiry_deadline_millis: Some(20_000),
         };
@@ -2049,7 +2052,7 @@ mod tests {
             callee_environment_id: environment,
             callee: id.clone(),
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("source-session".into()),
+            idempotency_key: InvocationId(Uuid::from_u128(2)),
         };
         let first = DurableStreamHandle {
             format_version: 1,

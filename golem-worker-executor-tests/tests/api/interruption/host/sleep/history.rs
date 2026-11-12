@@ -40,7 +40,7 @@ fn names(abi: Abi) -> (&'static str, &'static str) {
 
 pub(super) fn invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
     let mut current = false;
@@ -90,7 +90,7 @@ fn deliveries(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Vec<O
 
 pub(super) fn sleep_record(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     abi: Abi,
     finished: bool,
 ) -> anyhow::Result<Option<SleepRecord>> {

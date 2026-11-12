@@ -66,7 +66,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
-pub use invocation_id::{IdempotencyScope, InvocationId, InvocationRequestKey};
+pub use invocation_id::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
@@ -149,6 +149,9 @@ newtype_uuid!(
     wit_name: "agent-fingerprint",
     wit_owner: "golem:core@2.0.0/types"
 );
+
+// The unique part of an accepted invocation identity, without its owning agent.
+newtype_uuid!(InvocationId);
 
 #[cfg(feature = "full")]
 impl From<Timestamp> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {

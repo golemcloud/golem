@@ -1,5 +1,4 @@
 use super::*;
-use golem_common::model::IdempotencyKey;
 
 /// Acceptance predicate of the unconditional positional readers of the Store whose entries are
 /// attributed to `scope` (`None` for the primary agent Store, the entity invocation `Start` index
@@ -1171,7 +1170,7 @@ impl ReplayState {
     /// A recorded terminal naming another invocation is a divergence.
     pub async fn get_oplog_entry_agent_invocation_finished(
         &self,
-        invocation_id: &IdempotencyKey,
+        invocation_id: &golem_common::model::InvocationId,
     ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
         // The walk to the finished marker tolerates live-only abandoned durable-call records
         // (see `AbandonedStarts`): the replayed guest has already produced its invocation

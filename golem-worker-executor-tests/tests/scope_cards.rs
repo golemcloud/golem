@@ -924,7 +924,7 @@ struct RecordedWalletReads {
 impl RecordedWalletReads {
     fn find(
         entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
         read: WalletRead,
     ) -> Option<Self> {
         let started = entries.iter().find_map(|(index, entry)| {
@@ -1529,7 +1529,7 @@ struct RecordedCardDecisions {
 impl RecordedCardDecisions {
     fn find(
         entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
         decision: CardDecision,
     ) -> Option<Self> {
         let started = entries.iter().find_map(|(index, entry)| {

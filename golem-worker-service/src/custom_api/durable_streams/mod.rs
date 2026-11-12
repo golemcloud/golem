@@ -319,7 +319,7 @@ impl DurableStreamsHandler {
         max_items: u32,
         wait_millis: u64,
         admission: golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission,
-        invocation_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+        invocation_key: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> Result<Option<ReadStreamSlotSuccess>, RequestHandlerError> {
         let result = self
             .worker_service

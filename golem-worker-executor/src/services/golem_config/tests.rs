@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::{
     DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
     FilesystemSnapshotsKind, FilesystemStorageMode, GolemConfig, InvocationResultsConfig, Limits,
@@ -295,7 +299,7 @@ fn invocation_results_config_constructs_configured_membership() {
     let mut membership = config.membership();
     for index in 1..=6 {
         membership.insert(
-            golem_common::model::IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
             golem_common::model::InvocationResultPosition {
                 terminal: golem_common::model::oplog::OplogIndex::from_u64(index),
                 request: None,

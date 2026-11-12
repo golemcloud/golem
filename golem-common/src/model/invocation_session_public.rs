@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
+use crate::model::InvocationId;
 use crate::schema::SchemaGraph;
 
 pub const INVOCATION_SESSION_SUBPROTOCOL: &str = "golem.agent-invocation.v1";
@@ -467,7 +468,7 @@ pub enum PublicServerMessage {
         #[serde(rename = "attemptId")]
         attempt_id: Uuid,
         #[serde(rename = "idempotencyKey")]
-        idempotency_key: String,
+        idempotency_key: InvocationId,
         mappings: Vec<PublicStreamMapping>,
         #[serde(rename = "sessionToken")]
         session_token: String,

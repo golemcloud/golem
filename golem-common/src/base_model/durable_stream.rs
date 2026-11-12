@@ -15,7 +15,7 @@
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
     SchemaFingerprintV1, SchemaType, SchemaValue, TypeId,
@@ -137,14 +137,15 @@ impl AttachmentId {
     pub fn primary(
         callee_environment_id: EnvironmentId,
         callee: &AgentId,
-        invocation_key: &IdempotencyKey,
+        invocation_key: &InvocationId,
     ) -> Result<Self, DurableStreamIdentityError> {
         let agent_name = callee.agent_id.as_bytes();
         let agent_name_length: u32 = agent_name
             .len()
             .try_into()
             .map_err(|_| DurableStreamIdentityError::AgentNameTooLong)?;
-        let invocation_key = invocation_key.value.as_bytes();
+        let invocation_key = invocation_key.to_string();
+        let invocation_key = invocation_key.as_bytes();
         let invocation_key_length: u32 = invocation_key
             .len()
             .try_into()
@@ -343,7 +344,7 @@ pub struct StreamInvocationId {
     pub callee_environment_id: EnvironmentId,
     pub callee: AgentId,
     pub callee_fingerprint: AgentFingerprint,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: InvocationId,
 }
 
 pub type StreamSessionKey = StreamInvocationId;
@@ -481,12 +482,12 @@ pub struct StreamSessionMapping {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamRegistrationInvocation {
-    Local(IdempotencyKey),
+    Local(InvocationId),
     Remote(StreamInvocationId),
 }
 
 impl StreamRegistrationInvocation {
-    pub fn idempotency_key(&self) -> &IdempotencyKey {
+    pub fn idempotency_key(&self) -> &InvocationId {
         match self {
             Self::Local(idempotency_key) => idempotency_key,
             Self::Remote(invocation) => &invocation.idempotency_key,
@@ -757,7 +758,7 @@ impl StreamSessionExpiryPolicy {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
     pub route_scope: Option<String>,
     pub expiry_policy: StreamSessionExpiryPolicy,
@@ -771,7 +772,7 @@ pub struct StreamSessionPreparedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionExpiryRefreshedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
     pub route_scope: String,
     pub expected_deadline_millis: u64,
@@ -784,7 +785,7 @@ pub struct StreamSessionExpiryRefreshedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionExpiredRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
     pub route_scope: String,
     pub expected_deadline_millis: u64,
@@ -1089,7 +1090,7 @@ pub struct StreamTopologyActivatedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionAttachedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attachment_id: AttachmentId,
     pub attempt_id: AttemptId,
     pub epoch: u64,
@@ -1132,7 +1133,7 @@ pub struct ResumeAttemptDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionResumeAttemptRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attempt: ResumeAttemptDescriptor,
     pub accepted_epoch: u64,
 }
@@ -1142,7 +1143,7 @@ pub struct StreamSessionResumeAttemptRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionDetachedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attachment_id: AttachmentId,
     pub owner_attempt_id: AttemptId,
     pub epoch: u64,
@@ -1327,7 +1328,7 @@ pub struct StreamConsumerCancelIntentRecord {
     pub format_version: u8,
     pub session_key: StreamRegistrationInvocation,
     /// The consumer's invocation, relative to the oplog owner.
-    pub consumer_invocation: IdempotencyKey,
+    pub consumer_invocation: InvocationId,
     pub source: StreamRecordReference,
     pub epoch: u64,
     pub role: StreamCancelRole,
@@ -1451,7 +1452,7 @@ pub struct StreamExportForkCandidate {
     pub cut: OplogIndex,
     pub selected: StreamId,
     pub source_invocation: StreamInvocationId,
-    pub target_session_key: IdempotencyKey,
+    pub target_session_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub retained_through: Option<StreamOffset>,
@@ -1477,7 +1478,7 @@ pub struct StreamExportForkInitializedRecord {
     pub format_version: u8,
     pub public_session_id: String,
     pub route_scope: String,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub source_invocation: StreamInvocationId,
     pub request_hash: Vec<u8>,
     pub expiry_policy: StreamSessionExpiryPolicy,
@@ -1558,7 +1559,7 @@ impl StreamSessionRecord {
     }
 
     /// Identifies records that can change this owner's callee-side session lifecycle.
-    pub fn local_session_key(&self) -> Option<&IdempotencyKey> {
+    pub fn local_session_key(&self) -> Option<&InvocationId> {
         let reference = match self {
             Self::Prepared(record) => return Some(&record.session_key),
             Self::ExpiryRefreshed(record) => return Some(&record.session_key),
@@ -1954,7 +1955,7 @@ mod tests {
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
-    use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+    use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
     use golem_schema::schema::SchemaFingerprintV1;
     use proptest::prelude::*;
     use test_r::test;
@@ -1987,7 +1988,7 @@ mod tests {
             AttachmentId::primary(
                 environment_id,
                 &agent_id,
-                &IdempotencyKey::new("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                &InvocationId(uuid::uuid!("550e8400-e29b-41d4-a716-446655440000")),
             )
             .unwrap()
             .to_string(),
@@ -2095,7 +2096,7 @@ mod tests {
                 agent_id: "consumer".to_string(),
             },
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
-            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
         };
         let mut record = StreamConsumerItemValueRecord {
             format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
@@ -2144,7 +2145,7 @@ mod tests {
             callee_environment_id: session_environment_id,
             callee: session_authority.clone(),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(13)),
-            idempotency_key: IdempotencyKey::new("child-session".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543211)),
         };
         let consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
         let consumer = AgentId {
@@ -2156,7 +2157,7 @@ mod tests {
             callee_environment_id: consumer_environment_id,
             callee: consumer.clone(),
             callee_fingerprint: consumer_fingerprint,
-            idempotency_key: IdempotencyKey::new("parent-invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
         };
         let attachment_id = AttachmentId::primary(
             session_environment_id,
@@ -2184,7 +2185,7 @@ mod tests {
             AttachmentId::primary(
                 consumer_environment_id,
                 &consumer,
-                &IdempotencyKey::new("parent-invocation".to_string()),
+                &InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
             )
             .unwrap()
         );
@@ -2196,7 +2197,7 @@ mod tests {
 
         let mut relabelled_session = key;
         relabelled_session.session_key.idempotency_key =
-            IdempotencyKey::new("different-child-session".to_string());
+            InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543213));
         assert!(!relabelled_session.is_well_formed());
     }
 
@@ -2209,7 +2210,7 @@ mod tests {
             agent_id: "agent".to_string(),
         };
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
-        let idempotency_key = IdempotencyKey::new("invocation".to_string());
+        let idempotency_key = InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210));
         let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
@@ -2230,7 +2231,7 @@ mod tests {
         let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
-            public_session_id: session_key.idempotency_key.value.clone(),
+            public_session_id: session_key.idempotency_key.to_string(),
             route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
@@ -2276,7 +2277,7 @@ mod tests {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("tool-invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         };
         let attachment_id =
             AttachmentId::primary(environment_id, &agent_id, &session_key.idempotency_key).unwrap();
@@ -2297,7 +2298,7 @@ mod tests {
         let mut prepared = StreamSessionPreparedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
-            public_session_id: session_key.idempotency_key.value.clone(),
+            public_session_id: session_key.idempotency_key.to_string(),
             route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,

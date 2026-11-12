@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -152,7 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn durable_stream_session_status(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
         let status = self.state_actor.status().await;
         self.worker_service()
@@ -178,7 +180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn prepared_stream_session(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
@@ -196,7 +198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn native_tool_session(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<Option<(StreamSessionPreparedRecord, StreamSession)>, WorkerExecutorError> {
         let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
             return Ok(None);
@@ -291,7 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Persists stream-bearing result mappings and returns the transport value.
     pub(crate) async fn materialize_durable_streaming_result(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         value: golem_common::schema::SchemaValue,
         graph: &golem_common::schema::SchemaGraph,
         root: &golem_common::schema::SchemaType,
@@ -335,7 +337,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records a failed terminal for the invocation's durable stream session.
     pub async fn fail_durable_streaming_session(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         details: String,
     ) -> Result<(), WorkerExecutorError> {
         self.finish_durable_streaming_session(idempotency_key, Err(details))
@@ -344,14 +346,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records a successful terminal for the invocation's durable stream session.
     pub async fn complete_durable_streaming_session(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         self.finish_durable_streaming_session(idempotency_key, Ok(()))
             .await
     }
     pub(in crate::worker) async fn finish_durable_streaming_session(
         &self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         result: Result<(), String>,
     ) -> Result<(), WorkerExecutorError> {
         let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {

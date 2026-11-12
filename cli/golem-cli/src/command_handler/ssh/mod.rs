@@ -62,7 +62,7 @@ use anyhow::anyhow;
 use golem_client::api::WorkerClient;
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
-use golem_common::model::AgentStatus;
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_common::schema::tool::Tool;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
@@ -248,7 +248,11 @@ async fn cancel_call(ctx: &Arc<Context>, owner: &ToolOwner, key: &CallKey) -> an
         .golem_clients()
         .await?
         .worker
-        .cancel_invocation(&agent.component_id.0, &agent.agent_id, &accepted.value)
+        .cancel_invocation(
+            &agent.component_id.0,
+            &agent.agent_id,
+            &accepted.to_string(),
+        )
         .await
         .map(|result| result.canceled)
         .map_service_error()?)
@@ -932,13 +936,14 @@ impl SshCommandHandler {
     /// cannot be had in time, which leaves the lookup command to the user.
     async fn finished_result(&self, session: &Session, key: &CallKey) -> Option<BashResult> {
         let accepted = key.accepted()?;
+        let accepted_key = IdempotencyKey::new(accepted.to_string());
         let tool_handler = self.ctx.tool_handler();
         let lookup = tool_handler.invoke_tool_scalar(
             &session.owner,
             &session.tool,
             vec![RUN.to_string()],
             None,
-            &accepted,
+            &accepted_key,
             NativeToolInvocationMode::Lookup,
             None,
         );
@@ -1041,7 +1046,7 @@ impl SshCommandHandler {
                     Some(accepted) => format!(
                         "The directory the command ended in is unknown, so the session ends. \
                          Invocation key: {}",
-                        accepted.value
+                        accepted
                     ),
                     None => "The directory the command ended in is unknown, so the session ends."
                         .to_string(),
@@ -1102,7 +1107,7 @@ impl SshCommandHandler {
                 &crate::command_name(),
                 &self.global_args(),
                 &session.agent,
-                &accepted.value,
+                &accepted.to_string(),
                 &session.tool,
             )
         ));

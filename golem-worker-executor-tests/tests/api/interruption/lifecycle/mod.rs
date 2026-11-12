@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 fn completed_invocation_payload(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<(OplogIndex, OplogIndex, PayloadId)> {
     let starts: Vec<_> = entries
         .iter()

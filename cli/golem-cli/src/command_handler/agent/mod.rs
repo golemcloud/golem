@@ -725,10 +725,13 @@ impl AgentCommandHandler {
             })?;
 
         // The key the server accepted the invocation under, which cancels and looks it up.
-        let accepted_key = IdempotencyKey::new(result.idempotency_key.clone());
+        let accepted_key = result
+            .idempotency_key
+            .parse::<golem_common::model::InvocationId>()
+            .context("the server returned an invalid invocation ID")?;
         if let Some((goal, handle)) = connect_handle.take() {
             if let Some(goal) = goal {
-                goal.set_target(accepted_key.to_uuid());
+                goal.set_target(accepted_key);
                 goal.set_output_written();
             }
             let _ = timeout(Duration::from_secs(3), handle).await;
@@ -841,18 +844,37 @@ impl AgentCommandHandler {
         .await?;
 
         // The REPL writes the accepted invocation ID to stdin once the call returns.
-        if let Some(goal) = connection.invocation_goal() {
-            tokio::spawn(async move {
+        let invocation_target = if let Some(goal) = connection.invocation_goal() {
+            Some(async move {
                 use tokio::io::AsyncBufReadExt;
                 let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
                 if let Ok(Some(line)) = lines.next_line().await {
-                    goal.set_target(IdempotencyKey::new(line.trim().to_string()).to_uuid());
+                    goal.set_target(
+                        line.trim()
+                            .parse::<golem_common::model::InvocationId>()
+                            .context("stdin contains an invalid invocation ID")?,
+                    );
                     goal.set_output_written();
                 }
-            });
-        }
+                Ok::<_, anyhow::Error>(())
+            })
+        } else {
+            None
+        };
 
-        connection.run_forever().await?;
+        if let Some(target) = invocation_target {
+            let connection = connection.run_forever();
+            tokio::pin!(connection);
+            tokio::select! {
+                result = &mut connection => result?,
+                result = target => {
+                    result?;
+                    connection.await?;
+                }
+            }
+        } else {
+            connection.run_forever().await?;
+        }
 
         Ok(())
     }

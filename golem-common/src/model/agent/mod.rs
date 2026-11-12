@@ -53,9 +53,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::base_model::IdempotencyKey;
 pub use crate::base_model::agent::*;
 pub use crate::base_model::worker::*;
+use crate::base_model::{IdempotencyKey, InvocationId};
 use crate::model::account::AccountId;
 use crate::model::component::ComponentId;
 use crate::model::component_metadata::{self, ComponentMetadata};
@@ -612,7 +612,7 @@ pub enum ScheduledAction {
     /// A missing agent or a fingerprint mismatch drops the action without creating an agent.
     WakeInvocation {
         owned_agent_id: OwnedAgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
@@ -625,7 +625,7 @@ pub enum ScheduledAction {
         owned_agent_id: OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     },
 }
@@ -684,9 +684,9 @@ impl ScheduleId {
         Self { id: Uuid::now_v7() }
     }
 
-    pub fn for_invocation(fingerprint: AgentFingerprint, key: &IdempotencyKey) -> Self {
+    pub fn for_invocation(fingerprint: AgentFingerprint, key: &InvocationId) -> Self {
         Self {
-            id: Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
+            id: Uuid::new_v5(&fingerprint.0, key.to_string().as_bytes()),
         }
     }
 }
@@ -729,29 +729,29 @@ pub enum AgentEvent {
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     StdErr {
         timestamp: Timestamp,
         bytes: Vec<u8>,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     Log {
         timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     InvocationStart {
         timestamp: Timestamp,
         function: String,
-        invocation_id: Uuid,
+        invocation_id: InvocationId,
     },
     InvocationFinished {
         timestamp: Timestamp,
         function: String,
-        invocation_id: Uuid,
+        invocation_id: InvocationId,
     },
     PluginError {
         timestamp: Timestamp,

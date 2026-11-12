@@ -371,11 +371,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.state.set_current_idempotency_key(key)
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
         self.state.get_current_idempotency_key()
     }
 

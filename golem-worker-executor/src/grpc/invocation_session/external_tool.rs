@@ -90,7 +90,7 @@ where
             agent_fingerprint: None,
         };
         if mode == Mode::Lookup {
-            let key: IdempotencyKey = request
+            let key = request
                 .idempotency_key
                 .clone()
                 .ok_or_else(|| {
@@ -98,7 +98,13 @@ where
                         "external tool lookup requires an invocation identity",
                     )
                 })?
-                .into();
+                .value
+                .parse::<golem_common::model::InvocationId>()
+                .map_err(|error| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "invalid invocation identity: {error}"
+                    ))
+                })?;
             response.idempotency_key = Some(key.clone());
             let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
             let Some(metadata) = metadata else {
@@ -264,12 +270,9 @@ where
                 )
                 .await?;
             let metadata = worker.get_initial_worker_metadata();
-            let key = IdempotencyKey::new(
-                request_key
-                    .finalize(metadata.agent_id, metadata.fingerprint, &operation)
-                    .uuid()
-                    .to_string(),
-            );
+            let key = request_key
+                .finalize(metadata.agent_id, metadata.fingerprint, &operation)
+                .id();
             response.idempotency_key = Some(key.clone());
             let invocation = AgentInvocation::ExternalTool {
                 idempotency_key: key.clone(),
@@ -317,12 +320,9 @@ where
             )?;
         }
         let metadata = worker.get_latest_worker_metadata().await;
-        let key = IdempotencyKey::new(
-            request_key
-                .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)
-                .uuid()
-                .to_string(),
-        );
+        let key = request_key
+            .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)
+            .id();
         response.idempotency_key = Some(key.clone());
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);

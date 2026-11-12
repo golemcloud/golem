@@ -24,7 +24,7 @@ use golem_common::model::oplog::OplogEntry;
 use golem_common::model::oplog::attachment::{
     ToolAttachmentId, ToolAttachmentReadObservation, ToolAttachmentReadOutcome,
 };
-use golem_common::model::{IdempotencyKey, OplogIndex, Timestamp};
+use golem_common::model::{OplogIndex, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::pin::Pin;
@@ -52,7 +52,7 @@ pub(super) struct AttachmentInputProducer<U: 'static, Ctx: WorkerCtx> {
     source: AttachmentStreamProducer,
     controller: AttachmentController,
     attachment: ToolAttachmentId,
-    invocation: IdempotencyKey,
+    invocation: golem_common::model::InvocationId,
     getter: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
     ordinal: Arc<AtomicU64>,
     attempt: Arc<AtomicU64>,
@@ -288,7 +288,7 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
 
 struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
     attachment: ToolAttachmentId,
-    invocation: IdempotencyKey,
+    invocation: golem_common::model::InvocationId,
     ordinal: u64,
     attempt: Arc<AtomicU64>,
     parent: Option<OplogIndex>,
@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
 pub(crate) struct NativeAttachmentInput {
     source: AttachmentStreamProducer,
     controller: AttachmentController,
-    binding: Option<(ToolAttachmentId, IdempotencyKey)>,
+    binding: Option<(ToolAttachmentId, golem_common::model::InvocationId)>,
     ordinal: u64,
     attempt: Arc<AtomicU64>,
     pending: Option<futures::future::BoxFuture<'static, anyhow::Result<PreparedRead>>>,

@@ -13814,6 +13814,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         invocationKey:
           type: string
+          format: uuid
         oplogIndex:
           type: integer
           format: uint64

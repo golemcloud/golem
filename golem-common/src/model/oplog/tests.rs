@@ -56,8 +56,8 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, AgentInvocationPayload, ComponentId, Empty, IdempotencyKey, OplogIndex,
-    Timestamp, TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, Empty, OplogIndex, Timestamp,
+    TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -294,7 +294,9 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
         result: StreamEndResult::ErrorContext(vec![9]),
         ..successful_end.clone()
     };
-    let session_key = StreamRegistrationInvocation::Local(IdempotencyKey::new("stream".into()));
+    let session_key = StreamRegistrationInvocation::Local(
+        Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
+    );
     let successful_session = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
         format_version: 1,
         session_key: session_key.clone(),
@@ -1289,7 +1291,7 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
             method_name: "test".to_string(),
             function_input: typed(
                 SchemaType::tuple(vec![
@@ -1343,7 +1345,7 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
 
     let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
             output: typed(
                 SchemaType::r#enum(vec![
@@ -1393,7 +1395,7 @@ fn error_serialization_poem_serde_equivalence() {
         let entry = PublicOplogEntry::Error(ErrorParams {
             timestamp: Timestamp::now_utc().rounded(),
             kind: OplogErrorKind::Invocation,
-            invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
+            invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
             error: "test".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state,
@@ -1444,7 +1446,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
     let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
             constructor_parameters: typed(
                 SchemaType::tuple(vec![SchemaType::string()]),
                 SchemaValue::Tuple {
@@ -1481,7 +1483,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
         timestamp: Timestamp::now_utc().rounded(),
         not_before: None,
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
             constructor_parameters: typed(
                 SchemaType::tuple(vec![SchemaType::tuple(vec![])]),
                 SchemaValue::Tuple {
@@ -1511,7 +1513,7 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         not_before: Some(Timestamp::from(123_456)),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            invocation_id: IdempotencyKey::new("idempotency_key".to_string()),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into(),
             method_name: "test".to_string(),
             function_input: typed(
                 SchemaType::tuple(vec![
@@ -1729,7 +1731,7 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let raw = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before,
-            invocation_id: IdempotencyKey::new("pending".to_string()),
+            invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
                     &crate::model::AgentInvocationPayload::SaveSnapshot,
@@ -1747,6 +1749,14 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         assert_eq!(raw, decoded);
         let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
             raw.clone().try_into().unwrap();
+        match proto.entry.as_ref().unwrap() {
+            golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::PendingAgentInvocation(pending) => {
+                let id = pending.invocation_id.as_ref().unwrap();
+                assert_eq!(id.high_bits, 0x0123456789abcdef);
+                assert_eq!(id.low_bits, 0xfedcba9876543213);
+            }
+            entry => panic!("unexpected raw entry: {entry:?}"),
+        }
         let decoded: OplogEntry = proto.try_into().unwrap();
         assert_eq!(raw, decoded);
 
@@ -1770,7 +1780,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
 
     let finished = OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::from(1_000),
-        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
         result: OplogPayload::SerializedInline {
             bytes: crate::serialization::serialize(
                 &crate::model::AgentInvocationResult::AgentInitialization,
@@ -1786,7 +1796,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         timestamp: Timestamp::from(2_000),
         entity_parent_start_index: None,
         kind: OplogErrorKind::Invocation,
-        invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
+        invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
         error: AgentError::TransientError("failed".to_string()),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
@@ -1820,7 +1830,7 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
         timestamp: Timestamp::from(3_000),
         entity_parent_start_index: None,
         kind: OplogErrorKind::Recovery,
-        invocation_id: Some(IdempotencyKey::new("some-invocation".to_string())),
+        invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543214).into()),
         error: AgentError::TransientError("recovery".to_string()),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
@@ -1833,16 +1843,31 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
 fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
     let finished = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation_id: IdempotencyKey::new("finished-invocation".to_string()),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
         result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
         method_name: None,
         consumed_fuel: 7,
         component_revision: ComponentRevision::INITIAL,
     });
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        finished.clone().try_into().unwrap();
+    match proto.entry.unwrap() {
+        golem_api_grpc::proto::golem::worker::oplog_entry::Entry::AgentInvocationFinished(
+            finished,
+        ) => {
+            let id = finished.invocation_id.unwrap();
+            assert_eq!(id.high_bits, 0x0123456789abcdef);
+            assert_eq!(id.low_bits, 0xfedcba9876543211);
+        }
+        entry => panic!("unexpected public entry: {entry:?}"),
+    }
+    let mut invalid = serde_json::to_value(&finished).unwrap();
+    invalid["invocationId"] = serde_json::json!("arbitrary request seed");
+    assert!(serde_json::from_value::<PublicOplogEntry>(invalid).is_err());
     let invocation_error = PublicOplogEntry::Error(ErrorParams {
         timestamp: Timestamp::now_utc().rounded(),
         kind: OplogErrorKind::Invocation,
-        invocation_id: Some(IdempotencyKey::new("failed-invocation".to_string())),
+        invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
         error: "failed".to_string(),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
@@ -1935,7 +1960,7 @@ fn revert_serialization_poem_serde_equivalence() {
 fn cancel_pending_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation_id: IdempotencyKey::new("cancel-key".to_string()),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543215).into(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2419,7 +2444,7 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     };
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation_id: IdempotencyKey::new("wallet-pin".to_string()),
+        invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
@@ -2854,6 +2879,7 @@ mod scope_projection {
     use crate::model::{OplogIndex, Timestamp, TransactionId};
     use std::collections::HashMap;
     use test_r::test;
+    use uuid::Uuid;
 
     fn idx(i: u64) -> OplogIndex {
         OplogIndex::from_u64(i)
@@ -2916,7 +2942,7 @@ mod scope_projection {
                 OplogEntry::error(
                     Some(idx(10)),
                     OplogErrorKind::Invocation,
-                    Some(crate::model::IdempotencyKey::new("invocation".to_string())),
+                    Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into()),
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
                     None,
@@ -2927,7 +2953,7 @@ mod scope_projection {
                 OplogEntry::error(
                     None,
                     OplogErrorKind::Invocation,
-                    Some(crate::model::IdempotencyKey::new("invocation".to_string())),
+                    Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into()),
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
                     None,

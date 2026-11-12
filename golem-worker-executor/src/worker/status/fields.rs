@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
+use golem_common::model::InvocationId;
 use golem_common::model::card::{
     SourceCardTransferConfirmed, SourceCardTransferIndex, SourceCardTransferRecords,
     SourceCardTransferStarted, SourceCardTransferState, StoredCard,
@@ -645,12 +646,12 @@ pub(super) fn calculate_invocation_results(
 /// entries of the pending ones. A result takes the position of its request from here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct InvocationRequests {
-    pub current: Option<IdempotencyKey>,
+    pub current: Option<InvocationId>,
     pub current_started_at: Option<OplogIndex>,
-    pub pending: HashMap<IdempotencyKey, OplogIndex>,
+    pub pending: HashMap<InvocationId, OplogIndex>,
     /// The last invocation cancelled before it started, with its `PendingAgentInvocation` entry.
     /// A permission-denied `Error` can follow the cancellation and name the same invocation.
-    pub cancelled: Option<(IdempotencyKey, OplogIndex)>,
+    pub cancelled: Option<(InvocationId, OplogIndex)>,
 }
 
 impl InvocationRequests {
@@ -673,7 +674,7 @@ impl InvocationRequests {
         }
     }
 
-    fn request_of(&self, key: &IdempotencyKey) -> Option<OplogIndex> {
+    fn request_of(&self, key: &InvocationId) -> Option<OplogIndex> {
         if self.current.as_ref() == Some(key) {
             self.current_started_at
         } else {
@@ -698,7 +699,7 @@ pub(crate) fn fold_invocation_result_entries(
     requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    mut observe_result: impl FnMut(&IdempotencyKey, InvocationResultPosition),
+    mut observe_result: impl FnMut(&InvocationId, InvocationResultPosition),
 ) {
     for (oplog_idx, entry) in entries {
         // Pending requests follow `calculate_pending_invocations`, which keeps them in deleted

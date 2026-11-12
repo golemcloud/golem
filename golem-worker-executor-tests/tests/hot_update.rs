@@ -1246,7 +1246,6 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::IdempotencyKey;
     use golem_common::model::card::{
         Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
         parse_permission_fields, parse_polymorphic_permission,
@@ -1310,7 +1309,7 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 CardManagedByRuntimeDerived {
                     environment_id: context.default_environment_id,
                     agent_id: worker.clone(),
-                    invocation_key: IdempotencyKey::fresh(),
+                    invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                     oplog_index: OplogIndex::INITIAL,
                 },
             )

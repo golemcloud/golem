@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
@@ -289,7 +290,7 @@ pub enum EphemeralStart {
 /// as a schedule whose commit a caller is still repairing.
 pub fn ephemeral_inspection_may_start(
     status: &AgentStatusRecord,
-    initialization_key: &IdempotencyKey,
+    initialization_key: &InvocationId,
     now: Timestamp,
 ) -> bool {
     status.ephemeral_execution_begun
@@ -305,7 +306,7 @@ pub fn ephemeral_inspection_may_start(
 /// for later: its constructor reservation alone does not make it due.
 pub fn ephemeral_start_decision(
     status: &AgentStatusRecord,
-    initialization_key: &IdempotencyKey,
+    initialization_key: &InvocationId,
     now: Timestamp,
 ) -> EphemeralStart {
     if status.ephemeral_execution_begun {

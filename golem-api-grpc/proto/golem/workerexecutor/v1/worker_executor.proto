@@ -508,7 +508,7 @@ message RevertWorkerResponse {
 
 message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
-  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.UUID idempotency_key = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
@@ -602,7 +602,7 @@ message CreateStreamSessionSuccess {
   string session = 1;
   bool replayed = 2;
   uint64 component_revision = 3;
-  golem.worker.IdempotencyKey invocation_key = 4;
+  golem.common.UUID invocation_key = 4;
   StreamSessionExpiryPolicy expiry_policy = 5;
   optional uint64 expiry_deadline_millis = 6;
 }
@@ -631,7 +631,7 @@ message ReadStreamSlotRequest {
   // Restricts the session to the method authorized by the HTTP route.
   string expected_method = 10;
   StreamSlotReadAdmission admission = 11;
-  optional golem.worker.IdempotencyKey invocation_key = 12;
+  optional golem.common.UUID invocation_key = 12;
   string route_scope = 13;
 }
 
@@ -672,7 +672,7 @@ message ReadStreamSlotSuccess {
   bool writable = 12;
   // Creation provenance for an exported fork, independent of subsequent progress.
   ForkStreamSlotSuccess fork = 13;
-  golem.worker.IdempotencyKey invocation_key = 14;
+  golem.common.UUID invocation_key = 14;
   StreamSessionExpiryPolicy expiry_policy = 15;
   optional uint64 expiry_deadline_millis = 16;
 }
@@ -715,7 +715,7 @@ message ForkStreamSlotSuccess {
   bytes fork_offset = 3;
   uint64 sub_offset = 4;
   uint64 oplog_index = 5;
-  golem.worker.IdempotencyKey invocation_key = 6;
+  golem.common.UUID invocation_key = 6;
 }
 
 message ForkStreamSlotRejection {
@@ -789,7 +789,7 @@ message AppendToStreamSlotResponse {
     golem.common.Empty gone = 8;
     golem.common.Empty read_only = 9;
   }
-  golem.worker.IdempotencyKey invocation_key = 10;
+  golem.common.UUID invocation_key = 10;
   StreamSessionExpiryPolicy expiry_policy = 11;
   optional uint64 expiry_deadline_millis = 12;
   bytes stream_head_offset = 13;
@@ -800,7 +800,7 @@ message ProcessOplogEntriesRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 component_revision = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.UUID idempotency_key = 4;
   golem.common.AccountId account_id = 5;
   map<string, string> config = 6;
   golem.worker.AgentMetadata metadata = 7;

@@ -41,10 +41,10 @@ use futures::future::Either;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::InvocationId;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
@@ -185,7 +185,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
     child_key: &IdempotencyKey,
     method_name: &str,
     freshness: InvocationFreshnessDisposition,
-) -> anyhow::Result<Result<(InvocationId, AgentFingerprint), InternalRpcError>> {
+) -> anyhow::Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>> {
     let request_key = InvocationRequestKey::Internal(child_key.clone());
     let (fingerprint, creation_data) = {
         let payload = ctx

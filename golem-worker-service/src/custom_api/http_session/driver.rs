@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::worker::{
     StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item, invocation_request,
     invocation_response,
 };
-use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey};
+use golem_common::model::{AgentId, InvocationId, InvocationRequestKey};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,7 +48,7 @@ pub(super) async fn run_session(
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
     completed: Arc<AtomicBool>,
-    cleanup_identity: Arc<OnceLock<(AgentId, IdempotencyKey)>>,
+    cleanup_identity: Arc<OnceLock<(AgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
     let mut input = InputProgress::default();
@@ -262,7 +262,7 @@ pub(super) async fn run_session(
             match accepted_identity(current.clone()) {
                 Ok(identity) => {
                     let agent = current.agent_id.clone().unwrap().try_into().unwrap();
-                    let key = current.idempotency_key.clone().unwrap().into();
+                    let key = current.idempotency_key.unwrap().into();
                     let _ = cleanup_identity.set((agent, key));
                     accepted = Some(identity);
                 }

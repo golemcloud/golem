@@ -39,6 +39,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result,
 };
 use golem_common::SafeDisplay;
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
@@ -2308,7 +2309,7 @@ fn translate_accepted(
         .map(|value| required_uuid(Some(value), "callee fingerprint"))
         .transpose()?
         .unwrap_or_else(|| deterministic_uuid(b"non-durable-callee"));
-    let idempotency_key: golem_common::model::IdempotencyKey = accepted
+    let idempotency_key: InvocationId = accepted
         .idempotency_key
         .clone()
         .ok_or_else(|| AdapterError::protocol("accepted response has no idempotency key"))?
@@ -2359,8 +2360,7 @@ fn translate_accepted(
             }
         }
     }
-    let logical_invocation_id =
-        invocation_uuid(&agent_id, &idempotency_key.value, callee_incarnation);
+    let logical_invocation_id = invocation_uuid(&agent_id, &idempotency_key, callee_incarnation);
     state.tokens = Some(TokenContext {
         bindings: bindings.clone(),
         key_id: token_key_id.to_string(),
@@ -2376,7 +2376,7 @@ fn translate_accepted(
                 application: state.application.clone().unwrap_or_default(),
                 environment: state.environment.clone().unwrap_or_default(),
                 agent: encoded_identity,
-                idempotency_key: idempotency_key.value.clone(),
+                idempotency_key: idempotency_key.to_string(),
                 logical_invocation_id,
                 attachment_id,
                 expected_attachment_generation: accepted.epoch,
@@ -2413,7 +2413,7 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
-        idempotency_key: idempotency_key.value,
+        idempotency_key,
         mappings,
         session_token,
         version: 1,
@@ -3124,7 +3124,7 @@ fn required_uuid(
 
 fn invocation_uuid(
     agent_id: &golem_common::model::AgentId,
-    idempotency_key: &str,
+    idempotency_key: &InvocationId,
     callee_incarnation: Uuid,
 ) -> Uuid {
     let identity = format!("{}\0{idempotency_key}\0{callee_incarnation}", agent_id);
@@ -3392,7 +3392,11 @@ mod tests {
         }
     }
 
-    fn idempotency_key() -> Option<ProtoIdempotencyKey> {
+    fn idempotency_key() -> Option<ProtoUuid> {
+        Some(proto_uuid(5))
+    }
+
+    fn request_idempotency_key() -> Option<ProtoIdempotencyKey> {
         Some(ProtoIdempotencyKey {
             value: "session-key".to_string(),
         })
@@ -3494,7 +3498,7 @@ mod tests {
                 InvocationStart {
                     method_name: Some("run".to_string()),
                     input: Some(input),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -3969,6 +3973,7 @@ mod tests {
             )
             .unwrap();
             let PublicServerMessage::InvocationAccepted {
+                idempotency_key,
                 mappings,
                 session_token,
                 ..
@@ -3987,6 +3992,16 @@ mod tests {
             let InvocationSessionTokenPayload::Session(session) = verified.payload else {
                 panic!("expected session token")
             };
+            assert_eq!(idempotency_key, InvocationId(Uuid::from_u128(5)));
+            assert_eq!(session.idempotency_key, idempotency_key.to_string());
+            let agent_id: golem_common::model::AgentId = proto_agent_id().try_into().unwrap();
+            assert_eq!(
+                session.logical_invocation_id,
+                Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("{agent_id}\0{idempotency_key}\0{}", Uuid::from_u128(4)).as_bytes(),
+                )
+            );
             assert_eq!(
                 decode_session_agent_identity(&session.agent)
                     .unwrap()
@@ -4429,7 +4444,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4564,7 +4579,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4851,7 +4866,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,
@@ -4932,7 +4947,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,

@@ -1423,9 +1423,7 @@ mod tests {
             session_key: reference.clone(),
             reader_id: reader,
             destination: StreamReaderForwardDestination::SessionBinding {
-                session_key: StreamRegistrationInvocation::Local(
-                    golem_common::model::IdempotencyKey::new("destination".into()),
-                ),
+                session_key: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(301).into()),
                 binding: sibling,
                 publication: StreamReaderForwardPublication::InvocationResult { handle_index: 0 },
             },
@@ -1679,8 +1677,7 @@ mod tests {
         )
         .unwrap();
         attachment.epoch = 3;
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("consumer-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(302).into();
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: StreamRegistrationInvocation::Remote(source.clone()),
@@ -1732,8 +1729,7 @@ mod tests {
                 .has_committed_cancellation(&attachment, &mapping, &intent)
                 .unwrap()
         );
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("other-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(303).into();
         assert!(
             !forked
                 .has_committed_cancellation(&attachment, &mapping, &intent)

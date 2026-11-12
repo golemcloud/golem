@@ -26,7 +26,7 @@ use golem_common::base_model::durable_stream::{
     StreamConsumerTerminal, StreamConsumerTerminalRecord, StreamOffset,
     StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSourceUnavailableRecord,
 };
-use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
 use test_r::test;
 use uuid::Uuid;
@@ -525,7 +525,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         .await
         .unwrap();
     let mut later_session = identity.invocation.clone();
-    later_session.idempotency_key = IdempotencyKey::new("later".into());
+    later_session.idempotency_key = uuid::Uuid::from_u128(201).into();
     producer
         .append_session_record(
             None,
@@ -1429,7 +1429,7 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     let source_session = identity.invocation.clone();
     let target_session = continuation_session(&source_session, "fork-output-only");
     let mut output_only_source = source_session.clone();
-    output_only_source.idempotency_key = IdempotencyKey::new("output-only".to_string());
+    output_only_source.idempotency_key = uuid::Uuid::from_u128(202).into();
     let mut output_only_target = output_only_source.clone();
     output_only_target.callee = target_session.callee.clone();
     output_only_target.callee_fingerprint = target_session.callee_fingerprint;

@@ -16,7 +16,7 @@ use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
 use futures::{StreamExt, stream};
-use golem_common::model::{IdempotencyKey, LogLevel};
+use golem_common::model::{InvocationId, LogLevel};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -43,14 +43,9 @@ pub trait WorkerEventService: Send + Sync {
     /// structured log entries are also included. The stream is guaranteed to contain information only emitted during the _last_ invocation.
     fn get_last_invocation_errors(&self) -> String;
 
-    fn emit_invocation_start(
-        &self,
-        function: &str,
-        idempotency_key: &IdempotencyKey,
-        is_live: bool,
-    ) {
+    fn emit_invocation_start(&self, function: &str, idempotency_key: &InvocationId, is_live: bool) {
         self.emit_event(
-            InternalWorkerEvent::invocation_start(function, idempotency_key.to_uuid()),
+            InternalWorkerEvent::invocation_start(function, *idempotency_key),
             is_live,
         )
     }
@@ -58,11 +53,11 @@ pub trait WorkerEventService: Send + Sync {
     fn emit_invocation_finished(
         &self,
         function: &str,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         is_live: bool,
     ) {
         self.emit_event(
-            InternalWorkerEvent::invocation_finished(function, idempotency_key.to_uuid()),
+            InternalWorkerEvent::invocation_finished(function, *idempotency_key),
             is_live,
         )
     }

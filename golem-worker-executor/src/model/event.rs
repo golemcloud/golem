@@ -1,6 +1,5 @@
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{AgentEvent, LogLevel, OplogIndex, Timestamp, oplog};
-use uuid::Uuid;
+use golem_common::model::{AgentEvent, InvocationId, LogLevel, OplogIndex, Timestamp, oplog};
 
 // Internal version of AgentEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -8,29 +7,29 @@ pub enum InternalWorkerEvent {
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     StdErr {
         timestamp: Timestamp,
         bytes: Vec<u8>,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     Log {
         timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
-        invocation_id: Option<Uuid>,
+        invocation_id: Option<InvocationId>,
     },
     InvocationStart {
         timestamp: Timestamp,
         function: String,
-        invocation_id: Uuid,
+        invocation_id: InvocationId,
     },
     InvocationFinished {
         timestamp: Timestamp,
         function: String,
-        invocation_id: Uuid,
+        invocation_id: InvocationId,
     },
     PluginError {
         timestamp: Timestamp,
@@ -49,7 +48,7 @@ pub enum InternalWorkerEvent {
 }
 
 impl InternalWorkerEvent {
-    pub fn stdout(bytes: Vec<u8>, invocation_id: Option<Uuid>) -> Self {
+    pub fn stdout(bytes: Vec<u8>, invocation_id: Option<InvocationId>) -> Self {
         Self::StdOut {
             timestamp: Timestamp::now_utc(),
             bytes,
@@ -57,7 +56,7 @@ impl InternalWorkerEvent {
         }
     }
 
-    pub fn stderr(bytes: Vec<u8>, invocation_id: Option<Uuid>) -> Self {
+    pub fn stderr(bytes: Vec<u8>, invocation_id: Option<InvocationId>) -> Self {
         Self::StdErr {
             timestamp: Timestamp::now_utc(),
             bytes,
@@ -65,7 +64,12 @@ impl InternalWorkerEvent {
         }
     }
 
-    pub fn log(level: LogLevel, context: &str, message: &str, invocation_id: Option<Uuid>) -> Self {
+    pub fn log(
+        level: LogLevel,
+        context: &str,
+        message: &str,
+        invocation_id: Option<InvocationId>,
+    ) -> Self {
         Self::Log {
             timestamp: Timestamp::now_utc(),
             level,
@@ -75,7 +79,7 @@ impl InternalWorkerEvent {
         }
     }
 
-    pub fn invocation_start(function: &str, invocation_id: Uuid) -> Self {
+    pub fn invocation_start(function: &str, invocation_id: InvocationId) -> Self {
         Self::InvocationStart {
             timestamp: Timestamp::now_utc(),
             function: function.to_string(),
@@ -83,7 +87,7 @@ impl InternalWorkerEvent {
         }
     }
 
-    pub fn invocation_finished(function: &str, invocation_id: Uuid) -> Self {
+    pub fn invocation_finished(function: &str, invocation_id: InvocationId) -> Self {
         Self::InvocationFinished {
             timestamp: Timestamp::now_utc(),
             function: function.to_string(),

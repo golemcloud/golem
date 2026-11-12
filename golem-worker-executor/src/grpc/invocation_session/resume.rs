@@ -49,7 +49,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )?;
             let lookup = InvocationStart {
                 agent_id: resume.agent_id.clone(),
-                idempotency_key: resume.idempotency_key.clone(),
+                idempotency_key: resume.idempotency_key.clone().map(|key| {
+                    golem_common::model::IdempotencyKey::from_uuid(uuid::Uuid::from(key)).into()
+                }),
                 auth_ctx: resume.auth_ctx.clone(),
                 principal: resume.principal.clone(),
                 environment_id: resume.environment_id,

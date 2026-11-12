@@ -65,7 +65,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId,
+    OwnedAgentId,
 };
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
@@ -75,6 +75,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
+use uuid::Uuid;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
 use golem_common::related_span;
@@ -90,7 +91,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
-use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 

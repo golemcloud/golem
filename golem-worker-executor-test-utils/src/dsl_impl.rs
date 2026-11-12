@@ -1247,7 +1247,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)

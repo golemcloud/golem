@@ -748,8 +748,7 @@ async fn persisted_finished_session_rejects_new_events_after_cold_load_and_evict
 
     for ordinal in 0..130 {
         let mut other = session.clone();
-        other.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("open-session-{ordinal}"));
+        other.idempotency_key = uuid::Uuid::from_u128(1000 + ordinal as u128).into();
         cold.ensure_session_accepts_new_events(&other)
             .await
             .unwrap();
@@ -1277,8 +1276,7 @@ async fn persisted_reconciliation_pages_active_catalogue_without_payloads() {
             &fixture.identity,
             handle.stream_id,
         );
-        key.session_key.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("consumer-{ordinal}"));
+        key.session_key.idempotency_key = uuid::Uuid::from_u128(2000 + ordinal as u128).into();
         key.consumer_invocation = key.session_key.clone();
         key.attachment_id = AttachmentId::primary(
             key.consumer_environment_id,
@@ -2239,8 +2237,7 @@ async fn persisted_session_catalogue_includes_mapping_free_foreign_sessions_once
         let producer = fixture.producer().await;
         for ordinal in range {
             let mut session = fixture.identity.invocation.clone();
-            session.idempotency_key =
-                golem_common::model::IdempotencyKey::new(format!("outbound-{ordinal}"));
+            session.idempotency_key = uuid::Uuid::from_u128(3000 + ordinal as u128).into();
             session.callee.agent_id = "foreign()".into();
             let repeated = !expected.insert(session.clone());
             let reader_id = local_reader(1, 0);

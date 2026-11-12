@@ -18,7 +18,6 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
     ServerFrame, SessionTransportError, encode_generated_streamless_value,
 };
-use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::invocation_session_public::{
@@ -26,6 +25,7 @@ use golem_common::model::invocation_session_public::{
     PublicInvocationResult, PublicOutputStreamOutcome, PublicResumeOperation, PublicServerMessage,
     PublicStreamDirection, PublicStreamMapping,
 };
+use golem_common::model::{IdempotencyKey, InvocationId};
 use golem_common::schema::SchemaValue;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use std::collections::BTreeMap;
@@ -69,7 +69,7 @@ pub struct SessionEvents {
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionCheckpoint {
-    pub idempotency_key: Option<IdempotencyKey>,
+    pub idempotency_key: Option<InvocationId>,
     pub result: Option<PublicInvocationResult>,
     pub outputs: BTreeMap<StreamId, OutputObservation>,
     pub attempts: Vec<SessionEvents>,
@@ -130,7 +130,7 @@ impl SessionCheckpoint {
             } => {
                 self.channels.clear();
                 self.install_mappings(mappings)?;
-                let key = IdempotencyKey::new(idempotency_key.clone());
+                let key = *idempotency_key;
                 if let Some(previous) = &self.idempotency_key {
                     ensure!(previous == &key, "reattachment changed invocation identity");
                 }
@@ -307,10 +307,7 @@ impl PublicInvocationSession {
                 pending_operation: Some(start),
                 session_token: None,
             },
-            SessionCheckpoint {
-                idempotency_key: Some(key),
-                ..Default::default()
-            },
+            SessionCheckpoint::default(),
             timeout,
         )
         .await
@@ -465,7 +462,7 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
-            idempotency_key: "invocation".to_string(),
+            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),
             version: INVOCATION_SESSION_VERSION,
@@ -484,7 +481,7 @@ mod tests {
             completed: None,
         };
         let mut checkpoint = SessionCheckpoint {
-            idempotency_key: Some(IdempotencyKey::new("invocation".to_string())),
+            idempotency_key: Some(InvocationId(uuid::Uuid::from_u128(1))),
             attempts: vec![event()],
             ..Default::default()
         };

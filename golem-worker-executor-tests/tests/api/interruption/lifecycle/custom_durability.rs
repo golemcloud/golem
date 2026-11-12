@@ -26,7 +26,7 @@ async fn history(worker: &Worker<Context>) -> anyhow::Result<BTreeMap<OplogIndex
 
 fn roots(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> Vec<(OplogIndex, DurableInvocationId)> {
     let anchors: Vec<_> = entries
         .iter()
@@ -91,7 +91,7 @@ fn observations(entries: &BTreeMap<OplogIndex, OplogEntry>, owner: OplogIndex) -
 
 fn finished_for_key(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> Vec<OplogIndex> {
     let mut current = false;
     let mut finished = Vec::new();
@@ -113,7 +113,7 @@ fn finished_for_key(
 fn assert_completed(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     original: &[(OplogIndex, DurableInvocationId)],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) {
     assert_eq!(roots(entries, key), original);
     for (start, _) in original {

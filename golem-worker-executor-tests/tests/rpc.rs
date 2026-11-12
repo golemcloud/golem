@@ -4815,7 +4815,7 @@ fn origin_observer_start(
             callee_environment_id: Some(component.environment_id.into()),
             callee: Some(caller.clone().into()),
             callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            idempotency_key: Some(golem_common::model::InvocationId::new().into()),
         }),
         ..Default::default()
     }

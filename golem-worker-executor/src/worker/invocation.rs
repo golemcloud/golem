@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use crate::durable_host::durability::{
     ClassifiedHostError, DurabilityHost, DurableCallTrapContextMarker, DurableRecoveryFailure,
     DurableRecoveryFailureKind, SemanticTrapRetryOverrideMarker,
@@ -34,7 +36,7 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
-use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
@@ -58,7 +60,7 @@ pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         payload: golem_common::model::oplog::OplogPayload<
             golem_common::model::AgentInvocationPayload,
         >,
@@ -124,7 +126,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     invocation: crate::worker::HydratedInvocation,
-    stream_session: Option<&IdempotencyKey>,
+    stream_session: Option<&InvocationId>,
 ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -169,7 +171,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    stream_session: Option<&IdempotencyKey>,
+    stream_session: Option<&InvocationId>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -220,7 +222,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    stream_session: Option<&IdempotencyKey>,
+    stream_session: Option<&InvocationId>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -439,7 +441,7 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     result: Result<InvokeResult, WorkerExecutorError>,
     display_name: &str,
-    idempotency_key: &IdempotencyKey,
+    idempotency_key: &InvocationId,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let Ok(InvokeResult::Succeeded {
         result: invocation_result,
@@ -2071,7 +2073,6 @@ mod tests {
     use golem_common::base_model::Empty;
     use golem_common::base_model::agent::Snapshotting;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::{AgentTypeName, Principal};
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::RawSnapshotData;
@@ -2083,6 +2084,7 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+    use uuid::Uuid;
 
     #[test]
     async fn finalization_selected_owner_failure_cannot_replace_later_shard_loss() {
@@ -2481,7 +2483,7 @@ mod tests {
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
         AgentInvocation::AgentMethod {
-            idempotency_key: IdempotencyKey::new("k".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(1)),
             method_name: METHOD_NAME.to_string(),
             input,
             invocation_context: InvocationContextStack::fresh(),
@@ -2507,7 +2509,7 @@ mod tests {
     fn load_snapshot_uses_read_only_strictness() {
         let lowered = lower_invocation(
             AgentInvocation::LoadSnapshot {
-                idempotency_key: IdempotencyKey::new("snapshot-load".to_string()),
+                idempotency_key: InvocationId(Uuid::from_u128(2)),
                 snapshot: RawSnapshotData {
                     data: vec![1, 2, 3],
                     mime_type: "application/octet-stream".to_string(),
@@ -2526,7 +2528,7 @@ mod tests {
     fn save_snapshot_does_not_use_read_only_strictness() {
         let lowered = lower_invocation(
             AgentInvocation::SaveSnapshot {
-                idempotency_key: IdempotencyKey::new("snapshot-save".to_string()),
+                idempotency_key: InvocationId(Uuid::from_u128(3)),
             },
             &metadata(),
             Some(&agent_id()),

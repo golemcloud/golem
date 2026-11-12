@@ -19028,6 +19028,14 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
     initialize_git_harness(&harness, "main").await?;
     let cwd = string_list(&["/workspace/repo"]);
     let cancelled_key = IdempotencyKey::fresh();
+    let cancelled_id = harness
+        .executor
+        .finalized_invocation_key(
+            &harness.worker_id,
+            &golem_common::model::InvocationRequestKey::Internal(cancelled_key.clone()),
+            "tool:git/config",
+        )
+        .await?;
 
     {
         let mut active_git_gate = harness
@@ -19114,7 +19122,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         assert!(
             harness
                 .executor
-                .cancel_invocation(&harness.worker_id, &cancelled_key)
+                .cancel_invocation(&harness.worker_id, &cancelled_id)
                 .await?,
             "queued Git invocation must be cancellable"
         );
@@ -19131,7 +19139,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         matches!(
             &entry.entry,
             PublicOplogEntry::CancelPendingInvocation(params)
-                if params.invocation_id == cancelled_key
+                if params.invocation_id == cancelled_id
         )
     }));
     assert_eq!(

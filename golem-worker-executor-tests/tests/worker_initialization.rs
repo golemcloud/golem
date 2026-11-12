@@ -366,7 +366,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
         callee_environment_id: metadata.environment_id,
         callee: metadata.agent_id.clone(),
         callee_fingerprint: metadata.fingerprint,
-        idempotency_key: IdempotencyKey::new("stream-session".into()),
+        idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
     };
     let handle = DurableStreamHandle {
         format_version: 1,
@@ -922,7 +922,7 @@ async fn prepare_session(
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
     let pending_index = oplog.current_oplog_index().await.next().next();
-    let idempotency_key = IdempotencyKey::new("stream-session".into());
+    let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
@@ -949,7 +949,7 @@ async fn prepare_session(
     for record in [
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            public_session_id: idempotency_key.value.clone(),
+            public_session_id: idempotency_key.to_string(),
             route_scope: None,
             session_key: idempotency_key.clone(),
             expiry_policy: StreamSessionExpiryPolicy::None,
@@ -1061,7 +1061,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
 ) -> anyhow::Result<()> {
     let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
     let metadata = worker.get_initial_worker_metadata();
-    let idempotency_key = IdempotencyKey::new("direct-completion".into());
+    let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
@@ -1212,7 +1212,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     use golem_worker_executor::services::oplog::CommitLevel;
 
     let (executor, worker, faults) = setup(last_unique_id, deps, component).await?;
-    let key = IdempotencyKey::new("completion-during-stop".into());
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let context = InvocationContextStack::fresh();
     // Make the actor-owned invocation prefix fall inside the later Jump, forcing checkpoint
     // fallback while leaving the invocation's completion itself in retained history.
@@ -1370,7 +1370,7 @@ async fn jump_projection_finishes_without_its_producer(
         let discarded = worker
             .add_and_commit_oplog(OplogEntry::grow_memory(11))
             .await?;
-        let key = IdempotencyKey::new(format!("invalidate-prefix-{cancel_full_waiter}"));
+        let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
         let context = InvocationContextStack::fresh();
         let started = worker
             .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {

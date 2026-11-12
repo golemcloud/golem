@@ -64,7 +64,6 @@ use futures::future::Either;
 use golem_common::base_model::agent::AgentMode;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -606,7 +605,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self,
                 &remote_agent_id,
                 target_fingerprint,
-                IdempotencyKey::from_uuid(invocation_id.uuid()),
+                invocation_id.id(),
                 logical_streaming_origin,
                 stream_auth_ctx,
             )
@@ -1323,7 +1322,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self,
                 &remote_agent_id,
                 target_fingerprint,
-                IdempotencyKey::from_uuid(invocation_id.uuid()),
+                invocation_id.id(),
                 logical_streaming_origin,
                 stream_auth_ctx,
             )

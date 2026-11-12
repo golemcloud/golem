@@ -15,11 +15,10 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
-    InvocationResultPosition, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;

@@ -36,7 +36,7 @@ use crate::model::regions::DeletedRegions;
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
     AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
-    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, IdempotencyKey,
+    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, InvocationId,
     RetryConfig, RetryPolicyState, Timestamp,
 };
 
@@ -191,7 +191,7 @@ impl InvocationResultBloom {
         }
     }
 
-    pub fn insert(&mut self, key: &IdempotencyKey) {
+    pub fn insert(&mut self, key: &InvocationId) {
         for bit in self.bit_indexes(key) {
             let word_index = bit / u64::BITS as usize;
             let bit_index = bit % u64::BITS as usize;
@@ -200,7 +200,7 @@ impl InvocationResultBloom {
         }
     }
 
-    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+    pub fn might_contain(&self, key: &InvocationId) -> bool {
         self.bit_indexes(key).all(|bit| {
             let word_index = bit / u64::BITS as usize;
             let bit_index = bit % u64::BITS as usize;
@@ -208,8 +208,8 @@ impl InvocationResultBloom {
         })
     }
 
-    fn bit_indexes(&self, key: &IdempotencyKey) -> impl Iterator<Item = usize> + use<> {
-        let digest = blake3::hash(key.value.as_bytes());
+    fn bit_indexes(&self, key: &InvocationId) -> impl Iterator<Item = usize> + use<> {
+        let digest = blake3::hash(key.0.as_bytes());
         let bytes = digest.as_bytes();
         let first = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let second = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) | 1;
@@ -233,7 +233,7 @@ impl Default for InvocationResultBloom {
 }
 
 // A deterministic approximation of the persistent tree node, pointers, and scalar value. Dynamic
-// idempotency-key bytes are accounted for separately. This only controls when the representation
+// UUID bytes are accounted for separately. This only controls when the representation
 // switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
 const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
 
@@ -251,12 +251,12 @@ pub struct InvocationResultPosition {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 enum InvocationResultMembershipState {
     Exact {
-        by_key: OrdMap<IdempotencyKey, InvocationResultPosition>,
+        by_key: OrdMap<InvocationId, InvocationResultPosition>,
         key_bytes: usize,
     },
     Indexed {
-        recent_by_key: OrdMap<IdempotencyKey, InvocationResultPosition>,
-        recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
+        recent_by_key: OrdMap<InvocationId, InvocationResultPosition>,
+        recent_by_index: OrdMap<OplogIndex, InvocationId>,
         bloom: InvocationResultBloom,
     },
 }
@@ -290,11 +290,11 @@ impl InvocationResultMembership {
         }
     }
 
-    pub fn get(&self, key: &IdempotencyKey) -> Option<&OplogIndex> {
+    pub fn get(&self, key: &InvocationId) -> Option<&OplogIndex> {
         self.position(key).map(|position| &position.terminal)
     }
 
-    pub fn position(&self, key: &IdempotencyKey) -> Option<&InvocationResultPosition> {
+    pub fn position(&self, key: &InvocationId) -> Option<&InvocationResultPosition> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.get(key),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => {
@@ -303,16 +303,16 @@ impl InvocationResultMembership {
         }
     }
 
-    pub fn contains_key(&self, key: &IdempotencyKey) -> bool {
+    pub fn contains_key(&self, key: &InvocationId) -> bool {
         self.get(key).is_some()
     }
 
-    pub fn insert(&mut self, key: IdempotencyKey, position: InvocationResultPosition) {
+    pub fn insert(&mut self, key: InvocationId, position: InvocationResultPosition) {
         self.change_generation = self.change_generation.wrapping_add(1);
         match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
                 if !by_key.contains_key(&key) {
-                    *key_bytes = key_bytes.saturating_add(key.value.len());
+                    *key_bytes = key_bytes.saturating_add(size_of::<InvocationId>());
                 }
                 by_key.insert(key, position);
                 self.promote_if_needed();
@@ -333,7 +333,7 @@ impl InvocationResultMembership {
         }
     }
 
-    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+    pub fn might_contain(&self, key: &InvocationId) -> bool {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.contains_key(key),
             InvocationResultMembershipState::Indexed { bloom, .. } => bloom.might_contain(key),
@@ -372,14 +372,14 @@ impl InvocationResultMembership {
         self.revert_generation = generation;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &InvocationResultPosition)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&InvocationId, &InvocationResultPosition)> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.iter(),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.iter(),
         }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &IdempotencyKey> {
+    pub fn keys(&self) -> impl Iterator<Item = &InvocationId> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.keys(),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.keys(),
@@ -397,11 +397,11 @@ impl InvocationResultMembership {
         self.len() == 0
     }
 
-    pub fn remove(&mut self, key: &IdempotencyKey) -> Option<InvocationResultPosition> {
+    pub fn remove(&mut self, key: &InvocationId) -> Option<InvocationResultPosition> {
         let position = match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
                 let position = by_key.remove(key)?;
-                *key_bytes = key_bytes.saturating_sub(key.value.len());
+                *key_bytes = key_bytes.saturating_sub(size_of::<InvocationId>());
                 position
             }
             InvocationResultMembershipState::Indexed {
@@ -464,8 +464,8 @@ impl InvocationResultMembership {
 
     fn truncate_recent(
         capacity: usize,
-        recent_by_key: &mut OrdMap<IdempotencyKey, InvocationResultPosition>,
-        recent_by_index: &mut OrdMap<OplogIndex, IdempotencyKey>,
+        recent_by_key: &mut OrdMap<InvocationId, InvocationResultPosition>,
+        recent_by_index: &mut OrdMap<OplogIndex, InvocationId>,
     ) {
         while recent_by_key.len() > capacity {
             let Some((oldest_index, oldest_key)) = recent_by_index
@@ -602,7 +602,7 @@ pub struct AgentStatusRecord {
     pub ephemeral_execution_begun: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
-    pub current_idempotency_key: Option<IdempotencyKey>,
+    pub current_idempotency_key: Option<InvocationId>,
     /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
     pub current_invocation_started_at: Option<OplogIndex>,
     pub component_revision: ComponentRevision,
@@ -792,7 +792,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<IdempotencyKey>,
+    pub session_key: Option<InvocationId>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -846,7 +846,7 @@ impl DurableStreamSessionStatus {
     pub fn apply_pending_invocation(
         &mut self,
         oplog_idx: OplogIndex,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) {
         if self.lifecycle_error.is_some()
             || self
@@ -1054,12 +1054,12 @@ pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum DurableStreamPublicBinding {
     Live {
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
         expiry_deadline_millis: Option<u64>,
     },
     Retired {
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
     },
 }
 
@@ -1144,15 +1144,15 @@ impl DurableStreamPublicBinding {
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DurableStreamSessionIndex {
-    sessions: OrdMap<String, Arc<DurableStreamSessionStatus>>,
+    sessions: OrdMap<InvocationId, Arc<DurableStreamSessionStatus>>,
     /// True once this status has observed local session lifecycle history. A cache miss is therefore
     /// not evidence that an older, completed session never existed.
     has_history: bool,
 }
 
 impl DurableStreamSessionIndex {
-    pub fn get(&self, key: &IdempotencyKey) -> Option<&DurableStreamSessionStatus> {
-        self.sessions.get(&key.value).map(Arc::as_ref)
+    pub fn get(&self, key: &InvocationId) -> Option<&DurableStreamSessionStatus> {
+        self.sessions.get(key).map(Arc::as_ref)
     }
 
     pub fn apply_oplog_entry(
@@ -1244,10 +1244,10 @@ impl DurableStreamSessionIndex {
         self.insert(key.clone(), status);
     }
 
-    pub fn insert(&mut self, key: IdempotencyKey, status: DurableStreamSessionStatus) {
+    pub fn insert(&mut self, key: InvocationId, status: DurableStreamSessionStatus) {
         self.has_history = true;
         let finished = status.finished.is_some();
-        self.sessions.insert(key.value, Arc::new(status));
+        self.sessions.insert(key, Arc::new(status));
         if finished {
             self.trim_completed();
         }
@@ -1272,10 +1272,10 @@ impl DurableStreamSessionIndex {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (IdempotencyKey, &DurableStreamSessionStatus)> {
+    pub fn iter(&self) -> impl Iterator<Item = (InvocationId, &DurableStreamSessionStatus)> {
         self.sessions
             .iter()
-            .map(|(key, status)| (IdempotencyKey::new(key.clone()), status.as_ref()))
+            .map(|(key, status)| (*key, status.as_ref()))
     }
 }
 
@@ -1292,10 +1292,12 @@ impl BinarySerializer for DurableStreamSessionIndex {
 impl BinaryDeserializer for DurableStreamSessionIndex {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
         let has_history = <bool as BinaryDeserializer>::deserialize(context)?;
-        let entries =
-            desert_rust::deserialize_iterator::<(String, Arc<DurableStreamSessionStatus>)>(context)
-                .0
-                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        let entries = desert_rust::deserialize_iterator::<(
+            InvocationId,
+            Arc<DurableStreamSessionStatus>,
+        )>(context)
+        .0
+        .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
         Ok(Self {
             sessions: entries,
             has_history,

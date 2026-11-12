@@ -48,7 +48,7 @@ impl Rpc for DispatchThenHangRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -393,8 +393,11 @@ async fn repair_after_stdout_hint_executes_target_once(
          keys derived from the hint index {:?} and from the index before it {:?}; \
          target inc_by AgentInvocationStarted (index, key) {increments:?}; counter {count}; \
          recovered caller result {recovered:?}",
-        IdempotencyKey::derived(&caller_key, hint),
-        IdempotencyKey::derived(&caller_key, hint.previous()),
+        IdempotencyKey::derived(&IdempotencyKey::new(caller_key.to_string()), hint),
+        IdempotencyKey::derived(
+            &IdempotencyKey::new(caller_key.to_string()),
+            hint.previous()
+        ),
     );
 
     recovered?;

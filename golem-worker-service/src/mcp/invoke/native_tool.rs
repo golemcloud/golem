@@ -648,7 +648,7 @@ mod tests {
                     callee_environment_id: environment,
                     callee: agent.clone(),
                     callee_fingerprint: Some(uuid(4)),
-                    idempotency_key: start.idempotency_key.clone(),
+                    idempotency_key: Some(uuid(6)),
                 }),
                 component_revision: Some(1),
                 element_schema_fingerprint: vec![5; 32],
@@ -669,7 +669,7 @@ mod tests {
         let accepted = InvocationAccepted {
             agent_id: agent,
             environment_id: environment,
-            idempotency_key: start.idempotency_key.clone(),
+            idempotency_key: Some(uuid(6)),
             component_revision: Some(1),
             attachment_id: Some(uuid(1)),
             attempt_id: Some(uuid(2)),

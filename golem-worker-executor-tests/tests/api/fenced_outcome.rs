@@ -54,15 +54,12 @@ async fn selected_writer_fence(
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
     let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
     let key = IdempotencyKey::fresh();
-    let stored_key = IdempotencyKey::new(
-        golem_common::model::InvocationRequestKey::external(
-            executor.auth_ctx().idempotency_scope(),
-            Some(&key),
-        )
-        .finalize(id.clone(), fingerprint, "add")
-        .uuid()
-        .to_string(),
-    );
+    let stored_key = golem_common::model::InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&key),
+    )
+    .finalize(id.clone(), fingerprint, "add")
+    .id();
     let caller = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();

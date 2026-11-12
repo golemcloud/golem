@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
@@ -56,7 +58,7 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
     AgentMetadata, AgentResourceDescription, AgentStatus, AgentStatusRecord, AuthoritativeSnapshot,
-    AuthoritativeSnapshotKind, AutomaticSnapshot, FailedUpdateRecord, IdempotencyKey,
+    AuthoritativeSnapshotKind, AutomaticSnapshot, FailedUpdateRecord,
     OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
     PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
     SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
@@ -66,6 +68,7 @@ use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use uuid::Uuid;
 
 fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPin {
     golem_common::model::card::InvocationWalletPin {
@@ -81,7 +84,7 @@ fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPi
 #[test]
 async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let test_case = TestCase::builder(0).build();
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id().clone(),
@@ -154,7 +157,6 @@ use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use test_r::test;
-use uuid::Uuid;
 
 #[test]
 async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
@@ -231,9 +233,9 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
                 agent_id: "remote".into(),
             },
             callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
         }),
-        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
         role: StreamCancelRole::OutputConsumer,
@@ -302,13 +304,13 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
     };
     let first = crate::durable_host::durable_stream::tests::identity().invocation;
     let mut second = first.clone();
-    second.idempotency_key = IdempotencyKey::fresh();
+    second.idempotency_key = InvocationId(Uuid::new_v4());
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
             first.clone(),
         ),
-        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
         role: StreamCancelRole::OutputConsumer,
@@ -555,9 +557,12 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                         callee_environment_id: EnvironmentId::new(),
                         callee: target.clone(),
                         callee_fingerprint: export_owner_fingerprint(),
-                        idempotency_key: IdempotencyKey::new(session.to_string()),
+                        idempotency_key: InvocationId(Uuid::new_v5(
+                            &Uuid::NAMESPACE_OID,
+                            session.as_bytes(),
+                        )),
                     },
-                    target_session_key: IdempotencyKey::new("target-session".into()),
+                    target_session_key: InvocationId(Uuid::from_u128(2)),
                     expiry_policy: StreamSessionExpiryPolicy::None,
                     expiry_deadline_millis: None,
                     retained_through: None,
@@ -1057,7 +1062,7 @@ async fn the_status_reader_reads_nothing_past_its_horizon() {
 
 #[test]
 async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], idempotency_key.clone())
@@ -1109,7 +1114,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
 
 #[test]
 async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let retry_state = RetryPolicyState::Counter(56);
     let test_case = TestCase::builder(0)
@@ -1144,7 +1149,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
 
 #[test]
 async fn exhausted_semantic_retry_state_marks_status_failed() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let retry_state = RetryPolicyState::AndThen {
         left: Box::new(RetryPolicyState::Counter(3)),
@@ -1215,7 +1220,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
 
 #[test]
 async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let exhausted = RetryPolicyState::Counter(100);
     let test_case = TestCase::builder(0)
@@ -1262,7 +1267,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
 #[test]
 async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
     let retry_from = OplogIndex::from_u64(1);
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .add(
             OplogEntry::error(
@@ -1429,7 +1434,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
-                Some(IdempotencyKey::fresh()),
+                Some(InvocationId(Uuid::new_v4())),
                 AgentError::TransientError("invocation attempt failed".to_string()),
                 invocation_retry_from,
                 Some(RetryPolicyState::Counter(3)),
@@ -1514,7 +1519,7 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
 
 #[test]
 async fn invocation_failure_is_classified_separately_from_recovery_failure() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let test_case = TestCase::builder(0)
         .add(
@@ -1569,8 +1574,8 @@ async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() 
 
 #[test]
 async fn invocation_results() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -1594,8 +1599,8 @@ async fn invocation_results() {
 
 #[test]
 async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations() {
-    let completed = IdempotencyKey::fresh();
-    let pending = IdempotencyKey::fresh();
+    let completed = InvocationId(Uuid::new_v4());
+    let pending = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .agent_invocation_started("completed", vec![], completed.clone())
         .agent_invocation_finished(
@@ -1625,7 +1630,7 @@ async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations()
 
 #[test]
 fn recovery_errors_are_not_invocation_results() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let entries = BTreeMap::from([
         (
@@ -1672,7 +1677,7 @@ fn recovery_errors_are_not_invocation_results() {
     assert_eq!(requests.current_started_at, Some(OplogIndex::from_u64(1)));
 }
 
-fn started_invocation(key: &IdempotencyKey) -> OplogEntry {
+fn started_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id: key.clone(),
@@ -1689,7 +1694,7 @@ fn started_invocation(key: &IdempotencyKey) -> OplogEntry {
     }
 }
 
-fn finished_invocation(key: &IdempotencyKey) -> OplogEntry {
+fn finished_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
         invocation_id: key.clone(),
@@ -1703,8 +1708,8 @@ fn finished_invocation(key: &IdempotencyKey) -> OplogEntry {
 fn fold_results(
     entries: Vec<OplogEntry>,
 ) -> (
-    Vec<(IdempotencyKey, InvocationResultPosition)>,
-    Option<IdempotencyKey>,
+    Vec<(InvocationId, InvocationResultPosition)>,
+    Option<InvocationId>,
 ) {
     let entries = entries
         .into_iter()
@@ -1729,7 +1734,7 @@ fn result(terminal: u64, request: Option<u64>) -> InvocationResultPosition {
     }
 }
 
-fn pending_invocation_entry(key: &IdempotencyKey) -> OplogEntry {
+fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
     OplogEntry::pending_agent_invocation(
         None,
         key.clone(),
@@ -1745,7 +1750,7 @@ fn pending_invocation_entry(key: &IdempotencyKey) -> OplogEntry {
     )
 }
 
-fn invocation_error(invocation_id: &IdempotencyKey) -> OplogEntry {
+fn invocation_error(invocation_id: &InvocationId) -> OplogEntry {
     OplogEntry::error(
         None,
         OplogErrorKind::Invocation,
@@ -1758,8 +1763,8 @@ fn invocation_error(invocation_id: &IdempotencyKey) -> OplogEntry {
 
 #[test]
 fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
-    let finished = IdempotencyKey::fresh();
-    let running = IdempotencyKey::fresh();
+    let finished = InvocationId(Uuid::new_v4());
+    let running = InvocationId(Uuid::new_v4());
 
     // A background retry of `finished` records its error while `running` runs. It must neither
     // replace the finished result nor be attributed to `running`.
@@ -1790,8 +1795,8 @@ fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
 
 #[test]
 fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
-    let running = IdempotencyKey::fresh();
-    let denied = IdempotencyKey::fresh();
+    let running = InvocationId(Uuid::new_v4());
+    let denied = InvocationId(Uuid::new_v4());
 
     // A hint separates the cancellation from the error, so the error is not positionally adjacent
     // to the `CancelPendingInvocation` of the invocation it names.
@@ -1828,9 +1833,9 @@ fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_anoth
 
 #[test]
 fn invocation_results_point_at_their_request_entry() {
-    let queued = IdempotencyKey::fresh();
-    let cancelled = IdempotencyKey::fresh();
-    let running = IdempotencyKey::fresh();
+    let queued = InvocationId(Uuid::new_v4());
+    let cancelled = InvocationId(Uuid::new_v4());
+    let running = InvocationId(Uuid::new_v4());
 
     // `queued` waits behind `running`, so its request is its pending entry and not the started
     // entry of the invocation that ran before it. A cancelled invocation never starts, so its
@@ -1858,8 +1863,8 @@ fn invocation_results_point_at_their_request_entry() {
 
 #[test]
 async fn invocation_results_with_jump() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -1884,8 +1889,8 @@ async fn invocation_results_with_jump() {
 
 #[test]
 async fn invocation_results_with_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -1910,7 +1915,7 @@ async fn invocation_results_with_revert() {
 
 #[test]
 async fn single_auto_update_for_running() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
@@ -1944,7 +1949,7 @@ async fn single_auto_update_for_running() {
 
 #[test]
 async fn auto_update_for_running_with_jump() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
@@ -1984,8 +1989,8 @@ async fn auto_update_for_running_with_jump() {
 
 #[test]
 async fn single_manual_update() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2044,8 +2049,8 @@ async fn single_manual_update() {
 
 #[test]
 async fn single_manual_failed_update() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2091,8 +2096,8 @@ async fn single_manual_failed_update() {
 
 #[test]
 async fn single_manual_failed_update_during_snapshot() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update2 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2490,7 +2495,7 @@ fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
 
 #[test]
 async fn auto_update_for_running_with_jump_and_revert() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
@@ -2531,8 +2536,8 @@ async fn auto_update_for_running_with_jump_and_revert() {
 
 #[test]
 async fn single_manual_update_with_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2579,8 +2584,8 @@ async fn single_manual_update_with_revert() {
 
 #[test]
 async fn multiple_manual_updates_with_jump_and_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2641,8 +2646,8 @@ async fn multiple_manual_updates_with_jump_and_revert() {
 /// override sits on top of it.
 #[test]
 async fn two_successful_manual_updates() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2693,7 +2698,7 @@ async fn two_successful_manual_updates() {
 
 #[test]
 async fn a_revert_across_an_update_drops_its_name_from_the_status() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let name = FilesystemSnapshotName::update();
     let update = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
@@ -2777,8 +2782,8 @@ fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
 
 #[test]
 async fn multiple_reverts() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -2825,8 +2830,8 @@ async fn multiple_reverts() {
 
 #[test]
 async fn cancel_pending_invocation() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
@@ -2855,7 +2860,7 @@ async fn cancel_pending_invocation() {
 
 #[test]
 async fn permission_denied_rejection_survives_status_reconstruction() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),
@@ -2901,7 +2906,7 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
 
 #[test]
 async fn snapshot_tracking() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -3796,7 +3801,7 @@ async fn failed_snapshot_assisted_update_does_not_promote_snapshot() {
 
 #[test]
 async fn snapshot_tracking_with_revert() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], k1.clone())
@@ -3852,8 +3857,8 @@ fn jump_repair_fixture(
     AgentStatusRecord,
     AgentStatusRecord,
 ) {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_mode(agent_mode)
@@ -4306,7 +4311,7 @@ fn rebuild_fixture() -> TestCase {
         .grow_memory(17)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
             ComponentRevision::INITIAL,
         )
         .grow_memory(5)
@@ -4422,7 +4427,7 @@ impl TestCaseBuilder {
         self,
         function_name: &str,
         request: Vec<SchemaValue>,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Self {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
@@ -4455,7 +4460,7 @@ impl TestCaseBuilder {
     pub fn agent_invocation_finished(
         self,
         result: AgentInvocationResult,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         component_revision: ComponentRevision,
     ) -> Self {
         self.add(
@@ -4724,7 +4729,7 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn cancel_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
+    pub fn cancel_pending_invocation(self, idempotency_key: InvocationId) -> Self {
         let entry = OplogEntry::cancel_pending_invocation(idempotency_key.clone()).rounded();
         self.add(entry.clone(), move |mut status| {
             let request = status
@@ -4748,7 +4753,7 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn permission_denied_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
+    pub fn permission_denied_pending_invocation(self, idempotency_key: InvocationId) -> Self {
         self.cancel_pending_invocation(idempotency_key.clone()).add(
             OplogEntry::error(
                 None,
@@ -5510,7 +5515,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id.clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: IdempotencyKey::fresh(),
+        idempotency_key: InvocationId(Uuid::new_v4()),
     };
     let attachment_id = AttachmentId::primary(
         session_key.callee_environment_id,
@@ -5520,7 +5525,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
     .unwrap();
     let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
-        public_session_id: session_key.idempotency_key.value.clone(),
+        public_session_id: session_key.idempotency_key.to_string(),
         route_scope: None,
         session_key: session_key.idempotency_key.clone(),
         expiry_policy: StreamSessionExpiryPolicy::None,
@@ -7734,7 +7739,7 @@ mod region_fold {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before: None,
-            invocation_id: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -8297,7 +8302,7 @@ mod invocation_payload_decodes {
         serialized(OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before: None,
-            invocation_id: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "a".to_string(),
                 input: SchemaValue::Record {

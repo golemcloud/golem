@@ -383,9 +383,7 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
     };
 
     let expected = SerializableToolAdmissionRefusal::BeforeInputRead {
-        session: StreamRegistrationInvocation::Local(
-            golem_common::base_model::IdempotencyKey::new("input-owner".into()),
-        ),
+        session: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(701).into()),
         binding: Box::new(StreamBindingRecord {
             transport_stream_id: 7,
             source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(19))),
@@ -3454,9 +3452,9 @@ fn probed_entity_invocation(
         context.activation,
         context.principal,
         InvocationExecutionMode::Live,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
         false,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
     )
     .unwrap();
     let (destroyed, receipt) = tokio::sync::oneshot::channel();
@@ -3543,9 +3541,9 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         operation.activation,
         operation.principal,
         InvocationExecutionMode::Live,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
         false,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
     )
     .unwrap();
     let registration = slot.register(&scope, Default::default()).unwrap();

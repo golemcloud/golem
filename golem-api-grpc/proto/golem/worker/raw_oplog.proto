@@ -8,7 +8,6 @@ import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/component/plugin.proto";
-import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
 import "golem/schema/schema.proto";
 import "golem/worker/retry_policy.proto";
@@ -262,7 +261,7 @@ message RawCompletionDeliveredParameters {
 }
 
 message RawAgentInvocationStartedParameters {
-  IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
   RawOplogPayload payload = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -281,7 +280,7 @@ message RawAgentInvocationFinishedParameters {
   int64 consumed_fuel = 2;
   uint64 component_revision = 3;
   optional string method_name = 4;
-  IdempotencyKey invocation_id = 5;
+  golem.common.UUID invocation_id = 5;
 }
 
 message RawErrorParameters {
@@ -292,7 +291,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
-  optional IdempotencyKey invocation_id = 6;
+  optional golem.common.UUID invocation_id = 6;
 }
 
 message RawJumpParameters {
@@ -300,7 +299,7 @@ message RawJumpParameters {
 }
 
 message RawPendingAgentInvocationParameters {
-  IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
   RawOplogPayload payload = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -391,7 +390,7 @@ message RawRevertParameters {
 }
 
 message RawCancelPendingInvocationParameters {
-  IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
 }
 
 message RawBeginRemoteTransactionParameters {

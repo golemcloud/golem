@@ -648,9 +648,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 }) = &server_frame
                 {
                     accepted = true;
-                    accepted_key.clone_from(idempotency_key);
+                    accepted_key = idempotency_key.to_string();
                     if let Some(goal) = &args.invocation_goal {
-                        goal.set_target(IdempotencyKey::new(idempotency_key.clone()).to_uuid());
+                        goal.set_target(*idempotency_key);
                     }
                     output_streams.clear();
                     if let Some(binding) = input_binding.as_mut() {
@@ -905,7 +905,7 @@ pub(super) struct ScalarInvocationArgs {
 
 pub(super) struct ScalarInvocation {
     /// The key the server accepted the invocation under, which cancels and looks it up.
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: golem_common::model::InvocationId,
     pub result: Option<TypedSchemaValue>,
 }
 
@@ -986,11 +986,10 @@ pub(super) async fn invoke_scalar(
             PublicServerMessage::InvocationAccepted {
                 idempotency_key, ..
             } => {
-                let key = IdempotencyKey::new(idempotency_key);
                 if let Some(goal) = &args.invocation_goal {
-                    goal.set_target(key.to_uuid());
+                    goal.set_target(idempotency_key);
                 }
-                accepted_key = Some(key);
+                accepted_key = Some(idempotency_key);
             }
             PublicServerMessage::InvocationResult { result: value, .. } => {
                 result = match *value {

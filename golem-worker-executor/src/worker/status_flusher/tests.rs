@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use async_trait::async_trait;
@@ -108,7 +110,7 @@ impl WorkerService for MockWorkerService {
         _agent_mode: AgentMode,
         _fingerprint: golem_common::model::AgentFingerprint,
         _status: &AgentStatusRecord,
-        _key: &golem_common::model::IdempotencyKey,
+        _key: &InvocationId,
     ) -> Result<
         Option<golem_common::model::DurableStreamSessionStatus>,
         crate::durable_host::durable_stream::SessionError,

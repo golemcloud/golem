@@ -14,7 +14,7 @@
 
 use super::{
     AccountId, ActivatePluginRequest, AgentInvocation, AgentMetadataDto, AgentMetadataForGuests,
-    AuthCtx, DeactivatePluginRequest, HasAll, IdempotencyKey, OplogIndex, PluginPriority,
+    AuthCtx, DeactivatePluginRequest, HasAll, OplogIndex, PluginPriority,
     ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, extract_principal,
 };
@@ -80,7 +80,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
             })?;
 
-        let idempotency_key: IdempotencyKey = request
+        let idempotency_key: golem_common::model::InvocationId = request
             .idempotency_key
             .ok_or(WorkerExecutorError::invalid_request(
                 "idempotency_key not found",

@@ -262,7 +262,7 @@ async fn write_stdout(
                 match params.invocation {
                     golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(
                         call,
-                    ) if call.method_name == "write_stdout" => Some(call.invocation_id.to_uuid()),
+                    ) if call.method_name == "write_stdout" => Some(call.invocation_id.0),
                     _ => None,
                 }
             }

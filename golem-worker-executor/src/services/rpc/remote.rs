@@ -29,7 +29,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -74,7 +74,7 @@ impl Rpc for RemoteInvocationRpc {
                     "scheduled input cannot cross the remote worker boundary: {error}"
                 ),
             })?),
-            idempotency_key: Some(idempotency_key.clone().into()),
+            idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
             request_key: Some(request_key.into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent,
@@ -128,7 +128,7 @@ impl Rpc for RemoteInvocationRpc {
             match response.response {
                 Some(invocation_response::Response::Accepted(accepted)) => {
                     if accepted.agent_id != start.agent_id
-                        || accepted.idempotency_key != start.idempotency_key
+                        || accepted.idempotency_key != Some(idempotency_key.into())
                         || accepted.method_name != start.method_name
                         || accepted.component_revision.is_none()
                     {

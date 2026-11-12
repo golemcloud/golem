@@ -50,7 +50,7 @@ use golem_common::base_model::durable_stream::{
     StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::{OplogEntry, PayloadId, RawOplogPayload};
@@ -188,7 +188,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
         callee_environment_id: EnvironmentId(Uuid::from_u128(903)),
         callee: second.agent_id.clone(),
         callee_fingerprint: AgentFingerprint(Uuid::from_u128(904)),
-        idempotency_key: IdempotencyKey::new("remote-session".into()),
+        idempotency_key: uuid::Uuid::from_u128(101).into(),
     };
     let remote_record = registration_record(
         index,
@@ -1422,7 +1422,7 @@ pub(crate) fn identity() -> TestIdentity {
             callee_environment_id: environment_id,
             callee: agent_id,
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(102).into(),
         },
     }
 }
@@ -1471,7 +1471,7 @@ pub(crate) fn attachment_key(
         callee_environment_id: consumer_environment_id,
         callee: consumer.clone(),
         callee_fingerprint: expected_consumer_fingerprint,
-        idempotency_key: IdempotencyKey::new("consumer-invocation".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(103).into(),
     };
     StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
@@ -3168,8 +3168,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
     let registration_length = oplog.current_oplog_index().await;
 
     let mut altered_source = handle.clone();
-    altered_source.source_invocation.idempotency_key =
-        IdempotencyKey::new("altered-source".to_string());
+    altered_source.source_invocation.idempotency_key = uuid::Uuid::from_u128(104).into();
     let mut altered_revision = handle.clone();
     altered_revision.component_revision = ComponentRevision::new(2).unwrap();
     let mut altered_schema = handle;
@@ -3224,7 +3223,7 @@ async fn deletion_is_fail_closed_for_prepared_and_quiet_active_references() {
     live.commit_deletion_barrier(1_000, true).await.unwrap();
 
     let second_session = StreamInvocationId {
-        idempotency_key: IdempotencyKey::new("second".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(105).into(),
         ..identity.invocation.clone()
     };
     assert_eq!(
@@ -4009,7 +4008,7 @@ async fn reconciliation_adopts_rolls_back_and_fences_recreated_consumers() {
     );
 
     let second_session = StreamInvocationId {
-        idempotency_key: IdempotencyKey::new("abandoned".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(106).into(),
         ..identity.invocation.clone()
     };
     let second = live
@@ -4214,7 +4213,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
     oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            IdempotencyKey::new("pending-before-consumer-journal".to_string()),
+            uuid::Uuid::from_u128(107).into(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
             Vec::new(),
@@ -6141,7 +6140,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
     });
     let pending = OplogEntry::pending_agent_invocation(
         None,
-        IdempotencyKey::new("durable-session".to_string()),
+        uuid::Uuid::from_u128(108).into(),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
         Vec::new(),
@@ -6161,7 +6160,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     committed,
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        public_session_id: session_key.idempotency_key.value.clone(),
+                        public_session_id: session_key.idempotency_key.to_string(),
                         route_scope: None,
                         session_key: session_key.idempotency_key.clone(),
                         expiry_policy: StreamSessionExpiryPolicy::None,
@@ -6310,7 +6309,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
-        public_session_id: identity.invocation.idempotency_key.value.clone(),
+        public_session_id: identity.invocation.idempotency_key.to_string(),
         route_scope: None,
         session_key: identity.invocation.idempotency_key.clone(),
         expiry_policy: StreamSessionExpiryPolicy::None,
@@ -7610,7 +7609,7 @@ async fn stream_limit_is_scoped_to_one_session_not_the_producer_agent_lifetime()
 
     for session in 0..=MAX_DURABLE_STREAMS_PER_SESSION {
         let mut invocation = identity.invocation.clone();
-        invocation.idempotency_key = IdempotencyKey::new(format!("session-{session}"));
+        invocation.idempotency_key = uuid::Uuid::from_u128(1000 + session as u128).into();
         let request = ProducerRegistrationRequest {
             coordinate: StreamRegistrationCoordinate::Root {
                 invocation_id: invocation.clone(),
@@ -9514,7 +9513,7 @@ async fn nested_registration_must_match_its_enclosing_stream_coordinate() {
         .unwrap();
 
     let mut other_session = identity.invocation.clone();
-    other_session.idempotency_key = IdempotencyKey::new("other-session".to_string());
+    other_session.idempotency_key = uuid::Uuid::from_u128(109).into();
     let other = producer
         .register(
             None,
