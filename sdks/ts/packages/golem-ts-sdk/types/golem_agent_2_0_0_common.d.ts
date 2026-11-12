@@ -1,4 +1,5 @@
 declare module 'golem:agent/common@2.0.0' {
+  import * as golemCore200Http from 'golem:core/http@2.0.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   export type SchemaGraph = golemCore200Types.SchemaGraph;
@@ -8,6 +9,8 @@ declare module 'golem:agent/common@2.0.0' {
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
   export type ComponentId = golemCore200Types.ComponentId;
+  export type HttpRouteMode = golemCore200Http.HttpRouteMode;
+  export type DurableStreamRouteOptions = golemCore200Http.DurableStreamRouteOptions;
   export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type AgentTypeKind = "regular" | "http-router";
@@ -99,31 +102,6 @@ declare module 'golem:agent/common@2.0.0' {
   export type CorsOptions = {
     allowedPatterns: string[];
   };
-  export type DurableStreamSlotSource =
-  {
-    tag: 'input'
-    val: string
-  } |
-  {
-    tag: 'output'
-    val: string
-  };
-  export type DurableStreamSlotOptions = {
-    source: DurableStreamSlotSource;
-    name?: string;
-    contentType?: string;
-  };
-  export type DurableStreamRouteLoadOptions = {
-    maxConcurrentReadersPerStream?: number;
-    maxAppendRequestsPerSecondPerStream?: number;
-  };
-  export type DurableStreamRouteOptions = {
-    slots: DurableStreamSlotOptions[];
-    allowExternalWrites?: boolean;
-    allowStreamDelete?: boolean;
-    allowInvocationDelete?: boolean;
-    load?: DurableStreamRouteLoadOptions;
-  };
   export type HttpMethod =
   {
     tag: 'get'
@@ -213,6 +191,7 @@ declare module 'golem:agent/common@2.0.0' {
     queryVars: QueryVariable[];
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
+    mode?: HttpRouteMode;
     durableStreams?: DurableStreamRouteOptions;
   };
   export type AgentMethod = {

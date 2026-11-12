@@ -116,12 +116,16 @@ pub(super) fn emit(
                 .trim()
             );
         }
+        op["x-golem-route-mode"] = json!(behaviour.route_mode.as_str());
         op["security"] = build_security(&route.security, security_schemes, public_origin)?;
         if let Some(body) = body {
             op["requestBody"] = body;
         }
         let item = paths.entry(path.into()).or_default();
-        item.insert("x-golem-route-mode".into(), json!("durable-streams"));
+        item.insert(
+            "x-golem-route-mode".into(),
+            json!(behaviour.route_mode.as_str()),
+        );
         if let Some(slot) = slot {
             item.insert("x-golem-stream-slot".into(), json!({
                 "name": slot.public_name,

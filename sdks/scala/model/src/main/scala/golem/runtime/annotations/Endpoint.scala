@@ -43,7 +43,8 @@ final class endpoint(
   val method: String,
   val path: String,
   val auth: Boolean = false,
-  val cors: Array[String] = Array.empty
+  val cors: Array[String] = Array.empty,
+  val mode: String = ""
 ) extends StaticAnnotation
 
 /** Associates a durable stream slot with one HTTP endpoint on the method. */
@@ -64,9 +65,6 @@ final class durableStreamSlot(
 final class durableStreams(
   val endpointMethod: String = "",
   val endpointPath: String = "",
-  val allowExternalWrites: Boolean = true,
-  val allowStreamDelete: Boolean = true,
-  val allowInvocationDelete: Boolean = true,
   val maxConcurrentReadersPerStream: Int = 0,
   val maxAppendRequestsPerSecondPerStream: Int = 0
 ) extends StaticAnnotation

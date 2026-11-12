@@ -19,7 +19,7 @@ continues.
 ```
 
 Replay: claim `Start#11` by identity (`StartClaim`), resolve `End#12` through
-`ConcurrentReplayResolver`, classify as `Delivered`, release `v` to the guest at the boundary
+`ReplayStarts` under the cursor lock, classify as `Delivered`, release `v` to the guest at the boundary
 recorded by `#13` (`CompletionDelivery::AtMarker`). No live action runs.
 Owners: `concurrent/call.rs::run`, `concurrent/delivery.rs`, `replay_state/cursor.rs`.
 
