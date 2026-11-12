@@ -1697,7 +1697,7 @@ while replay returns `STARTED` and enters that Store-holding call before it can 
 The direct call would wait behind a guest boundary that its own Store ownership prevents.
 
 Replay: claim the matching `Start` (`StartClaim`: invocation id, function name and kind),
-resolve its terminal through `ConcurrentReplayResolver`, then classify with
+resolve its terminal through `ReplayStarts` under the cursor lock, then classify with
 `classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
 | Recorded | `ReplayedResolution` | Guest handoff |
@@ -1965,11 +1965,13 @@ entitled to nothing it did not record. Kind and owner are validated before consu
 - A durable-call `Start` nobody has claimed is never handed to a positional reader and is never
   parked on either: its owner may be a concurrent host task that needs the very Store the parked
   reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
-  direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
+  direct call). The cursor commits past it and **retains** it (`ReplayStart::Retained` in `CursorState::starts`,
   in oplog order, together with its terminal once reached). The owner's later identity claim
   checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching`); a
   `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- `ReplayStarts` (`replay_state/starts.rs`) owns each active Start's state under the cursor lock. A `Claimed` entry separates `AheadOfCursor`/`Consumed` position from `Waiting`/`Prefetched` terminal ownership. A prefetched result can reach the host before the cursor consumes either the Start or its exact terminal; it does not authorize guest delivery. `UnregisteredAhead` preserves the Start-consumption obligation before successful registration, after registration failure, or after explicit unregistration. Dropping a receiver retains its terminal sender; explicit unregistration removes a waiting sender but keeps an ahead Start, and leaves prefetched-terminal drainage intact. The derived retained-key index visits retained entries only, not every active claim. Subtree ancestry, fork effects, guest-delivery tokens and reconstruction guards remain separate owners.
+- Registration performs fallible terminal lookahead before creating its sender. Failure leaves an ahead Start owed, a head Start consumed, and an adopted retained Start removed with its position/events already published. Do not rewind these effects or treat caller cancellation as registration failure: accepted `run_owned_cursor_op` work survives cancellation. Bulk incomplete resolution belongs to explicit prefix finalization (`CursorTx::switch_to_live`), which retains unclaimed Starts. Merely observing the replay target does not clear claims; the final-terminal path rechecks its receiver under the cursor lock before declaring it incomplete. Registry membership alone cannot replace the distinct claimed-ahead, terminal-ownership, active-awaiter and reconstruction predicates.
 - A delivery barrier blocks physical advancement, not adoption of already-retained history.
   `with_claim_tx_admission` first polls one gate waiter, then uses the restricted `RetainedClaims`
   capability under the state mutex while that gate is unavailable. Using retained history means

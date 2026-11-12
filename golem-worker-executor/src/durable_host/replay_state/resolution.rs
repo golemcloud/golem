@@ -94,7 +94,7 @@ impl ReplayState {
             .run_owned_cursor_op(move |state| async move {
                 let _historical_reconstruction = historical_reconstruction;
                 let mut st = state.cursor.state.lock().await;
-                st.concurrent_resolver.unregister(start_idx);
+                st.starts.unregister(start_idx);
                 Ok(())
             })
             .await;
@@ -405,7 +405,7 @@ impl ReplayState {
                     let routed = tokio::select! {
                         biased;
                         failure = state.cursor.owner_tool_operations.wait_for_owner_failure() => {
-                            state.cursor.state.lock().await.concurrent_resolver.unregister(start_idx);
+                            state.cursor.state.lock().await.starts.unregister(start_idx);
                             return Err(super::cursor::historical_reconstruction_owner_failure(failure));
                         }
                         gate = gate.as_mut() => {
@@ -430,7 +430,7 @@ impl ReplayState {
                                 .state
                                 .lock()
                                 .await
-                                .concurrent_resolver
+                                .starts
                                 .unregister(start_idx);
                             Err(WorkerExecutorError::runtime(format!(
                                 "concurrent replay resolver channel closed for Start at {start_idx}"
@@ -485,11 +485,11 @@ impl ReplayState {
                                 // flushed it before its `End`, or a crash happened in between).
                                 // Drop the stale registration and report Incomplete so the caller
                                 // can re-execute the side effect and complete the existing `Start`.
-                                st.concurrent_resolver.unregister_incomplete(start_idx);
+                                st.starts.unregister_incomplete(start_idx);
                                 Ok(ResolutionOutcome::Incomplete)
                             }
                             Err(oneshot::error::TryRecvError::Closed) => {
-                                st.concurrent_resolver.unregister(start_idx);
+                                st.starts.unregister(start_idx);
                                 Err(WorkerExecutorError::runtime(format!(
                                     "concurrent replay resolver channel closed for Start at {start_idx}"
                                 )))

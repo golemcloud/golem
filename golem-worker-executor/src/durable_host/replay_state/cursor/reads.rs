@@ -61,7 +61,7 @@ impl CursorTx<'_> {
     /// On the first non-drainable entry (a non-terminal, or an `End`/`Cancelled` nobody awaits):
     /// - if `condition` matches, it is committed and returned;
     /// - if it is a durable-call `Start` nobody has claimed, it is committed past and **retained**
-    ///   for its owner's later identity-validated claim (see [`CursorState::retained_starts`]),
+    ///   for its owner's later identity-validated claim (see [`CursorState::starts`]),
     ///   and the drain continues. The reader is never handed another operation's `Start`, and it
     ///   never parks on one either: the owner of that `Start` may need the Store this reader holds
     ///   before it can claim it;
@@ -166,8 +166,9 @@ impl CursorTx<'_> {
                 // before the guest can observe the read; reserving an import is not enough.
                 let unreached_guest_call = guest_order.is_some_and(|order| {
                     self.st
-                        .retained_starts
-                        .range(..read_idx)
+                        .starts
+                        .retained_iter()
+                        .take_while(|(index, _)| **index < read_idx)
                         .any(|(_, retained)| {
                             matches!(&retained.entry, OplogEntry::Start {
                             invocation_id: Some(id), ..
@@ -224,7 +225,7 @@ impl CursorTx<'_> {
                     self.skip_forward().await?;
                     continue;
                 }
-                if abandoned.is_some() && self.st.retained_starts.contains_key(start_index) {
+                if abandoned.is_some() && self.st.starts.get_retained(start_index).is_some() {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "AgentInvocationFinished",
                         format!(
@@ -260,12 +261,12 @@ impl CursorTx<'_> {
                 continue;
             }
 
-            if self.st.claimed_starts.contains(&read_idx) {
+            if self.st.starts.is_claimed_ahead(&read_idx) {
                 // A `Start` already claimed out-of-position by an identity-keyed scan-ahead claim
-                // (`claim_owned_start`): its owner registered a resolver awaiter at claim time, so
-                // just consume it here and keep draining — it must never be handed to a positional
-                // reader.
-                self.st.claimed_starts.remove(&read_idx);
+                // stays reserved even if registration failed or was explicitly removed. Consume
+                // its position without changing any remaining terminal obligation; it must never
+                // be handed to a positional reader.
+                self.st.starts.consume_claimed_start(&read_idx);
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
             }
@@ -413,8 +414,8 @@ impl CursorTx<'_> {
             }
             (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
         };
-        let owner_can_consume = self.st.retained_starts.contains_key(&owner)
-            || self.st.claimed_starts.contains(&owner)
+        let owner_can_consume = self.st.starts.get_retained(&owner).is_some()
+            || self.st.starts.is_claimed_ahead(&owner)
             || self.cursor.reconstruction_claims.is_body_active(owner)
             || self
                 .future_entity_start_can_be_claimed(*head_idx, owner)
@@ -473,7 +474,7 @@ impl CursorState {
         {
             return Ok(None);
         }
-        if self.retained_entity_counts.contains_key(&owner) {
+        if self.starts.retained_summary().entities.contains_key(&owner) {
             return Ok(None);
         }
         if let Some(failure) = cursor.delivery_failure.lock().unwrap().clone() {
@@ -785,9 +786,9 @@ impl ReplayState {
                         {
                             return Ok(None);
                         }
-                        if terminal_start_index(&entry).is_some_and(|start_index| {
-                            st.concurrent_resolver.owns_terminal(start_index, index)
-                        }) || custom_subtree_entry_is_drainable(&st, &entry)
+                        if terminal_start_index(&entry)
+                            .is_some_and(|start_index| st.starts.owns_terminal(start_index, index))
+                            || custom_subtree_entry_is_drainable(&st, &entry)
                         {
                             return Ok(None);
                         }
@@ -807,17 +808,14 @@ impl ReplayState {
                             return Ok(None);
                         }
                         if matches!(entry, OplogEntry::Start { .. })
-                            && st.claimed_starts.contains(&index)
+                            && st.starts.is_claimed_ahead(&index)
                         {
                             return Ok(None);
                         }
-                        if owner.is_some_and(|owner| {
-                            owner != root && st.concurrent_resolver.is_awaited(owner)
-                        }) {
+                        if owner.is_some_and(|owner| owner != root && st.starts.is_awaited(owner)) {
                             return Ok(None);
                         }
-                        if terminal_start_index(&entry) == Some(root)
-                            && st.concurrent_resolver.is_awaited(root)
+                        if terminal_start_index(&entry) == Some(root) && st.starts.is_awaited(root)
                         {
                             return Ok(None);
                         }
@@ -833,7 +831,7 @@ impl ReplayState {
 
     /// Returns the earliest retained, still unclaimed durable-call `Start` in `root`'s call tree
     /// that is not owned by a still running reconstructed entity body (see
-    /// [`CursorState::retained_starts`]).
+    /// [`CursorState::starts`]).
     ///
     /// The cursor steps over unclaimed `Start`s instead of parking on them, so a body that
     /// returned without re-issuing one of its recorded calls no longer stalls the cursor. Callers
@@ -850,7 +848,7 @@ impl ReplayState {
         self.run_owned_cursor_op(move |state| async move {
             let cursor = &*state.cursor;
             let st = cursor.state.lock().await;
-            let Some(last_retained) = st.retained_starts.keys().next_back().copied() else {
+            let Some(last_retained) = st.starts.retained_keys().next_back().copied() else {
                 return Ok(None);
             };
             if last_retained <= root {
@@ -882,7 +880,7 @@ impl ReplayState {
                 next = last_read.next();
             }
 
-            for index in st.retained_starts.keys().copied() {
+            for index in st.starts.retained_keys().copied() {
                 if index <= root {
                     continue;
                 }
