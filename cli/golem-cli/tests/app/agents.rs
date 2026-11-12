@@ -6315,7 +6315,7 @@ async fn deploy_counter_agent_with_invocations(ctx: &mut TestContext, app_name: 
 }
 
 /// The JSON document embedded in a generated oplog viewer page.
-fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
+pub(super) fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
     let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
     let start = html
         .find(open_tag)

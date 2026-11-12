@@ -152,6 +152,21 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
     registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
     registry_entry!(
+        "AgentOplogExportHeaderView",
+        "agent.oplog-export-header",
+        arb_agent_oplog_export_header
+    ),
+    registry_entry!(
+        "AgentOplogExportEntryView",
+        "agent.oplog-export-entry",
+        arb_agent_oplog_export_entry
+    ),
+    registry_entry!(
+        "AgentOplogExportCoverageView",
+        "agent.oplog-export-coverage",
+        arb_agent_oplog_export_coverage
+    ),
+    registry_entry!(
         "AgentPluginToggleResult",
         "agent.plugin-toggle",
         arb_agent_plugin_toggle_result
@@ -694,6 +709,28 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
             );
         }
     }
+}
+
+#[test]
+fn cli_output_schema_export_documents_are_multi_document() {
+    let schema = load_command_output_schema();
+    let definitions = schema_definitions(&schema);
+    for output_type in [
+        "agent.oplog-export-header",
+        "agent.oplog-export-entry",
+        "agent.oplog-export-coverage",
+    ] {
+        let definition = &definitions[output_type];
+        assert_eq!(
+            definition["x-golem-output-mode"], "multi-document",
+            "{output_type}"
+        );
+        assert_eq!(
+            definition["x-golem-command"], "agent oplog",
+            "{output_type}"
+        );
+    }
+    assert_eq!(definitions["agent.oplog"]["x-golem-output-mode"], "stream");
 }
 
 #[test]
@@ -3641,6 +3678,172 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
                     attribution,
                     entry,
                 }
+            }),
+    )
+}
+
+fn arb_keep_flags() -> BoxedStrategy<crate::oplog_export::obfuscator::KeepFlags> {
+    (any::<bool>(), any::<bool>(), any::<bool>())
+        .prop_map(
+            |(scalars, shape, error_text)| crate::oplog_export::obfuscator::KeepFlags {
+                scalars,
+                shape,
+                error_text,
+            },
+        )
+        .boxed()
+}
+
+fn oplog_export_key() -> crate::oplog_export::obfuscator::TokenKey {
+    crate::oplog_export::obfuscator::TokenKey::from_bytes([42; 32])
+}
+
+fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
+    use crate::oplog_export::obfuscator::{ObfuscationContext, agent_reference};
+    serialized_output(
+        (arb_keep_flags(), any::<bool>(), "[A-Za-z0-9-]{1,24}").prop_map(
+            |(keep, filtered, name)| {
+                let key = oplog_export_key();
+                let ctx = ObfuscationContext::new(&key, keep);
+                let agent_id = golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(uuid!(
+                        "13a5c8d4-f05e-4e23-b982-f4d413e181cb"
+                    )),
+                    agent_id: format!("agent(\"{name}\")"),
+                };
+                crate::model::agent::oplog_export_view::AgentOplogExportHeaderView(
+                    crate::oplog_export::model::OplogExportHeader {
+                        obfuscate: true,
+                        keep_scalars: keep.scalars,
+                        keep_shape: keep.shape,
+                        keep_error_text: keep.error_text,
+                        filtered,
+                        root: agent_reference(&ctx, &agent_id),
+                        cli_version: "1.0.0".to_string(),
+                        generated_at: "2026-01-01T00:00:00+00:00".to_string(),
+                    },
+                )
+            },
+        ),
+    )
+}
+
+fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
+    use crate::oplog_export::model::OmittedReason;
+    use crate::oplog_export::obfuscator::{ObfuscationContext, render_entry, render_omitted};
+    use golem_common::model::oplog::{OmittedOplogEntry, PublicOplogEntryWithIndex};
+
+    let full = (
+        arb_small_u64(),
+        arb_public_oplog_entry_attribution(),
+        prop_oneof![
+            proptest::sample::select(sample_public_oplog_entries()),
+            arb_typed_value_oplog_entry(),
+        ],
+        arb_keep_flags(),
+        proptest::option::of("[a-z:/.{}-]{1,24}"),
+    )
+        .prop_map(|(index, attribution, entry, keep, start_function)| {
+            let key = oplog_export_key();
+            let ctx = ObfuscationContext::new(&key, keep);
+            let entry = PublicOplogEntryWithIndex {
+                oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
+                attribution,
+                entry,
+            };
+            render_entry(&ctx, &entry, start_function.as_deref()).entry
+        });
+    let omitted = (
+        arb_small_u64(),
+        arb_public_oplog_entry_attribution(),
+        "[A-Za-z]{1,24}",
+        arb_small_u64(),
+        arb_keep_flags(),
+        any::<bool>(),
+    )
+        .prop_map(|(index, attribution, entry_type, size, keep, too_large)| {
+            let key = oplog_export_key();
+            let ctx = ObfuscationContext::new(&key, keep);
+            let omitted = OmittedOplogEntry {
+                oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
+                attribution,
+                timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
+                entry_type,
+                size,
+                component_revision: golem_common::model::component::ComponentRevision::new(1)
+                    .unwrap(),
+            };
+            let reason = if too_large {
+                OmittedReason::TooLarge
+            } else {
+                OmittedReason::HydrationFailed
+            };
+            render_omitted(&ctx, &omitted, reason)
+        });
+    serialized_output(
+        prop_oneof![full, omitted]
+            .prop_map(crate::model::agent::oplog_export_view::AgentOplogExportEntryView),
+    )
+}
+
+fn arb_coverage_list<T: std::fmt::Debug + Clone + 'static>(
+    item: impl Strategy<Value = T> + 'static,
+) -> BoxedStrategy<crate::oplog_export::model::CoverageList<T>> {
+    (proptest::collection::vec(item, 0..3), 0u64..200)
+        .prop_map(|(shown, extra)| crate::oplog_export::model::CoverageList {
+            discovered: shown.len() as u64 + extra,
+            shown,
+        })
+        .boxed()
+}
+
+fn arb_agent_oplog_export_coverage() -> OutputDocumentStrategy {
+    use crate::oplog_export::model::{
+        KEEP_SCALARS_WITHOUT_SHAPE_NOTE, OmittedEntryRef, OmittedReason, OplogExportCoverage,
+        SchemaLessRpcValueRef, StartUnknownRef,
+    };
+    serialized_output(
+        (
+            arb_coverage_list(
+                (
+                    arb_small_u64(),
+                    "[A-Za-z]{1,24}",
+                    arb_small_u64(),
+                    any::<bool>(),
+                )
+                    .prop_map(|(index, kind, size, too_large)| OmittedEntryRef {
+                        index,
+                        kind,
+                        size,
+                        reason: if too_large {
+                            OmittedReason::TooLarge
+                        } else {
+                            OmittedReason::HydrationFailed
+                        },
+                    }),
+            ),
+            arb_coverage_list(
+                (arb_small_u64(), arb_small_u64())
+                    .prop_map(|(index, start_index)| StartUnknownRef { index, start_index }),
+            ),
+            arb_coverage_list(
+                (arb_small_u64(), "[a-zA-Z.]{1,24}")
+                    .prop_map(|(index, path)| SchemaLessRpcValueRef { index, path }),
+            ),
+            any::<bool>(),
+        )
+            .prop_map(|(hydration_failures, start_unknown, schema_less, note)| {
+                let notes = if note {
+                    vec![KEEP_SCALARS_WITHOUT_SHAPE_NOTE.to_string()]
+                } else {
+                    vec![]
+                };
+                let mut coverage = OplogExportCoverage::new(notes);
+                coverage.hydration_failures = hydration_failures;
+                coverage.start_unknown = start_unknown;
+                coverage.schema_less_rpc_values = schema_less;
+                coverage.update_incomplete();
+                crate::model::agent::oplog_export_view::AgentOplogExportCoverageView(coverage)
             }),
     )
 }
