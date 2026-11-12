@@ -255,9 +255,12 @@ Do not manually call `begin`, `commit`, or `rollback`; those are not public meth
 
 Declare the agent's database grants in `golem.yaml` when it uses an explicit `initialCard`.
 Ordinary reads need `query`; writes, table DDL, index creation, and table locks need `mutate`.
-Resources use `database.schema.table`, with `*` allowed per component. For example:
+Resources use `database.schema.table`, with `*` allowed per component. An explicit card replaces
+the default card, so it also needs `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`: the SDK reads
+that variable when it restores the agent from a snapshot. For example:
 
 ```text
+env(?agent) @ ?agent : read : GOLEM_AGENT_ID
 rdbms(?env) @ ?agent : query : app.public.notes
 rdbms(?env) @ ?agent : mutate : app.public.notes
 ```

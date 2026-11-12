@@ -179,16 +179,20 @@ agents:
     initialCard:
       lowerBound:
         positive:
+          - "env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
           - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
         negative:
           - "tool(?component/git) @ ?agent : invoke : status --short --null"
       upperBound:
         positive:
+          - "env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
           - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
         negative: []
 ```
 
 This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
+
+The `env` grant lets the agent read its own `GOLEM_AGENT_ID`, which the Rust, TypeScript, Go, MoonBit and Effect SDKs read. An explicit card replaces the default card, so it must contain this grant, and an upper bound with positive grants must contain it too. See [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
 
 Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/develop/tool-security#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
 
