@@ -71,9 +71,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// `changes_state` is set, and gives whether a snapshot is the next action.
     pub(super) async fn on_external_invocation_completed(&mut self, changes_state: bool) -> bool {
         self.invocations_since_snapshot += 1;
-        if changes_state {
-            *self.last_state_change = Some(self.parent.oplog.current_oplog_index().await);
-        }
         match self.parent.snapshot_policy() {
             SnapshotPolicy::EveryNInvocation { count } => {
                 if self.invocations_since_snapshot >= *count as u64 {
@@ -86,6 +83,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
             SnapshotPolicy::Periodic { .. } => {
                 let status = self.parent.get_last_known_status().await;
+                if changes_state {
+                    *self.last_state_change = Some(status.oplog_idx);
+                }
                 if matches!(
                     self.periodic_snapshot_action(&status),
                     PeriodicSnapshotAction::DueNow
