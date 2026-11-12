@@ -39,3 +39,15 @@ final case class SchemaConflictError(typeId: String, detail: Option[String] = No
 
 /** Raised when decoding a [[SchemaValue]] back into a Scala value fails. */
 final case class FromSchemaError(message: String) extends RuntimeException(message)
+
+/** A producer failure, delivered after its accepted stream items. */
+sealed abstract class StreamError(message: String, val name: String = "StreamError") extends RuntimeException(message)
+
+object StreamError {
+  final case class Failed(value: TypedSchemaValue)   extends StreamError("agent stream failed")
+  final case class Trapped(detail: String)           extends StreamError(detail)
+  case object Cancelled                              extends StreamError("agent stream cancelled", "AbortError")
+  case object Abandoned                              extends StreamError("agent stream abandoned")
+  final case class Interrupted(detail: String)       extends StreamError(detail)
+  final case class ResourceExhausted(detail: String) extends StreamError(detail)
+}

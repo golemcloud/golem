@@ -111,6 +111,7 @@ pub use schema_value_stream::CoreTypesHost;
 pub mod rpc;
 mod sockets;
 pub mod stream_bus;
+pub(crate) mod stream_outcome;
 pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
@@ -392,6 +393,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
+    pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
+    schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     invocation_id: Option<golem_common::model::OwnedInvocationId>,

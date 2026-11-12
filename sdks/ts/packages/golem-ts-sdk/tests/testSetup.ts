@@ -106,12 +106,16 @@ vi.mock('golem:core/types@2.0.0', () => ({
   // instances; tests build fakes with `fakeRawCard`.
   PermissionCard: class PermissionCard {},
   SchemaValueStream: {
-    unwrap: async (value: { reader: AsyncIterable<unknown> }) => value.reader,
+    unwrap: async (value: { reader: AsyncIterable<unknown>; outcome?: Promise<unknown> }) => [
+      value.reader,
+      value.outcome ?? Promise.resolve({ tag: 'ok' }),
+    ],
     wrap: async (
       reader: AsyncIterable<unknown> & { failWrap?: boolean; onDispose?: () => void },
+      outcome: Promise<unknown>,
     ) => {
       if (reader.failWrap) throw new Error('test schema value stream wrap failure');
-      return { reader, [Symbol.dispose]: () => reader.onDispose?.() };
+      return { reader, outcome, [Symbol.dispose]: () => reader.onDispose?.() };
     },
   },
   parseUuid: (uuid: string) => {

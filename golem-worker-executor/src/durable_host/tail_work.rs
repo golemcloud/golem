@@ -282,6 +282,9 @@ mod context {
 
         pub(crate) fn begin_stream_runtime_teardown(&self) {
             self.stream_runtime_teardown.store(true, Ordering::Release);
+            self.schema_producers.revoke();
+            let tasks = self.schema_output_tasks.lock().unwrap().take();
+            drop(tasks);
         }
 
         /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)

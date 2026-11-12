@@ -100,13 +100,14 @@ async fn test_go_generated_guest_streams_e2e() {
             fn new(name: String) -> Self { Self { _name: name } }
             async fn consume(&self, mut input: AgentStream<i8>) -> i32 {
                 let mut total = 0;
-                while let Some(value) = input.next().await.expect("read narrow input") { total += i32::from(value); }
+                while let Some(value) = input.next().await { total += i32::from(value.expect("read narrow input")); }
                 total
             }
             fn produce(&self) -> AgentStream<StreamItem> {
                 let (mut writer, stream) = AgentStream::new();
                 spawn_local(async move {
                     let _ = writer.write_one(StreamItem { label: "remote".into(), children: vec![StreamItem { label: "child".into(), children: vec![] }] }).await;
+                    let _ = writer.close().await;
                 });
                 stream
             }
@@ -149,6 +150,7 @@ async fn test_go_generated_guest_streams_e2e() {
 
             import (
             	"fmt"
+                "io"
 
             	"{module}/agents/consumer"
 
@@ -179,11 +181,11 @@ async fn test_go_generated_guest_streams_e2e() {
             		forwarded := golem.Must(remote.Forward(provider.StreamBundle{{Optional: values.Some(output)}}))
             		optional, some := forwarded.Optional.Get()
             		check(some, "forward lost the optional stream")
-            		item, ok := optional.Next()
-            		check(ok && item.Label == "remote", "first item: %+v %v", item, ok)
+                    item, err := optional.Next()
+                    check(err == nil && item.Label == "remote", "first item: %+v %v", item, err)
             		check(len(item.Children) == 1 && item.Children[0].Label == "child", "children: %+v", item.Children)
-            		_, ok = optional.Next()
-            		check(!ok, "the produced stream did not end")
+                    _, err = optional.Next()
+                    check(err == io.EOF, "the produced stream did not end: %v", err)
 
             		for count := 0; count < 4; count++ {{
             			siblings := make([]golem.AgentStream[provider.StreamItem], 0, count)
@@ -201,14 +203,14 @@ async fn test_go_generated_guest_streams_e2e() {
             			return w.Write(golem.StreamOf(provider.StreamItem{{Label: "nested"}}))
             		}})
             		returned := golem.Must(remote.Nested(outer))
-            		inner, ok := returned.Next()
-            		check(ok, "the nested stream is empty")
-            		item, ok = inner.Next()
-            		check(ok && item.Label == "nested", "nested item: %+v %v", item, ok)
-            		_, ok = inner.Next()
-            		check(!ok, "the inner stream did not end")
-            		_, ok = returned.Next()
-            		check(!ok, "the outer stream did not end")
+                    inner, err := returned.Next()
+                    check(err == nil, "the nested stream is empty: %v", err)
+                    item, err = inner.Next()
+                    check(err == nil && item.Label == "nested", "nested item: %+v %v", item, err)
+                    _, err = inner.Next()
+                    check(err == io.EOF, "the inner stream did not end: %v", err)
+                    _, err = returned.Next()
+                    check(err == io.EOF, "the outer stream did not end: %v", err)
 
             		return "ok:" + golem.Must(remote.Status())
             	}})

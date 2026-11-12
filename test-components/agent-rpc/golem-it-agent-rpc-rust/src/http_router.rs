@@ -157,11 +157,19 @@ impl HttpRouter for RawHttpRouterImpl {
                 let mut input = request.body;
                 let (mut writer, output) = AgentStream::new();
                 spawn_local(async move {
-                    while let Ok(Some(chunk)) = input.next().await {
+                    while let Some(chunk) = input.next().await {
+                        let chunk = match chunk {
+                            Ok(chunk) => chunk,
+                            Err(error) => {
+                                let _ = writer.finish(Err(error)).await;
+                                return;
+                            }
+                        };
                         if writer.write_one(chunk).await.is_err() {
-                            break;
+                            return;
                         }
                     }
+                    let _ = writer.close().await;
                 });
                 (200, output)
             }

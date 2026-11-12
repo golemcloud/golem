@@ -15,8 +15,10 @@
 package golem
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"reflect"
 
@@ -42,7 +44,8 @@ import (
 //
 // Reading:
 //
-//	for line := range s.All() {
+//	for line, err := range s.All() {
+//	    if err != nil { return err }
 //	    ...
 //	}
 //
@@ -55,10 +58,69 @@ import (
 // Forwarding one you have not read costs nothing — the endpoint moves, no items
 // are pumped through this component.
 //
-// Clean completion is end of input, and a stream has no failure end of its own.
-// A producer that fails must not close it cleanly, because the reader could not
-// tell that apart from success: ProduceStream fails the invocation instead.
-// Model recoverable failures in the item type, as AgentStream[Result[T, E]].
+// A producer failure follows its accepted items as a StreamError. Per-item
+// Result values remain ordinary items, independent of the stream outcome.
+
+// StreamErrorKind identifies the producer's terminal failure.
+type StreamErrorKind uint8
+
+const (
+	StreamFailed StreamErrorKind = iota
+	StreamTrapped
+	StreamCancelled
+	StreamAbandoned
+	StreamInterrupted
+	StreamResourceExhausted
+)
+
+// StreamError carries a producer outcome. Value is present for StreamFailed;
+// Message carries diagnostics for traps, interruptions and resource limits.
+type StreamError struct {
+	Kind    StreamErrorKind
+	Value   TypedValue
+	Message string
+}
+
+func (e *StreamError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("golem: stream %s", [...]string{"failed", "trapped", "cancelled", "abandoned", "interrupted", "resource-exhausted"}[e.Kind])
+}
+
+func (e *StreamError) Unwrap() error {
+	if e.Kind == StreamCancelled {
+		return context.Canceled
+	}
+	return nil
+}
+
+func streamErrorFromWire(e types.StreamError) error {
+	switch e.Tag() {
+	case types.StreamErrorFailed:
+		return &StreamError{Kind: StreamFailed, Value: TypedValue{wit: e.Failed()}}
+	case types.StreamErrorTrapped:
+		return &StreamError{Kind: StreamTrapped, Message: e.Trapped()}
+	case types.StreamErrorCancelled:
+		return &StreamError{Kind: StreamCancelled}
+	case types.StreamErrorAbandoned:
+		return &StreamError{Kind: StreamAbandoned}
+	case types.StreamErrorInterrupted:
+		return &StreamError{Kind: StreamInterrupted, Message: e.Interrupted()}
+	case types.StreamErrorResourceExhausted:
+		return &StreamError{Kind: StreamResourceExhausted, Message: e.ResourceExhausted()}
+	default:
+		panic("golem: invalid stream outcome")
+	}
+}
+
+func streamFailure(err error) types.StreamError {
+	var declared *StreamError
+	if errors.As(err, &declared) && declared.Kind == StreamFailed {
+		return types.MakeStreamErrorFailed(declared.Value.wit)
+	}
+	return types.MakeStreamErrorFailed(EncodeTypedValue(err.Error()).wit)
+}
 
 // ErrReaderGone reports that the consumer dropped its end. A producer that
 // sees this should stop; it is cooperative, not an error in the data.
@@ -84,18 +146,23 @@ var (
 type treeSource struct {
 	read          func(dst []types.SchemaValueTree) uint32
 	writerDropped func() bool
+	outcome       func() error
+	dropOutcome   func()
 	drop          func()
 	// reader is the host endpoint this source wraps, kept so an unread stream
 	// can be handed straight back. It is nil for a source that did not come
 	// from the host, which therefore cannot be transferred.
 	//nolint:unused // read by the wasip1 build, to hand an unread stream back
 	reader any
+	//nolint:unused // transferred by the wasip1 build
+	future any
 }
 
 type treeSink struct {
 	write         func(items []types.SchemaValueTree) uint32
 	readerDropped func() bool
 	drop          func()
+	finish        func(error)
 }
 
 func (s treeSource) valid() bool { return s.read != nil }
@@ -168,32 +235,24 @@ func StreamOf[T any](items ...T) AgentStream[T] {
 // ProduceStream runs produce on its own goroutine and returns the stream it
 // writes to. Returning nil closes the stream cleanly, and so does returning
 // [ErrReaderGone] (or an error wrapping it), which only says the consumer
-// stopped reading. Returning any other error, or panicking, fails the
-// invocation the stream belongs to — the component traps — because a stream
-// has no failure end and a consumer must not read a failed production as a
-// complete one.
+// stopped reading. Another error produces a failed outcome. A StreamError
+// with Kind StreamFailed preserves its declared Value; other errors carry a string.
 func ProduceStream[T any](produce func(*AgentStreamWriter[T]) error) AgentStream[T] {
 	w, s := NewAgentStream[T]()
 	go func() {
-		if err := produce(w); err != nil && !errors.Is(err, ErrReaderGone) {
-			failProduction(err)
-			return
+		err := produce(w)
+		if errors.Is(err, ErrReaderGone) {
+			err = nil
 		}
-		w.Close()
+		w.Finish(err)
 	}()
 	return s
 }
 
-// failProduction ends a failed production by failing the invocation. It is a
-// variable so native tests can observe it instead of crashing the test binary.
-var failProduction = func(err error) {
-	panic(fmt.Sprintf("golem: stream producer failed: %v", err))
-}
-
-// Next reads the next value, reporting ok=false at clean end of input. It
+// Next reads the next value, reporting io.EOF at clean end of input. It
 // panics on a stream that was handed on or closed, and on an item that does
 // not match the stream's schema.
-func (s AgentStream[T]) Next() (T, bool) {
+func (s AgentStream[T]) Next() (T, error) {
 	var zero T
 	if s.st == nil {
 		panic(errStreamClosed)
@@ -208,13 +267,20 @@ func (s AgentStream[T]) Next() (T, bool) {
 
 	tree, ok := s.st.nextTree()
 	if !ok {
-		return zero, false
+		if s.st.src.outcome != nil {
+			outcome := s.st.src.outcome
+			s.st.src.outcome = nil
+			if err := outcome(); err != nil {
+				return zero, err
+			}
+		}
+		return zero, io.EOF
 	}
 	v, err := s.codec.decode(tree)
 	if err != nil {
 		panic(fmt.Errorf("golem: stream item: %w", err))
 	}
-	return v, true
+	return v, nil
 }
 
 // nextTree pulls one value tree, refilling the batch when it runs out.
@@ -244,13 +310,17 @@ func (st *streamState) nextTree() (types.SchemaValueTree, bool) {
 	}
 }
 
-// All iterates the stream to clean end of input, panicking as [AgentStream.Next]
-// does.
-func (s AgentStream[T]) All() iter.Seq[T] {
-	return func(yield func(T) bool) {
+// All yields each item and then at most one terminal error. Stopping early
+// releases the reader without awaiting the producer outcome.
+func (s AgentStream[T]) All() iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		defer s.Close()
 		for {
-			v, ok := s.Next()
-			if !ok || !yield(v) {
+			v, err := s.Next()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if !yield(v, err) || err != nil {
 				return
 			}
 		}
@@ -259,12 +329,15 @@ func (s AgentStream[T]) All() iter.Seq[T] {
 
 // Collect reads the stream to completion. Use it only where the sequence is
 // known to be bounded — it defeats the point of streaming otherwise.
-func (s AgentStream[T]) Collect() []T {
+func (s AgentStream[T]) Collect() ([]T, error) {
 	var out []T
-	for v := range s.All() {
+	for v, err := range s.All() {
+		if err != nil {
+			return out, err
+		}
 		out = append(out, v)
 	}
-	return out
+	return out, nil
 }
 
 // Close releases the reading endpoint. A producer observes it on its next
@@ -320,11 +393,21 @@ func (w *AgentStreamWriter[T]) WriteAll(vs ...T) error {
 // Close completes the stream. The reader sees end of input. Closing twice does
 // nothing, so a deferred Close after an explicit one is safe.
 func (w *AgentStreamWriter[T]) Close() {
+	w.Finish(nil)
+}
+
+// Finish closes the item stream and reports its outcome. A failed declared
+// value is supplied as &StreamError{Kind: StreamFailed, Value: value}.
+func (w *AgentStreamWriter[T]) Finish(err error) {
 	if w.closed {
 		return
 	}
 	w.closed = true
-	w.sink.drop()
+	if w.sink.finish != nil {
+		w.sink.finish(err)
+	} else {
+		w.sink.drop()
+	}
 }
 
 // defaultStreamCodec converts items through the SDK's own codec for T.

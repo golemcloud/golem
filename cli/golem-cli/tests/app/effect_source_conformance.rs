@@ -8,6 +8,106 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 
 #[test]
+#[timeout("10 minutes")]
+async fn effect_stream_outcome_is_catchable_through_rpc() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    assert!(
+        ctx.cli([
+            flag::YES,
+            cmd::NEW,
+            "effect-stream-outcome",
+            flag::TEMPLATE,
+            "effect"
+        ])
+        .await
+        .success_or_dump()
+    );
+    ctx.cd("effect-stream-outcome");
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {version}
+            app: effect-stream-outcome
+            environments:
+              local:
+                server: local
+                componentPresets: quick
+            components:
+              effect-stream-outcome:main:
+                dir: .
+                templates: effect
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        indoc! {r#"
+            import { Effect, Schema, Stream } from "effect";
+            import { Bridge, defineAgent, method, Schema as GolemSchema, WitTypes } from "@golemcloud/effect-golem";
+
+            const Producer = defineAgent({
+              name: "EffectOutcomeProducer", id: { name: Schema.String },
+              methods: {
+                produce: method({ input: { fail: Schema.Boolean }, success: WitTypes.AgentStream(WitTypes.Uint32) }),
+                status: method({ input: {}, success: Schema.String }),
+              },
+            });
+            Producer.implement({
+              init: () => Effect.succeed({}),
+              methods: () => ({
+                produce: ({ fail }) => Effect.succeed(fail
+                  ? Stream.concat(Stream.make(17, 29), Stream.fail(GolemSchema.StreamError.failed({
+                      graph: { defs: new Map(), root: Bridge.t.u32() }, value: Bridge.v.u32(73),
+                    })))
+                  : Stream.make(17, 29)),
+                status: () => Effect.succeed("ready"),
+              }),
+            });
+            defineAgent({
+              name: "EffectOutcomeCaller", id: { name: Schema.String },
+              methods: { run: method({ input: {}, success: Schema.String }) },
+            }).implement({
+              init: () => Effect.succeed({}),
+              methods: () => ({
+                run: () => Effect.gen(function* () {
+                  const producer = yield* Producer.client.get({ name: "failed" });
+                  const independent = yield* Producer.client.get({ name: "sibling" });
+                  const sibling = yield* independent.produce({ fail: false });
+                  const failed = yield* producer.produce({ fail: true });
+                  const prefix: number[] = [];
+                  const declared = yield* failed.pipe(
+                    Stream.runForEach(value => Effect.sync(() => { prefix.push(value); })),
+                    Effect.andThen(Effect.die("stream failure became clean EOF")),
+                    Effect.catchTag("StreamError", error => Effect.sync(() => {
+                      const failure = error.failure;
+                      if (failure.tag !== "failed" || failure.val.value.tag !== "u32") throw error;
+                      return failure.val.value.value;
+                    })),
+                  );
+                  const other = yield* Stream.runCollect(sibling);
+                  return `${prefix.join(",")}:${declared}:${Array.from(other).join(",")}:${yield* producer.status({})}`;
+                }).pipe(Effect.orDie, Effect.scoped),
+              }),
+            });
+        "#},
+    )
+    .unwrap();
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "EffectOutcomeCaller(\"reader\")",
+            "run",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains("17,29:73:17,29:ready"));
+}
+
+#[test]
 #[timeout("20 minutes")]
 async fn effect_ambient_native_client_executes_through_golem() {
     let mut ctx = TestContext::new();

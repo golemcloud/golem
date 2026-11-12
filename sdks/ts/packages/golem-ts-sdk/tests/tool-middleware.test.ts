@@ -752,9 +752,12 @@ describe('monomorphic tool middleware dispatch', () => {
   it.each(['result', 'custom-error'])('closes rejected underlying %s streams', async (mode) => {
     const close = vi.fn(async () => ({ done: true as const, value: undefined }));
     const next = vi.fn();
-    const raw = await SchemaValueStream.wrap({
-      [Symbol.asyncIterator]: () => ({ next, return: close }),
-    });
+    const raw = await SchemaValueStream.wrap(
+      {
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      },
+      Promise.resolve({ tag: 'ok', val: undefined }),
+    );
     const schema = z.object({ stream: s.stream(s.u32()), count: s.u32() });
     const definition = toolDefinition('probe').body((body) =>
       body.returns(schema).error('failed', { kind: 'runtime', exitCode: 1, payload: schema }),

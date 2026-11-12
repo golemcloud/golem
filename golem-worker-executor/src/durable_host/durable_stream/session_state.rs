@@ -847,7 +847,10 @@ impl SessionControlMetadata {
             StreamSessionRecord::ConsumerItemValue(record) if record_matches => {
                 Some(record.reader_id)
             }
-            StreamSessionRecord::ConsumerTerminal(record) if record_matches => {
+            StreamSessionRecord::ConsumerTerminal(record)
+            | StreamSessionRecord::ConsumerOutcome(record)
+                if record_matches =>
+            {
                 Some(record.reader_id)
             }
             StreamSessionRecord::SourceUnavailable(record) if record_matches => {

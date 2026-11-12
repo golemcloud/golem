@@ -208,7 +208,7 @@ Only these are authoritative:
   producer oplog": losing the bus, a reader or a socket loses nothing.
 - The **consumer's `StreamSession` journal** (`StreamSessionRecord` in
   `golem-common/src/base_model/durable_stream.rs`) records bindings plus
-  `ConsumerItemValue`/`ConsumerTerminal`. Each observation contains its bytes or terminal,
+  `ConsumerItemValue`/`ConsumerTerminal` and the separate `ConsumerOutcome` observation. Each observation contains its bytes or terminal,
   `source_offset`, `consumer_read_ordinal`, and a `LocalStreamReaderId` made from the oplog index
   and binding slot of the record that introduced the reader.
 
@@ -351,6 +351,9 @@ reads share this gate with timers and accessor completions. A non-blocking poll 
 cannot consume an async input; a busy guest must ask through recorded synchronous host calls.
 Host-side `consume_host` takes do not gate. Native guest write completions are not instrumented
 by this gate. These records remain hints and satisfy no claim.
+
+`ConsumerOutcome` reserves a separate guest boundary from the item stream's `ConsumerTerminal`. It identifies the same reader, terminal source offset and read ordinal, but advances no item progress and introduces no readers. The consumer head accepts one outcome observation only after the terminal observation. An outcome re-observation must reference an original `ConsumerOutcome`, not EOF; it preserves logical content while allowing a new guest owner after a cut. Consuming EOF does not acknowledge the outcome's replay boundary.
+
 Native failed-terminal traps use the same preparation and blocked-wait gate. Wasmtime propagates
 a producer error without calling its read-consumption observer, so the adapter acknowledges the
 prepared observation immediately before emitting the native trap. Host take alone still records
@@ -411,6 +414,14 @@ Randomness is allowed where it is recorded before it is observed: `caller_attemp
 later run reads the persisted value.
 
 ### Terminals
+
+Tool schema-result mappings and output drainage have different lifetimes. `MaterializeResponse` retains Store tail activity only until mappings are published. Before mutation admission, `spawn_materialize_result` registers preparation and drainage in the context-owned schema output task group. Dropping the response observer does not cancel that work. Runtime teardown revokes the group, including work whose mappings committed before its admitted reply returned.
+
+During guest execution and settlement, a Store task supervises native schema output failures. It propagates the original typed error, including `OplogFenced`, without waiting for guest completion. Stop that observer before joining the task group: its join set supports one waiter. Recheck its retained failure before cancellation arbitration, so cancellation cannot discard an already completed output failure.
+
+Primary streaming results use the same early native ownership. Mapping preparation, guest producer settlement and outcome selection run with the Store scheduler active, before parent finalization, in live execution and replay. The invocation principal and read-only restrictions remain installed while guest producers run. Materialized output drainage remains after parent finalization, so it does not retain the primary filesystem lane while child calls need that lane. Native failure supervision stays active during finalization and stops before the output drain takes over the join set. A guest-declared error also waits for producer settlement before selecting the normal-return fallback; it is not a guest trap. Successful non-streaming calls settle their schema producers before releasing child calls. A deterministic guest trap or stack overflow selects the registered producers' trapped fallback before parent finalization and before `PrimaryStore` destroys the physical Store. The original context remains available for native output drainage and ordinary invocation failure bookkeeping. A pending lifecycle interrupt bypasses semantic selection; an interrupt during drainage revokes the work through ordinary teardown. Native output failures retain their typed errors. Invocation-owned drainage checks that each native output, including nested outputs, has a durable terminal before reporting completion. An aborted output without a terminal requests reconstruction; adapter shutdown alone cannot authorize successful session finalization. This check does not make Store-dependent projections independent of the Store.
+
+After guest tasks and local tail work settle, the tool body selects outcomes for its registered schema producers and releases their active registrations. It joins materialized outputs, not unread local streams. Streaming result contracts and undeclared middleware error payloads start the cleanup deadline only after guest tasks exit. An allowlisted tool trap selects outcomes before physical Store destruction; the retained original context drains materialized output afterward. Store destruction closes projection dispatchers, but their adapter abort does not establish that a selected terminal became durable. Neither the success output-drain wait nor the retained-context drain currently has a cleanup timeout. Local cancellation revokes schema output work without selecting a semantic fallback.
 
 `StreamTerminal` records one `Finished`, `Failed(StreamError)` or `ConsumerCancelled` terminal,
 authored by `Guest`, `Host` or `Protocol`. The first terminal wins; a competing terminal cannot

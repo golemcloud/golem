@@ -15,11 +15,13 @@
 package golem
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"io"
 	"reflect"
 	"testing"
-	"time"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -85,22 +87,24 @@ func streamOverFake[T any](t *testing.T, values ...T) (AgentStream[T], *fakeStre
 
 func TestAgentStreamReadsToCleanEOF(t *testing.T) {
 	s, _ := streamOverFake(t, "a", "b", "c")
-	got := s.Collect()
+	got, err := s.Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
 		t.Errorf("read %v", got)
 	}
 }
 
-// TestAgentStreamEOFIsOkFalse — the contract a consumer relies on: a clean
-// end of input is ok=false, and reading past it stays there.
-func TestAgentStreamEOFIsOkFalse(t *testing.T) {
+// A clean end of input is io.EOF, and reading past it stays there.
+func TestAgentStreamEOF(t *testing.T) {
 	s, _ := streamOverFake(t, "only")
-	if _, ok := s.Next(); !ok {
+	if _, err := s.Next(); err != nil {
 		t.Fatal("first read reported end of input")
 	}
 	for range 2 {
-		if v, ok := s.Next(); ok {
-			t.Errorf("end of input reported as ok=%v value=%v", ok, v)
+		if v, err := s.Next(); !errors.Is(err, io.EOF) {
+			t.Errorf("end of input reported as err=%v value=%v", err, v)
 		}
 	}
 }
@@ -108,7 +112,10 @@ func TestAgentStreamEOFIsOkFalse(t *testing.T) {
 func TestAgentStreamAllStopsAtEOF(t *testing.T) {
 	s, _ := streamOverFake(t, int64(1), int64(2))
 	var seen []int64
-	for v := range s.All() {
+	for v, err := range s.All() {
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen = append(seen, v)
 	}
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
@@ -189,7 +196,7 @@ func TestAgentStreamTransferIsAffine(t *testing.T) {
 // cannot be put back, so the receiver would not get the stream it was promised.
 func TestAgentStreamPartiallyReadCannotBeForwarded(t *testing.T) {
 	s, _ := streamOverFake(t, "a", "b")
-	if _, ok := s.Next(); !ok {
+	if _, err := s.Next(); err != nil {
 		t.Fatal("first read reported end of input")
 	}
 	if _, err := s.streamTake(); !errors.Is(err, errStreamPartiallyRead) {
@@ -291,42 +298,108 @@ func TestAReceivedStreamCanBeStoredInAStructField(t *testing.T) {
 	}
 }
 
-// observeFailedProduction replaces failing the invocation, which off wasm would
-// crash the test binary, with reporting the failure.
-func observeFailedProduction(t *testing.T) <-chan error {
-	t.Helper()
-	failed := make(chan error, 1)
-	prev := failProduction
-	failProduction = func(err error) { failed <- err }
-	t.Cleanup(func() { failProduction = prev })
-	return failed
-}
-
-// TestAFailedProductionIsNotEndOfInput — a producer that fails must not look
-// like one that finished: the invocation fails instead of the stream closing.
+// A producer failure follows the accepted prefix without trapping the reader.
 func TestAFailedProductionIsNotEndOfInput(t *testing.T) {
-	failed := observeFailedProduction(t)
 	s := ProduceStream(func(w *AgentStreamWriter[int32]) error {
 		if err := w.Write(1); err != nil {
 			return err
 		}
 		return errors.New("disk gone")
 	})
-	if v, ok := s.Next(); !ok || v != 1 {
-		t.Fatalf("first item %d, %v", v, ok)
+	if v, err := s.Next(); err != nil || v != 1 {
+		t.Fatalf("first item %d, %v", v, err)
 	}
-	if err := <-failed; err == nil || err.Error() != "disk gone" {
-		t.Fatalf("the production failed with %v", err)
+	_, err := s.Next()
+	var failure *StreamError
+	if !errors.As(err, &failure) || failure.Kind != StreamFailed {
+		t.Fatalf("unexpected outcome %v", err)
+	}
+	if value, err := DecodeTypedValue[string](failure.Value); err != nil || value != "disk gone" {
+		t.Fatalf("producer error %q: %v", value, err)
+	}
+	if _, err := s.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("after error: %v", err)
 	}
 
 	done := ProduceStream(func(w *AgentStreamWriter[int32]) error { return w.Write(2) })
-	if got := done.Collect(); len(got) != 1 || got[0] != 2 {
-		t.Fatalf("a finished production gave %v", got)
+	if got, err := done.Collect(); err != nil || len(got) != 1 || got[0] != 2 {
+		t.Fatalf("a finished production gave %v: %v", got, err)
 	}
-	select {
-	case err := <-failed:
-		t.Fatalf("a finished production failed with %v", err)
-	default:
+}
+
+func TestAgentStreamOutcomes(t *testing.T) {
+	declared := EncodeTypedValue(struct {
+		Code   int32
+		Reason string
+	}{17, "denied"})
+	cases := []struct {
+		kind StreamErrorKind
+		wire types.StreamError
+	}{
+		{StreamFailed, types.MakeStreamErrorFailed(declared.wit)},
+		{StreamTrapped, types.MakeStreamErrorTrapped("trap")},
+		{StreamCancelled, types.MakeStreamErrorCancelled()},
+		{StreamAbandoned, types.MakeStreamErrorAbandoned()},
+		{StreamInterrupted, types.MakeStreamErrorInterrupted("lost hop")},
+		{StreamResourceExhausted, types.MakeStreamErrorResourceExhausted("limit")},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprint(tc.kind), func(t *testing.T) {
+			s, _ := streamOverFake(t, int32(17), int32(93))
+			s.st.src.outcome = func() error { return streamErrorFromWire(tc.wire) }
+			for _, expected := range []int32{17, 93} {
+				if got, err := s.Next(); err != nil || got != expected {
+					t.Fatalf("prefix: %v %v", got, err)
+				}
+			}
+			_, err := s.Next()
+			var failure *StreamError
+			if !errors.As(err, &failure) || failure.Kind != tc.kind {
+				t.Fatalf("outcome: %v", err)
+			}
+			if errors.Is(err, context.Canceled) != (tc.kind == StreamCancelled) {
+				t.Fatalf("cancellation: %v", err)
+			}
+			if tc.kind == StreamFailed && !reflect.DeepEqual(failure.Value, declared) {
+				t.Fatalf("declared value lost: %v", failure.Value)
+			}
+			if _, err := s.Next(); !errors.Is(err, io.EOF) {
+				t.Fatalf("after failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentStreamIteratorCarriesDeclaredFailure(t *testing.T) {
+	type failureValue struct {
+		Code   int32
+		Reason string
+	}
+	declared := failureValue{29, "rejected"}
+	s := ProduceStream(func(w *AgentStreamWriter[int32]) error {
+		if err := w.WriteAll(17, 93); err != nil {
+			return err
+		}
+		return &StreamError{Kind: StreamFailed, Value: EncodeTypedValue(declared)}
+	})
+	var prefix []int32
+	failures := 0
+	for value, err := range s.All() {
+		if err == nil {
+			prefix = append(prefix, value)
+			continue
+		}
+		failures++
+		var failure *StreamError
+		if !errors.As(err, &failure) {
+			t.Fatal(err)
+		}
+		if got, err := DecodeTypedValue[failureValue](failure.Value); err != nil || got != declared {
+			t.Fatalf("value: %v %v", got, err)
+		}
+	}
+	if !reflect.DeepEqual(prefix, []int32{17, 93}) || failures != 1 {
+		t.Fatalf("prefix %v, failures %d", prefix, failures)
 	}
 }
 
@@ -342,7 +415,6 @@ type streamLeaf struct{ Lines AgentStream[string] }
 // A producer that returns the Write error after the consumer stopped reading
 // ends cleanly: the reader going away is not a failed production.
 func TestAProducerStoppedByTheReaderEndsCleanly(t *testing.T) {
-	failed := observeFailedProduction(t)
 	stopped := make(chan error, 1)
 	s := ProduceStream(func(w *AgentStreamWriter[int32]) error {
 		for i := int32(0); ; i++ {
@@ -352,16 +424,11 @@ func TestAProducerStoppedByTheReaderEndsCleanly(t *testing.T) {
 			}
 		}
 	})
-	if _, ok := s.Next(); !ok {
+	if _, err := s.Next(); err != nil {
 		t.Fatal("no first item")
 	}
 	s.Close()
 	if err := <-stopped; !errors.Is(err, ErrReaderGone) {
 		t.Fatalf("the producer stopped with %v, want ErrReaderGone", err)
-	}
-	select {
-	case err := <-failed:
-		t.Fatalf("a producer stopped by its reader failed the invocation: %v", err)
-	case <-time.After(100 * time.Millisecond):
 	}
 }

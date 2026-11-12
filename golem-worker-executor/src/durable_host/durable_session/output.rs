@@ -20,6 +20,25 @@ fn stops_at_control_terminal(error: &StreamStoreError, history_pending: bool) ->
             if event.terminal_origin == Some(StreamTerminalOrigin::Control))
 }
 
+fn result_materialization_retained_bytes(
+    value: &SchemaValue,
+    graph: &SchemaGraph,
+    root: &SchemaType,
+) -> Result<usize, SessionError> {
+    preflight_recursive_stream_value(value)?;
+    let mut next_stream_index = 0u64;
+    Ok(
+        encode_recursive_stream_value_with_schema(value, graph, root, |_stream, _path| {
+            let index = next_stream_index;
+            next_stream_index = next_stream_index
+                .checked_add(1)
+                .ok_or_else(|| "durable output handle index overflow".to_string())?;
+            Ok(index)
+        })?
+        .encoded_len(),
+    )
+}
+
 impl StreamSession {
     /// Registers result streams and replaces them with session transport mappings.
     pub async fn materialize_result(
@@ -45,17 +64,7 @@ impl StreamSession {
         component_revision: golem_common::model::component::ComponentRevision,
         preparation: Option<ExternalActivity>,
     ) -> Result<SchemaValue, SessionError> {
-        preflight_recursive_stream_value(&value)?;
-        let mut next_stream_index = 0u64;
-        let retained_bytes =
-            encode_recursive_stream_value_with_schema(&value, graph, root, |_stream, _path| {
-                let index = next_stream_index;
-                next_stream_index = next_stream_index
-                    .checked_add(1)
-                    .ok_or_else(|| "durable output handle index overflow".to_string())?;
-                Ok(index)
-            })?
-            .encoded_len();
+        let retained_bytes = result_materialization_retained_bytes(&value, graph, root)?;
         let session = self.clone();
         let graph = graph.clone();
         let drain_graph = graph.clone();
@@ -91,6 +100,7 @@ impl StreamSession {
                                 Arc::new(drain_graph),
                                 coordinator_source,
                                 coordinator_activity,
+                                false,
                             )
                             .await
                     });
@@ -99,11 +109,71 @@ impl StreamSession {
             )
             .await?;
 
-        // Drains may live for the lifetime of the guest stream, so they must not retain the
-        // producer operation permit used for the bounded durable materialization above.
+        // This response is only an observer: abandoning it does not discard accepted output.
         drain
             .await
             .map_err(|error| format!("durable output drain coordinator failed: {error}"))??;
+        Ok(result)
+    }
+
+    /// Registers invocation ownership before submitting any durable materialization work.
+    /// The returned receiver observes mappings only; dropping it does not cancel the drain.
+    pub(crate) fn spawn_materialize_result(
+        &self,
+        value: SchemaValue,
+        graph: &SchemaGraph,
+        root: &SchemaType,
+        component_revision: golem_common::model::component::ComponentRevision,
+        preparation: Option<ExternalActivity>,
+        tasks: &crate::worker::tasks::NativeReconstructionSpawner,
+    ) -> Result<oneshot::Receiver<Result<SchemaValue, WorkerExecutorError>>, WorkerExecutorError>
+    {
+        let retained_bytes = result_materialization_retained_bytes(&value, graph, root)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        let session = self.clone();
+        let graph = graph.clone();
+        let drain_graph = Arc::new(graph.clone());
+        let root = root.clone();
+        let source = session.runtime_source.clone();
+        let activity = source.as_ref().map(RuntimeSource::external_activity);
+        let (reply, result) = oneshot::channel();
+        tasks.spawn(async move {
+            let preparation_session = session.clone();
+            let materialized = session
+                .producer
+                .run_admitted_accounted(
+                    None,
+                    retained_bytes,
+                    false,
+                    preparation,
+                    move |_, admission| async move {
+                        preparation_session
+                            .materialize_result_owned(
+                                &admission,
+                                value,
+                                graph,
+                                root,
+                                component_revision,
+                            )
+                            .await
+                    },
+                )
+                .await;
+            let MaterializedResult { value, drains } = match materialized {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    let error = error.into_worker_executor_error(WorkerExecutorError::runtime);
+                    let _ = reply.send(Err(error.clone()));
+                    return Err(error);
+                }
+            };
+            // Admission is released before either exposing mappings or waiting on output.
+            let _ = reply.send(Ok(value));
+            session
+                .drain_materialized_result(drains, drain_graph, source, activity, true)
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
+        })?;
         Ok(result)
     }
 
@@ -490,6 +560,7 @@ impl StreamSession {
         graph: Arc<SchemaGraph>,
         coordinator_source: Option<RuntimeSource>,
         mut coordinator_activity: Option<ExternalActivity>,
+        require_durable_terminal: bool,
     ) -> Result<(), SessionError> {
         if !drains.is_empty() {
             let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
@@ -502,7 +573,9 @@ impl StreamSession {
                     if streams.require_root_attachment_before_production {
                         streams.wait_for_active_attachment(&drain.handle).await?;
                     }
-                    streams.drain_output(drain, graph, nested_tx).await
+                    streams
+                        .drain_result_output(drain, graph, nested_tx, require_durable_terminal)
+                        .await
                 });
             }
             loop {
@@ -510,7 +583,11 @@ impl StreamSession {
                     let streams = self.clone();
                     let graph = graph.clone();
                     let nested_tx = nested_tx.clone();
-                    tasks.spawn(async move { streams.drain_output(drain, graph, nested_tx).await });
+                    tasks.spawn(async move {
+                        streams
+                            .drain_result_output(drain, graph, nested_tx, require_durable_terminal)
+                            .await
+                    });
                 }
                 if tasks.is_empty() {
                     break;
@@ -530,9 +607,16 @@ impl StreamSession {
                         let streams = self.clone();
                         let graph = graph.clone();
                         let nested_tx = nested_tx.clone();
-                        tasks.spawn(
-                            async move { streams.drain_output(drain, graph, nested_tx).await },
-                        );
+                        tasks.spawn(async move {
+                            streams
+                                .drain_result_output(
+                                    drain,
+                                    graph,
+                                    nested_tx,
+                                    require_durable_terminal,
+                                )
+                                .await
+                        });
                     }
                     (_, Some(result)) => {
                         let task_result = result
@@ -740,6 +824,7 @@ impl StreamSession {
             graph,
             coordinator_source,
             coordinator_activity,
+            false,
         )
         .await
     }
@@ -893,7 +978,9 @@ impl StreamSession {
             };
             if let Some(recorded) = recorded {
                 if recorded.payload != payload
-                    || (recorded.is_terminal() && recorded.terminal_author != Some(authored_by))
+                    || (recorded.is_terminal()
+                        && (recorded.terminal_author != Some(authored_by)
+                            || recorded.terminal_origin != event.terminal_origin))
                 {
                     return Err("byte output differs from its recorded bytes or terminal".into());
                 }
@@ -937,6 +1024,7 @@ impl StreamSession {
                                 pending = Some(crate::durable_host::stream_bus::LiveStreamEvent {
                                     offset: next.offset,
                                     payload,
+                                    terminal_origin: next.terminal_origin,
                                 });
                                 break;
                             }
@@ -955,7 +1043,14 @@ impl StreamSession {
                 }
                 CommittedProducerStreamEventPayload::Terminal(terminal) => self
                     .producer
-                    .end(None, handle.stream_id, sequence, authored_by, terminal)
+                    .end_with_origin(
+                        None,
+                        handle.stream_id,
+                        sequence,
+                        authored_by,
+                        event.terminal_origin.expect("live terminal origin"),
+                        terminal,
+                    )
                     .await
                     .map(|_| ()),
                 _ => unreachable!("byte output produces only bytes and terminals"),
@@ -983,6 +1078,21 @@ impl StreamSession {
                 .await;
         }
         result
+    }
+
+    async fn drain_result_output(
+        &self,
+        drain: PendingOwnedStreamDrain,
+        graph: Arc<SchemaGraph>,
+        nested_tx: mpsc::UnboundedSender<PendingOwnedStreamDrain>,
+        require_durable_terminal: bool,
+    ) -> Result<(), SessionError> {
+        let handle = drain.handle.clone();
+        self.drain_output(drain, graph, nested_tx).await?;
+        if require_durable_terminal && self.producer.terminal_event(&handle).await?.is_none() {
+            return Err(SessionError::IncompleteOutput(handle.stream_id));
+        }
+        Ok(())
     }
 
     pub(super) async fn drain_output(
@@ -1452,7 +1562,14 @@ impl StreamSession {
                     };
                     match self
                         .producer
-                        .end(None, handle.stream_id, event.offset, author, terminal)
+                        .end_with_origin(
+                            None,
+                            handle.stream_id,
+                            event.offset,
+                            author,
+                            event.terminal_origin.expect("live terminal origin"),
+                            terminal,
+                        )
                         .await
                     {
                         Ok(_) => Ok(()),

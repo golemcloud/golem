@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import {
   GuestSchemaValueStreamHandle,
   type GuestSchemaValueStream,
@@ -21,12 +21,15 @@ import {
 } from '../internal/schema-model';
 import type { SchemaCodec } from './codec';
 import { ownStream, withNativeStreamScope } from '../internal/schema-model/streamScope';
+import { unwrapSchemaValueStream } from '../internal/schema-model/schemaValueStreamHandle';
+import { StreamError } from '../internal/schema-model/errors';
 
 interface TypedStreamState<T> {
   readonly kind: 'typed';
   readonly source: AsyncIterable<T>;
   iterator?: AsyncIterator<T>;
   busy: boolean;
+  closed?: boolean;
 }
 
 interface WireStreamState {
@@ -36,6 +39,7 @@ interface WireStreamState {
   acquiring?: Promise<AsyncIterator<SchemaValueTree>>;
   readonly readItem: (tree: SchemaValueTree) => unknown;
   busy: boolean;
+  closed?: boolean;
 }
 
 type AgentStreamState<T> = TypedStreamState<T> | WireStreamState;
@@ -58,10 +62,9 @@ const states = new WeakMap<object, AgentStreamState<unknown>>();
  * each accepted downstream write gates the next source pull. If a subsequent write observes that
  * the remote reader was dropped, the runtime stops pulling and invokes and awaits the source
  * iterator's `return()` exactly once. P3 does not interrupt an arbitrary pending source `next()` or
- * guarantee cleanup before a later agent invocation. A source or cleanup rejection fails the
- * active producer, write, or invocation session rather than appearing as clean EOF. P3 streams do
- * not carry a recoverable terminal error; use an item type such as `Result<T, E>` when errors must
- * be represented in the stream contract.
+ * guarantee cleanup before a later agent invocation. The reader receives a catchable StreamError
+ * after the accepted items. Throw StreamError.failed(value) to retain a declared schema value;
+ * other thrown errors carry their message as a string value. Per-item Result values remain items.
  */
 export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
   private constructor() {}
@@ -87,6 +90,7 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
   /** Read the next item, or `{ done: true, value: undefined }` after clean completion. */
   async next(): Promise<IteratorResult<T>> {
     const state = streamState(this);
+    if (state.closed) return { done: true, value: undefined };
     if (state.busy) {
       throw new Error('an AgentStream operation is already in progress');
     }
@@ -108,8 +112,9 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
             value: await withNativeStreamScope(() => state.readItem(item.value) as T),
           };
     } catch (error) {
+      if (error instanceof StreamError) state.closed = true;
       if (state.kind === 'wire' && states.has(this)) {
-        states.delete(this);
+        if (!state.closed) states.delete(this);
         try {
           await state.iterator?.return?.();
         } catch {
@@ -128,6 +133,7 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
    */
   async return(value?: unknown): Promise<IteratorResult<T>> {
     const state = streamState(this);
+    if (state.closed) return { done: true, value: value as T };
     if (state.busy) {
       throw new Error('an AgentStream operation is already in progress');
     }
@@ -310,7 +316,7 @@ async function wireIterator(state: WireStreamState): Promise<AsyncIterator<Schem
   state.endpoint = undefined;
   state.acquiring = (async () => {
     const source =
-      endpoint.kind === 'native' ? endpoint.value : await SchemaValueStream.unwrap(endpoint.value);
+      endpoint.kind === 'native' ? endpoint.value : await unwrapSchemaValueStream(endpoint.value);
     state.iterator = source[Symbol.asyncIterator]();
     return state.iterator;
   })();

@@ -553,6 +553,132 @@ fn test_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::nil())
 }
 
+#[test]
+#[test_r::timeout("30s")]
+async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
+    use crate::durable_host::durable_stream::{
+        DbDirectStreamAttachmentConsumerProbe, StreamAttachmentConsumerProbe,
+    };
+    use golem_common::model::durable_stream::*;
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let (_, kv, oplog_service) = service_with_oplog().await;
+        let service = DefaultWorkerService::new(
+            kv,
+            Arc::new(ShardServiceDefault::new()),
+            oplog_service.clone(),
+            Arc::new(super::tests::IndexTestComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+        let consumer = owned_agent("overlay-consumer", ComponentId::new());
+        let source = owned_agent("overlay-source", ComponentId::new());
+        let invocation = session_key(&consumer, &IdempotencyKey::new("consume".into()));
+        let oplog = create_oplog_with_identity(
+            oplog_service.as_ref(),
+            &consumer,
+            mode,
+            invocation.callee_fingerprint,
+        )
+        .await;
+        let handle = DurableStreamHandle {
+            format_version: 1,
+            stream_id: StreamId(uuid::Uuid::new_v4()),
+            producer_environment_id: source.environment_id,
+            producer: source.agent_id.clone(),
+            expected_producer_fingerprint: AgentFingerprint::new(),
+            producer_generation: OplogIndex::NONE,
+            source_invocation: session_key(&source, &IdempotencyKey::new("produce".into())),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+        };
+        let introducing_oplog_index = append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: 1,
+                session_key: local_registration(&invocation),
+                mapping: StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: StreamRecordReference::Foreign(handle.clone()),
+                    role: SessionStreamRole::Input,
+                },
+            }),
+        )
+        .await;
+        let reader_id = local_reader(introducing_oplog_index, 0);
+        let attachment = StreamAttachmentKey {
+            attachment_id: AttachmentId::primary(
+                consumer.environment_id,
+                &consumer.agent_id,
+                &invocation.idempotency_key,
+            )
+            .unwrap(),
+            stream_id: handle.stream_id,
+            epoch: 1,
+            session_key: invocation.clone(),
+            producer_environment_id: source.environment_id,
+            producer: source.agent_id,
+            expected_producer_fingerprint: handle.expected_producer_fingerprint,
+            consumer_environment_id: consumer.environment_id,
+            consumer: consumer.agent_id,
+            expected_consumer_fingerprint: invocation.callee_fingerprint,
+            consumer_invocation: invocation.clone(),
+        };
+        let offset = StreamOffset::new(OplogIndex::from_u64(79), 0);
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
+                format_version: 1,
+                session_key: local_registration(&invocation),
+                reader_id,
+                source_offset: offset,
+                consumer_read_ordinal: 0,
+            }),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        let probe = DbDirectStreamAttachmentConsumerProbe::new(Arc::new(service), oplog_service);
+        let before = probe
+            .journal_inspection(&attachment)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.len(), 1);
+        assert!(before[0].source_offsets.is_empty());
+        assert_eq!(before[0].source_unavailable, Some(offset));
+
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
+                format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                observation: StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                },
+                reobserves: None,
+                session_key: local_registration(&invocation),
+                reader_id,
+                source_offset: offset,
+                consumer_read_ordinal: 0,
+                authored_by: StreamTerminalAuthor::Protocol,
+                terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                    "durable stream source unavailable".into(),
+                )),
+            }),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        let after = probe
+            .journal_inspection(&attachment)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "guest EOF must not acknowledge a missing producer item"
+        );
+    }
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(

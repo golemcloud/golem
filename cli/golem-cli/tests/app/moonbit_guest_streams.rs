@@ -70,6 +70,7 @@ async fn moonbit_guest_streams_context() -> TestContext {
             fn new(name: String) -> Self;
             async fn consume(&self, input: AgentStream<i8>) -> i32;
             fn produce(&self) -> AgentStream<StreamItem>;
+            fn declared_failure(&self) -> AgentStream<u32>;
             fn forward(&self, bundle: StreamBundle) -> StreamBundle;
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>>;
             async fn malformed(&self) -> AgentStream<u32>;
@@ -82,13 +83,23 @@ async fn moonbit_guest_streams_context() -> TestContext {
             fn new(name: String) -> Self { Self { name } }
             async fn consume(&self, mut input: AgentStream<i8>) -> i32 {
                 let mut total = 0;
-                while let Some(value) = input.next().await.expect("read narrow input") { total += i32::from(value); }
+                while let Some(value) = input.next().await { total += i32::from(value.expect("read narrow input")); }
                 total
             }
             fn produce(&self) -> AgentStream<StreamItem> {
                 let (mut writer, stream) = AgentStream::new();
                 spawn_local(async move {
                     let _ = writer.write_one(StreamItem { label: "remote".into(), children: vec![StreamItem { label: "child".into(), children: vec![] }] }).await;
+                    let _ = writer.close().await;
+                });
+                stream
+            }
+            fn declared_failure(&self) -> AgentStream<u32> {
+                let (mut writer, stream) = AgentStream::new();
+                spawn_local(async move {
+                    writer.write_all([17, 29]).await.unwrap();
+                    let value = golem_rust::schema::try_into_typed_schema_value(&73u32).unwrap();
+                    writer.finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(value)))).await.unwrap();
                 });
                 stream
             }
@@ -98,6 +109,7 @@ async fn moonbit_guest_streams_context() -> TestContext {
                 let gate = golem_rust::create_promise();
                 StreamGateClient::get(self.name.clone()).arm(gate.clone()).await;
                 let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
+                let (completion, outcome) = golem_rust::schema::wit::new_schema_stream_outcome();
                 spawn_local(async move {
                     let first = golem_rust::schema::wit::encode_value(&golem_rust::schema::SchemaValue::U32(7)).expect("encode first item");
                     if writer.write_one(first).await.is_some() { return; }
@@ -105,8 +117,13 @@ async fn moonbit_guest_streams_context() -> TestContext {
                     let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree {
                         value_nodes: vec![], root: 0,
                     }).await;
+                    drop(writer);
+                    let _ = completion.write(Some(Ok(()))).await;
                 });
-                AgentStream::from_raw(stream)
+                AgentStream::from_schema_stream_with_wire_decoder(
+                    golem_rust::schema::SchemaValueStream::from_native(stream, outcome),
+                    |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|e| e.to_string()),
+                )
             }
             async fn drop_after_one(&self, mut input: AgentStream<u32>) -> u32 {
                 let first = input.next().await.expect("read input").expect("first item");
@@ -140,7 +157,7 @@ async fn moonbit_guest_streams_context() -> TestContext {
     let manifest = ctx.cwd_path_join("consumer/moon.pkg");
     let package = fs::read_to_string(&manifest).unwrap().replace(
         "import {",
-        "import {\n  \"stream-provider-guest-client/client\" @provider,",
+        "import {\n  \"stream-provider-guest-client/client\" @provider,\n  \"golemcloud/golem_sdk/schema_model\" @model,",
     );
     fs::write_str(&manifest, package).unwrap();
     fs::write_str(
@@ -158,7 +175,8 @@ async fn moonbit_guest_streams_context() -> TestContext {
               defer input.drop()
               for ;; {
                 match input.read() {
-                  Some(value) => if writer.write_one(value) is @schema.PeerDropped { return }
+                  Some(Ok(value)) => if writer.write_one(value) is @schema.PeerDropped { return }
+                  Some(Err(error)) => raise error
                   None => return
                 }
               }
@@ -193,6 +211,18 @@ async fn moonbit_guest_streams_context() -> TestContext {
 
         pub async fn StreamConsumer::run(self : Self) -> String {
           @provider.StreamProviderClient::scoped(self.name, async fn(remote) {
+            let sibling = remote.produce()
+            let failed = remote.declared_failure()
+            assert_eq(failed.read(), Some(Ok(17U)))
+            assert_eq(failed.read(), Some(Ok(29U)))
+            match failed.read() {
+              Some(Err(@schema.StreamError::Failed(value))) => assert_eq(value.value, @model.U32(73U))
+              _ => fail("declared failure did not retain its typed value")
+            }
+            assert_true(failed.read() is None)
+            assert_eq(sibling.read().unwrap().unwrap().label, "remote")
+            assert_true(sibling.read() is None)
+            assert_eq(remote.status(), "ready")
             let source = @provider.produce_consume_input_0_stream(async fn(writer) {
               assert_true(writer.write_all([1, 2, 3]) is @schema.Accepted)
             })
@@ -200,7 +230,7 @@ async fn moonbit_guest_streams_context() -> TestContext {
             let output = remote.produce()
             let forwarded = remote.forward({ optional: Some(output), siblings: [] })
             let output = forwarded.optional.unwrap()
-            let item = output.read().unwrap()
+            let item = output.read().unwrap().unwrap()
             assert_eq(item.label, "remote")
             assert_eq(item.children[0].label, "child")
             assert_true(output.read() is None)
@@ -218,8 +248,8 @@ async fn moonbit_guest_streams_context() -> TestContext {
               assert_true(writer.write_one(inner) is @schema.Accepted)
             })
             let outer = remote.nested(outer)
-            let inner = outer.read().unwrap()
-            assert_eq(inner.read().unwrap().label, "nested")
+            let inner = outer.read().unwrap().unwrap()
+            assert_eq(inner.read().unwrap().unwrap().label, "nested")
             assert_true(inner.read() is None)
             assert_true(outer.read() is None)
             "ok:" + remote.status()

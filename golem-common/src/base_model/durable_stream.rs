@@ -1513,6 +1513,8 @@ pub enum StreamSessionRecord {
     ConsumerCancelIntent(StreamConsumerCancelIntentRecord),
     ConsumerCancelApplied(StreamConsumerCancelAppliedRecord),
     ConsumerTerminal(StreamConsumerTerminalRecord),
+    /// Consumption of the completion future, independently of the item stream's EOF.
+    ConsumerOutcome(StreamConsumerTerminalRecord),
     ReaderForwardIntent(StreamReaderForwardIntentRecord),
     InvocationResult(StreamSessionInvocationResultRecord),
     Finished(StreamSessionFinishedRecord),
@@ -1528,7 +1530,7 @@ impl StreamSessionRecord {
     pub fn reobserves(&self) -> Option<OplogIndex> {
         match self {
             Self::ConsumerItemValue(record) => record.reobserves,
-            Self::ConsumerTerminal(record) => record.reobserves,
+            Self::ConsumerTerminal(record) | Self::ConsumerOutcome(record) => record.reobserves,
             _ => None,
         }
     }
@@ -1546,7 +1548,8 @@ impl StreamSessionRecord {
                         StreamConsumerObservation::Guest { .. }
                     )
             }
-            (Self::ConsumerTerminal(record), Self::ConsumerTerminal(original)) => {
+            (Self::ConsumerTerminal(record), Self::ConsumerTerminal(original))
+            | (Self::ConsumerOutcome(record), Self::ConsumerOutcome(original)) => {
                 let mut record = record.clone();
                 record.reobserves = None;
                 record.observation = original.observation.clone();
@@ -1608,6 +1611,7 @@ impl StreamSessionRecord {
             Self::ConsumerCancelIntent(record) => record.format_version,
             Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
+            Self::ConsumerOutcome(record) => record.format_version,
             Self::ReaderForwardIntent(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
@@ -1644,7 +1648,7 @@ impl StreamSessionRecord {
         }
 
         let expected_version = match self {
-            Self::ConsumerItemValue(_) | Self::ConsumerTerminal(_) => {
+            Self::ConsumerItemValue(_) | Self::ConsumerTerminal(_) | Self::ConsumerOutcome(_) => {
                 STREAM_CONSUMER_RECORD_FORMAT_VERSION
             }
             _ => DURABLE_STREAM_FORMAT_VERSION,
@@ -1655,7 +1659,9 @@ impl StreamSessionRecord {
         if let Some(index) = self.reobserves() {
             let guest = match self {
                 Self::ConsumerItemValue(record) => &record.observation,
-                Self::ConsumerTerminal(record) => &record.observation,
+                Self::ConsumerTerminal(record) | Self::ConsumerOutcome(record) => {
+                    &record.observation
+                }
                 _ => unreachable!(),
             };
             if !index.is_defined() || !matches!(guest, StreamConsumerObservation::Guest { .. }) {
@@ -1794,6 +1800,10 @@ impl StreamSessionRecord {
             }
             Self::ConsumerTerminal(record) => {
                 StreamOffset::from_bytes(record.source_offset.0).is_ok()
+            }
+            Self::ConsumerOutcome(record) => {
+                matches!(record.observation, StreamConsumerObservation::Guest { .. })
+                    && StreamOffset::from_bytes(record.source_offset.0).is_ok()
             }
             Self::ReaderForwardIntent(record) => {
                 record.reader_id.introducing_oplog_index.is_defined()
@@ -2080,19 +2090,27 @@ mod tests {
                     crate::serialization::serialize(&consumer).unwrap(),
                     crate::serialization::serialize(&other_author).unwrap()
                 );
-                let session = StreamSessionRecord::ConsumerTerminal(consumer.clone());
-                assert_eq!(
-                    StreamSessionRecord::from_value(&session.to_value()).unwrap(),
-                    session
-                );
-                #[cfg(feature = "full")]
-                assert_eq!(
-                    crate::serialization::deserialize::<StreamSessionRecord>(
-                        &crate::serialization::serialize(&session).unwrap(),
-                    )
-                    .unwrap(),
-                    session
-                );
+                let eof = StreamSessionRecord::ConsumerTerminal(consumer.clone());
+                let outcome = StreamSessionRecord::ConsumerOutcome(consumer.clone());
+                assert_ne!(eof, outcome);
+                assert_ne!(eof.to_value(), outcome.to_value());
+                assert!(!outcome.matches_reobserved(&eof));
+                assert!(!eof.matches_reobserved(&outcome));
+                for session in [eof, outcome] {
+                    assert!(session.has_supported_format());
+                    assert_eq!(
+                        StreamSessionRecord::from_value(&session.to_value()).unwrap(),
+                        session
+                    );
+                    #[cfg(feature = "full")]
+                    assert_eq!(
+                        crate::serialization::deserialize::<StreamSessionRecord>(
+                            &crate::serialization::serialize(&session).unwrap(),
+                        )
+                        .unwrap(),
+                        session
+                    );
+                }
                 assert!(
                     !StreamSessionRecord::ConsumerTerminal(other_author)
                         .matches_reobserved(&StreamSessionRecord::ConsumerTerminal(consumer),)

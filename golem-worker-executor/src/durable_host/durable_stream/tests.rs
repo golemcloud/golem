@@ -3625,6 +3625,11 @@ async fn cascade_retries_after_overlay_commit_before_outbox_commit() {
 #[test]
 #[test_r::timeout("30s")]
 async fn reobserved_input_allows_source_loss_overlay() {
+    use golem_common::model::durable_stream::{
+        STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerObservation,
+        StreamConsumerTerminalRecord,
+    };
+
     let source_identity = identity();
     let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
     let handle = source
@@ -3649,7 +3654,8 @@ async fn reobserved_input_allows_source_loss_overlay() {
         fingerprint: key.expected_consumer_fingerprint,
         invocation: key.consumer_invocation.clone(),
     };
-    let consumer = producer(Arc::new(TestOplog::default()), &consumer_identity, None).await;
+    let consumer_oplog = Arc::new(TestOplog::default());
+    let consumer = producer(consumer_oplog.clone(), &consumer_identity, None).await;
     let reference = StreamRegistrationInvocation::Local(key.session_key.idempotency_key);
     consumer
         .append_session_record(
@@ -3724,6 +3730,41 @@ async fn reobserved_input_allows_source_loss_overlay() {
             .unwrap(),
         Some(offsets[1])
     );
+    consumer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
+                format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                observation: StreamConsumerObservation::Guest {
+                    parent_start_index: None,
+                },
+                reobserves: None,
+                session_key: StreamRegistrationInvocation::Local(
+                    key.session_key.idempotency_key.clone(),
+                ),
+                reader_id,
+                source_offset: offsets[1],
+                consumer_read_ordinal: 1,
+                authored_by: StreamTerminalAuthor::Protocol,
+                terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                    "durable stream source unavailable".into(),
+                )),
+            }),
+        )
+        .await
+        .unwrap();
+    for consumer in [
+        consumer.clone(),
+        producer(consumer_oplog, &consumer_identity, None).await,
+    ] {
+        assert_eq!(
+            consumer
+                .commit_source_unavailable_overlay(None, key.clone(), reader_id, offsets[1], 1)
+                .await,
+            Ok(true),
+            "retry after guest EOF must retain the original missing position"
+        );
+    }
 }
 
 #[test]

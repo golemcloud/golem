@@ -1183,7 +1183,8 @@ impl RunningWorker {
         let prepared = match PreparedAgent::finish(
             RunningAgentRuntime {
                 instance,
-                store: store.map(async_lock::Mutex::new),
+                store: store
+                    .map(|store| async_lock::Mutex::new(instance::PrimaryStore::new(store))),
             },
             reconstructing,
             &decision,

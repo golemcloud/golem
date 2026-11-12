@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Pull, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Pull, Scope, Stream } from "effect"
 
 /** An iterator whose close interrupts and joins an in-flight Effect pull before scope release. */
 export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A> {
@@ -40,11 +40,17 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
         if (this.closePromise) return { done: true, value: undefined }
       }
       const pulling = this.runPromise(
-        Pull.catchDone(this.pull, () => Effect.succeed<ReadonlyArray<A>>([])),
+        Effect.exit(Pull.catchDone(this.pull, () => Effect.succeed<ReadonlyArray<A>>([]))),
         { signal: controller.signal },
       )
       this.execution = pulling
-      const chunk = await pulling
+      const exit = await pulling
+      if (Exit.isFailure(exit)) {
+        if (this.pending === controller) this.pending = undefined
+        await this.close(exit).catch(() => undefined)
+        throw Cause.squash(exit.cause)
+      }
+      const chunk = exit.value
       if (this.pending === controller) this.pending = undefined
       if (chunk.length === 0) {
         await this.close(Exit.void)

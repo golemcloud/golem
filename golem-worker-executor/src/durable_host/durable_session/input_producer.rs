@@ -348,6 +348,7 @@ impl DurableInputProducer {
             pending_guest_value: None,
             guest_delivery: None,
             pending_observation: None,
+            completion: None,
             finished: false,
             dropping: false,
             drop_event_sink: None,
@@ -416,6 +417,7 @@ impl DurableInputProducer {
             DurableReceiveError::Session(error) => error.into_trap(),
             DurableReceiveError::Interrupt(kind) => anyhow::Error::new(kind),
         })?;
+        let ordinal = self.input.consumer_read_ordinal;
         self.input.complete_receive(&mut read);
         self.pending_observation = read.observation;
         let event = read.event.ok_or_else(|| {
@@ -443,6 +445,9 @@ impl DurableInputProducer {
                 let authored_by = event
                     .terminal_author
                     .unwrap_or(StreamTerminalAuthor::Protocol);
+                if let Some(completion) = &mut self.completion {
+                    completion.terminal(authored_by, terminal.clone(), event.offset, ordinal);
+                }
                 if let StreamTerminal::Failed(error) = &terminal
                     && let Some(observer) = &self.producer_cancel
                 {
@@ -610,16 +615,20 @@ impl DurableInputProducer {
     }
 
     pub(super) fn track_guest_consumption(
-        &self,
+        &mut self,
         observer: StreamReadObserver,
     ) -> StreamReadObserver {
         let consumed = self.guest_read_ordinal.clone();
         let next = self.input.consumer_read_ordinal;
+        let completion = self.finished.then(|| self.completion.take()).flatten();
         Box::new(move |consumption| {
             let delivered = consumption == wasmtime::component::TerminalConsumption::Delivered;
             observer(consumption)?;
             if delivered {
                 consumed.store(next, Ordering::Release);
+                if let Some(completion) = completion {
+                    completion.deliver();
+                }
             }
             Ok(())
         })
@@ -792,6 +801,9 @@ impl DurableInputProducer {
                 authored_by,
                 terminal,
             }) => {
+                if self.completion.is_some() {
+                    return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
+                }
                 return Poll::Ready(Err(wasmtime::Error::from_anyhow(
                     durable_stream_cancel_error(authored_by, terminal),
                 )));
@@ -822,10 +834,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
         let (item, observer) = if let Some(capacity) = destination.remaining(&mut store) {
             std::task::ready!(self.poll_guest_value(cx, &mut store, capacity.min(1), finish))?
         } else {
-            (
-                std::task::ready!(self.poll_value(cx, &mut store, finish, None))?,
-                None,
-            )
+            let item = std::task::ready!(self.poll_value(cx, &mut store, finish, None))?;
+            if matches!(item, DurableInputItem::Terminal(StreamResult::Dropped))
+                && let Some(completion) = self.completion.take()
+            {
+                completion.deliver();
+            }
+            (item, None)
         };
         if let Some(observer) = observer {
             destination.register_read_observer(&mut store, move |consumption| {

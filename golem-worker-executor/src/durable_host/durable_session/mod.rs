@@ -104,6 +104,7 @@ mod attachment;
 mod cancellation;
 mod forwarding;
 mod input;
+mod input_outcome;
 mod input_producer;
 mod input_receive;
 mod output;
@@ -802,6 +803,7 @@ pub struct DurableInputProducer {
     pending_guest_value: Option<wasmtime::Result<DurableInputItem>>,
     guest_delivery: Option<oneshot::Receiver<Result<StreamReadObserver, WorkerExecutorError>>>,
     pending_observation: Option<PendingConsumerObservation>,
+    completion: Option<input_outcome::InputCompletionSender>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,

@@ -5489,6 +5489,61 @@ async fn replay_consumer_observations_reserve_item_and_terminal_guest_boundaries
 
 #[test]
 #[test_r::timeout("10s")]
+async fn replay_outcome_consumption_has_its_own_boundary_after_eof() {
+    use golem_common::model::durable_stream::StreamSessionRecord;
+
+    let eof = consumer_observation(0, true, true);
+    let mut outcome = eof.clone();
+    let OplogEntry::StreamSession {
+        record: OplogPayload::Inline(record),
+        ..
+    } = &mut outcome
+    else {
+        unreachable!()
+    };
+    let StreamSessionRecord::ConsumerTerminal(terminal) = record.as_ref() else {
+        unreachable!()
+    };
+    **record = StreamSessionRecord::ConsumerOutcome(terminal.clone());
+    let replay = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        eof,
+        remove_retry_policy(),
+        outcome,
+        remove_retry_policy(),
+    ])
+    .await;
+
+    let eof = replay
+        .await_stream_observation(OplogIndex::from_u64(2))
+        .await
+        .unwrap();
+    eof.acknowledge();
+    assert_eq!(
+        replay.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(3)
+    );
+    let mut next = Box::pin(replay.get_oplog_entry(None));
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "EOF does not acknowledge the outcome"
+    );
+    let outcome = replay
+        .await_stream_observation(OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "preparing the outcome is not consumption"
+    );
+    outcome.acknowledge();
+    assert_eq!(next.await.unwrap().0, OplogIndex::from_u64(5));
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn failed_stream_observation_preserves_divergence_for_positional_readers() {
     for terminal in [false, true] {
         let rs = replay_state_over(vec![

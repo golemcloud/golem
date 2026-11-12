@@ -1,10 +1,11 @@
 use super::*;
+use crate::durable_host::durability::DurabilityHost;
 use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     pub(super) async fn record_retry_interrupt_failure(
         &self,
-        store: &Mutex<Store<Ctx>>,
+        store: &Mutex<PrimaryStore<Ctx>>,
         kind: InterruptKind,
     ) {
         // The invocation callback may have committed its outcome while this stop was being
@@ -526,6 +527,54 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &InvocationId,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
+        let mut result = result;
+        if let Ok(outputs) = self
+            .store
+            .data()
+            .durable_ctx()
+            .schema_output_drain_monitor()
+            && let Some(error) = outputs.wait_for_failure().now_or_never()
+        {
+            result = Err(error);
+        }
+        if let Ok(InvokeResult::Failed {
+            error: error @ (AgentError::DeterministicTrap(_) | AgentError::StackOverflow),
+            timed_out: false,
+            semantic_trap_retry_override: None,
+            ..
+        }) = &result
+            && self
+                .store
+                .data()
+                .durable_ctx()
+                .selected_tool_owner_failure()
+                .is_none()
+            && self.store.data().check_interrupt().is_none()
+        {
+            self.store
+                .data_mut()
+                .durable_ctx_mut()
+                .settle_schema_producers(Err(error.to_string("")));
+            self.store.dispose();
+            self.store
+                .data_mut()
+                .durable_ctx_mut()
+                .dispose_trapped_guest_resources();
+            match self
+                .store
+                .data()
+                .durable_ctx()
+                .schema_output_drain_monitor()
+            {
+                Ok(outputs) => {
+                    let interrupt = self.store.data().durable_ctx().create_interrupt_signal();
+                    if let Err(error) = outputs.drain_interruptibly(interrupt).await {
+                        result = Err(error);
+                    }
+                }
+                Err(error) => result = Err(error),
+            }
+        }
         self.store
             .data()
             .durable_ctx()

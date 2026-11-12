@@ -715,11 +715,16 @@ impl Typed for TypedImpl {
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Ok(Some(value)) = input.next().await {
+            while let Some(value) = input.next().await {
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => { let _ = writer.finish(Err(error)).await; return; }
+                };
                 if writer.write_one(value * 3 + 1).await.is_err() {
-                    break;
+                    return;
                 }
             }
+            let _ = writer.close().await;
         });
         output
     }
@@ -1012,6 +1017,7 @@ impl TypedOutputStream for TypedOutputStreamImpl {
                 ])
                 .await
                 .expect("write remaining typed tool output items");
+            writer.close().await.expect("close typed tool output");
         });
         output
     }

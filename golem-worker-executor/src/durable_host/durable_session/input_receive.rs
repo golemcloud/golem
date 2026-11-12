@@ -282,7 +282,8 @@ impl PrepareInputObservation {
                 }
                 let expected = match &record {
                     StreamSessionRecord::ConsumerItemValue(record) => &record.observation,
-                    StreamSessionRecord::ConsumerTerminal(record) => &record.observation,
+                    StreamSessionRecord::ConsumerTerminal(record)
+                    | StreamSessionRecord::ConsumerOutcome(record) => &record.observation,
                     _ => unreachable!(),
                 };
                 if recorded_index.replace(*index).is_some() || expected != observation {
@@ -298,7 +299,8 @@ impl PrepareInputObservation {
                     StreamSessionRecord::ConsumerItemValue(record) => {
                         record.reobserves = Some(recorded.original_index);
                     }
-                    StreamSessionRecord::ConsumerTerminal(record) => {
+                    StreamSessionRecord::ConsumerTerminal(record)
+                    | StreamSessionRecord::ConsumerOutcome(record) => {
                         record.reobserves = Some(recorded.original_index);
                     }
                     _ => unreachable!(),

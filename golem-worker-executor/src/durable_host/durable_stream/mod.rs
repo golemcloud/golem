@@ -457,14 +457,14 @@ impl std::fmt::Display for StreamStoreError {
 
 impl std::error::Error for StreamStoreError {}
 
-/// Why a durable stream session operation failed. A refused oplog write keeps its type as
-/// `Fenced`, so whoever acts on it reroutes to the shard's new owner; every other failure is the
-/// text the session has always reported.
+/// Why a durable stream session operation failed. Storage failures retain their type, and
+/// an output that stopped before its terminal requires reconstruction rather than success.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionError {
     Fenced(OplogFence),
     /// The oplog of the agent does not read. It keeps its type, so the agent fails with it.
     Unreadable(UnreadableOplog),
+    IncompleteOutput(StreamId),
     Failed(String),
 }
 
@@ -479,8 +479,7 @@ impl SessionError {
         matches!(self, Self::Failed(text) if text.contains(needle))
     }
 
-    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
-    /// other failure is rendered through `otherwise`, which says how that boundary classifies it.
+    /// Retains storage and reconstruction failures; `otherwise` classifies ordinary failures.
     pub(crate) fn into_worker_executor_error(
         self,
         otherwise: impl FnOnce(String) -> WorkerExecutorError,
@@ -488,12 +487,14 @@ impl SessionError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
             Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
+            error @ Self::IncompleteOutput(_) => {
+                WorkerExecutorError::recovery_required(error.to_string())
+            }
             Self::Failed(text) => otherwise(text),
         }
     }
 
-    /// Converts for a host function: a fence traps as the lost shard it is, an unreadable oplog
-    /// as the failure of the agent it is, and every other failure traps with its text.
+    /// Converts for a host function, retaining storage and reconstruction failures as typed traps.
     pub(crate) fn into_trap(self) -> anyhow::Error {
         match self {
             Self::Fenced(fence) => {
@@ -501,6 +502,9 @@ impl SessionError {
             }
             Self::Unreadable(unreadable) => {
                 anyhow::Error::from(WorkerExecutorError::from(unreadable))
+            }
+            error @ Self::IncompleteOutput(_) => {
+                anyhow::Error::from(WorkerExecutorError::recovery_required(error.to_string()))
             }
             Self::Failed(text) => anyhow::Error::msg(text),
         }
@@ -524,6 +528,7 @@ impl From<SessionError> for StreamStoreError {
         match error {
             SessionError::Fenced(fence) => Self::Fenced(fence),
             SessionError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            error @ SessionError::IncompleteOutput(_) => Self::Oplog(error.to_string()),
             SessionError::Failed(text) => Self::Oplog(text),
         }
     }
@@ -585,6 +590,10 @@ impl std::fmt::Display for SessionError {
         match self {
             Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
             Self::Unreadable(unreadable) => write!(formatter, "{unreadable}"),
+            Self::IncompleteOutput(stream_id) => write!(
+                formatter,
+                "schema output {stream_id} stopped before its terminal became durable"
+            ),
             Self::Failed(text) => formatter.write_str(text),
         }
     }
@@ -686,6 +695,8 @@ struct ProducerStreamIndex {
 pub struct IndexedConsumerJournal {
     next_read_ordinal: u64,
     terminal: bool,
+    terminal_outcome: Option<(StreamTerminalAuthor, StreamTerminal)>,
+    outcome_observed: bool,
     last_source_offset: Option<StreamOffset>,
     source_unavailable: Option<StreamOffset>,
 }

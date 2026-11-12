@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { describe, expect, it } from 'vitest';
-import type { SchemaValueStream, SchemaValueTree } from 'golem:core/types@2.0.0';
+import { describe, expect, it, vi } from 'vitest';
+import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from '../src/schema/agentStream';
 import {
   ownSchemaValueStreams,
@@ -36,6 +36,7 @@ import { s } from '../src/schema/markers';
 import { Result } from '../src/host/result';
 import {
   GuestSchemaValueStreamHandle,
+  StreamError,
   schemaValueFromWit,
   schemaValueToWitAsync,
   type SchemaValue,
@@ -63,6 +64,48 @@ function streamItemCard(raw: never): PermissionCard {
 }
 
 describe('schema-native AgentStream', () => {
+  it('delivers the accepted prefix and one declared failure, then ends', async () => {
+    const codec = compileSchema(s.stream(s.u32()));
+    const declared = { graph: compileSchema(s.u32()).graph, value: v.u32(73) };
+    const source = AgentStream.from(
+      (async function* () {
+        yield 7;
+        yield 23;
+        throw StreamError.failed(declared);
+      })(),
+    );
+    const tree = await schemaValueToWitAsync(codec.toValue(source));
+    const reader = codec.fromValue(schemaValueFromWit(tree)) as AgentStream<number>;
+    expect(await reader.next()).toEqual({ done: false, value: 7 });
+    expect(await reader.next()).toEqual({ done: false, value: 23 });
+    await expect(reader.next()).rejects.toMatchObject({
+      failure: { tag: 'failed', val: declared },
+    });
+    expect(await reader.return()).toEqual({ done: true, value: undefined });
+    expect(await reader.next()).toEqual({ done: true, value: undefined });
+  });
+
+  it('rejects host cancellation as AbortError exactly once', async () => {
+    const codec = compileSchema(s.stream(s.u32()));
+    const raw = {
+      reader: emptyWireStream(),
+      outcome: Promise.resolve({ tag: 'err', val: { tag: 'cancelled' } }),
+    } as unknown as SchemaValueStream;
+    const reader = codec.fromValue(
+      v.stream(
+        new GuestSchemaValueStreamHandle({
+          kind: 'wrapped',
+          value: raw,
+        }),
+      ),
+    ) as AgentStream<number>;
+    await expect(reader.next()).rejects.toMatchObject({
+      name: 'AbortError',
+      failure: { tag: 'cancelled' },
+    });
+    expect(await reader.next()).toEqual({ done: true, value: undefined });
+  });
+
   it('compiles a stream marker with its recursive item schema', () => {
     const codec = compileSchema(s.stream(s.u32()));
     expect(codec.graph.root.body).toMatchObject({
@@ -139,12 +182,21 @@ describe('schema-native AgentStream', () => {
 
   it('disposes resources wrapped before a later sequential wrap fails', async () => {
     let disposed = 0;
-    const firstSource = Object.assign(emptyWireStream(), {
-      onDispose: () => {
-        disposed += 1;
-      },
-    });
-    const failingSource = Object.assign(emptyWireStream(), { failWrap: true });
+    const firstSource = emptyWireStream();
+    const failingSource = emptyWireStream();
+    const wrap = vi
+      .spyOn(SchemaValueStream, 'wrap')
+      .mockImplementationOnce(
+        async (reader, outcome) =>
+          ({
+            reader,
+            outcome,
+            [Symbol.dispose]: () => {
+              disposed += 1;
+            },
+          }) as unknown as SchemaValueStream,
+      )
+      .mockRejectedValueOnce(new Error('test schema value stream wrap failure'));
     const first = new GuestSchemaValueStreamHandle({ kind: 'native', value: firstSource });
     const failing = new GuestSchemaValueStreamHandle({ kind: 'native', value: failingSource });
     const later = nativeHandle();
@@ -162,6 +214,7 @@ describe('schema-native AgentStream', () => {
     expect(disposed).toBe(1);
     expect(first.peek()).toBeUndefined();
     expect(later.peek()).toBeDefined();
+    wrap.mockRestore();
   });
 
   it('passes an unread wrapped stream through without replacing it', async () => {

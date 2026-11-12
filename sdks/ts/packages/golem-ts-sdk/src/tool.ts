@@ -26,7 +26,8 @@ import type {
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
-import { SchemaValueStream } from 'golem:core/types@2.0.0';
+import type { SchemaValueStream } from 'golem:core/types@2.0.0';
+import { unwrapSchemaValueStream } from './internal/schema-model/schemaValueStreamHandle';
 import {
   deferredStartedToolInvocation,
   mapSettledToolResult,
@@ -2393,7 +2394,7 @@ export function withWireValueOwnership<T>(
           if (closedWireStreams.has(stream)) return;
           closedWireStreams.add(stream);
           try {
-            const source = await SchemaValueStream.unwrap(stream);
+            const source = await unwrapSchemaValueStream(stream);
             await source[Symbol.asyncIterator]().return?.();
           } catch {
             // Preserve the decoding failure while closing every rejected endpoint.

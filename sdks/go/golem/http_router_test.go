@@ -16,6 +16,7 @@ package golem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
@@ -198,7 +199,11 @@ func request(method, path string, query Option[string], headers []HTTPHeader, ch
 func bodyOf(t *testing.T, resp HTTPResponse) string {
 	t.Helper()
 	var b strings.Builder
-	for _, c := range resp.Body.Collect() {
+	chunks, err := resp.Body.Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range chunks {
 		b.Write(c)
 	}
 	return b.String()
@@ -295,20 +300,23 @@ func TestAPanicBeforeTheHeadFailsTheRequest(t *testing.T) {
 	serveHTTP(context.Background(), h, request("GET", "/p", None[string](), nil))
 }
 
-// A stream has no failure end state, so a panic once the head is out can only
-// end the body where the handler stopped.
+// A handler panic after sending the head follows the partial body as a failure.
 func TestAPanicAfterTheHeadFailsTheRequest(t *testing.T) {
-	failed := observeFailedProduction(t)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "partial")
 		panic("boom")
 	})
 	resp := serveHTTP(context.Background(), h, request("GET", "/p", None[string](), nil))
-	if chunk, ok := resp.Body.Next(); !ok || string(chunk) != "partial" {
-		t.Fatalf("first chunk %q, %v", chunk, ok)
+	if chunk, err := resp.Body.Next(); err != nil || string(chunk) != "partial" {
+		t.Fatalf("first chunk %q, %v", chunk, err)
 	}
-	if err := <-failed; !strings.Contains(err.Error(), "panicked after sending the response head: boom") {
-		t.Fatalf("the production failed with %v", err)
+	_, err := resp.Body.Next()
+	var failure *StreamError
+	if !errors.As(err, &failure) || failure.Kind != StreamFailed {
+		t.Fatalf("outcome: %v", err)
+	}
+	if message, err := DecodeTypedValue[string](failure.Value); err != nil || !strings.Contains(message, "panicked after sending the response head: boom") {
+		t.Fatalf("producer error %q: %v", message, err)
 	}
 }
 

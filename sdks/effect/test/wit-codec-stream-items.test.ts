@@ -1,11 +1,33 @@
-import { Context, Effect, Fiber, Schema, SchemaGetter, SchemaIssue, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Schema,
+  SchemaGetter,
+  SchemaIssue,
+  Stream,
+} from "effect"
 import { describe, expect, it, vi } from "vitest"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
+import { StreamError, type StreamFailure } from "../src/Schema.js"
+import { t, v } from "../src/internal/schema-model/model.js"
+import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
+import type { StreamOutcome } from "golem:core/types@2.0.0"
 
 const transport = vi.hoisted(() => ({
-  wrap: vi.fn(async (source: AsyncIterable<unknown>) => ({ source })),
-  unwrap: vi.fn(async (stream: { source: AsyncIterable<unknown> }) => stream.source),
+  wrap: vi.fn(async (source: AsyncIterable<unknown>, outcome: Promise<StreamOutcome>) => ({
+    source,
+    outcome,
+  })),
+  unwrap: vi.fn(
+    async (stream: { source: AsyncIterable<unknown>; outcome: Promise<StreamOutcome> }) => [
+      stream.source,
+      stream.outcome,
+    ],
+  ),
 }))
 vi.mock("golem:core/types@2.0.0", () => ({ SchemaValueStream: transport }))
 
@@ -18,6 +40,93 @@ const roundTrip = async <S extends Schema.Top>(schema: S, values: readonly S["Ty
 }
 
 describe("stream item schemas", () => {
+  it.each<StreamFailure>([
+    {
+      tag: "failed",
+      val: { graph: { defs: new Map(), root: t.string() }, value: v.string("declared failure") },
+    },
+    { tag: "trapped", val: "producer trap" },
+    { tag: "abandoned" },
+    { tag: "interrupted", val: "hop lost" },
+    { tag: "resource-exhausted", val: "limit reached" },
+    { tag: "cancelled" },
+  ])("preserves the accepted prefix and $tag outcome", async (failure) => {
+    const codec = await Effect.runPromise(compile(WitTypes.AgentStream(WitTypes.Uint32)))
+    const wire =
+      failure.tag === "failed"
+        ? await Effect.runPromise(
+            codec.encodeAsync(
+              Stream.concat(Stream.make(17, 93), Stream.fail(StreamError.failed(failure.val))),
+            ),
+          )
+        : {
+            root: 0,
+            valueNodes: [
+              {
+                tag: "stream-value" as const,
+                val: {
+                  source: {
+                    async *[Symbol.asyncIterator]() {
+                      yield schemaValueToWit(v.u32(17))
+                      yield schemaValueToWit(v.u32(93))
+                    },
+                  },
+                  outcome: Promise.resolve({ tag: "err", val: failure }),
+                } as never,
+              },
+            ],
+          }
+    const stream = await Effect.runPromise(codec.decode(wire))
+    const prefix: number[] = []
+    const exit = await Effect.runPromise(
+      Effect.exit(
+        Stream.runForEach(stream, (value) =>
+          Effect.sync(() => {
+            prefix.push(value)
+          }),
+        ),
+      ),
+    )
+    expect(prefix).toEqual([17, 93])
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      if (failure.tag === "cancelled") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      else {
+        const error = Cause.squash(exit.cause)
+        expect(error).toBeInstanceOf(StreamError)
+        expect((error as StreamError).failure).toEqual(failure)
+      }
+    }
+  })
+
+  it("closes early without waiting for the producer outcome", async () => {
+    const codec = await Effect.runPromise(compile(WitTypes.AgentStream(WitTypes.Uint32)))
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+    const wire = {
+      root: 0,
+      valueNodes: [
+        {
+          tag: "stream-value",
+          val: {
+            source: {
+              [Symbol.asyncIterator]: () => ({
+                next: async () => ({
+                  done: false as const,
+                  value: { root: 0, valueNodes: [{ tag: "u32-value", val: 29 }] },
+                }),
+                return: close,
+              }),
+            },
+            outcome: new Promise<StreamOutcome>(() => {}),
+          },
+        },
+      ],
+    }
+    const stream = await Effect.runPromise(codec.decode(wire as never))
+    expect(await Effect.runPromise(Stream.runCollect(Stream.take(stream, 1)))).toEqual([29])
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it("validates literal and refinement items on each pull", async () => {
     const literal = await roundTrip(Schema.Literal("yes"), ["no" as "yes"])
     await expect(Effect.runPromise(Stream.runCollect(literal))).rejects.toThrow(/yes/)

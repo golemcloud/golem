@@ -431,26 +431,24 @@ fn agent_stream<T: IntoWire + FromWire + 'static>(values: Vec<T>) -> AgentStream
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(values).await;
+        let _ = writer.close().await;
     });
     stream
 }
 
 fn agent_error_stream() -> AgentStream<u32> {
-    let (mut writer, output) = golem_rust::schema::wit::new_schema_value_stream();
+    let (mut writer, output) = AgentStream::new();
     spawn_local(async move {
-        let first = encode_schema_value(&SchemaValue::U32(1))
-            .expect("failed to encode value before producer error");
-        if writer.write_one(first).await.is_some() {
-            return;
-        }
-        let _ = writer
-            .write_one(golem_rust::schema::wit::wire::SchemaValueTree {
-                value_nodes: Vec::new(),
-                root: 0,
-            })
-            .await;
+        writer.write_one(1).await.unwrap();
+        let value = golem_rust::schema::try_into_typed_schema_value(&73u32).unwrap();
+        writer
+            .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                value,
+            ))))
+            .await
+            .unwrap();
     });
-    AgentStream::from_raw(output)
+    output
 }
 
 #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
@@ -567,6 +565,8 @@ pub trait StreamingRpcTarget {
     ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
     fn produce_error(&self) -> AgentStream<u32>;
+    fn produce_outcome(&self, kind: u8) -> AgentStream<u32>;
+    fn forward_outcome(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     fn ping(&self) -> u64;
     fn increment_scalar(&mut self) -> u64;
     fn increment_stream(&mut self) -> AgentStream<u64>;
@@ -604,9 +604,9 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         gate: PromiseId,
     ) -> u64 {
         self.scalar += 1;
-        assert_eq!(input.next().await.unwrap(), Some(17));
+        assert_eq!(input.next().await, Some(Ok(17)));
         golem_rust::await_promise(&gate).await;
-        assert_eq!(input.next().await.unwrap(), None);
+        assert_eq!(input.next().await, None);
         self.scalar
     }
 
@@ -692,6 +692,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             writer.write_one(snapshot()).await.unwrap();
             span.finish();
             writer.write_one(snapshot()).await.unwrap();
+            writer.close().await.unwrap();
         });
         output
     }
@@ -705,6 +706,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                     .await
                     .expect("failed to write benchmark chunk");
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -712,16 +714,14 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(value) = input
-                .next()
-                .await
-                .expect("failed to consume transform input")
-            {
+            while let Some(value) = input.next().await {
+                let value = value.expect("failed to consume transform input");
                 writer
                     .write_one(value * 10)
                     .await
                     .expect("failed to write transformed value");
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -759,6 +759,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                     .await
                     .expect("failed to write delayed output");
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -771,6 +772,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
             writer.write_one(7).await.unwrap();
             writer.write_one(201).await.unwrap();
+            writer.close().await.unwrap();
         });
         output
     }
@@ -790,8 +792,8 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
             nested_writer.write_one(7).await.unwrap();
             nested_writer.write_one(201).await.unwrap();
-            drop(nested_writer);
-            drop(writer);
+            nested_writer.close().await.unwrap();
+            writer.close().await.unwrap();
         });
         output
     }
@@ -799,9 +801,9 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     fn produce_then_spin(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            assert_eq!(input.next().await.expect("input available"), Some(7));
+            assert_eq!(input.next().await, Some(Ok(7)));
             writer.write_one(7).await.expect("output attached");
-            assert_eq!(input.next().await.expect("input available"), Some(8));
+            assert_eq!(input.next().await, Some(Ok(8)));
             writer.write_one(8).await.expect("output attached");
             let mut value = 0u64;
             loop {
@@ -818,16 +820,14 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     fn transform_bytes(&self, mut input: AgentStream<u8>) -> AgentStream<u8> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(value) = input
-                .next()
-                .await
-                .expect("failed to consume byte transform input")
-            {
+            while let Some(value) = input.next().await {
+                let value = value.expect("failed to consume byte transform input");
                 writer
                     .write_one(value)
                     .await
                     .expect("failed to write transformed byte");
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -835,16 +835,14 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     fn transform_binary(&self, mut input: AgentStream<Bytes>) -> AgentStream<Bytes> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(value) = input
-                .next()
-                .await
-                .expect("failed to consume binary transform input")
-            {
+            while let Some(value) = input.next().await {
+                let value = value.expect("failed to consume binary transform input");
                 writer
                     .write_one(value)
                     .await
                     .expect("failed to write transformed binary value");
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -896,6 +894,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 })
                 .await
                 .expect("failed to write second nested stream item");
+            writer.close().await.unwrap();
         });
         output
     }
@@ -913,6 +912,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 })
                 .await
                 .expect("failed to write left nested sibling");
+            left_writer.close().await.unwrap();
         });
         spawn_local(async move {
             right_writer
@@ -922,6 +922,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 })
                 .await
                 .expect("failed to write right nested sibling");
+            right_writer.close().await.unwrap();
         });
         (left, right)
     }
@@ -943,6 +944,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             writer.write_all(0..16).await.unwrap();
             golem_rust::await_promise(&gate).await;
             writer.write_all(16..64).await.unwrap();
+            writer.close().await.unwrap();
         });
         (agent_stream(vec!["a".to_string(), "b".to_string()]), stream)
     }
@@ -966,6 +968,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 }
                 writer.write_one(domain + index * 3).await.unwrap();
             }
+            writer.close().await.unwrap();
         });
         output
     }
@@ -1009,6 +1012,41 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         agent_error_stream()
     }
 
+    fn produce_outcome(&self, kind: u8) -> AgentStream<u32> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_all([17, 29]).await.unwrap();
+            match kind {
+                0 => {
+                    let value = golem_rust::schema::try_into_typed_schema_value(&73u32).unwrap();
+                    writer
+                        .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                            value,
+                        ))))
+                        .await
+                        .unwrap();
+                }
+                1 => drop(writer),
+                2 => {
+                    drop(writer);
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(5_000_000).await;
+                    panic!("producer trapped after dropping its writer");
+                }
+                3 => {
+                    let _ = writer
+                        .finish(Err(golem_rust::agentic::StreamError::Cancelled))
+                        .await;
+                }
+                _ => writer.close().await.unwrap(),
+            }
+        });
+        stream
+    }
+
+    fn forward_outcome(&self, input: AgentStream<u32>) -> AgentStream<u32> {
+        input
+    }
+
     fn ping(&self) -> u64 {
         42
     }
@@ -1036,6 +1074,7 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             writer.write_one(value).await.unwrap();
             golem_rust::await_promise(&gate).await;
             writer.write_one(value).await.unwrap();
+            writer.close().await.unwrap();
         });
         stream
     }
@@ -1145,6 +1184,7 @@ pub trait StreamingRpcCaller {
     async fn drop_gated_output(&self, gate: PromiseId) -> u64;
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn call_producer_error(&self) -> Vec<u32>;
+    async fn catch_producer_outcome(&self, kind: u8) -> Vec<u32>;
     async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
@@ -1219,7 +1259,8 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let mut output = target.produce_binary_chunks(chunk_count, chunk_size).await;
         let mut chunks_read = 0;
         let mut first_chunk_nanos = 0;
-        while let Some(chunk) = output.next().await.expect("benchmark RPC stream failed") {
+        while let Some(chunk) = output.next().await {
+            let chunk = chunk.expect("benchmark RPC stream failed");
             if chunks_read == 0 {
                 first_chunk_nanos = started.elapsed().as_nanos() as u64;
             }
@@ -1262,11 +1303,8 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let mut nested_items = target.produce_nested_items().await;
         let mut nested_item_labels = Vec::new();
         let mut nested_item_values = Vec::new();
-        while let Some(item) = nested_items
-            .next()
-            .await
-            .expect("failed to consume outer nested-item stream")
-        {
+        while let Some(item) = nested_items.next().await {
+            let item = item.expect("failed to consume outer nested-item stream");
             nested_item_labels.push(item.label);
             nested_item_values.push(
                 item.values
@@ -1287,7 +1325,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .expect("failed to consume second sibling stream");
 
         let mut dropped = target.produce(vec![20, 21, 22]).await;
-        assert_eq!(dropped.next().await.unwrap(), Some(20));
+        assert_eq!(dropped.next().await, Some(Ok(20)));
         drop(dropped);
         let after_consumer_drop = target.ping().await;
 
@@ -1313,7 +1351,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let mut output = StreamingRpcTargetClient::get(self.name.clone())
             .produce_drop_probe(gate)
             .await;
-        assert_eq!(output.next().await.unwrap(), Some(17));
+        assert_eq!(output.next().await, Some(Ok(17)));
         drop(output);
         42
     }
@@ -1325,6 +1363,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             writer.write_one(169).await.unwrap();
             golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
             writer.write_all([7, 201]).await.unwrap();
+            writer.close().await.unwrap();
         });
         StreamingRpcTargetClient::get(self.name.clone())
             .consume(input)
@@ -1371,6 +1410,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
                 .write_all(vec![2, 3])
                 .await
                 .expect("failed to write input after caller recovery gate");
+            writer.close().await.unwrap();
         });
         target
             .transform(input)
@@ -1393,7 +1433,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let output = StreamingRpcTargetClient::get(self.name.clone())
             .benchmark_gated_output(7, 17, source_gate)
             .await;
-        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let (mut reader, outcome) = output.into_raw().await.expect("unwrap durable output");
         let decode = |tree| {
             u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
                 .expect("decode u32 item")
@@ -1442,6 +1482,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             assert_eq!(buffer.len(), 1);
             values.extend(buffer.into_iter().map(decode));
         }
+        assert!(outcome.await.is_ok());
         values
     }
 
@@ -1457,7 +1498,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         let output = StreamingRpcTargetClient::get(self.name.clone())
             .benchmark_gated_output(7, 17, source_gate)
             .await;
-        let mut reader = output.into_raw().await.expect("unwrap durable output");
+        let (mut reader, outcome) = output.into_raw().await.expect("unwrap durable output");
         let decode = |tree| {
             u32::from_value(&golem_rust::decode_schema_value(tree).expect("decode raw item"))
                 .expect("decode u32 item")
@@ -1488,6 +1529,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             assert_eq!(buffer.len(), 1);
             values.extend(buffer.into_iter().map(decode));
         }
+        assert!(outcome.await.is_ok());
         values
     }
 
@@ -1534,11 +1576,38 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .expect("producer stream must fail")
     }
 
+    async fn catch_producer_outcome(&self, kind: u8) -> Vec<u32> {
+        use golem_rust::agentic::StreamError;
+        let mut effect = StreamingRpcTargetClient::get(format!("{}-outcome-effect", self.name));
+        let sibling = effect.produce(vec![101, 307]).await;
+        let source = StreamingRpcTargetClient::get(self.name.clone())
+            .produce_outcome(kind)
+            .await;
+        let mut output = StreamingRpcTargetClient::get(format!("{}-forward", self.name))
+            .forward_outcome(source)
+            .await;
+        assert_eq!(output.next().await, Some(Ok(17)));
+        assert_eq!(output.next().await, Some(Ok(29)));
+        let expected = match (kind, output.next().await) {
+            (0, Some(Err(StreamError::Failed(value)))) => {
+                assert_eq!(value.value(), &SchemaValue::U32(73));
+                73
+            }
+            (1, Some(Err(StreamError::Abandoned))) => 1,
+            (2 | 3, Some(Err(StreamError::Trapped(_)))) => 2,
+            (_, outcome) => panic!("unexpected producer outcome: {outcome:?}"),
+        };
+        assert!(output.next().await.is_none());
+        assert_eq!(sibling.collect().await.unwrap(), vec![101, 307]);
+        let count = effect.increment_scalar().await;
+        vec![17, 29, expected, count as u32]
+    }
+
     async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32> {
         let mut output = StreamingRpcTargetClient::get(self.name.clone())
             .produce_error()
             .await;
-        assert_eq!(output.next().await.unwrap(), Some(1));
+        assert_eq!(output.next().await, Some(Ok(1)));
         golem_rust::await_promise(&gate).await;
         output.collect().await.expect("producer stream must fail")
     }

@@ -164,6 +164,86 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ct
     }
 }
 
+/// A primary runtime keeps its original host context after disposing a trapped Store.
+pub(super) struct PrimaryStore<Ctx: 'static> {
+    state: Option<PrimaryStoreState<Ctx>>,
+}
+
+enum PrimaryStoreState<Ctx: 'static> {
+    Resident(Store<Ctx>),
+    Disposed(Ctx),
+}
+
+impl<Ctx: 'static> PrimaryStore<Ctx> {
+    pub(super) fn new(store: Store<Ctx>) -> Self {
+        Self {
+            state: Some(PrimaryStoreState::Resident(store)),
+        }
+    }
+
+    pub(super) fn data(&self) -> &Ctx {
+        match self.state.as_ref().unwrap() {
+            PrimaryStoreState::Resident(store) => store.data(),
+            PrimaryStoreState::Disposed(context) => context,
+        }
+    }
+
+    pub(super) fn data_mut(&mut self) -> &mut Ctx {
+        match self.state.as_mut().unwrap() {
+            PrimaryStoreState::Resident(store) => store.data_mut(),
+            PrimaryStoreState::Disposed(context) => context,
+        }
+    }
+}
+
+impl<Ctx: crate::workerctx::FuelManagement + 'static> PrimaryStore<Ctx> {
+    pub(super) fn dispose(&mut self) {
+        self.state = self.state.take().map(|state| match state {
+            PrimaryStoreState::Resident(mut store) => {
+                if let Ok(current_fuel_level) = store.get_fuel() {
+                    store.data_mut().settle_fuel(current_fuel_level);
+                }
+                PrimaryStoreState::Disposed(store.into_data())
+            }
+            state @ PrimaryStoreState::Disposed(_) => state,
+        });
+    }
+}
+
+impl<Ctx: 'static> Deref for PrimaryStore<Ctx> {
+    type Target = Store<Ctx>;
+
+    fn deref(&self) -> &Self::Target {
+        match self.state.as_ref().unwrap() {
+            PrimaryStoreState::Resident(store) => store,
+            PrimaryStoreState::Disposed(_) => panic!("guest execution after Store disposal"),
+        }
+    }
+}
+
+impl<Ctx: 'static> DerefMut for PrimaryStore<Ctx> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.state.as_mut().unwrap() {
+            PrimaryStoreState::Resident(store) => store,
+            PrimaryStoreState::Disposed(_) => panic!("guest execution after Store disposal"),
+        }
+    }
+}
+
+impl<Ctx: 'static> AsContext for PrimaryStore<Ctx> {
+    type Data = Ctx;
+
+    fn as_context(&self) -> wasmtime::StoreContext<'_, Ctx> {
+        self.deref().as_context()
+    }
+}
+
+impl<Ctx: 'static> AsContextMut for PrimaryStore<Ctx> {
+    fn as_context_mut(&mut self) -> wasmtime::StoreContextMut<'_, Ctx> {
+        self.deref_mut().as_context_mut()
+    }
+}
+
 /// The durable execution stream shared by every Store belonging to one owner.
 ///
 /// A replay generation owns its cursor and live wallet together. Stores attach to the installed
@@ -1428,7 +1508,7 @@ mod monthly_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ObservedPrimaryStore, StoreFuelGuard, instantiation_failure, interrupt_kind_in,
+        ObservedPrimaryStore, PrimaryStore, StoreFuelGuard, instantiation_failure, interrupt_kind_in,
         resource_capacity_trap,
     };
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
@@ -1657,6 +1737,40 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    fn primary_disposal_retains_context_after_releasing_the_physical_runtime() -> anyhow::Result<()>
+    {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let mut store = wasmtime::Store::new(
+            &engine,
+            FuelTestContext {
+                borrowed: true,
+                returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
+            },
+        );
+        store.as_context_mut().set_runtime_observer(runtime)?;
+        store.set_fuel(137)?;
+        let mut store = PrimaryStore::new(store);
+        store.dispose();
+        assert!(observer.upgrade().is_none());
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&store.data().returned_at, &returned_at));
+        assert_eq!(returned_at.load(Ordering::Acquire), 137);
+        store.data_mut().borrowed = false;
+        store.dispose();
+        drop(store);
         assert!(dropped.load(Ordering::Acquire));
         Ok(())
     }

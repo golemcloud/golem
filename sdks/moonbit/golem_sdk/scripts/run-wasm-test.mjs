@@ -810,11 +810,12 @@ for (const imported of WebAssembly.Module.imports(module)) {
     importObject[imported.module] ??= {}
     switch (imported.name) {
       case "[stream-new-0][static]schema-value-stream.wrap":
+      case "[future-new-1][static]schema-value-stream.wrap":
         importObject[imported.module][imported.name] = () =>
           (12n << 32n) | 11n
         break
       case "[async-lower][static]schema-value-stream.wrap":
-        importObject[imported.module][imported.name] = (_reader, resultPtr) => {
+        importObject[imported.module][imported.name] = (_reader, _outcome, resultPtr) => {
           if (schemaValueStreamHostMode === 3) {
             return (1 << 4) | 0
           }
@@ -839,8 +840,23 @@ for (const imported of WebAssembly.Module.imports(module)) {
             701,
             true,
           )
+          new DataView(instance.exports.memory.buffer).setInt32(
+            resultPtr + 4,
+            702,
+            true,
+          )
           return 2
         }
+        break
+      case "[async-lower][future-read-1][static]schema-value-stream.unwrap":
+        importObject[imported.module][imported.name] = (_future, resultPtr) => {
+          new DataView(instance.exports.memory.buffer).setUint8(resultPtr, 0)
+          return 0
+        }
+        break
+      case "[async-lower][future-write-1][static]schema-value-stream.wrap":
+        importObject[imported.module][imported.name] = () =>
+          schemaValueStreamHostMode === 3 ? 1 : 0
         break
       case "[async-lower][stream-read-0][static]schema-value-stream.unwrap":
         importObject[imported.module][imported.name] = () =>

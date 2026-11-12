@@ -714,7 +714,11 @@ pub(super) async fn await_streaming_rpc_acceptance(
         };
         match streams.cancel_unbound_rpc_inputs(&mappings).await {
             Ok(()) => {}
-            Err(error @ (SessionError::Fenced(_) | SessionError::Unreadable(_))) => {
+            Err(
+                error @ (SessionError::Fenced(_)
+                | SessionError::Unreadable(_)
+                | SessionError::IncompleteOutput(_)),
+            ) => {
                 return Err(error);
             }
             Err(SessionError::Failed(details)) => {
@@ -833,7 +837,9 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                                 // This caller's own write refused, or its own oplog unreadable: a
                                 // lost shard or a failed agent, not an RPC failure.
                                 Err(
-                                    error @ (SessionError::Fenced(_) | SessionError::Unreadable(_)),
+                                    error @ (SessionError::Fenced(_)
+                                    | SessionError::Unreadable(_)
+                                    | SessionError::IncompleteOutput(_)),
                                 ) => {
                                     return Err(error.into_trap());
                                 }
