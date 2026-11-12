@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::state::{RunningStop, StopPhase, StoppingStop};
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -22,7 +23,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[doc(hidden)]
     pub async fn test_stop(&self) {
         self.stop_internal(
-            false,
+            StopOrigin::External,
             None,
             UnloadRequest::ordinary(UnloadReason::ExplicitStop),
             FinalWorkerState::Unloaded {
@@ -34,7 +35,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn stop_internal(
         &self,
-        called_from_invocation_loop: bool,
+        origin: StopOrigin,
         fail_pending_invocations: Option<WorkerExecutorError>,
         unload_request: UnloadRequest,
         final_state: FinalWorkerState,
@@ -49,7 +50,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let stop_result = self
             .stop_internal_locked(
                 &mut instance_guard,
-                called_from_invocation_loop,
+                origin,
                 fail_pending_invocations,
                 unload_request,
                 final_state,
@@ -59,7 +60,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Startup can stop before a prepared Store exists to acknowledge interruption.
         // Keep the lifecycle lock until the retiring execution's receipt is delivered.
-        if called_from_invocation_loop {
+        if origin == StopOrigin::InvocationLoop {
             acknowledge_no_store_interruption(&mut self.execution_status.write().unwrap(), None);
         }
 
@@ -85,7 +86,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker.spawn_lost_shard_retirement(reason);
         }
 
-        if !called_from_invocation_loop && let Some(startup_attempt) = startup_attempt {
+        if origin == StopOrigin::External
+            && let Some(startup_attempt) = startup_attempt
+        {
             self.complete_startup(startup_attempt, Err(startup_error));
         }
     }
@@ -95,49 +98,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn stop_internal_locked(
         &self,
-        instance_guard: &mut MutexGuard<'_, WorkerInstance>,
-        called_from_invocation_loop: bool,
+        instance_guard: &mut MutexGuard<'_, WorkerLifecycle>,
+        origin: StopOrigin,
         // Only respected when this is the call that triggered the stop
         fail_pending_invocations: Option<WorkerExecutorError>,
         unload_request: UnloadRequest,
         final_state: FinalWorkerState,
         pending_live_invocations: PendingLiveInvocationDisposition,
     ) -> StopResult {
-        let runtime = match &mut **instance_guard {
-            WorkerInstance::Deleting(deleting) => &mut *deleting.runtime,
-            instance => instance,
-        };
         let actor_loss_cleanup = self.state_actor.lifecycle_is_closed()
             && (matches!(&final_state, FinalWorkerState::CleanupFailed(_))
-                || runtime.retained_cleanup_failure().is_some());
-        // Preserve cleanup health even if a later finalization step unwinds. Physical
-        // ownership remains with the invocation loop or the existing stopping task.
-        let fallback = match (&*runtime, &final_state) {
-            (WorkerInstance::CleanupFailed(error), _)
-            | (
-                WorkerInstance::Stopping(StoppingWorker {
-                    final_state: FinalWorkerState::CleanupFailed(error),
-                    ..
-                }),
-                _,
-            ) => WorkerInstance::CleanupFailed(error.clone()),
-            (_, FinalWorkerState::CleanupFailed(error)) if called_from_invocation_loop => {
-                WorkerInstance::CleanupFailed(error.clone())
-            }
-            _ => WorkerInstance::Unloaded {
-                startup_failure: None,
-            },
+                || instance_guard.retained_cleanup_failure().is_some());
+        let Some(previous_instance_state) = instance_guard.begin_stop(origin, &final_state) else {
+            return StopResult::Stopped;
         };
-        let previous_instance_state = std::mem::replace(runtime, fallback);
 
         match previous_instance_state {
-            WorkerInstance::Unloaded { .. } => {
+            StopPhase::Unloaded(unloaded) => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                *runtime = final_state.into_instance();
-                if let WorkerInstance::Unloaded { startup_failure } = &*runtime {
+                if let WorkerInstance::Unloaded { startup_failure } = unloaded.complete(final_state)
+                {
                     self.resolve_pending_queue_on_unload(
                         startup_failure.as_ref(),
                         pending_live_invocations,
@@ -146,7 +129,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 StopResult::Stopped
             }
-            WorkerInstance::CleanupFailed(error) => {
+            StopPhase::CleanupFailed(failed) => {
                 if let Some(ref pending_error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(
                         pending_error.clone(),
@@ -154,17 +137,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await;
                 }
-                *runtime = WorkerInstance::CleanupFailed(error);
+                failed.retain();
                 StopResult::Stopped
             }
-            WorkerInstance::WaitingForPermit(_) => {
+            StopPhase::WaitingForPermit(waiting) => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
-                *runtime = final_state.into_instance();
-                match &*runtime {
+                let completed = waiting.complete(final_state);
+                match completed.state() {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -180,16 +163,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 StopResult::Stopped
             }
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
-                *runtime = previous_instance_state;
-                // Should we return an error here?
-                StopResult::Stopped
-            }
-            WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => {
-                *runtime = previous_instance_state;
-                StopResult::Stopped
-            }
-            WorkerInstance::Stopping(stopping) if called_from_invocation_loop => {
+            StopPhase::Stopping(StoppingStop::InvocationLoop(stopping)) => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
@@ -197,10 +171,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // As in the `Running` arm: the worker is unloaded from here on, so a start can
                 // register the next generation's grant before this loop task exits.
                 self.release_linear_memory_grant();
-                let pending_live_invocations = stopping.pending_live_invocations;
-                let (instance, notify) = complete_stopping_worker(stopping, final_state);
-                *runtime = instance;
-                match &*runtime {
+                let (phase, notify, pending_live_invocations) = stopping.complete(final_state);
+                match phase {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -217,25 +189,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 notify.set();
                 StopResult::Stopped
             }
-            WorkerInstance::Stopping(mut stopping) => {
+            StopPhase::Stopping(StoppingStop::External(mut stopping)) => {
                 let deleting = matches!(&final_state, FinalWorkerState::Deleting);
-                stopping.final_state = merge_final_worker_state(stopping.final_state, final_state);
-                if pending_live_invocations == PendingLiveInvocationDisposition::Fail {
-                    stopping.pending_live_invocations = PendingLiveInvocationDisposition::Fail;
-                }
+                stopping.merge_request(final_state, pending_live_invocations);
                 if deleting && let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                let notify = stopping.notify.clone();
-                *runtime = WorkerInstance::Stopping(stopping);
-                StopResult::AlreadyStopping { notify }
+                stopping.join()
             }
-            WorkerInstance::Running(running) => {
+            StopPhase::Running(running) => {
                 self.owner_runtime_resources.fence_filesystem_generation();
                 debug!(
-                    "Stopping running worker ({called_from_invocation_loop}) ({})",
-                    fail_pending_invocations.is_some()
+                    ?origin,
+                    fail_pending_invocations = fail_pending_invocations.is_some(),
+                    "Stopping running worker"
                 );
 
                 // Make sure the oplog is committed. Best-effort: a stop must finish.
@@ -284,45 +252,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     debug!("Forced status flush on stop failed (will retry in background): {err}");
                 }
 
-                // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
-                if called_from_invocation_loop {
-                    crate::metrics::workers::dec_worker_memory_resident();
-                    // The invocation-loop task retains the shared grant cell until it
-                    // exits. Release its reservation now so permit reacquisition can
-                    // register and admit the replacement generation without overlapping
-                    // the old generation's grant.
-                    self.release_linear_memory_grant();
-                    *runtime = final_state.into_instance();
-                    match &*runtime {
-                        WorkerInstance::Unloaded { startup_failure } => {
-                            self.resolve_pending_queue_on_unload(
-                                startup_failure.as_ref(),
-                                pending_live_invocations,
-                            )
-                            .await;
-                        }
-                        WorkerInstance::CleanupFailed(error) => {
-                            self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                match running {
+                    RunningStop::InvocationLoop(running) => {
+                        crate::metrics::workers::dec_worker_memory_resident();
+                        // The invocation-loop task retains the shared grant cell until it
+                        // exits. Release its reservation now so permit reacquisition can
+                        // register and admit the replacement generation without overlapping
+                        // the old generation's grant.
+                        self.release_linear_memory_grant();
+                        let completed = running.complete(final_state);
+                        match completed.state() {
+                            WorkerInstance::Unloaded { startup_failure } => {
+                                self.resolve_pending_queue_on_unload(
+                                    startup_failure.as_ref(),
+                                    pending_live_invocations,
+                                )
                                 .await;
+                            }
+                            WorkerInstance::CleanupFailed(error) => {
+                                self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                                    .await;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        StopResult::Stopped
                     }
-                    StopResult::Stopped
-                } else {
-                    // drop the running worker, this signals to the invocation loop to start exiting.
-                    // `stop()` consumes the RunningWorker and drops everything but
-                    // its join handle, releasing its memory grant back to the gate.
-                    let run_loop_handle = running.stop(unload_request);
-                    let notify = OneShotEvent::new();
-                    crate::metrics::workers::dec_worker_memory_resident();
-                    *runtime = WorkerInstance::Stopping(StoppingWorker {
-                        notify: notify.clone(),
-                        final_state,
-                        pending_live_invocations,
-                    });
-                    StopResult::NeedsWaitForLoopExit {
-                        run_loop_handle,
-                        notify,
+                    RunningStop::External(running) => {
+                        running.begin(unload_request, final_state, pending_live_invocations)
                     }
                 }
             }
@@ -345,11 +301,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let mut instance_guard = self.instance.lock().await;
                 if let Some(error) = run_loop_failure.as_ref() {
-                    merge_run_loop_failure(instance_guard.deletion_runtime_mut(), error.clone());
+                    instance_guard.record_loop_failure(error.clone());
                 }
                 let actor_loss_cleanup = self.state_actor.lifecycle_is_closed()
                     && instance_guard.retained_cleanup_failure().is_some();
-                let is_deleting = match &*instance_guard {
+                let is_deleting = match instance_guard.state() {
                     WorkerInstance::Stopping(stopping) => {
                         matches!(stopping.final_state, FinalWorkerState::Deleting)
                     }
@@ -377,25 +333,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     instance_guard = self.instance.lock().await;
                 }
 
-                let runtime = instance_guard.deletion_runtime_mut();
-                let pending_live_invocations = if matches!(&*runtime, WorkerInstance::Stopping(_)) {
-                    match std::mem::replace(
-                        runtime,
-                        WorkerInstance::Unloaded {
-                            startup_failure: None,
-                        },
-                    ) {
-                        WorkerInstance::Stopping(stopping) => {
-                            let pending_live_invocations = stopping.pending_live_invocations;
-                            *runtime = stopping.final_state.into_instance();
-                            Some(pending_live_invocations)
-                        }
-                        _ => unreachable!(),
-                    }
-                } else {
-                    None
-                };
-                match &*runtime {
+                let pending_live_invocations = instance_guard.finish_external_stop();
+                match instance_guard.deletion_runtime() {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -614,11 +553,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Lock a worker not in stopping state.
     pub(in crate::worker) async fn lock_non_stopping_worker(
         &self,
-    ) -> MutexGuard<'_, WorkerInstance> {
+    ) -> MutexGuard<'_, WorkerLifecycle> {
         loop {
             let instance_guard = self.instance.lock().await;
 
-            match &*instance_guard {
+            match instance_guard.state() {
                 WorkerInstance::Stopping(stopping) => {
                     let notify = stopping.notify.clone();
                     drop(instance_guard);
@@ -630,11 +569,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn lock_non_stopping_worker_owned(
         &self,
-    ) -> OwnedMutexGuard<WorkerInstance> {
+    ) -> OwnedMutexGuard<WorkerLifecycle> {
         loop {
             let instance_guard = self.instance.clone().lock_owned().await;
 
-            match &*instance_guard {
+            match instance_guard.state() {
                 WorkerInstance::Stopping(stopping) => {
                     let notify = stopping.notify.clone();
                     drop(instance_guard);
@@ -646,14 +585,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn restart_with_memory_admission(
         this: Arc<Worker<Ctx>>,
-        called_from_invocation_loop: bool,
+        origin: StopOrigin,
         delay: Option<Duration>,
         oom_retry_count: u32,
         start_attempt: Option<Uuid>,
         reason: UnloadReason,
     ) -> Result<Option<Uuid>, WorkerExecutorError> {
         this.stop_internal(
-            called_from_invocation_loop,
+            origin,
             None,
             UnloadRequest::ordinary(reason),
             FinalWorkerState::Unloaded {

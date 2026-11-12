@@ -520,7 +520,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         None,
                         self.oom_retry_count,
                         pending_startup_attempt,
@@ -1208,7 +1208,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         delay,
                         self.oom_retry_count + 1,
                         pending_startup_attempt,

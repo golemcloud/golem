@@ -1132,7 +1132,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return agent_filesystem_snapshots::Confirmation::Deferred;
         }
         let instance_guard = self.instance.clone().lock_owned().await;
-        let instance = match (&*instance_guard, &who) {
+        let instance = match (instance_guard.state(), &who) {
             (WorkerInstance::Running(running), filesystem_snapshots::Confirmer::Running(mark)) => {
                 filesystem_snapshots::InstanceView::Running {
                     generation_matches: running.filesystem_snapshot_slot.owns(*mark),

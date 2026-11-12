@@ -1554,6 +1554,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                   "string"
                 ]
               },
+              "mode": "durableStreams",
               "durableStreams": {
                 "slots": [
                   {
@@ -1565,9 +1566,6 @@ The request body is encoded as multipart/form-data containing metadata and the W
                     "contentType": "string"
                   }
                 ],
-                "allowExternalWrites": true,
-                "allowStreamDelete": true,
-                "allowInvocationDelete": true,
                 "load": {
                   "maxConcurrentReadersPerStream": 0,
                   "maxAppendRequestsPerSecondPerStream": 0
@@ -1763,6 +1761,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
                       "string"
                     ]
                   },
+                  "mode": "durableStreams",
                   "durableStreams": {
                     "slots": [
                       {
@@ -1774,9 +1773,6 @@ The request body is encoded as multipart/form-data containing metadata and the W
                         "contentType": "string"
                       }
                     ],
-                    "allowExternalWrites": true,
-                    "allowStreamDelete": true,
-                    "allowInvocationDelete": true,
                     "load": {
                       "maxConcurrentReadersPerStream": 0,
                       "maxAppendRequestsPerSecondPerStream": 0

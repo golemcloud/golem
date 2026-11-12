@@ -390,6 +390,16 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             registry.set_policy(policy);
             limits.run_batch_for_test().await;
             executor.resume(&id, false).await?;
+        } else {
+            // The receipt reports the Store's acknowledgement after the selected outcome. The
+            // generation records `Interrupted` only after it unloads, so a resume before that
+            // finds a running worker and changes nothing.
+            executor
+                .wait_for_status(&id, AgentStatus::Interrupted, Duration::from_secs(10))
+                .await?;
+            worker.await_ready_to_process_commands().await?;
+            worker.retained_cleanup_for_test().await?;
+            assert!(!worker.is_loaded().await);
         }
         let result = invocation.await??;
         assert_eq!(

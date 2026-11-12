@@ -75,6 +75,12 @@ type = "Unrestricted"
 
 [domain_registration.available_domains.config]
 
+[durable_stream_routes]
+default_append_requests_per_second_per_stream = 100
+default_concurrent_readers_per_stream = 16
+max_append_requests_per_second_per_stream = 1000
+max_concurrent_readers_per_stream = 16
+
 [grpc]
 port = 9090
 
