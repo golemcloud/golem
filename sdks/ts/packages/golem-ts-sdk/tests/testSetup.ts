@@ -157,7 +157,10 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.3.0', () => ({
-  getEnvironment: () => [['GOLEM_AGENT_ID', (globalThis as any).currentAgentId]],
+  getEnvironment: () => {
+    const agentId = (globalThis as any).currentAgentId;
+    return agentId === undefined ? [] : [['GOLEM_AGENT_ID', agentId]];
+  },
 }));
 
 // Load the package barrel so its side-effecting imports register the schema

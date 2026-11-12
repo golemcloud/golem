@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeAgentId, parseAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import { ParsedAgentId } from '../src/agentId';
+import { getRawSelfAgentId } from '../src/host/hostapi';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
@@ -71,6 +72,22 @@ describe('identity boundaries', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(RemoteCallError);
       expect((error as RemoteCallError).cause).toEqual({ tag: 'denied', details: 'no access' });
+    }
+  });
+});
+
+describe('self agent ID', () => {
+  it('names the card grant when GOLEM_AGENT_ID is not readable', () => {
+    const previous = (globalThis as { currentAgentId?: string }).currentAgentId;
+    (globalThis as { currentAgentId?: string }).currentAgentId = undefined;
+    try {
+      expect(() => getRawSelfAgentId()).toThrow(
+        new Error(
+          "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+        ),
+      );
+    } finally {
+      (globalThis as { currentAgentId?: string }).currentAgentId = previous;
     }
   });
 });
