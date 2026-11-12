@@ -775,6 +775,8 @@ This feature makes environment variables a good fit for passing configuration su
 #### Default environment variables
 It is possible to define default environment values and config key-value pairs for a component using the **app manifest**. These values are automatically set for each agent created from the component, but can be overridden when creating the agent.
 
+With an explicit `initialCard`, an agent sees an environment variable only if its card allows the agent to read it; see [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
+
 To set component level environment variables, use the `env` section of the `golem.yaml`:
 
 ```yaml
