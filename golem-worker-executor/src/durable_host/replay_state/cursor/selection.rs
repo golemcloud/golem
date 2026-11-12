@@ -341,7 +341,7 @@ impl CursorTx<'_> {
         head: Option<HeadOwner>,
         claim_parent: Option<OplogIndex>,
     ) -> Option<tokio::sync::watch::Receiver<HashSet<OplogIndex>>> {
-        if self.cursor.is_live() {
+        if self.cursor.at_replay_tail() {
             return None;
         }
         let head_parent = match head? {
@@ -394,7 +394,7 @@ impl CursorTx<'_> {
         loop {
             self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
                 .await?;
-            if self.cursor.is_live() {
+            if self.cursor.at_replay_tail() {
                 return Ok(MissingStart::ReplayEnded);
             }
             if self.blocked_on_completion_delivery {
@@ -963,7 +963,7 @@ impl CursorTx<'_> {
         }
         // Every `Start` claim registers a resolver awaiter atomically with the consume/claim, so
         // its terminal is always a resolver-routed *awaited terminal* — never an orphan a parked
-        // awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals
+        // awaiter behind it could sleep on until `exhaust_replay_prefix`. The only un-drained terminals
         // the cursor may leave at its head are the dedicated-positional-consumer pairs
         // (`GolemApiFork`). A retained `Start` whose terminal was already committed
         // (and attached to it) is the one claim resolved before this returns.

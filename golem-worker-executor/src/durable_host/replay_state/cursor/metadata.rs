@@ -99,7 +99,7 @@ impl ReplayState {
                 has_seen_logs: AtomicBool::new(false),
             },
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
-            transition_phase: AtomicU8::new(ReplayTransitionPhase::Replaying as u8),
+            transition_phase: AtomicReplayTransitionPhase::replaying(),
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
@@ -137,7 +137,7 @@ impl ReplayState {
             tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
-        if cursor.is_live() {
+        if cursor.at_replay_tail() {
             cursor.publish_live();
         }
         Ok(Self {
@@ -690,9 +690,7 @@ impl ReplayState {
                 }
             }
             if new_target > cursor.last_replayed_index() {
-                cursor
-                    .transition_phase
-                    .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
+                cursor.transition_phase.resume_replay();
                 cursor
                     .pending_replay_events
                     .lock()
@@ -700,7 +698,7 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
-            if cursor.is_live()
+            if cursor.at_replay_tail()
                 && let Some(wallet) = &cursor.wallet
             {
                 wallet.finish_replay_prefix();

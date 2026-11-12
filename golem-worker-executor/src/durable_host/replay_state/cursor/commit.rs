@@ -139,7 +139,7 @@ impl CursorTx<'_> {
     ) -> Result<(), WorkerExecutorError> {
         // Skipping hint entries and recording log entries
         let mut logs: HashMap<(u64, u64), usize> = HashMap::new();
-        while self.cursor.is_replay() {
+        while self.cursor.has_replay_remaining() {
             // Speculative peek: does not advance the published cursor. The cursor is advanced (via
             // `move_replay_idx`) only when a hint entry is actually skipped past below; the first
             // non-hint entry leaves the cursor untouched, so no speculative position is ever
@@ -465,27 +465,27 @@ impl CursorTx<'_> {
     /// `ReplayFinished` is queued whenever the cursor reaches the target, including when it gets
     /// there via a skip/jump that never consumes the target entry. Consumers withhold the event
     /// until the primary publishes live admission after reconstruction settlement. The forced
-    /// transition in [`Self::switch_to_live`] is the only other path to live and emits its own
-    /// `ReplayFinished`.
+    /// exhaustion in [`Self::exhaust_replay_prefix`] is the only other path to the replay tail
+    /// and emits its own `ReplayFinished`.
     ///
-    /// Exactly-once holds because the `was_replay && is_live` edge is true only on the single advance
-    /// that crosses into live: once live, the replay-driving loops stop and no further
-    /// `move_replay_idx` runs until the replay target is grown (`set_replay_target`) or a new cursor
-    /// is built (`new`), each of which starts a fresh replay epoch that emits its own
-    /// `ReplayFinished` on completion.
+    /// Exactly-once holds because the `was_replay && at_replay_tail` edge is true only on the
+    /// advance that exhausts replay. At the tail, the replay-driving loops stop and no further
+    /// `move_replay_idx` runs until the replay target grows (`set_replay_target`) or a new cursor
+    /// is built (`new`). Each starts a fresh replay epoch that emits its own `ReplayFinished`
+    /// on completion.
     pub(in crate::durable_host::replay_state) async fn move_replay_idx(
         &mut self,
         new_idx: OplogIndex,
     ) -> Result<(), UnreadableOplog> {
-        let was_replay = self.cursor.is_replay();
+        let was_replay = self.cursor.has_replay_remaining();
         self.cursor.position.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await?;
-        if self.cursor.is_live()
+        if self.cursor.at_replay_tail()
             && let Some(wallet) = &self.cursor.wallet
         {
             wallet.finish_replay_prefix();
         }
-        if was_replay && self.cursor.is_live() {
+        if was_replay && self.cursor.at_replay_tail() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
         Ok(())
@@ -497,7 +497,7 @@ impl CursorTx<'_> {
         let initial_snapshot_skip_end = self.st.initial_snapshot_skip_end.take();
         // Loop: after jumping a region, the freshly looked-up next region may start immediately
         // after the jump target (adjacent regions recorded separately), requiring another jump.
-        while self.cursor.is_replay() {
+        while self.cursor.has_replay_remaining() {
             match self.st.next_skipped_region.clone() {
                 Some(region) if region.start == (self.cursor.last_replayed_index().next()) => {
                     let target = region.end.next(); // we want to continue reading _after_ the region
