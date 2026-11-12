@@ -1620,6 +1620,29 @@ fn worker_filter_matches() {
         parsed,
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable)
     );
+
+    // `true` is the empty `and` and `false` the empty `or`, and both mean what they say.
+    for (text, expected) in [
+        ("true", true),
+        ("false", false),
+        ("not true", false),
+        ("not false", true),
+        ("name == worker-1 and true", true),
+        ("name == worker-1 and false", false),
+        ("name == worker-2 or true", true),
+        ("name == worker-2 or false", false),
+        ("name == worker-1 or false", true),
+        ("status == Idle and not false", true),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(text)
+                .unwrap()
+                .matches(&worker_metadata),
+            expected,
+            "{text}"
+        );
+    }
+    assert!(!AgentFilter::new_or(vec![]).matches(&worker_metadata));
 }
 
 #[test]
