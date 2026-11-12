@@ -12,10 +12,99 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::super::tests::live_unfinished_handle;
 use super::*;
 use futures::FutureExt;
 use test_r::test;
+
+pub fn live_unfinished_handle<P: DropPolicy>(
+    start_idx: OplogIndex,
+    sink: UnboundedSender<DropEvent>,
+) -> DurableCallSession<golem_common::model::oplog::host_functions::MonotonicClockNow, P> {
+    live_unfinished_handle_with_counter(start_idx, sink, Arc::new(AtomicUsize::new(0)))
+}
+
+pub fn live_unfinished_handle_with_counter<P: DropPolicy>(
+    start_idx: OplogIndex,
+    sink: UnboundedSender<DropEvent>,
+    counter: Arc<AtomicUsize>,
+) -> DurableCallSession<golem_common::model::oplog::host_functions::MonotonicClockNow, P> {
+    DurableCallSession {
+        start_idx,
+        state: SessionState::executing(
+            CallRecording::Recorded {
+                request_upload: PendingUpload::already_durable(),
+            },
+            LiveCallPermit::new(counter),
+        ),
+        scope_replay_recovery: ScopeReplayRecovery::default().into(),
+        cancellation_span_id: None,
+        span_observer: None,
+        host_internal_calls: false,
+        execution_scope: CallExecutionScope {
+            retry_from: start_idx,
+            durable_scope: None,
+            observational_owner: None,
+            entity_parent_start_index: None,
+            invocation_id: None,
+            logical_key_position: None,
+            agent_invocation: None,
+        },
+        retry: InFunctionRetryController::new(
+            DurableFunctionType::ReadLocal,
+            DurableExecutionState {
+                is_live: true,
+                snapshotting_mode: false,
+                max_in_function_retry_delay: std::time::Duration::ZERO,
+            },
+            "test:monotonic_clock::now",
+        ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
+        tool_trap_disposal: Arc::new(AtomicBool::new(false)),
+        entity_admission: false,
+        requires_agent_authority: false,
+        agent_auth_ctx: None,
+        drop_sink: Some(sink),
+        cleanup_sink: None,
+        _phantom: PhantomData,
+    }
+}
+
+#[test]
+fn extracted_execution_retains_cleanup_and_permit_after_session_drop() {
+    for terminal in [false, true] {
+        let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut session = live_unfinished_handle::<Cancellable>(OplogIndex::from_u64(8), sink);
+        session.state = SessionState::executing(
+            CallRecording::Recorded {
+                request_upload: PendingUpload::already_durable(),
+            },
+            LiveCallPermit::new(counter.clone()),
+        );
+        assert!(session.take_replay_call().is_err());
+        let execution = session.take_executing_call().unwrap();
+        drop(session);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        assert!(events.try_recv().is_err());
+        if terminal {
+            let released = execution.enter_direct_terminal();
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+            drop(released);
+            assert!(events.try_recv().is_err());
+        } else {
+            drop(execution);
+            let DropEvent::UnfinishedCancellable { call } = events.try_recv().unwrap() else {
+                panic!("the extracted call must retain its cancellation obligation");
+            };
+            assert_eq!(call.start_idx(), OplogIndex::from_u64(8));
+            assert_eq!(counter.load(Ordering::Acquire), 1);
+            drop(call);
+        }
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+        assert!(events.try_recv().is_err());
+    }
+}
 
 #[test]
 #[test_r::timeout("10s")]
@@ -31,16 +120,20 @@ async fn tool_trap_disposal_retains_pending_upload_before_terminal() {
         session.drop_sink = None;
         session.tool_trap_disposal = marker.clone();
         session.runtime_teardown = Arc::new(|| true);
-        session.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
-        session.request_upload = PendingUpload::spawned(
-            async move {
-                upload.await.unwrap();
-                Ok(())
-            }
-            .boxed()
-            .shared(),
+        session.state = SessionState::executing(
+            CallRecording::Recorded {
+                request_upload: PendingUpload::spawned(
+                    async move {
+                        upload.await.unwrap();
+                        Ok(())
+                    }
+                    .boxed()
+                    .shared(),
+                ),
+            },
+            LiveCallPermit::new(counter.clone()),
         );
-        let guard = terminal_started.then(|| session.terminal_guard());
+        let guard = terminal_started.then(|| session.terminal_guard().unwrap());
         marker.store(true, Ordering::Release);
         drop(guard);
         drop(session);
@@ -66,9 +159,24 @@ fn tool_trap_disposal_does_not_cancel_replay_or_leave_incomplete_calls() {
         session.entity_admission = entity_admission;
         session.cleanup_sink = Some(sink);
         session.tool_trap_disposal.store(true, Ordering::Release);
-        session.is_live = !replay;
-        session.persisted = persisted;
-        session.parked_undelivered_replay = replay;
+        session.state = if replay {
+            let (_, receiver) = oneshot::channel();
+            let mut state =
+                SessionState::replaying(ReplayCallHandle::new(session.start_idx, receiver));
+            state.discard_after_guest_drop();
+            state
+        } else {
+            SessionState::executing(
+                if persisted {
+                    CallRecording::Recorded {
+                        request_upload: PendingUpload::already_durable(),
+                    }
+                } else {
+                    CallRecording::Unrecorded
+                },
+                LiveCallPermit::new(Arc::new(AtomicUsize::new(0))),
+            )
+        };
         drop(session);
         assert!(events.try_recv().is_err());
     }
@@ -95,7 +203,7 @@ fn tool_trap_disposal_accepted_start_survives_both_oneshot_drop_boundaries() {
             teardown: TeardownProbe::never(),
             _policy: PhantomData,
         };
-        session.finished = true;
+        session.abandon_for_trap();
         drop(session);
         let (send, receive) = oneshot::channel();
         if sent_before_drop {
@@ -186,7 +294,7 @@ async fn tool_trap_disposal_joins_accepted_metadata_before_cancellation_cleanup(
         teardown: TeardownProbe::never(),
         _policy: PhantomData,
     };
-    session.finished = true;
+    session.abandon_for_trap();
     drop(session);
     let (release, held) = oneshot::channel();
     let (send, receive) = oneshot::channel();
@@ -247,8 +355,13 @@ async fn tool_trap_disposal_preserves_a_selected_pending_terminal() {
     session.cleanup_sink = Some(sink);
     session.tool_trap_disposal.store(true, Ordering::Release);
     let counter = Arc::new(AtomicUsize::new(0));
-    session.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
-    let mut guard = session.terminal_guard();
+    session.state = SessionState::executing(
+        CallRecording::Recorded {
+            request_upload: PendingUpload::already_durable(),
+        },
+        LiveCallPermit::new(counter.clone()),
+    );
+    let mut guard = session.terminal_guard().unwrap();
     let (finish, pending) = oneshot::channel();
     guard.cleanup_after_terminal(
         tokio::spawn(async move {
