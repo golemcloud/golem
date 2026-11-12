@@ -913,7 +913,7 @@ function rowTime(e, prevTs) {
 }
 function badge(t, c) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(c || cat)}` }, label); }
 function attrTag(e) {
-  if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + fieldText(inv.entity.name) }, fieldText(inv.entity.name, 40)); }
+  if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + fieldText(inv.entity.name) }, fieldText(inv.entity.name, EXPORT ? 40 : undefined)); }
   return null;
 }
 function nodeKey(n) { return n.kind === 'entity' ? 'ent' + idxOf(n.inv.startIndex) : (n.e ? n.e.index : 'root'); }
@@ -939,7 +939,7 @@ function groupHeader(n) {
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {
     const inv = n.inv; const op = inv.operation;
-    parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', fieldText(inv.entity.name, 60)), op && op.type === 'Tool' ? span('val', ' ' + (EXPORT ? pathText(op.commandPath) : (op.commandPath || []).join(' '))) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
+    parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', fieldText(inv.entity.name, EXPORT ? 60 : undefined)), op && op.type === 'Tool' ? span('val', ' ' + (EXPORT ? pathText(op.commandPath) : (op.commandPath || []).join(' '))) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   }
   return { parts, cls, right };

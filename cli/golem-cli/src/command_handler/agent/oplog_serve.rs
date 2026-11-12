@@ -120,6 +120,14 @@ struct OplogExportPageResponse {
     coverage: OplogExportCoverage,
 }
 
+/// A page of `/api/oplog`, serialised directly so its fields keep their declared order.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OplogPage {
+    Plain(OplogPageResponse),
+    Export(OplogExportPageResponse),
+}
+
 const EXPORT_FAILED_TEXT: &str = "The export of the agent failed.";
 
 const ROOT_CHANGED_TEXT: &str =
@@ -134,7 +142,7 @@ async fn viewer_page(server: Data<&Arc<OplogViewerServer>>) -> Html<String> {
 async fn oplog_page(
     server: Data<&Arc<OplogViewerServer>>,
     Query(params): Query<OplogPageQuery>,
-) -> poem::Result<Json<serde_json::Value>> {
+) -> poem::Result<Json<OplogPage>> {
     let cursor = match (params.cursor_index, params.cursor_revision) {
         (Some(next_oplog_index), Some(current_component_revision)) => Some(OplogCursor {
             next_oplog_index,
@@ -156,14 +164,11 @@ async fn oplog_page(
             .await
             .map_err(export_error)?;
         session.check_root().await.map_err(export_error)?;
-        return Ok(Json(
-            serde_json::to_value(OplogExportPageResponse {
-                entries: page.entries,
-                next: page.next,
-                coverage: page.coverage,
-            })
-            .map_err(|error| export_error(error.into()))?,
-        ));
+        return Ok(Json(OplogPage::Export(OplogExportPageResponse {
+            entries: page.entries,
+            next: page.next,
+            coverage: page.coverage,
+        })));
     }
 
     let clients = server.ctx.golem_clients().await.map_err(upstream_error)?;
@@ -196,13 +201,10 @@ async fn oplog_page(
         );
     }
 
-    Ok(Json(
-        serde_json::to_value(OplogPageResponse {
-            entries,
-            next: result.next,
-        })
-        .map_err(upstream_error)?,
-    ))
+    Ok(Json(OplogPage::Plain(OplogPageResponse {
+        entries,
+        next: result.next,
+    })))
 }
 
 #[handler]
