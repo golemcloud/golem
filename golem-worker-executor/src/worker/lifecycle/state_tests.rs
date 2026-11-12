@@ -268,3 +268,91 @@ fn deletion_claims_nothing_before_initialization_completes() {
     assert!(matches!(lifecycle.state(), WorkerInstance::Unresolved));
     assert!(lifecycle.ensure_not_deleting().is_ok());
 }
+
+#[test]
+#[timeout("5s")]
+async fn deletion_retains_waiting_admission_until_its_stop_completes() {
+    let (exited, mut exit) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _exited = exited;
+        std::future::pending::<()>().await;
+    });
+    let mut lifecycle = WorkerLifecycle {
+        phase: WorkerInstance::WaitingForPermit(WaitingWorker {
+            handle,
+            start_attempt: Uuid::new_v4(),
+        }),
+    };
+    let Some((DeleteOutcome::Started(_), Some(_sender))) = lifecycle.claim_deletion() else {
+        panic!("expected a started deletion");
+    };
+    assert!(lifecycle.runtime_active());
+    assert!(lifecycle.ensure_not_deleting().is_err());
+
+    let final_state = FinalWorkerState::Deleting;
+    let Some(StopPhase::WaitingForPermit(waiting)) =
+        lifecycle.begin_stop(StopOrigin::External, &final_state)
+    else {
+        panic!("expected the retained permit admission");
+    };
+    assert!(exit.try_recv().unwrap().is_none());
+    let completed = waiting.complete(final_state);
+    assert!(matches!(
+        completed.final_state(),
+        FinalWorkerState::Deleting
+    ));
+    assert!(!lifecycle.runtime_active());
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::Deleting)
+    ));
+    tokio::task::yield_now().await;
+    assert!(exit.try_recv().unwrap().is_none());
+    drop(completed);
+    assert!(exit.await.is_err());
+}
+
+#[test]
+fn deletion_retry_retains_a_cleanup_failure_from_before_the_claim() {
+    let failure = WorkerExecutorError::runtime("cleanup failed before deletion");
+    let mut lifecycle = WorkerLifecycle {
+        phase: WorkerInstance::CleanupFailed(failure.clone()),
+    };
+    let Some((DeleteOutcome::Started(_), Some(first_attempt))) = lifecycle.claim_deletion() else {
+        panic!("expected a started deletion");
+    };
+    assert_eq!(lifecycle.cleanup_failure(), Some(&failure));
+    lifecycle.complete_deletion_stage(WorkerDeletionStage::BarriersClosed);
+
+    let final_state = FinalWorkerState::Deleting;
+    let Some(StopPhase::CleanupFailed(failed)) =
+        lifecycle.begin_stop(StopOrigin::External, &final_state)
+    else {
+        panic!("expected the retained cleanup failure");
+    };
+    failed.retain();
+    assert_eq!(lifecycle.cleanup_failure(), Some(&failure));
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::CleanupFailed(error)) if error == failure
+    ));
+
+    first_attempt.send(Err(failure.clone())).unwrap();
+    let Some((DeleteOutcome::Started(_), Some(_retry))) = lifecycle.claim_deletion() else {
+        panic!("expected a retry after the failed attempt");
+    };
+    assert!(matches!(
+        lifecycle.state(),
+        WorkerInstance::Deleting(deleting)
+            if deleting.completed_stage == WorkerDeletionStage::BarriersClosed
+    ));
+    assert_eq!(lifecycle.cleanup_failure(), Some(&failure));
+
+    lifecycle.deletion_cleanup_completed();
+    assert!(lifecycle.cleanup_failure().is_none());
+    assert!(
+        lifecycle
+            .begin_stop(StopOrigin::External, &FinalWorkerState::Deleting)
+            .is_none()
+    );
+}

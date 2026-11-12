@@ -4275,6 +4275,62 @@ async fn delete_worker(
     Ok(())
 }
 
+/// A delete that arrives while the agent is still initializing waits for the initialization to
+/// publish a runtime, then claims and deletes that runtime once.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_during_initialization_deletes_the_initialized_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "delete-during-initialization");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+    let hook = Arc::new(DeletionStageHook::new(
+        OwnedAgentId::new(context.default_environment_id, &worker_id),
+        None,
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&worker_id)
+        .await;
+
+    let starting_executor = executor.clone();
+    let component_id = component.id;
+    let starting = tokio::spawn(async move {
+        starting_executor
+            .start_agent(&component_id, counter_id)
+            .await
+    });
+    gate.entered().await;
+    let deleting_executor = executor.clone();
+    let deleting_worker_id = worker_id.clone();
+    let deleting =
+        tokio::spawn(async move { deleting_executor.delete_worker(&deleting_worker_id).await });
+    drop(gate);
+
+    // The start may also observe the deletion that follows its initialization.
+    if let Err(error) = starting.await? {
+        assert!(error.to_string().contains("being deleted"), "{error}");
+    }
+    deleting.await??;
+    assert_eq!(hook.claims(), (1, 1));
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
