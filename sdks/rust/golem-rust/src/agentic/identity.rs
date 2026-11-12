@@ -20,6 +20,15 @@ use crate::bindings::golem::agent::{common, host};
 use crate::golem_agentic::golem::agent::{common as agentic_common, host as agentic_host};
 use crate::{SchemaValue, Uuid};
 
+/// The panic text for an environment variable that Golem sets but that the agent cannot read.
+/// The executor shows such a variable to the agent only when the agent's permission card allows
+/// the agent to read it.
+pub(crate) fn golem_env_var_not_readable(name: &str) -> String {
+    format!(
+        "{name} is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : {name}"
+    )
+}
+
 pub(crate) fn parse_agent_id(
     id: &str,
 ) -> Result<
