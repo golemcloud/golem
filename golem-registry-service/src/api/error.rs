@@ -998,6 +998,10 @@ impl From<ToolReleaseError> for ApiError {
             ToolReleaseError::ImmutableReleaseConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
             }
+            ToolReleaseError::StrictFollowingGrantConflict => Self::conflict(
+                api::error_code::TOOL_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT,
+                error,
+            ),
             ToolReleaseError::DePublishedReleaseRequiresExplicitRestore
             | ToolReleaseError::ToolReleaseNotPublished
             | ToolReleaseError::ToolReleaseNotDePublished => {
@@ -1087,6 +1091,10 @@ impl From<ToolMiddlewareReleaseError> for ApiError {
             }
             ToolMiddlewareReleaseError::ImmutableReleaseConflict => Self::conflict(
                 api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+                error,
+            ),
+            ToolMiddlewareReleaseError::StrictFollowingGrantConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT,
                 error,
             ),
             ToolMiddlewareReleaseError::PublicationToolNotFound(_) => Self::bad_request(
@@ -1920,6 +1928,16 @@ mod tests {
         let tool_name = ToolName::try_from("echo").unwrap();
         let cases = [
             (
+                ToolReleaseError::ImmutableReleaseConflict,
+                "conflict",
+                api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT,
+            ),
+            (
+                ToolReleaseError::StrictFollowingGrantConflict,
+                "conflict",
+                api::error_code::TOOL_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT,
+            ),
+            (
                 ToolReleaseError::ToolReleaseNotFound(ToolReleaseId::new()),
                 "not_found",
                 api::error_code::TOOL_RELEASE_NOT_FOUND,
@@ -1993,6 +2011,11 @@ mod tests {
                 ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound,
                 "not_found",
                 api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::StrictFollowingGrantConflict,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT,
             ),
             (
                 ToolMiddlewareReleaseError::ImmutableReleaseConflict,
@@ -2227,6 +2250,7 @@ mod tests {
             ToolReleaseError::PublicationOwnerMismatch(name.clone()),
             ToolReleaseError::PublicationHostSource(name),
             ToolReleaseError::ImmutableReleaseConflict,
+            ToolReleaseError::StrictFollowingGrantConflict,
             ToolReleaseError::DePublishedReleaseRequiresExplicitRestore,
             ToolReleaseError::Unauthorized(AuthorizationError::SystemOnlyActionNotAllowed(
                 "publish".to_string(),
@@ -2243,6 +2267,7 @@ mod tests {
             ToolMiddlewareReleaseError::PublicationOwnerMismatch(name.clone()),
             ToolMiddlewareReleaseError::PublicationHostSource(name),
             ToolMiddlewareReleaseError::ImmutableReleaseConflict,
+            ToolMiddlewareReleaseError::StrictFollowingGrantConflict,
             ToolMiddlewareReleaseError::DePublishedReleaseRequiresExplicitRestore,
             ToolMiddlewareReleaseError::Unauthorized(
                 AuthorizationError::SystemOnlyActionNotAllowed("publish".to_string()),
@@ -2291,6 +2316,65 @@ mod tests {
                 status_code_and_messages(b.into())
             );
         }
+    }
+
+    #[test]
+    fn strict_following_grant_conflicts_have_their_own_code_and_message() {
+        assert_eq!(
+            status_code_and_messages(
+                DeploymentWriteError::from(ToolReleaseError::StrictFollowingGrantConflict).into()
+            ),
+            (
+                "conflict",
+                api::error_code::TOOL_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT.to_string(),
+                vec![
+                    "Tool release coordinate is followed by a grant in a version-checked environment; use a new version"
+                        .to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            status_code_and_messages(
+                DeploymentWriteError::from(ToolReleaseError::ImmutableReleaseConflict).into()
+            ),
+            (
+                "conflict",
+                api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT.to_string(),
+                vec![
+                    "Tool release coordinate already exists with different immutable metadata"
+                        .to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            status_code_and_messages(
+                DeploymentWriteError::from(ToolMiddlewareReleaseError::StrictFollowingGrantConflict)
+                    .into()
+            ),
+            (
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_STRICT_FOLLOWING_GRANT_CONFLICT
+                    .to_string(),
+                vec![
+                    "ToolMiddleware release coordinate is followed by a grant in a version-checked environment; use a new version"
+                        .to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            status_code_and_messages(
+                DeploymentWriteError::from(ToolMiddlewareReleaseError::ImmutableReleaseConflict)
+                    .into()
+            ),
+            (
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT.to_string(),
+                vec![
+                    "ToolMiddleware release coordinate already exists with different immutable metadata"
+                        .to_string()
+                ]
+            )
+        );
     }
 
     #[test]
