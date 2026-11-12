@@ -25,11 +25,23 @@ pub extern "C" fn initialize_snapshot_clock() {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u32(0x5eed);
+    let environment = std::env::vars().collect::<Vec<_>>();
+    // A language runtime may also make a durable call that is not a read while it initializes.
+    if environment
+        .iter()
+        .any(|(name, _)| name == INITIALIZER_WRITE_VARIABLE)
+    {
+        std::hint::black_box(golem_rust::generate_idempotency_key());
+    }
     let _ = INITIALIZER_STATE.set(InitializerState {
         seed_hash: hasher.finish(),
-        environment_size: std::env::vars().count() as u32,
+        environment_size: environment.len() as u32,
     });
 }
+
+/// When an agent's environment holds this variable, the core initializer also generates an
+/// idempotency key, a durable call that is not a read.
+const INITIALIZER_WRITE_VARIABLE: &str = "INITIALIZER_GENERATES_IDEMPOTENCY_KEY";
 
 fn initializer_state() -> &'static InitializerState {
     INITIALIZER_STATE

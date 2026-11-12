@@ -1102,6 +1102,32 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// The automatic snapshot entries that a start of the agent rejected and stored for its
+    /// incarnation, so no later start selects them.
+    pub async fn rejected_automatic_snapshots(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<std::collections::BTreeSet<OplogIndex>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        Ok(worker_service
+            .get_rejected_periodic_snapshots(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
+            )
+            .await?
+            .into_iter()
+            .collect())
+    }
+
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
             .fail_next_oplog_download(agent_id.clone());
