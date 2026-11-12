@@ -761,7 +761,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerExecutorError::invalid_request("Invocation has no idempotency key")
         })
     }
-    pub(in crate::worker) fn ensure_component_agent_ingress(
+    pub(crate) fn ensure_component_agent_ingress(
         &self,
         operation: &str,
     ) -> Result<(), WorkerExecutorError> {
@@ -1214,11 +1214,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
     }
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
-    /// the constructor before a schedule whose commit the caller may still be repairing.
+    /// the constructor before a schedule whose commit the caller may still be repairing. A
+    /// worker that a delete has claimed gives the deletion error, as starting it would.
     pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
+        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1271,6 +1273,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Self::start_if_needed(self.clone()).await?;
         }
         Ok(())
+    }
+    /// The number of transient commands, such as file reads, listings and wallet reads, that
+    /// wait in the worker's queue.
+    #[doc(hidden)]
+    pub async fn queued_command_count_for_test(&self) -> usize {
+        self.queue.read().await.len()
     }
     pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;

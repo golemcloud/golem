@@ -1310,8 +1310,29 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
+The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
+and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
+(`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
+principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+(`CreateIntent::Create`) records its key. An invocation that creates its target
+(`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
+the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
+no key. The recorded `wasm-rpc` activation call sends the key derived from its own `Start`, so a
+repaired activation sends the same key. Later re-activations send no key and check the recorded
+fingerprint. A fork target records `Fork`, no key and the forker's principal. A self fork also
+records the forking agent's current invocation context; a fork through the worker service records a
+fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
+`AgentInitialization` with the recorded principal and context, not with the loading request's. The
+resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
+not published yet; it carries no principal or context. Tests:
+`restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
+`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`durable_rpc_activation_repeats_its_key_after_restart` in
+`tests/rpc/held_response_restart.rs`.
+
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
-interrupt, delete, resume, update, revert, and plugin changes never create an absent agent.
+interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
+reads, cancel and connect never create an absent agent.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
@@ -3116,7 +3137,8 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 
 Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
 resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
-mappings. Entity-invocation requests do not record the internal calling principal: live execution
+mappings. The target's `Create` entry records the fork request, not the source's create
+request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
 The separate execution `principal`, authority snapshot, guest inputs, recorded environment and

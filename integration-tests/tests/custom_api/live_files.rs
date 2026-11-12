@@ -122,6 +122,12 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
             .await?
             .is_none()
     );
+    for name in ["first", "second"] {
+        context
+            .user
+            .start_agent(&context.component_id, agent_id!("LiveFiles", name))
+            .await?;
+    }
     let url = context.base_url.join("/files/first/created.txt")?;
     let (first, concurrent) = tokio::join!(
         context.client.get(url.clone()).send(),
@@ -315,6 +321,11 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
         .send()
         .await?;
     assert_eq!(retained.bytes().await?, b"changed".as_slice());
+    // The constructor of `fail` traps, so creating it may report the failure.
+    let _ = context
+        .user
+        .try_start_agent(&context.component_id, agent_id!("LiveFiles", "fail"))
+        .await?;
     let response = context
         .client
         .get(context.base_url.join("/files/fail/created.txt")?)
@@ -322,6 +333,71 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
         .await?;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(!response.text().await?.contains("private"));
+    Ok(())
+}
+
+/// A live file route never creates its agent: for a key with no agent, or a deleted one, every
+/// mapping misses, the route answers 404 like an unknown file, and no agent exists afterwards.
+#[test]
+#[timeout("180s")]
+async fn mounted_live_files_of_a_missing_or_deleted_agent_are_not_found_and_create_nothing(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let context = context(deps).await?;
+    let deleted = agent(&context, "deleted");
+    context
+        .user
+        .start_agent(&context.component_id, agent_id!("LiveFiles", "deleted"))
+        .await?;
+    let served = context
+        .client
+        .get(context.base_url.join("/files/deleted/created.txt")?)
+        .send()
+        .await?;
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(served.bytes().await?, b"deleted".as_slice());
+    context.user.delete_worker(&deleted).await?;
+
+    for name in ["missing", "deleted"] {
+        assert!(
+            context
+                .user
+                .get_worker_metadata_opt(&agent(&context, name))
+                .await?
+                .is_none(),
+            "{name}"
+        );
+        // An exact mapping, a mapping with a fallback, and a file the constructor would create.
+        for (method, suffix) in [
+            (Method::GET, "created.txt"),
+            (Method::HEAD, "created.txt"),
+            (Method::GET, "alias"),
+            (Method::GET, "only.txt"),
+            (Method::GET, "ro.txt"),
+        ] {
+            let response = context
+                .client
+                .request(
+                    method.clone(),
+                    context.base_url.join(&format!("/files/{name}/{suffix}"))?,
+                )
+                .send()
+                .await?;
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{name}: {method} {suffix}"
+            );
+        }
+        assert!(
+            context
+                .user
+                .get_worker_metadata_opt(&agent(&context, name))
+                .await?
+                .is_none(),
+            "{name}: a live file read created the agent"
+        );
+    }
     Ok(())
 }
 
@@ -338,6 +414,10 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
     let expected = large_file_contents();
     for disconnect in [false, true] {
         let name = format!("large-{disconnect}");
+        context
+            .user
+            .start_agent(&context.component_id, agent_id!("LiveFiles", name.as_str()))
+            .await?;
         let domain = context.host_header.to_str()?;
         let address = ([127, 0, 0, 1], context.base_url.port().unwrap()).into();
         // Bound outer transport read-ahead as well as the gzip-compressed inner gRPC
