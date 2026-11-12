@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
+import "golem/worker/worker_id.proto";
+
+// Trusted backend context. The receipt is not an authorization secret: the target
+// also validates the recorded scheduling principal against owner_agent_id.
+message ScheduledInvocationCancellation {
+  golem.worker.AgentId owner_agent_id = 1;
+  golem.common.UUID schedule_id = 2;
+  golem.common.EnvironmentId target_environment_id = 3;
+}

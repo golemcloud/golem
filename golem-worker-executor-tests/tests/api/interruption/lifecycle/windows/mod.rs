@@ -470,13 +470,19 @@ mod activation {
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
-        let mut outcome = executor.gate_next_invocation_started(&owned).await?;
+        let lane = worker.owner_execution().lane();
+        let prebody = lane.acquire_exclusive().await;
         // Finish scheduling before suspending so an outstanding caller or retry
         // cannot issue a startup request during teardown.
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
-        outcome.entered().await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while lane.metadata().active_invocation_count == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         assert!(matches!(
             &*worker
                 .owner_runtime_resources()
@@ -495,7 +501,7 @@ mod activation {
             worker.selected_owner_failure_for_test().await,
             Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        outcome.release();
+        drop(prebody);
         assert_eq!(
             worker.selected_owner_failure_for_test().await,
             Some(ToolOwnerFailureMetadata::Lifecycle)

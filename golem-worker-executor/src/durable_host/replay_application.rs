@@ -320,14 +320,11 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                         .try_get_active_agent(&owner_id)
                         .await
                         .filter(|active| Arc::ptr_eq(&active.execution(), &execution));
-                    let winner = operations
-                        .selected_owner_failure()
-                        .expect("failure cleanup has an owner winner");
+                    let winner = cleanup.winner().clone();
                     let interrupt = task_worker.current_execution_interrupt_signal();
                     let primary_interrupt = interrupt.clone();
                     let cleanup_operations = operations.clone();
-                    let cleanup = operations.start_owner_failure_cleanup(
-                        cleanup,
+                    let cleanup = cleanup.start(
                         async move {
                             if let Some(active) = active {
                                 active.fence_entity_bodies(winner).await;

@@ -21,6 +21,7 @@ pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod caller;
 pub mod card;
 pub mod component;
 #[allow(unused_assignments)]

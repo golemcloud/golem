@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
+use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_service::WorkerService;
 use golem_worker_service::bootstrap::Services;
@@ -30,38 +31,41 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        tokio::runtime::Builder::new_multi_thread()
+        return tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(dump_openapi_yaml())
-    } else if let Some(config) = make_worker_service_config_loader().load_or_dump_config() {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("Failed to install crypto provider");
-
-        let tracer = init_tracing_with_default_env_filter(&config.tracing);
-        info!("Using configuration:\n{}", config.to_safe_string_indented());
-
-        let prometheus_registry = golem_worker_service::metrics::register_all();
-
-        let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-            .without_counter_suffixes()
-            .without_units()
-            .build();
-
-        global::set_meter_provider(
-            MeterProviderBuilder::default()
-                .with_reader(exporter)
-                .build(),
-        );
-
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(async_main(config, prometheus_registry, tracer))
-    } else {
-        Ok(())
+            .block_on(dump_openapi_yaml());
     }
+
+    let config = match make_worker_service_config_loader().load_or_dump_config()? {
+        LoadOrDump::Loaded(config) => config,
+        LoadOrDump::Dumped => return Ok(()),
+    };
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
+
+    let tracer = init_tracing_with_default_env_filter(&config.tracing);
+    info!("Using configuration:\n{}", config.to_safe_string_indented());
+
+    let prometheus_registry = golem_worker_service::metrics::register_all();
+
+    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
+        .without_counter_suffixes()
+        .without_units()
+        .build();
+
+    global::set_meter_provider(
+        MeterProviderBuilder::default()
+            .with_reader(exporter)
+            .build(),
+    );
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main(config, prometheus_registry, tracer))
 }
 
 pub async fn dump_openapi_yaml() -> anyhow::Result<()> {

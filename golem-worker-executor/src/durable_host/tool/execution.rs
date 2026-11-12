@@ -677,7 +677,7 @@ where
     );
     accepted
         .operation
-        .register_execution(Arc::downgrade(&execution));
+        .register_execution(Arc::downgrade(&execution))?;
     if accessor.with(|mut access| {
         access
             .get()
@@ -886,7 +886,7 @@ mod finalization_tests {
                 }
                 _ => panic!("cleanup replaced the committed terminal"),
             }
-            operation.settle().await;
+            operation.settle().await.unwrap();
         }
     }
 
@@ -924,9 +924,10 @@ mod finalization_tests {
                             body_execution: SerializableEntityBodyExecution::Executed,
                             result: Err(SerializableToolRpcError::Cancelled),
                         }),
-                        true,
+                        operation::TerminalResolution::Committed,
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 Ok(())
             }
         }
@@ -1002,7 +1003,7 @@ mod finalization_tests {
                         operation.winner_if_active(),
                         Some(operation::ToolOperationWinner::Trap)
                     ));
-                    operation.settle().await;
+                    operation.settle().await.unwrap();
                     Ok(())
                 },
                 errors,
@@ -1063,7 +1064,7 @@ mod finalization_tests {
                 sibling.winner_if_active(),
                 Some(operation::ToolOperationWinner::Ordinary { .. })
             ));
-            sibling.settle().await;
+            sibling.settle().await.unwrap();
         }
     }
 
@@ -1117,7 +1118,7 @@ mod finalization_tests {
                     .wait_for(|winner| matches!(winner, operation::ToolOperationWinner::Trap))
                     .await
                     .unwrap();
-                operation.settle().await;
+                operation.settle().await.unwrap();
                 Ok(())
             },
             vec![failure.into()],
@@ -1177,7 +1178,7 @@ mod finalization_tests {
                 kind: InterruptKind::ShardLost
             })
         ));
-        operation.settle().await;
+        operation.settle().await.unwrap();
     }
 
     #[test]
@@ -1205,7 +1206,7 @@ mod finalization_tests {
                 Some(operation::ToolOperationWinner::Open)
             ));
             assert!(operation.select_trap(crate::model::TrapType::Exit).await);
-            operation.settle().await;
+            operation.settle().await.unwrap();
         }
     }
 }

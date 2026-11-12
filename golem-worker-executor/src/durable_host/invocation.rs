@@ -559,7 +559,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
         hydrated: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
             payload,
@@ -613,8 +613,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let start_index = self
                 .public_state
                 .worker()
-                .oplog()
-                .add_agent_invocation_started_from_pending(
+                .start_pending_invocation(
                     idempotency_key,
                     payload,
                     stack,
@@ -627,22 +626,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         scope_card_id: scope_card.map(|card| card.scope_card_id),
                     },
                 )
-                .await
-                .map_err(|err| match err.into_refusal() {
-                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
-                    Err(err) => panic!(
-                        "could not encode agent invocation on {}: {err}",
-                        self.agent_id()
-                    ),
-                })?;
-            self.primary_invocation_start_index = Some(start_index);
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
+            let Some(start_index) = start_index else {
+                return Ok(false);
+            };
+            self.primary_invocation_start_index = Some(start_index);
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn on_agent_invocation_finished(&mut self) {

@@ -230,13 +230,13 @@ where
                 })?,
             )
             .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
-            let account_id = request
+            let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
             let invocation = AgentInvocation::ExternalTool {
-                idempotency_key: key,
+                idempotency_key: key.clone(),
                 tool_name,
                 command_path: tool.command_path.clone(),
                 input: Box::new(TypedSchemaValue::new(graph, value)),
@@ -244,25 +244,24 @@ where
                 stdout: false,
                 stderr: false,
                 activation,
-                invocation_context: context,
+                invocation_context: context.clone(),
                 principal: principal.clone(),
                 scope_card,
             };
-            self.scheduler_service()
-                .schedule(
-                    at,
-                    ScheduledAction::InvokeEphemeral {
-                        account_id,
-                        owned_agent_id: owned,
-                        invocation: Box::new(invocation),
-                        component_revision: component.revision,
-                        env: Vec::new(),
-                        config: Vec::new(),
-                        parent: request.parent(),
-                        creation_principal: Box::new(principal),
-                    },
+            let worker = self
+                .active_agents()
+                .get_or_add_ephemeral_external_tool_pinned(
+                    self,
+                    owned.component_id(),
+                    owned.environment_id,
+                    &key,
+                    component.revision,
+                    &context,
+                    principal,
                 )
-                .await;
+                .await?;
+            worker.schedule_invocation(invocation, at).await?;
+            response.agent_fingerprint = Some(worker.get_initial_worker_metadata().fingerprint);
             response.component_revision = Some(component.revision);
             publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
             return Ok(response);
@@ -324,7 +323,10 @@ where
         } else {
             None
         };
-        if !streaming && worker.lookup_invocation_result(&key).await != LookupResult::New {
+        if !streaming
+            && !(mode == Mode::Schedule && request.schedule_at.is_some())
+            && worker.lookup_invocation_result(&key).await != LookupResult::New
+        {
             publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
             if mode == Mode::Await {
                 let mut output = worker.await_enqueued_invocation(key.clone()).await?;
@@ -403,22 +405,12 @@ where
                 })?,
             )
             .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
-            let account_id = request
+            let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
-            self.scheduler_service()
-                .schedule(
-                    at,
-                    ScheduledAction::Invoke {
-                        account_id,
-                        owned_agent_id: owned,
-                        invocation: Box::new(invocation),
-                        target_worker_fingerprint: metadata.fingerprint,
-                    },
-                )
-                .await;
+            worker.schedule_invocation(invocation, at).await?;
             publish_acceptance(acceptance_committed, accepted, response.component_revision)?;
             return Ok(response);
         } else {

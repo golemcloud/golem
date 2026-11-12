@@ -26,16 +26,15 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{OwnerKind, Principal};
+use golem_common::model::agent::OwnerKind;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey,
-    RetryConfig, ShardEpoch, ShardLeaseRevision, Timestamp,
+    AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, RetryConfig, ShardEpoch,
+    ShardLeaseRevision, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1067,34 +1066,12 @@ impl SchedulerWorkerAccess for DirectAccess {
         })
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        unreachable!("the sweep never enqueues invocations")
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         _delivery: crate::services::worker_activator::ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        unreachable!("the sweep never enqueues invocations")
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
         unreachable!("the sweep never enqueues invocations")
     }
 }
