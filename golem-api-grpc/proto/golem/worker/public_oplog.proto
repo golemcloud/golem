@@ -411,6 +411,7 @@ message RetryPolicyStatePair {
 enum OplogErrorKind {
   INVOCATION = 0;
   RECOVERY = 1;
+  INVOCATION_LOCAL = 2;
 }
 
 message ErrorParameters {

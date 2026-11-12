@@ -76,6 +76,9 @@ macro_rules! oplog_entry {
 
             /// True if the oplog entry is a "hint" that should be skipped during replay
             pub fn is_hint(&self) -> bool {
+                if matches!(self, Self::Error { kind: $crate::base_model::oplog::OplogErrorKind::InvocationLocal, .. }) {
+                    return false;
+                }
                 match self {
                     $(Self::$case { .. } => $hint),*
                 }

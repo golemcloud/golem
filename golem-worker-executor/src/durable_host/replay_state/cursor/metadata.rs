@@ -391,7 +391,16 @@ impl ReplayState {
                         None
                     }
                     OplogEntry::AgentInvocationFinished { .. } => {
-                        invocation_finishes.insert(marker_idx);
+                        invocation_finishes.insert(marker_idx, None);
+                        None
+                    }
+                    OplogEntry::Error {
+                        kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
+                        retry_from,
+                        entity_parent_start_index: None,
+                        ..
+                    } => {
+                        invocation_finishes.insert(marker_idx, Some(retry_from));
                         None
                     }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -508,7 +517,7 @@ impl ReplayState {
         })
     }
 
-    /// The first visible `AgentInvocationFinished` after the cursor and before `index`. Reads
+    /// The first visible invocation terminal after the cursor and before `index`. Reads
     /// only the scanned invocation finishes, never the oplog.
     pub(in crate::durable_host::replay_state) fn invocation_finish_before(
         &self,
@@ -524,7 +533,17 @@ impl ReplayState {
             .unwrap()
             .range(after_cursor..index)
             .next()
-            .copied()
+            .map(|(index, _)| *index)
+    }
+
+    pub(crate) fn invocation_has_recorded_local_failure(&self, start: OplogIndex) -> bool {
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(start.next()..)
+            .next()
+            .is_some_and(|(_, anchor)| anchor.is_some())
     }
 
     pub(crate) fn transaction_marker(
@@ -625,7 +644,7 @@ impl ReplayState {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
                     });
-                    cursor.invocation_finishes.lock().unwrap().retain(|index| *index <= new_target);
+                    cursor.invocation_finishes.lock().unwrap().retain(|index, _| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }

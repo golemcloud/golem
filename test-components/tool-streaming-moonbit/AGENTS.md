@@ -122,7 +122,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught `raise`, abort, or panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
+A method that raises an `AgentError` fails only that invocation, without automatic retry or rollback. Earlier mutations remain, and a durable agent can run its next invocation. Constructor errors, aborts, panics and actual Wasm traps remain agent-fatal. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 
@@ -130,7 +130,8 @@ Only customize when the *strategy* needs to change (different backoff, give-up c
 
 ```
 golem.yaml                        # Root application manifest
-moon.mod.json                     # Module definition (deps, preferred-target: wasm)
+moon.mod                          # Module definition (import, preferred_target = "wasm")
+moon.work                         # Application and local dependency module directories
 moon.pkg                          # Root package config
 <component>/                      # Component package (each becomes a WASM component)
   moon.pkg                        # Package config (imports, foreign_library, link exports)
@@ -184,6 +185,10 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - `moon info` — regenerate `.mbti` interface files
 - Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change
 - Start with tests for the affected package or file; use all tests for broad or unclear impact
+- Add local modules, including generated bridges, to `moon.work`; declare their module imports in `moon.mod` and package imports in `moon.pkg`
+- The application name sets the generated module name and workspace artifact directory under `_build/wasm/<profile>/build/<module-name>/`; component namespaces may differ
+- Golem prepares dependency sources with `moon tree --package --target wasm`; do not use no-argument `moon install`
+- Published code generation uses pinned `moonx golemcloud/golem_sdk_tools/cmd@<version> --`; that release needs a registry prebuilt Wasm asset. Local SDK overrides use the sibling tools checkout instead
 
 ## Running Golem CLI commands non-interactively
 

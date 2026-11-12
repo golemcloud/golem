@@ -349,6 +349,7 @@ fn oplog_error_kind_name(
     match kind {
         OplogErrorKind::Invocation => "invocation",
         OplogErrorKind::Recovery => "recovery",
+        OplogErrorKind::InvocationLocal => "invocation-local",
     }
 }
 
@@ -1765,7 +1766,15 @@ mod tests {
 
     #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
-        for next_key in ["failed-key", "next-key"] {
+        for (next_key, kind, expected_kind) in [
+            ("failed-key", OplogErrorKind::Invocation, "invocation"),
+            ("next-key", OplogErrorKind::Invocation, "invocation"),
+            (
+                "next-key",
+                OplogErrorKind::InvocationLocal,
+                "invocation-local",
+            ),
+        ] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);
             let failed = process_entries(
@@ -1778,7 +1787,7 @@ mod tests {
                     ),
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
-                        kind: OplogErrorKind::Invocation,
+                        kind,
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
@@ -1786,6 +1795,9 @@ mod tests {
                 ],
             );
 
+            assert!(failed.log_records[0].attributes.iter().any(|attribute| {
+                attribute.key == "error.kind" && attribute.value.string_value == expected_kind
+            }));
             assert!(failed.spans.is_empty());
             assert_eq!(state.implicit_spans.len(), 1);
             assert_eq!(state.pending_spans.len(), 1);

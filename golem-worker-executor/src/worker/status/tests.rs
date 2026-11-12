@@ -1519,6 +1519,77 @@ async fn invocation_results() {
 }
 
 #[test]
+async fn invocation_local_failure_finishes_only_its_key_and_keeps_the_agent_idle() {
+    let failed = IdempotencyKey::fresh();
+    let following = IdempotencyKey::fresh();
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("fail", vec![], failed.clone())
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::InvocationLocal,
+                AgentError::InternalError("method gave up".into()),
+                OplogIndex::INITIAL,
+                None,
+            ),
+            move |mut status| {
+                status.invocation_results.insert(failed, status.oplog_idx);
+                status.current_idempotency_key = None;
+                status.status = AgentStatus::Idle;
+                status
+            },
+        )
+        .agent_invocation_started("following", vec![], following.clone())
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            following,
+            ComponentRevision::INITIAL,
+        )
+        .build();
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_state() {
+    let anchor = OplogIndex::from_u64(13);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(29),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::InvocationLocal,
+            AgentError::InternalError("method gave up".into()),
+            anchor,
+            None,
+        ),
+    )]);
+    for recovery in [false, true] {
+        let (status, kind, retries, _) = calculate_latest_worker_status(
+            AgentStatus::Retrying,
+            Some(if recovery {
+                OplogErrorKind::Recovery
+            } else {
+                OplogErrorKind::Invocation
+            }),
+            HashMap::from([(anchor, RetryPolicyState::Counter(2))]),
+            None,
+            &RetryConfig::default(),
+            &DeletedRegions::default(),
+            &DeletedRegions::default(),
+            &entries,
+        );
+        if recovery {
+            assert_eq!(status, AgentStatus::Retrying);
+            assert_eq!(kind, Some(OplogErrorKind::Recovery));
+            assert_eq!(retries.get(&anchor), Some(&RetryPolicyState::Counter(2)));
+        } else {
+            assert_eq!(status, AgentStatus::Idle);
+            assert_eq!(kind, None);
+            assert!(retries.is_empty());
+        }
+    }
+}
+
+#[test]
 async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations() {
     let completed = IdempotencyKey::fresh();
     let pending = IdempotencyKey::fresh();

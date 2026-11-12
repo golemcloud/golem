@@ -38,7 +38,7 @@ import golem.schema.AgentStreamOwnership
 import golem.tool.{ToolInputStream, ToolOutputStream}
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
-import golem.runtime.{MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
+import golem.runtime.{AgentMethodFailure, MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
@@ -171,15 +171,18 @@ object Guest {
       val scalaPrincipal                                     = PrincipalConverter.fromJs(principal)
       val onRejected: js.Function1[Any, js.Thenable[js.Any]] =
         js.Any.fromFunction1 { (err: Any) =>
-          // Only catch SDK-level errors (JsAgentError). User code errors must propagate
-          // as unhandled rejections so they become WASM traps, enabling atomic block retries.
-          if (isJsAgentError(err))
-            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
-          else
-            throw (err match {
-              case t: Throwable => t
-              case other        => js.JavaScriptException(other)
-            })
+          err match {
+            case failure: AgentMethodFailure =>
+              val cause = failure.getCause match {
+                case js.JavaScriptException(value) => value
+                case other                         => other
+              }
+              js.Promise.reject(asAgentError(cause, "custom-error")).asInstanceOf[js.Thenable[js.Any]]
+            case _ if isJsAgentError(err) =>
+              js.Promise.reject(err).asInstanceOf[js.Thenable[js.Any]]
+            case t: Throwable => throw t
+            case other        => throw js.JavaScriptException(other)
+          }
         }
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(

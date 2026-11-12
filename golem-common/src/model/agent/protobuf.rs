@@ -1099,6 +1099,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
                             golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery => {
                                 OplogErrorKind::Recovery
                             }
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::InvocationLocal => {
+                                OplogErrorKind::InvocationLocal
+                            }
                         })
                 })
                 .transpose()?,
@@ -1167,6 +1170,9 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
                 }
                 OplogErrorKind::Recovery => {
                     golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                }
+                OplogErrorKind::InvocationLocal => {
+                    golem_api_grpc::proto::golem::worker::OplogErrorKind::InvocationLocal as i32
                 }
             }),
             component_size: value.component_size,

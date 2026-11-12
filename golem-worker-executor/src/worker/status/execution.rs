@@ -43,6 +43,7 @@ pub(super) fn calculate_latest_worker_status(
                 retry_policy_state,
                 ..
             } = entry
+            && *kind != OplogErrorKind::InvocationLocal
         {
             last_error_kind = Some(*kind);
             if *kind == OplogErrorKind::Invocation
@@ -97,7 +98,11 @@ pub(super) fn calculate_latest_worker_status(
                     current_retry_state.clear();
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
+            OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Error {
+                kind: OplogErrorKind::InvocationLocal,
+                ..
+            } => {
                 current_status = AgentStatus::Idle;
                 if !unresolved_recovery {
                     last_error_kind = None;
@@ -201,8 +206,10 @@ pub(super) fn calculate_latest_worker_status(
         if unresolved_recovery
             && !matches!(
                 entry,
-                OplogEntry::Error { .. }
-                    | OplogEntry::RecoverySucceeded { .. }
+                OplogEntry::Error {
+                    kind: OplogErrorKind::Invocation | OplogErrorKind::Recovery,
+                    ..
+                } | OplogEntry::RecoverySucceeded { .. }
                     | OplogEntry::Suspend { .. }
                     | OplogEntry::Interrupted { .. }
                     | OplogEntry::Exited { .. }

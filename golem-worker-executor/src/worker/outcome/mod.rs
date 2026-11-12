@@ -191,6 +191,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!("Stored invocation success for {key}");
         self.publish_completion(key, Ok(output));
     }
+    pub(crate) async fn store_method_failure(
+        &self,
+        key: &IdempotencyKey,
+        error: AgentError,
+        finished_index: OplogIndex,
+    ) {
+        let stderr = self.worker_event_service.get_last_invocation_errors();
+        let cached = InvocationResult::Cached {
+            result: Err(FailedInvocationResult::Method {
+                error: error.clone(),
+                stderr: stderr.clone(),
+            }),
+        };
+        let status = self.last_known_status.load_full();
+        let mut map = self.hydrated_invocation_results.write().await;
+        map.release_projected_completions(&status, self.last_known_status_detached());
+        map.insert_unprojected_completion(
+            key.clone(),
+            cached,
+            status.invocation_results.revert_generation(),
+            finished_index,
+        );
+        drop(map);
+        self.external_invocation_origins.write().await.remove(key);
+        self.publish_completion(
+            key,
+            Err(WorkerExecutorError::InvocationFailed { error, stderr }),
+        );
+    }
     pub(in crate::worker) fn publish_completion(
         &self,
         key: &IdempotencyKey,
@@ -224,7 +253,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             map.insert(
                 key.clone(),
                 InvocationResult::Cached {
-                    result: Err(FailedInvocationResult {
+                    result: Err(FailedInvocationResult::Trap {
                         trap_type: trap_type.clone(),
                         stderr: stderr.clone(),
                     }),
@@ -593,8 +622,11 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
             result: Ok(values), ..
         } => LookupResult::Complete(Ok(values)),
         InvocationResult::Cached {
+            result: Err(FailedInvocationResult::Method { error, stderr }),
+        } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
+        InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
                     // and there is no terminal invocation outcome, report it as pending
@@ -612,7 +644,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         }
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
                     ..
                 }),
@@ -620,7 +652,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Interrupted,
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(_),
                     ..
                 }),
@@ -628,7 +660,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Pending,
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type:
                         TrapType::Error {
                             error: AgentError::PermissionDenied(details),
@@ -640,7 +672,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Complete(Err(WorkerExecutorError::permission_denied(details))),
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Error { error, .. },
                     stderr,
                 }),
@@ -648,7 +680,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
         InvocationResult::Cached {
             result:
-                Err(FailedInvocationResult {
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Exit,
                     ..
                 }),
@@ -825,24 +857,31 @@ impl InvocationResult {
                     })
                 }
                 OplogEntry::Error {
-                    error, retry_from, ..
+                    kind,
+                    error,
+                    retry_from,
+                    ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
-                    Err(FailedInvocationResult {
-                        trap_type: TrapType::Error {
-                            error,
-                            retry_from,
-                            semantic_trap_retry_override: None,
-                        },
-                        stderr,
+                    Err(if kind == OplogErrorKind::InvocationLocal {
+                        FailedInvocationResult::Method { error, stderr }
+                    } else {
+                        FailedInvocationResult::Trap {
+                            trap_type: TrapType::Error {
+                                error,
+                                retry_from,
+                                semantic_trap_retry_override: None,
+                            },
+                            stderr,
+                        }
                     })
                 }
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult {
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
                     stderr: "".to_string(),
                 }),
-                OplogEntry::Exited { .. } => Err(FailedInvocationResult {
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Exit,
                     stderr: "".to_string(),
                 }),

@@ -443,8 +443,9 @@ type RawInvocationWalletPin struct {
 }
 
 const (
-	OplogErrorKindInvocation uint8 = 0
-	OplogErrorKindRecovery   uint8 = 1
+	OplogErrorKindInvocation      uint8 = 0
+	OplogErrorKindRecovery        uint8 = 1
+	OplogErrorKindInvocationLocal uint8 = 2
 )
 
 type OplogErrorKind = uint8

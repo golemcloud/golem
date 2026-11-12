@@ -20,7 +20,14 @@ import golem.Principal
 import golem.FutureInterop
 import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
-import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec, WireAgentMetadata, WireImplementationMethod}
+import golem.runtime.{
+  AgentMethodFailure,
+  InputRecordCodec,
+  MethodMetadata,
+  OutputCodec,
+  WireAgentMetadata,
+  WireImplementationMethod
+}
 import golem.runtime.http.HttpMethod
 import golem.schema.{
   AgentStream,
@@ -123,7 +130,7 @@ object MethodBinding {
           case Left(err) =>
             Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
           case Right((value, head)) =>
-            handler(instance, value, principal).flatMap { out =>
+            AgentMethodFailure.capture(handler(instance, value, principal)).flatMap { out =>
               outputCodec.into match {
                 case None                  => Future.successful(None)
                 case Some(into) if rawHttp =>

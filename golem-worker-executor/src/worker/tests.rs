@@ -1273,7 +1273,7 @@ fn lookup_keeps_retrying_error_pending() {
         &status_with_current_key(AgentStatus::Retrying, &key),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1288,13 +1288,45 @@ fn lookup_keeps_retrying_error_pending() {
 }
 
 #[test]
+fn lookup_reports_method_failure_even_before_status_projection() {
+    let key = IdempotencyKey::fresh();
+    let error = AgentError::InternalError("method gave up".into());
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Idle,
+        AgentStatus::Retrying,
+    ] {
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(status, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult::Method {
+                    error: error.clone(),
+                    stderr: "method stderr".into(),
+                }),
+            },
+        );
+        match lookup {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                error: actual,
+                stderr,
+            })) => {
+                assert_eq!(actual, error);
+                assert_eq!(stderr, "method stderr");
+            }
+            other => panic!("expected method failure, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn lookup_reports_terminal_error_as_failure() {
     let key = IdempotencyKey::fresh();
     let lookup = lookup_result_from_cached_result(
         &status_with_current_key(AgentStatus::Failed, &key),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1326,7 +1358,7 @@ fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
         &status,
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("prior retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1347,7 +1379,7 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
         &AgentStatusRecord::default(),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::PermissionDenied("permission denied".to_string()),
                     retry_from: OplogIndex::from_u64(17),

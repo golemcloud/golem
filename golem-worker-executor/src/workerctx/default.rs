@@ -717,6 +717,16 @@ impl InvocationHooks for Context {
             .await
     }
 
+    async fn on_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx
+            .on_agent_method_failure(full_function_name, error)
+            .await
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,

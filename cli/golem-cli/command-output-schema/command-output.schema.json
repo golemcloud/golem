@@ -5917,7 +5917,7 @@
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
-        "kind": { "type": "string", "enum": ["invocation", "recovery"] },
+        "kind": { "type": "string", "enum": ["invocation", "recovery", "invocationLocal"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }

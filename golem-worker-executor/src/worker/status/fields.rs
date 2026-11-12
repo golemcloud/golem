@@ -658,7 +658,11 @@ pub(crate) fn fold_invocation_result_entries(
                 *cancelled_idempotency_key = None;
                 *current_idempotency_key = Some(idempotency_key.clone());
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
+            OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Error {
+                kind: OplogErrorKind::InvocationLocal,
+                ..
+            } => {
                 *cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &*current_idempotency_key {
                     observe_result(idempotency_key, *oplog_idx);

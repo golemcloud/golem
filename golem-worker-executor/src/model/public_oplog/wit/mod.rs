@@ -174,6 +174,7 @@ impl From<golem_common::model::oplog::OplogErrorKind> for oplog::OplogErrorKind 
         match value {
             golem_common::model::oplog::OplogErrorKind::Invocation => Self::Invocation,
             golem_common::model::oplog::OplogErrorKind::Recovery => Self::Recovery,
+            golem_common::model::oplog::OplogErrorKind::InvocationLocal => Self::InvocationLocal,
         }
     }
 }
@@ -183,6 +184,7 @@ impl From<oplog::OplogErrorKind> for golem_common::model::oplog::OplogErrorKind 
         match value {
             oplog::OplogErrorKind::Invocation => Self::Invocation,
             oplog::OplogErrorKind::Recovery => Self::Recovery,
+            oplog::OplogErrorKind::InvocationLocal => Self::InvocationLocal,
         }
     }
 }

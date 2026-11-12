@@ -128,7 +128,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             record_invocation(was_live_before, "restarted");
             result
         }
-        Ok(InvokeResult::Failed { .. }) => {
+        Ok(InvokeResult::Failed { .. } | InvokeResult::MethodFailed { .. }) => {
             record_invocation(was_live_before, "failed");
             result
         }
@@ -360,7 +360,9 @@ fn retain_invocation_failure(
     if !shard_lost
         && (matches!(
             result,
-            Ok(InvokeResult::Succeeded { .. } | InvokeResult::Exited { .. })
+            Ok(InvokeResult::Succeeded { .. }
+                | InvokeResult::Exited { .. }
+                | InvokeResult::MethodFailed { .. })
         ) || matches!(
             &failure,
             Ok(InvokeResult::Interrupted {
@@ -875,9 +877,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     consumed_fuel,
                     result: Box::new(AgentInvocationResult::AgentInitialization),
                 }),
-                Ok(Ok(Err(wire_err))) => {
-                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
-                }
+                Ok(Ok(Err(wire_err))) => invoke_result_from_agent_error(
+                    store,
+                    golem_common::model::agent::AgentInvocationKind::AgentInitialization,
+                    consumed_fuel,
+                    wire_err,
+                ),
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
@@ -945,9 +950,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         result: Box::new(AgentInvocationResult::AgentMethod { output }),
                     })
                 }
-                Ok(Ok(Err(wire_err))) => {
-                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
-                }
+                Ok(Ok(Err(wire_err))) => invoke_result_from_agent_error(
+                    store,
+                    golem_common::model::agent::AgentInvocationKind::AgentMethod,
+                    consumed_fuel,
+                    wire_err,
+                ),
                 Ok(Err(err))
                 | Err(GuestCallSettlementError::Interrupted(err))
                 | Err(GuestCallSettlementError::Trap(err)) => {
@@ -1202,6 +1210,7 @@ fn replay_divergence_from_trap(
 /// leaked.
 fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
+    kind: golem_common::model::agent::AgentInvocationKind,
     consumed_fuel: u64,
     wire_err: golem_agent::common::AgentError,
 ) -> Result<InvokeResult, WorkerExecutorError> {
@@ -1212,13 +1221,11 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
                     "Failed to decode agent-error from guest: {e}"
                 ))
             })?;
-    Ok(InvokeResult::Failed {
+    Ok(InvokeResult::from_agent_error(
+        kind,
         consumed_fuel,
-        timed_out: false,
-        error: OplogAgentError::InternalError(agent_error.to_string()),
-        retry_from: OplogIndex::INITIAL,
-        semantic_trap_retry_override: None,
-    })
+        agent_error,
+    ))
 }
 
 /// Decodes the optional value returned by `invoke` into the schema-native
@@ -1420,6 +1427,11 @@ pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
 pub enum InvokeResult {
     /// The invoked function exited with exit code 0
     Exited { consumed_fuel: u64 },
+    /// The method returned a decoded guest error without trapping the instance.
+    MethodFailed {
+        consumed_fuel: u64,
+        error: OplogAgentError,
+    },
     /// The invoked function has failed
     Failed {
         consumed_fuel: u64,
@@ -1447,6 +1459,28 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
+    pub fn from_agent_error(
+        kind: golem_common::model::agent::AgentInvocationKind,
+        consumed_fuel: u64,
+        error: golem_common::model::agent::AgentError,
+    ) -> Self {
+        let error = OplogAgentError::InternalError(error.to_string());
+        if kind == golem_common::model::agent::AgentInvocationKind::AgentMethod {
+            Self::MethodFailed {
+                consumed_fuel,
+                error,
+            }
+        } else {
+            Self::Failed {
+                consumed_fuel,
+                error,
+                timed_out: false,
+                retry_from: OplogIndex::INITIAL,
+                semantic_trap_retry_override: None,
+            }
+        }
+    }
+
     fn from_trap_type(consumed_fuel: u64, trap: TrapType) -> Self {
         match trap {
             TrapType::Interrupt(interrupt_kind) => Self::Interrupted {
@@ -1513,6 +1547,7 @@ impl InvokeResult {
         match self {
             InvokeResult::Exited { consumed_fuel, .. }
             | InvokeResult::Failed { consumed_fuel, .. }
+            | InvokeResult::MethodFailed { consumed_fuel, .. }
             | InvokeResult::Succeeded { consumed_fuel, .. }
             | InvokeResult::Interrupted { consumed_fuel, .. } => *consumed_fuel,
         }
@@ -2031,6 +2066,43 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn decoded_method_error_is_not_a_trap_but_constructor_error_is() {
+        use crate::workerctx::default::Context;
+        use golem_common::model::agent::{AgentError, AgentInvocationKind};
+
+        for kind in [
+            AgentInvocationKind::AgentMethod,
+            AgentInvocationKind::AgentInitialization,
+        ] {
+            let result = InvokeResult::from_agent_error(
+                kind,
+                37,
+                AgentError::InvalidInput("method gave up".into()),
+            );
+            assert_eq!(result.consumed_fuel(), 37);
+            match kind {
+                AgentInvocationKind::AgentMethod => {
+                    assert!(result.as_trap_type::<Context>().is_none());
+                    let InvokeResult::MethodFailed { error, .. } = result else {
+                        panic!("expected a method failure");
+                    };
+                    assert_eq!(
+                        error,
+                        OplogAgentError::InternalError("Invalid input: method gave up".into())
+                    );
+                }
+                _ => assert!(matches!(
+                    result.as_trap_type::<Context>(),
+                    Some(TrapType::Error {
+                        error: OplogAgentError::InternalError(_),
+                        ..
+                    })
+                )),
+            }
+        }
+    }
+
+    #[test]
     async fn finalization_selected_owner_failure_cannot_replace_later_shard_loss() {
         let operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
         assert!(
@@ -2174,6 +2246,13 @@ mod tests {
             result,
             Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
         ));
+
+        let mut result = Ok(InvokeResult::MethodFailed {
+            consumed_fuel: 11,
+            error: OplogAgentError::InternalError("method error".into()),
+        });
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
+        assert_eq!(result.unwrap_err(), WorkerExecutorError::runtime("cleanup"));
     }
 
     #[test]
