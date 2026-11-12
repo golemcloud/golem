@@ -66,6 +66,12 @@ pub(crate) fn process_entries_from(
                 let time_ns = datetime_to_nanos(&params.timestamp);
                 state.terminal_error = Some((error_msg.clone(), time_ns));
                 let error_kind = oplog_error_kind_name(&params.kind);
+                if matches!(
+                    params.kind,
+                    golem_rust::bindings::golem::api::oplog::OplogErrorKind::InvocationLocal
+                ) {
+                    finish_invocation(state, time_ns, true, &mut completed_spans, &mut metrics);
+                }
 
                 metrics.push(counter_metric(
                     "golem.error.count",
@@ -840,30 +846,8 @@ fn handle_invocation_finished(
     metrics: &mut Vec<OtlpMetric>,
 ) {
     let end_time_ns = datetime_to_nanos(&params.timestamp);
-    flush_implicit_spans(state, end_time_ns, false, completed);
-
+    finish_invocation(state, end_time_ns, false, completed, metrics);
     let time_ns = end_time_ns.to_string();
-
-    if let Some(start_ns) = state.invocation_start_ns.take() {
-        let duration_ns = end_time_ns.saturating_sub(start_ns);
-        metrics.push(OtlpMetric {
-            name: "golem.invocation.duration_ns".to_string(),
-            unit: "ns".to_string(),
-            description: "Invocation duration".to_string(),
-            sum: Some(OtlpSum {
-                aggregation_temporality: 1,
-                is_monotonic: true,
-                data_points: vec![OtlpNumberDataPoint {
-                    start_time_unix_nano: time_ns.clone(),
-                    time_unix_nano: time_ns.clone(),
-                    as_int: Some(duration_ns.to_string()),
-                    as_double: None,
-                    attributes: Vec::new(),
-                }],
-            }),
-            gauge: None,
-        });
-    }
 
     if params.consumed_fuel > 0 {
         metrics.push(OtlpMetric {
@@ -877,6 +861,36 @@ fn handle_invocation_finished(
                     start_time_unix_nano: time_ns.clone(),
                     time_unix_nano: time_ns,
                     as_int: Some(params.consumed_fuel.to_string()),
+                    as_double: None,
+                    attributes: Vec::new(),
+                }],
+            }),
+            gauge: None,
+        });
+    }
+}
+
+fn finish_invocation(
+    state: &mut WorkerState,
+    end_time_ns: u128,
+    is_error: bool,
+    completed: &mut Vec<OtlpSpan>,
+    metrics: &mut Vec<OtlpMetric>,
+) {
+    flush_implicit_spans(state, end_time_ns, is_error, completed);
+    if let Some(start_ns) = state.invocation_start_ns.take() {
+        let time_ns = end_time_ns.to_string();
+        metrics.push(OtlpMetric {
+            name: "golem.invocation.duration_ns".to_string(),
+            unit: "ns".to_string(),
+            description: "Invocation duration".to_string(),
+            sum: Some(OtlpSum {
+                aggregation_temporality: 1,
+                is_monotonic: true,
+                data_points: vec![OtlpNumberDataPoint {
+                    start_time_unix_nano: time_ns.clone(),
+                    time_unix_nano: time_ns,
+                    as_int: Some(end_time_ns.saturating_sub(start_ns).to_string()),
                     as_double: None,
                     attributes: Vec::new(),
                 }],
@@ -1765,15 +1779,75 @@ mod tests {
     }
 
     #[test]
+    fn invocation_local_failure_finishes_implicit_spans_and_duration_without_another_invocation() {
+        let mut state = state();
+        handle_span_started(&mut state, opening("explicit"), None);
+        let failed = process_entries(
+            &mut state,
+            vec![
+                invocation_started(
+                    "trace-failed",
+                    vec![local_span("failed-invocation", None, false)],
+                ),
+                OplogEntry::Error(RawErrorParameters {
+                    timestamp: instant(18, 0),
+                    kind: OplogErrorKind::InvocationLocal,
+                    error: WorkerError::Unknown("boom".to_string()),
+                    retry_from: 0,
+                    retry_policy_state: None,
+                }),
+            ],
+        );
+
+        assert_eq!(failed.spans.len(), 1);
+        assert_eq!(failed.spans[0].span_id, "failed-invocation");
+        assert_eq!(failed.spans[0].trace_id, "trace-failed");
+        assert_eq!(failed.spans[0].end_time_unix_nano, "18000000000");
+        assert_eq!(failed.spans[0].status.as_ref().unwrap().code, 2);
+        assert_eq!(
+            failed.spans[0].status.as_ref().unwrap().message.as_deref(),
+            Some("unknown: boom")
+        );
+        let duration = failed
+            .metrics
+            .iter()
+            .find(|metric| metric.name == "golem.invocation.duration_ns")
+            .unwrap();
+        let points = &duration.sum.as_ref().unwrap().data_points;
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].as_int.as_deref(), Some("6000000000"));
+        assert_eq!(points[0].time_unix_nano, "18000000000");
+        assert!(failed.log_records[0].attributes.iter().any(|attribute| {
+            attribute.key == "error.kind" && attribute.value.string_value == "invocation-local"
+        }));
+        assert!(state.invocation_start_ns.is_none());
+        assert!(state.implicit_spans.is_empty());
+        assert_eq!(state.pending_spans.len(), 1);
+
+        let later = process_entries(
+            &mut state,
+            vec![OplogEntry::End(RawEndParameters {
+                timestamp: instant(30, 0),
+                start_index: 0,
+                response: None,
+                forced_commit: false,
+                span_finished: Some(close("explicit", SpanOutcome::Completed)),
+                span_attributes: None,
+            })],
+        );
+        assert_eq!(later.spans.len(), 1);
+        assert_eq!(later.spans[0].span_id, "explicit");
+        assert_eq!(later.spans[0].trace_id, "trace-a");
+        assert!(later.spans[0].status.is_none());
+        assert!(later.metrics.is_empty());
+        assert!(state.pending_spans.is_empty());
+    }
+
+    #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
         for (next_key, kind, expected_kind) in [
             ("failed-key", OplogErrorKind::Invocation, "invocation"),
             ("next-key", OplogErrorKind::Invocation, "invocation"),
-            (
-                "next-key",
-                OplogErrorKind::InvocationLocal,
-                "invocation-local",
-            ),
         ] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);

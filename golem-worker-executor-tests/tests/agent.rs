@@ -232,6 +232,192 @@ async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
 
 #[test]
 #[timeout("2m")]
+async fn stream_method_failure_settles_active_http_tail_before_publication_and_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::{OplogEntry, OplogErrorKind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let release_body = Arc::new(tokio::sync::Notify::new());
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        let release_body = release_body.clone();
+        async move {
+            let route = axum::Router::new().route(
+                "/",
+                axum::routing::post(move || {
+                    let requests = requests.clone();
+                    let release_body = release_body.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        axum::response::Response::builder()
+                            .header("content-length", "16")
+                            .body(axum::body::Body::from_stream(futures::stream::once(
+                                async move {
+                                    release_body.notified().await;
+                                    Ok::<_, std::convert::Infallible>("effect completed")
+                                },
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RustMethodFailure", "stream-failure-tail");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "value", data_value!())
+        .await?;
+    let mut gate = executor
+        .gate_after_next_append(&worker, |entry| {
+            matches!(
+                entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::WallClockNow,
+                    ..
+                }
+            )
+        })
+        .await;
+    let key = IdempotencyKey::fresh();
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    let (_, input) = data_value!(url).into_parts();
+    let invocation = InvocationStart {
+        agent_id: Some(worker.clone().into()),
+        method_name: Some("fail_stream_after_http".to_string()),
+        input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        idempotency_key: Some(key.clone().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        attempt_id: Some(uuid::Uuid::new_v4().into()),
+        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+        ..Default::default()
+    };
+    let mut failure = Box::pin(executor.invoke_agent_session(invocation));
+    tokio::select! {
+        _ = gate.entered() => {}
+        result = &mut failure => panic!("stream invocation ended before the HTTP checkpoint: {result:?}"),
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    let queued = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(&component, &agent, &queued, "value", data_value!())
+        .await?;
+    drop(gate);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut failure)
+            .await
+            .is_err(),
+        "a method failure must not be published while its response-body work is active"
+    );
+    let held = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        held.iter().any(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "http::types::response::consume-body-chunk"
+            ) && !held.iter().any(|terminal| matches!(
+                &terminal.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+            ))
+        }),
+        "the host must be waiting for real response-body I/O"
+    );
+    assert!(!held.iter().any(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )));
+    assert!(!held.iter().any(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.idempotency_key == queued)
+    )));
+    release_body.notify_one();
+    let error = failure
+        .as_mut()
+        .await
+        .expect_err("the method must fail after settling its tail");
+    assert!(format!("{error:#}").contains("method gave up"));
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(&component, &agent, &queued, "value", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        7
+    );
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(entries.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.idempotency_key == key)
+    )).count(), 1);
+    let terminal = entries.iter().find(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )).unwrap().oplog_index;
+    let body = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "http::types::response::consume-body"
+            )
+        })
+        .unwrap()
+        .oplog_index;
+    let body_end = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::End(end) if end.start_index == body
+            )
+        })
+        .expect("the response body must have a completed durable outcome")
+        .oplog_index;
+    assert!(body_end < terminal);
+    drop(failure);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        8
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must reuse the completed HTTP effect"
+    );
+    let reconstructed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(reconstructed.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )).count(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
 async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_effects(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

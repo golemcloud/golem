@@ -930,7 +930,19 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 };
                 let interrupted = store.data().durable_ctx().is_interrupting()
                     || store.data().durable_ctx().invocation_deadline_exceeded();
-                classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
+                match classify_guest_call_settlement(
+                    store.data().agent_id(),
+                    result,
+                    None,
+                    interrupted,
+                ) {
+                    // A failed export has no stream result to materialize, but its tail
+                    // work must settle before the invocation-local terminal is published.
+                    Ok(Ok(Err(error))) => {
+                        run_guest_call_settled(store, async |_accessor| Ok(Err(error))).await
+                    }
+                    other => other,
+                }
             } else {
                 run_guest_call_settled(store, async |accessor| {
                     guest

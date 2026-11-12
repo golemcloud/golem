@@ -1,5 +1,5 @@
 use golem_rust::agentic::{
-    AgentInitiator, AgentInvocationResult, AgentTypeName, BaseAgent, DirectAgentInput,
+    AgentInitiator, AgentInvocationResult, AgentStream, AgentTypeName, BaseAgent, DirectAgentInput,
     EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor, ExtendedAgentType,
     Principal, ResolvedAgent, Schema, SnapshotData, SnapshotRestoreContext, custom_error,
     get_agent_id, get_agent_type_by_name, register_agent_initiator, register_agent_type,
@@ -55,7 +55,7 @@ impl BaseAgent for MethodFailure {
         _principal: Principal,
     ) -> Result<AgentInvocationResult, AgentError> {
         let mut input = DirectAgentInput::new(input).map_err(custom_error)?;
-        if method_name == "fail_after_http" {
+        if method_name == "fail_after_http" || method_name == "fail_stream_after_http" {
             let url = input.take::<String>().map_err(custom_error)?;
             input.finish().map_err(custom_error)?;
             let request = golem_rust::http::Request::post(url)
@@ -64,9 +64,18 @@ impl BaseAgent for MethodFailure {
             let response = golem_rust::http::send(request)
                 .await
                 .map_err(custom_error)?;
-            golem_rust::http::response_bytes(response)
-                .await
-                .map_err(custom_error)?;
+            if method_name == "fail_stream_after_http" {
+                let (started, reading) = futures::channel::oneshot::channel();
+                golem_rust::agentic::spawn_local(async move {
+                    started.send(()).unwrap();
+                    golem_rust::http::response_bytes(response).await.unwrap();
+                });
+                reading.await.map_err(custom_error)?;
+            } else {
+                golem_rust::http::response_bytes(response)
+                    .await
+                    .map_err(custom_error)?;
+            }
             let _ = std::time::SystemTime::now();
             self.fail();
             return Err(custom_error("method gave up"));
@@ -152,6 +161,7 @@ golem_rust::ctor::__support::ctor_parse!(
                     methods: [
                         "fail",
                         "fail_after_http",
+                        "fail_stream_after_http",
                         "value",
                         "increment",
                         "declared_error",
@@ -163,7 +173,9 @@ golem_rust::ctor::__support::ctor_parse!(
                         description: String::new(),
                         prompt_hint: None,
                         http_endpoint: vec![],
-                        input_schema: if name == "fail_after_http" {
+                        input_schema: if name == "fail_after_http"
+                            || name == "fail_stream_after_http"
+                        {
                             vec![(
                                 "url".into(),
                                 EnrichedParameterSchema::Value(
@@ -177,6 +189,10 @@ golem_rust::ctor::__support::ctor_parse!(
                             "return_value".into(),
                             if name == "declared_error" {
                                 <Result<i64, String>>::get_type()
+                                    .get_schema_graph()
+                                    .unwrap()
+                            } else if name == "fail_stream_after_http" {
+                                <AgentStream<String>>::get_type()
                                     .get_schema_graph()
                                     .unwrap()
                             } else {
