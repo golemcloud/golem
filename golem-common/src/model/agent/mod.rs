@@ -275,9 +275,14 @@ impl ParsedAgentKey {
         parameters: TypedSchemaValue,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, String> {
-        let parsed = Self::new(agent_type, parameters, phantom_id);
-        AgentId::validate_length(&parsed.to_string())?;
-        Ok(parsed)
+        let key = AgentKey::new(agent_type, parameters).map_err(|err| err.to_string())?;
+        let text = match phantom_id {
+            Some(phantom_id) => format!("{key}[{phantom_id}]"),
+            None => key.to_string(),
+        };
+        AgentId::validate_length(&text)?;
+        let (agent_type, parameters) = key.into_parts();
+        Ok(Self::new(agent_type, parameters, phantom_id))
     }
 
     pub fn new_auto_phantom(

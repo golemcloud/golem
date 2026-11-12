@@ -673,6 +673,16 @@ mod canonical_key_tests {
     }
 
     #[test]
+    fn agent_key_with_duplicate_map_keys_is_an_error_not_a_panic() {
+        let result = crate::schema::agent::ParsedAgentKey::try_new(
+            crate::model::agent::AgentTypeName("T".to_string()),
+            params(vec![map_type()], vec![map(&[(1, "a"), (1, "b")])]),
+            None,
+        );
+        assert_eq!(result, Err("Duplicate map key: 1".to_string()));
+    }
+
+    #[test]
     fn unsorted_map_input_parses_to_the_canonical_value() {
         let canonical = parse(r#"m[(10,"b"),(9,"a")]"#, vec![map_type()]).unwrap();
         let unsorted = parse(r#"m[(9,"a"),(10,"b")]"#, vec![map_type()]).unwrap();
