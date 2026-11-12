@@ -219,8 +219,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{

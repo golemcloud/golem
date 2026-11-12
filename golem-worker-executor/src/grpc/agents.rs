@@ -22,7 +22,9 @@ use super::{
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
-use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition};
+use golem_common::model::agent::{
+    AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
+};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -397,6 +399,54 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "idempotency_key not found",
             ))?
             .into();
+
+        if let Some(scheduled) = request.scheduled {
+            let auth: AuthCtx = request.auth_ctx.unwrap().try_into().map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("invalid auth_ctx: {error}"))
+            })?;
+            if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "schedule cancellation requires an authenticated internal caller",
+                ));
+            }
+            let owner: AgentId = scheduled
+                .owner_agent_id
+                .ok_or_else(|| WorkerExecutorError::invalid_request("owner_agent_id not found"))?
+                .try_into()
+                .map_err(WorkerExecutorError::invalid_request)?;
+            let schedule_id = ScheduleId {
+                id: scheduled
+                    .schedule_id
+                    .ok_or_else(|| WorkerExecutorError::invalid_request("schedule_id not found"))?
+                    .into(),
+            };
+            let environment: EnvironmentId = scheduled
+                .target_environment_id
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("target_environment_id not found")
+                })?
+                .try_into()
+                .map_err(WorkerExecutorError::invalid_request)?;
+            if environment != owned_agent_id.environment_id {
+                return Err(WorkerExecutorError::invalid_request(
+                    "target environment mismatch",
+                ));
+            }
+            let worker = match Worker::get_exact_existing_suspended(
+                self,
+                &owned_agent_id,
+                Principal::anonymous(),
+            )
+            .await
+            {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            return worker
+                .cancel_scheduled_invocation(idempotency_key, schedule_id, &owner)
+                .await;
+        }
 
         self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)

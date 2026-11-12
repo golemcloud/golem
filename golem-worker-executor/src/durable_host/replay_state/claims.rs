@@ -301,14 +301,14 @@ impl ReplayState {
             }
             let mut st = state.cursor.state.lock().await;
             if st.skipped_regions.is_in_deleted_region(start_index)
-                || !st.concurrent_resolver.has_claim(start_index)
+                || !st.starts.has_claim(start_index)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "claimed incomplete admission Start",
                     format!("Start {start_index} is deleted or has no pending resolver"),
                 ));
             }
-            st.concurrent_resolver.unregister_incomplete(start_index);
+            st.starts.unregister_incomplete(start_index);
             drop(st);
             state.cursor.progress.notify_waiters();
             Ok(true)

@@ -2218,6 +2218,7 @@ fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
@@ -2264,6 +2265,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
 
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: Some(IdempotencyKey::fresh()),
         manual_update_target_revision: None,

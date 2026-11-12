@@ -674,6 +674,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type PendingAgentInvocationParameters = {
     timestamp: Datetime;
     invocation: AgentInvocation;
+    notBefore?: Datetime;
   };
   export type SnapshotParameters = {
     timestamp: Datetime;
@@ -958,6 +959,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
+    notBefore?: Datetime;
     idempotencyKey: string;
     payload: OplogPayload;
     traceId: string;

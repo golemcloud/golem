@@ -24,9 +24,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .as_ref()
             .map(|interrupt| interrupt.kind)
             .unwrap_or(kind);
-        if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+        // A committed `Restart` means guest code may have run, so a restart would run it again.
+        let begun_ephemeral = self.parent.agent_mode() == AgentMode::Ephemeral
+            && matches!(kind, InterruptKind::Restart | InterruptKind::Jump)
+            && self
+                .parent
+                .get_last_known_status()
+                .await
+                .ephemeral_execution_begun;
+        if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool
+            || begun_ephemeral
+        {
             // Core initialization has already entered the executable Store. Losing it
-            // is terminal for an external owner, just as losing its invocation body is.
+            // is terminal for an ephemeral owner, just as losing its invocation body is.
             if self
                 .parent
                 .add_and_commit_oplog(OplogEntry::interrupted())
@@ -167,6 +177,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     return CreateInstanceResult::Failed;
                 }
             }
+            if self.parent.agent_mode() == AgentMode::Ephemeral {
+                match self.parent.begin_ephemeral_execution().await {
+                    Ok(EphemeralStart::Begin) => {}
+                    Ok(EphemeralStart::NotDue | EphemeralStart::Withdrawn) => {
+                        return CreateInstanceResult::NotRunnable;
+                    }
+                    Err(err) => {
+                        warn!("Failed to record the start of ephemeral execution: {err}");
+                        self.stop_startup_retired().await;
+                        return CreateInstanceResult::Failed;
+                    }
+                }
+            }
             // The start future lives on the heap to keep the invocation-loop stack small.
             match Box::pin(RunningWorker::create_instance(
                 self.parent.clone(),
@@ -246,5 +269,63 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         }
         .instrument(phase)
         .await
+    }
+}
+
+/// Whether an ephemeral start may run guest code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EphemeralStart {
+    /// The start records `Restart` and runs.
+    Begin,
+    /// Only scheduled work that is not yet due is pending; nothing may run before it is due.
+    NotDue,
+    /// A never-started agent has nothing left to run: its scheduled work was cancelled.
+    Withdrawn,
+}
+
+/// Whether an inspection may start an ephemeral agent. Starting a never-started agent runs its
+/// constructor and uses it up, so only an agent that began, or one with a method due now, may be
+/// started for an inspection; any other start would come before the agent's accepted work, such
+/// as a schedule whose commit a caller is still repairing.
+pub fn ephemeral_inspection_may_start(
+    status: &AgentStatusRecord,
+    initialization_key: &IdempotencyKey,
+    now: Timestamp,
+) -> bool {
+    status.ephemeral_execution_begun
+        || status.pending_invocations.iter().any(|pending| {
+            !pending.is_manual_update()
+                && !pending.has_idempotency_key(initialization_key)
+                && pending.is_due(now)
+        })
+}
+
+/// Decides an ephemeral start from the folded status. A begun agent keeps today's behavior. A
+/// never-started agent runs only when it has pending work and that work is not only scheduled
+/// for later: its constructor reservation alone does not make it due.
+pub fn ephemeral_start_decision(
+    status: &AgentStatusRecord,
+    initialization_key: &IdempotencyKey,
+    now: Timestamp,
+) -> EphemeralStart {
+    if status.ephemeral_execution_begun {
+        return EphemeralStart::Begin;
+    }
+    if status.pending_invocations.is_empty() {
+        return EphemeralStart::Withdrawn;
+    }
+    let scheduled = status
+        .pending_invocations
+        .iter()
+        .any(|pending| pending.not_before.is_some());
+    let due_work = status.pending_invocations.iter().any(|pending| {
+        !pending.is_manual_update()
+            && !pending.has_idempotency_key(initialization_key)
+            && pending.is_due(now)
+    });
+    if scheduled && !due_work {
+        EphemeralStart::NotDue
+    } else {
+        EphemeralStart::Begin
     }
 }

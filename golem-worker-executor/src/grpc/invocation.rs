@@ -354,6 +354,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker =
                 Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
                     .await?;
+            if !reserved {
+                Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
+                    .await?;
+            }
             Self::not_found_if_deleting(&worker, Worker::start_if_needed(worker.clone()).await)
                 .await?;
             Ok(worker)
