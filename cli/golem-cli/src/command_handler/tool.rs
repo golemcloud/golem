@@ -46,7 +46,7 @@ use golem_client::api::{
 };
 use golem_client::invocation_session::{
     InvocationSession, InvocationSessionStateSnapshot, ReconnectPolicy,
-    drive_native_tool_session_until,
+    drive_native_tool_session_with_stop,
 };
 use golem_client::model::{
     NativeToolDefinition, NativeToolDescribeRequest, NativeToolInvocationMode,
@@ -472,12 +472,17 @@ impl ToolCommandHandler {
             let cancelled = async {
                 let _ = tokio::signal::ctrl_c().await;
             };
-            let result = drive_native_tool_session_until(
+            // The view shows the key the server accepted the call under, which is the key that
+            // looks the call up.
+            let mut accepted = None;
+            let result = drive_native_tool_session_with_stop(
                 session,
                 reader.take(),
                 &mut writer,
                 &mut stderr_writer,
                 cancelled,
+                std::future::pending::<()>(),
+                |key| accepted = Some(IdempotencyKey::new(key.to_string())),
             )
             .await
             .map_err(|error| match &error {
@@ -490,7 +495,8 @@ impl ToolCommandHandler {
             })?;
             let view = ToolInvocationSessionView {
                 target: public_target,
-                idempotency_key: key,
+                idempotency_key: accepted
+                    .ok_or_else(|| anyhow!("the tool session ended without an acceptance"))?,
                 result,
             };
             let failed = public_tool_failed(&view.result);

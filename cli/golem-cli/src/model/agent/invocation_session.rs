@@ -30,6 +30,9 @@ pub struct AgentInvocationSessionEvent {
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the failed invocation wrote to stderr, for a rejection or failure of the agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +72,7 @@ impl AgentInvocationSessionEvent {
             outcome: None,
             reason: None,
             error: None,
+            stderr: None,
             stream_id: None,
             parent_stream_id: None,
             path: None,

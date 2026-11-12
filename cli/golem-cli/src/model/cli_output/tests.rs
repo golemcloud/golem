@@ -3829,6 +3829,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                 proptest::option::of(arb_small_u64()),
                 proptest::option::of(arb_json_value(1)),
             ),
+            proptest::option::of(arb_small_string()),
         )
             .prop_map(
                 |(
@@ -3838,6 +3839,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                     component_revision,
                     (outcome, reason, error, stream_id),
                     (parent_stream_id, path, offset, value),
+                    stderr,
                 )| {
                     crate::model::agent::invocation_session::AgentInvocationSessionEvent {
                         kind,
@@ -3847,6 +3849,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                         outcome,
                         reason,
                         error,
+                        stderr,
                         stream_id,
                         parent_stream_id,
                         path,

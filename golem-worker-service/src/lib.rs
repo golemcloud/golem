@@ -83,10 +83,13 @@ pub struct WorkerService {
 
 impl WorkerService {
     pub async fn new(
-        config: WorkerServiceConfig,
+        mut config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
         config.validate_http_limits().map_err(anyhow::Error::msg)?;
+        // Resolve before building the services, so the kept configuration and
+        // `Services::golem_issuer` hold the same value.
+        config.resolve_golem_issuer();
         let services: Services = Services::new(&config).await?;
 
         Ok(Self {

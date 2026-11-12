@@ -40,6 +40,42 @@ private[runtime] object StreamSessionProtocol {
       throw BridgeException(s"malformed $kind fields")
   }
 
+  /** Checks the members of a server text message and returns its type. */
+  def validateServerMessage(json: Json): String = {
+    val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    kind match {
+      case "invocationAccepted" => validate(json, kind, Set("attemptId", "idempotencyKey", "mappings", "sessionToken"))
+      case "invocationRejected" => validate(json, kind, Set("code", "message", "retryable"), Set("attemptId", "stderr"))
+      case "invocationResult" => validate(json, kind, Set("mappings", "result"))
+      case "outputStreamItem" => validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
+      case "outputStreamEnd" => validate(json, kind, Set("channel", "outcome", "sequence"), Set("cursorToken"))
+      case "inputStreamAck" => validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
+      case "streamCancel" => validate(json, kind, Set("channel", "reason"))
+      case "attachmentRevoked" => validate(json, kind, Set("reason"))
+      case "invocationFinished" => validate(json, kind, Set("outcome"))
+      case _ => throw BridgeException(s"unsupported stream session message: $kind")
+    }
+    kind
+  }
+
+  private def optionalString(json: Json, name: String): Option[String] =
+    Json.field(json, name).map(value => Json.asString(value).fold(e => throw BridgeException(e), identity))
+
+  /** Decodes a validated `invocationRejected` message into the error the caller receives. */
+  def invocationRejection(json: Json): BridgeInvocationRejectedException = {
+    val code = Json.requireField(json, "code").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    val message = Json.requireField(json, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    new BridgeInvocationRejectedException(code, message, optionalString(json, "stderr"))
+  }
+
+  /** Validates and decodes the `failure` outcome of `invocationFinished`. */
+  def invocationFailure(outcome: Json): AgentStreamError = {
+    validateObject(outcome, Set("kind", "code", "message"), "invocation outcome", Set("stderr"))
+    val code = Json.requireField(outcome, "code").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    val message = Json.requireField(outcome, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    AgentStreamError(code, message, optionalString(outcome, "stderr"))
+  }
+
   def validateMapping(json: Json): Unit = {
     val direction = Json.requireField(json, "direction").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
     val required = if (direction == "input") Set("channel", "direction", "streamToken", "inputHighWater") else Set("channel", "direction", "streamToken")

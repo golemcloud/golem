@@ -604,10 +604,10 @@ pub(super) fn calculate_update_fields(
 
 pub(super) fn calculate_invocation_results(
     invocation_results: InvocationResultMembership,
-    current_idempotency_key: Option<IdempotencyKey>,
+    requests: InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (InvocationResultMembership, Option<IdempotencyKey>) {
+) -> (InvocationResultMembership, InvocationRequests) {
     let mut invocation_results = invocation_results;
     let revert_count = entries
         .values()
@@ -618,20 +618,75 @@ pub(super) fn calculate_invocation_results(
             .revert_generation()
             .wrapping_add(revert_count),
     );
-    let mut current_idempotency_key = current_idempotency_key;
+    let mut requests = requests;
 
-    fold_invocation_result_entries(
-        &mut current_idempotency_key,
-        deleted_regions,
-        entries,
-        |key, index| invocation_results.insert(key.clone(), index),
-    );
+    fold_invocation_result_entries(&mut requests, deleted_regions, entries, |key, position| {
+        // A permission-denied `Error` names its cancelled request only when the cancellation was
+        // folded with it; otherwise the earlier fold has recorded the request.
+        let request = position.request.or_else(|| {
+            invocation_results
+                .position(key)
+                .and_then(|known| known.request)
+        });
+        invocation_results.insert(
+            key.clone(),
+            InvocationResultPosition {
+                terminal: position.terminal,
+                request,
+            },
+        )
+    });
 
-    (invocation_results, current_idempotency_key)
+    (invocation_results, requests)
 }
 
-/// Gives every invocation result in `entries` to `observe_result`, and keeps
-/// `current_idempotency_key` as the running invocation.
+/// The request entries of the invocations whose results a fold has not seen yet: the
+/// `AgentInvocationStarted` entry of the running invocation and the `PendingAgentInvocation`
+/// entries of the pending ones. A result takes the position of its request from here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, desert_rust::BinaryCodec)]
+pub struct InvocationRequests {
+    pub current: Option<IdempotencyKey>,
+    pub current_started_at: Option<OplogIndex>,
+    pub pending: HashMap<IdempotencyKey, OplogIndex>,
+    /// The last invocation cancelled before it started, with its `PendingAgentInvocation` entry.
+    /// A permission-denied `Error` can follow the cancellation and name the same invocation.
+    pub cancelled: Option<(IdempotencyKey, OplogIndex)>,
+}
+
+impl InvocationRequests {
+    /// The requests at `status`, whose pending invocations still hold their request entries.
+    pub fn of_status(status: &AgentStatusRecord) -> Self {
+        Self {
+            current: status.current_idempotency_key.clone(),
+            current_started_at: status.current_invocation_started_at,
+            pending: status
+                .pending_invocations
+                .iter()
+                .filter_map(|pending| {
+                    pending
+                        .idempotency_key
+                        .clone()
+                        .map(|key| (key, pending.oplog_index))
+                })
+                .collect(),
+            cancelled: None,
+        }
+    }
+
+    fn request_of(&self, key: &IdempotencyKey) -> Option<OplogIndex> {
+        if self.current.as_ref() == Some(key) {
+            self.current_started_at
+        } else {
+            self.cancelled
+                .as_ref()
+                .filter(|(cancelled, _)| cancelled == key)
+                .map(|(_, request)| *request)
+        }
+    }
+}
+
+/// Gives every invocation result in `entries` to `observe_result`, with the position of its
+/// request, and keeps `requests` as the running and pending invocations.
 ///
 /// `AgentInvocationFinished` entries name their invocation, so they are attributed by that name
 /// and not by their position. An invocation `Error` is attributed to the invocation it names only
@@ -640,30 +695,52 @@ pub(super) fn calculate_invocation_results(
 /// entity body, therefore never replaces a finished result. `Exited` names no invocation and is
 /// attributed to the running one.
 pub(crate) fn fold_invocation_result_entries(
-    current_idempotency_key: &mut Option<IdempotencyKey>,
+    requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    mut observe_result: impl FnMut(&IdempotencyKey, OplogIndex),
+    mut observe_result: impl FnMut(&IdempotencyKey, InvocationResultPosition),
 ) {
     for (oplog_idx, entry) in entries {
+        // Pending requests follow `calculate_pending_invocations`, which keeps them in deleted
+        // regions too.
+        let pending_request = match entry {
+            OplogEntry::PendingAgentInvocation { invocation_id, .. } => {
+                requests.pending.insert(invocation_id.clone(), *oplog_idx);
+                None
+            }
+            OplogEntry::AgentInvocationStarted { invocation_id, .. }
+            | OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                requests.pending.remove(invocation_id)
+            }
+            _ => None,
+        };
+
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
             continue;
         }
 
+        let position = |request| InvocationResultPosition {
+            terminal: *oplog_idx,
+            request,
+        };
         match entry {
             OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
-                *current_idempotency_key = Some(invocation_id.clone());
+                requests.current = Some(invocation_id.clone());
+                requests.current_started_at = Some(*oplog_idx);
             }
             OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
-                observe_result(invocation_id, *oplog_idx);
-                if current_idempotency_key.as_ref() == Some(invocation_id) {
-                    *current_idempotency_key = None;
+                observe_result(invocation_id, position(requests.request_of(invocation_id)));
+                if requests.current.as_ref() == Some(invocation_id) {
+                    requests.current = None;
+                    requests.current_started_at = None;
                 }
             }
             OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
-                if current_idempotency_key.as_ref() != Some(invocation_id) {
-                    observe_result(invocation_id, *oplog_idx);
+                if requests.current.as_ref() != Some(invocation_id) {
+                    observe_result(invocation_id, position(pending_request));
+                    requests.cancelled =
+                        pending_request.map(|request| (invocation_id.clone(), request));
                 }
             }
             OplogEntry::Error {
@@ -672,15 +749,15 @@ pub(crate) fn fold_invocation_result_entries(
                 entity_parent_start_index,
                 error,
                 ..
-            } if current_idempotency_key.as_ref() == Some(invocation_id)
+            } if requests.current.as_ref() == Some(invocation_id)
                 || (entity_parent_start_index.is_none()
                     && matches!(error, AgentError::PermissionDenied(_))) =>
             {
-                observe_result(invocation_id, *oplog_idx);
+                observe_result(invocation_id, position(requests.request_of(invocation_id)));
             }
             OplogEntry::Exited { .. } => {
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
+                if let Some(idempotency_key) = &requests.current {
+                    observe_result(idempotency_key, position(requests.current_started_at));
                 }
             }
             _ => {}

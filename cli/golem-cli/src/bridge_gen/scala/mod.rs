@@ -307,6 +307,7 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "SchemaValueCodec",
     "Json",
     "BridgeException",
+    "BridgeInvocationRejectedException",
     "GolemServer",
     "Configuration",
     "AgentId",

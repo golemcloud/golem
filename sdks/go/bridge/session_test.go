@@ -482,6 +482,61 @@ func TestARejectedCallReportsItsCode(t *testing.T) {
 	}
 }
 
+// A rejection or a failed invocation caused by the agent carries what the
+// agent wrote to stderr, and the caller sees it on the error.
+func TestAnAgentFailureReportsItsStderr(t *testing.T) {
+	failures := map[string]func(c *fakeConn, failure map[string]any){
+		"rejected": func(c *fakeConn, failure map[string]any) {
+			start := c.expect("invocationStart")
+			failure["attemptId"], failure["retryable"] = start.m["attemptId"], false
+			c.send("invocationRejected", failure)
+		},
+		"finished": func(c *fakeConn, failure map[string]any) {
+			start := c.expect("invocationStart")
+			accept(c, start, "sess")
+			failure["kind"] = "failure"
+			c.send("invocationFinished", map[string]any{"outcome": failure})
+		},
+	}
+	for name, send := range failures {
+		for _, code := range []string{"invocation-failed", "previous-invocation-failed"} {
+			t.Run(name+"/"+code, func(t *testing.T) {
+				server := newFakeServer(t, func(c *fakeConn) {
+					send(c, map[string]any{"code": code, "message": "boom", "stderr": "trace\n"})
+					c.waitClose()
+				})
+				_, err := CallStreaming(ctxT(t), server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+				var failed *SessionError
+				if !errors.As(err, &failed) || failed.Code != code || failed.Message != "boom" || failed.Stderr != "trace\n" {
+					t.Fatalf("got %#v", err)
+				}
+			})
+		}
+		t.Run(name+"/without-stderr", func(t *testing.T) {
+			server := newFakeServer(t, func(c *fakeConn) {
+				send(c, map[string]any{"code": "invocation-failed", "message": "boom"})
+				c.waitClose()
+			})
+			_, err := CallStreaming(ctxT(t), server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+			var failed *SessionError
+			if !errors.As(err, &failed) || failed.Stderr != "" {
+				t.Fatalf("got %#v", err)
+			}
+		})
+		t.Run(name+"/unknown-member", func(t *testing.T) {
+			server := newFakeServer(t, func(c *fakeConn) {
+				send(c, map[string]any{"code": "invocation-failed", "message": "boom", "stderr": "trace\n", "stdout": "x"})
+				c.waitClose()
+			})
+			_, err := CallStreaming(ctxT(t), server.agent(t), "produce", schema.RecordValue{}, DecodeStream(DecodeU32))
+			var protocol *protocolError
+			if !errors.As(err, &protocol) || !strings.Contains(protocol.Error(), `unknown member "stdout"`) {
+				t.Fatalf("got %#v", err)
+			}
+		})
+	}
+}
+
 // A routing miss before acceptance is retried as a new attempt: a new attempt
 // id and new provisional references, the same idempotency key.
 func TestARoutingMissStartsANewAttempt(t *testing.T) {

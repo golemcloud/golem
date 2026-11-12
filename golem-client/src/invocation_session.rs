@@ -2250,13 +2250,16 @@ where
         stderr,
         cancelled,
         std::future::pending::<()>(),
+        |_| {},
     )
     .await
 }
 
 /// Drives a native tool session until completion. `stop_input` cancels only the tool's stdin
 /// and the session then still waits for the result; `cancelled` cancels every open stream and
-/// returns at once.
+/// returns at once. `on_accepted` receives the accepted invocation key each time the server
+/// accepts the call, before the call runs: it is the key that cancels or looks up the call.
+#[allow(clippy::too_many_arguments)]
 pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
     mut session: InvocationSession,
     input: Option<R>,
@@ -2264,6 +2267,7 @@ pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
     stderr: &mut E,
     cancelled: C,
     stop_input: S,
+    mut on_accepted: impl FnMut(&str),
 ) -> Result<PublicInvocationResult, SessionTransportError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -2574,7 +2578,8 @@ where
                         Err(error) => return Err(error),
                     };
                     match received.frame() {
-                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { mappings, .. }) => {
+                        ServerFrame::Message(PublicServerMessage::InvocationAccepted { idempotency_key, mappings, .. }) => {
+                            on_accepted(idempotency_key);
                             stdout_channel = None;
                             stderr_channel = None;
                             for mapping in mappings {
@@ -2677,9 +2682,9 @@ where
                                         ));
                                     }
                                 }
-                                PublicInvocationOutcome::Failure { code, message } => {
+                                PublicInvocationOutcome::Failure { code, message, stderr } => {
                                     completion_failure =
-                                        Some(format!("{}: {message}", code.as_str()));
+                                        Some(failure_text(*code, message, stderr.as_deref()));
                                 }
                             }
                             finished = true;
@@ -2697,6 +2702,14 @@ where
     let _ = cancel_input.send(true);
     let _ = cancel_output.send(true);
     result
+}
+
+/// The text of a failed or rejected invocation, followed by what the agent wrote to stderr.
+fn failure_text(code: PublicErrorCode, message: &str, stderr: Option<&str>) -> String {
+    match stderr {
+        Some(stderr) => format!("{}: {message}\n{stderr}", code.as_str()),
+        None => format!("{}: {message}", code.as_str()),
+    }
 }
 
 fn admit_native_output_frame(
@@ -3568,12 +3581,18 @@ where
     match frame.frame() {
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         | ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => Ok(false),
-        ServerFrame::Message(PublicServerMessage::InvocationRejected { code, message, .. }) => {
+        ServerFrame::Message(PublicServerMessage::InvocationRejected {
+            code,
+            message,
+            stderr,
+            ..
+        }) => {
             send_generated_result(
                 result_tx,
-                Err(SessionTransportError::Protocol(format!(
-                    "{}: {message}",
-                    code.as_str()
+                Err(SessionTransportError::Protocol(failure_text(
+                    *code,
+                    message,
+                    stderr.as_deref(),
                 ))),
             );
             Ok(true)
@@ -3806,9 +3825,11 @@ where
             inputs.clear();
             let failure = match outcome {
                 PublicInvocationOutcome::Success => None,
-                PublicInvocationOutcome::Failure { code, message } => {
-                    Some(format!("{}: {message}", code.as_str()))
-                }
+                PublicInvocationOutcome::Failure {
+                    code,
+                    message,
+                    stderr,
+                } => Some(failure_text(*code, message, stderr.as_deref())),
             };
             if let Some(message) = failure {
                 send_generated_result(
@@ -4944,6 +4965,7 @@ mod tests {
                             PublicInvocationOutcome::Failure {
                                 code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                                 message: "worker failed".to_string(),
+                                stderr: None,
                             }
                         } else {
                             PublicInvocationOutcome::Success
@@ -5225,7 +5247,7 @@ mod tests {
             .send(Message::Text(
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
-                    idempotency_key: "tool-invocation-key".to_string(),
+                    idempotency_key: "accepted-tool-invocation-key".to_string(),
                     mappings: vec![
                         PublicStreamMapping {
                             channel: stdin_channel,
@@ -5386,6 +5408,7 @@ mod tests {
     /// Opens a tool session and drives it with the two signals.
     async fn open_and_drive_native_tool_session<R, W, C, S>(
         address: std::net::SocketAddr,
+        on_accepted: impl FnMut(&str),
         initial: PublicClientMessage,
         input: R,
         stdout: &mut W,
@@ -5423,6 +5446,7 @@ mod tests {
                 &mut stderr,
                 cancelled,
                 stop_input,
+                on_accepted,
             ),
         )
         .await
@@ -5452,8 +5476,10 @@ mod tests {
 
         // The writer stays alive, so the input stays open and carries no data.
         let (input, _input_writer) = tokio::io::duplex(1);
+        let mut accepted = Vec::new();
         let result = open_and_drive_native_tool_session(
             address,
+            |key| accepted.push(key.to_string()),
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5467,6 +5493,8 @@ mod tests {
             result.unwrap(),
             PublicInvocationResult::ToolSuccess { result: None }
         );
+        // The server's invocation key, not the one the client sent.
+        assert_eq!(accepted, vec!["accepted-tool-invocation-key".to_string()]);
         server.await.unwrap();
     }
 
@@ -5491,6 +5519,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5530,6 +5559,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5584,6 +5614,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5638,6 +5669,7 @@ mod tests {
 
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             tokio::io::empty(),
             &mut tokio::io::sink(),
@@ -5691,6 +5723,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout_writer,
@@ -5727,6 +5760,7 @@ mod tests {
                         code: PublicErrorCode::Unauthorized,
                         message: "invocation is not authorized".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -5739,6 +5773,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5801,6 +5836,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout_writer,
@@ -5865,6 +5901,7 @@ mod tests {
         let (input, _input_writer) = tokio::io::duplex(1);
         let result = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut tokio::io::sink(),
@@ -5947,6 +5984,7 @@ mod tests {
 
         let error = open_and_drive_native_tool_session(
             address,
+            |_| {},
             initial,
             input,
             &mut stdout,
@@ -6166,6 +6204,7 @@ mod tests {
                         outcome: PublicInvocationOutcome::Failure {
                             code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                             message: "worker failed".to_string(),
+                            stderr: None,
                         },
                         version: 1,
                     })
@@ -6355,6 +6394,7 @@ mod tests {
                         outcome: PublicInvocationOutcome::Failure {
                             code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                             message: "worker failed".to_string(),
+                            stderr: None,
                         },
                         version: 1,
                     })
@@ -7182,6 +7222,7 @@ mod tests {
                                     code: PublicErrorCode::InvalidAttachmentState,
                                     message: "old attachment remains".to_string(),
                                     retryable: second_rejection.unwrap_or(false),
+                                    stderr: None,
                                     version: 1,
                                 })
                                 .unwrap()
@@ -7710,6 +7751,7 @@ mod tests {
                         code: PublicErrorCode::ValidationError,
                         message: "rejected".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -7782,6 +7824,7 @@ mod tests {
                         code: PublicErrorCode::InputConflict,
                         message: "input conflict".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -8299,6 +8342,7 @@ mod tests {
             code: PublicErrorCode::RoutingMiss,
             message: "moving".to_string(),
             retryable: true,
+            stderr: None,
             version: 1,
         }
     }

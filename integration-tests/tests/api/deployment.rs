@@ -2214,3 +2214,55 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
 
     Ok(())
 }
+
+#[test]
+#[timeout("5m")]
+#[tracing::instrument]
+async fn tool_middleware_lookup_with_invalid_name_keeps_registry_serving(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+    let deployment = user.deploy_environment(env.id).await?;
+
+    let service = deps.registry_service();
+    let raw_client = service.base_http_client().await;
+    let base_url = format!(
+        "http://{}:{}/v1/envs/{}/deployments/{}/tool-middlewares",
+        service.http_host(),
+        service.http_port(),
+        env.id.0,
+        deployment.revision
+    );
+
+    // A name that breaks the tool-name rules must not stop the registry process.
+    let invalid = raw_client
+        .get(format!("{base_url}/Audit_Log"))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert!(
+        invalid.status().is_client_error(),
+        "unexpected status {}",
+        invalid.status()
+    );
+
+    // A valid name that the deployment does not hold used to reach the panicking branch.
+    let absent = raw_client
+        .get(format!("{base_url}/audit-log"))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(absent.status(), reqwest::StatusCode::NOT_FOUND);
+    let absent: serde_json::Value = absent.json().await?;
+    assert_eq!(absent["code"], "TOOL_NOT_FOUND");
+
+    let list = raw_client
+        .get(&base_url)
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(list.status(), reqwest::StatusCode::OK);
+
+    Ok(())
+}

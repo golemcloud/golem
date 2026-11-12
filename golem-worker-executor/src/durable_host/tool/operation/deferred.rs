@@ -158,8 +158,7 @@ impl DeferredAdmissionTable {
             return false;
         };
         if entry.readiness != expected_readiness
-            || !operation
-                .transition_admission(expected_admission, BodyAdmissionState::SettledWithoutBody)
+            || !operation.settle_without_body(expected_admission)
         {
             return false;
         }
@@ -233,36 +232,34 @@ impl DeferredAdmissionTable {
         };
         let starts = starts
             .into_iter()
-            .filter(|start| {
-                entries
-                    .get(start)
-                    .is_some_and(|entry| entry.cohort.is_none_or(|assigned| assigned == cohort))
+            .filter_map(|start| {
+                let entry = entries.get_mut(&start)?;
+                if entry.cohort.is_some_and(|assigned| assigned != cohort) {
+                    return None;
+                }
+                entry.cohort = Some(cohort);
+                Some((start, entry.readiness))
             })
             .collect::<Vec<_>>();
-        for start in &starts {
-            let entry = entries
-                .get_mut(start)
-                .expect("filtered deferred admission must remain present");
-            entry.cohort = Some(cohort);
-        }
-        let Some(earliest_requested) = starts.iter().min().copied() else {
+        let Some(earliest_requested) = starts.iter().map(|(start, _)| *start).min() else {
             return Some(Ok(R::default()));
         };
         if entries.range(..earliest_requested).any(|(_, entry)| {
             entry.cohort.is_some() && entry.readiness == DeferredAdmissionReadiness::Staging
         }) || starts
             .iter()
-            .any(|start| entries[start].readiness == DeferredAdmissionReadiness::Staging)
+            .any(|(_, readiness)| *readiness == DeferredAdmissionReadiness::Staging)
         {
             return None;
         }
 
-        let mut released = starts;
-        released.sort_unstable();
-        let released = released
+        let mut released = starts
             .into_iter()
-            .filter(|start| entries[start].readiness == DeferredAdmissionReadiness::Ready)
+            .filter_map(|(start, readiness)| {
+                (readiness == DeferredAdmissionReadiness::Ready).then_some(start)
+            })
             .collect::<Vec<_>>();
+        released.sort_unstable();
         let claimed = match claim(&released) {
             Ok(claimed) => claimed,
             Err(error) => return Some(Err(error)),

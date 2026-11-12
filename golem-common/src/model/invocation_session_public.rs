@@ -81,6 +81,9 @@ pub enum PublicErrorCode {
     ResourceExhausted,
     ProducerError,
     InvocationFailed,
+    /// The agent's previous invocation failed, so the agent accepts no invocation until an
+    /// operator reverts or resumes it.
+    PreviousInvocationFailed,
     /// The executor that answered does not own this agent's shard right now: the assignment is
     /// moving, or one of its writes was fenced by the shard's new owner. Nothing is wrong with the
     /// request, and a client that retries reaches the new owner - which is why this is not
@@ -117,6 +120,7 @@ impl PublicErrorCode {
             Self::ResourceExhausted => "resource-exhausted",
             Self::ProducerError => "producer-error",
             Self::InvocationFailed => "invocation-failed",
+            Self::PreviousInvocationFailed => "previous-invocation-failed",
             Self::RoutingMiss => "routing-miss",
             Self::InternalError => "internal-error",
         }
@@ -172,6 +176,7 @@ const ALL_ERROR_CODES: &[PublicErrorCode] = &[
     PublicErrorCode::ResourceExhausted,
     PublicErrorCode::ProducerError,
     PublicErrorCode::InvocationFailed,
+    PublicErrorCode::PreviousInvocationFailed,
     PublicErrorCode::RoutingMiss,
     PublicErrorCode::InternalError,
 ];
@@ -448,6 +453,9 @@ pub enum PublicInvocationOutcome {
     Failure {
         code: PublicErrorCode,
         message: String,
+        /// What the failed invocation wrote to stderr, for a failure of the agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stderr: Option<String>,
     },
 }
 
@@ -472,6 +480,10 @@ pub enum PublicServerMessage {
         code: PublicErrorCode,
         message: String,
         retryable: bool,
+        /// What the failed invocation wrote to stderr, for a rejection caused by a failure of
+        /// the agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stderr: Option<String>,
         version: u8,
     },
     #[serde(rename = "invocationResult")]

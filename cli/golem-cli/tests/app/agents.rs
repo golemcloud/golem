@@ -5712,10 +5712,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         ])
         .await;
     assert!(!outputs.success());
-    assert!(
-        outputs
-            .stderr_contains("Agent Service - Error: 500 Internal Server Error, Invocation Failed")
-    );
+    assert!(outputs.stderr_contains("Invocation Failed (invocation-failed)"));
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.

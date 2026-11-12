@@ -124,6 +124,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     invocation: crate::worker::HydratedInvocation,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -136,7 +137,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
     .instrument(span!(Level::INFO, "on_agent_invocation_started"))
     .await;
     match started {
-        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance)
+        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance, stream_session)
             .await
             .map(Some),
         Ok(false) => {
@@ -160,6 +161,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
 /// - `lowered`: the lowered invocation describing what to invoke
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
+/// - `stream_session`: the session to materialize before ending the invocation scope
 ///
 /// Pending live invocations must first pass admission through
 /// [`invoke_live_observed_and_traced`]. Replay and snapshot calls need no pending admission.
@@ -167,11 +169,12 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance).await;
+    let result = invoke_observed(lowered, &mut store, instance, stream_session).await;
 
     match &result {
         Err(_) => {
@@ -217,6 +220,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -281,7 +285,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let durable_ctx = store.data_mut().durable_ctx_mut();
     durable_ctx.set_invocation_principal(invocation_principal);
     durable_ctx.set_invocation_id(call.has_invocation_id());
-    let call_future = dispatch_call(&mut store, instance, call, &display_name);
+    let call_future = async {
+        let result = dispatch_call(&mut store, instance, call, &display_name).await;
+        // Returning a stream handle does not end its producer's invocation. Keep its
+        // authority and lane registration until production and tail work settle.
+        if let Some(idempotency_key) = stream_session {
+            materialize_streaming_result(&mut store, result, &display_name, idempotency_key).await
+        } else {
+            result
+        }
+    };
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
@@ -422,7 +435,7 @@ fn retain_invocation_failure(
 
 /// Publishes the early stream-bearing result and drives its producers to completion.
 /// Live execution and replay use the same trap classification as the guest export.
-pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
+async fn materialize_streaming_result<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     result: Result<InvokeResult, WorkerExecutorError>,
     display_name: &str,
