@@ -19,9 +19,14 @@
 /// its reconnect window: `endpoint` is the WebSocket URL, `window_ms` the
 /// window, and `last_cause` the last failure, such as the HTTP status of a
 /// refused upgrade, a retryable rejection, or a connection error.
+/// `InvocationFailed` is a streaming call that the server reports as a failure
+/// of the agent, in a rejection or in the outcome of the finished invocation:
+/// `code` is `invocation-failed` or `previous-invocation-failed`, `message` the
+/// agent's error text, and `stderr` what the agent wrote to stderr, if anything.
 pub(all) suberror BridgeError {
   BridgeError(String)
   Unreachable(endpoint~ : String, window_ms~ : Int32, last_cause~ : String)
+  InvocationFailed(code~ : String, message~ : String, stderr~ : String?)
 } derive(Debug, Eq)
 
 ///|

@@ -2063,6 +2063,13 @@ mod tests {
         ));
     }
 
+    fn result_at(terminal: OplogIndex) -> golem_common::model::InvocationResultPosition {
+        golem_common::model::InvocationResultPosition {
+            terminal,
+            request: None,
+        }
+    }
+
     #[test]
     fn invocation_admission_rejects_same_key_or_result_branch_changes() {
         let key = IdempotencyKey::fresh();
@@ -2090,7 +2097,7 @@ mod tests {
         status.current_idempotency_key = None;
         status
             .invocation_results
-            .insert(IdempotencyKey::fresh(), OplogIndex::INITIAL);
+            .insert(IdempotencyKey::fresh(), result_at(OplogIndex::INITIAL));
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2100,7 +2107,7 @@ mod tests {
 
         status
             .invocation_results
-            .insert(key.clone(), OplogIndex::from_u64(2));
+            .insert(key.clone(), result_at(OplogIndex::from_u64(2)));
         let key_result_generation = status.invocation_results.change_generation();
         assert!(!can_append_invocation(
             &status,

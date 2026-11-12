@@ -237,14 +237,25 @@ impl Default for InvocationResultBloom {
 // switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
 const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
 
+/// Where an invocation result lies in the oplog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct InvocationResultPosition {
+    /// The entry that holds the result.
+    pub terminal: OplogIndex,
+    /// The `AgentInvocationStarted` or `PendingAgentInvocation` entry that holds the accepted
+    /// request, so a duplicate request is compared with it without searching the oplog. `None`
+    /// when the fold that found the result did not see the request.
+    pub request: Option<OplogIndex>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 enum InvocationResultMembershipState {
     Exact {
-        by_key: OrdMap<IdempotencyKey, OplogIndex>,
+        by_key: OrdMap<IdempotencyKey, InvocationResultPosition>,
         key_bytes: usize,
     },
     Indexed {
-        recent_by_key: OrdMap<IdempotencyKey, OplogIndex>,
+        recent_by_key: OrdMap<IdempotencyKey, InvocationResultPosition>,
         recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
         bloom: InvocationResultBloom,
     },
@@ -280,6 +291,10 @@ impl InvocationResultMembership {
     }
 
     pub fn get(&self, key: &IdempotencyKey) -> Option<&OplogIndex> {
+        self.position(key).map(|position| &position.terminal)
+    }
+
+    pub fn position(&self, key: &IdempotencyKey) -> Option<&InvocationResultPosition> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.get(key),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => {
@@ -292,14 +307,14 @@ impl InvocationResultMembership {
         self.get(key).is_some()
     }
 
-    pub fn insert(&mut self, key: IdempotencyKey, result_index: OplogIndex) {
+    pub fn insert(&mut self, key: IdempotencyKey, position: InvocationResultPosition) {
         self.change_generation = self.change_generation.wrapping_add(1);
         match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
                 if !by_key.contains_key(&key) {
                     *key_bytes = key_bytes.saturating_add(key.value.len());
                 }
-                by_key.insert(key, result_index);
+                by_key.insert(key, position);
                 self.promote_if_needed();
             }
             InvocationResultMembershipState::Indexed {
@@ -308,11 +323,11 @@ impl InvocationResultMembership {
                 bloom,
             } => {
                 bloom.insert(&key);
-                if let Some(previous_index) = recent_by_key.remove(&key) {
-                    recent_by_index.remove(&previous_index);
+                if let Some(previous) = recent_by_key.remove(&key) {
+                    recent_by_index.remove(&previous.terminal);
                 }
-                recent_by_key.insert(key.clone(), result_index);
-                recent_by_index.insert(result_index, key);
+                recent_by_key.insert(key.clone(), position);
+                recent_by_index.insert(position.terminal, key);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
         }
@@ -331,7 +346,9 @@ impl InvocationResultMembership {
 
     pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
         match &self.state {
-            InvocationResultMembershipState::Exact { by_key, .. } => by_key.values().copied().min(),
+            InvocationResultMembershipState::Exact { by_key, .. } => {
+                by_key.values().map(|position| position.terminal).min()
+            }
             InvocationResultMembershipState::Indexed {
                 recent_by_index, ..
             } => recent_by_index.get_min().map(|(index, _)| *index),
@@ -355,7 +372,7 @@ impl InvocationResultMembership {
         self.revert_generation = generation;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &OplogIndex)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &InvocationResultPosition)> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.iter(),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.iter(),
@@ -380,25 +397,25 @@ impl InvocationResultMembership {
         self.len() == 0
     }
 
-    pub fn remove(&mut self, key: &IdempotencyKey) -> Option<OplogIndex> {
-        let index = match &mut self.state {
+    pub fn remove(&mut self, key: &IdempotencyKey) -> Option<InvocationResultPosition> {
+        let position = match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
-                let index = by_key.remove(key)?;
+                let position = by_key.remove(key)?;
                 *key_bytes = key_bytes.saturating_sub(key.value.len());
-                index
+                position
             }
             InvocationResultMembershipState::Indexed {
                 recent_by_key,
                 recent_by_index,
                 ..
             } => {
-                let index = recent_by_key.remove(key)?;
-                recent_by_index.remove(&index);
-                index
+                let position = recent_by_key.remove(key)?;
+                recent_by_index.remove(&position.terminal);
+                position
             }
         };
         self.change_generation = self.change_generation.wrapping_add(1);
-        Some(index)
+        Some(position)
     }
 
     fn promote_if_needed(&mut self) {
@@ -426,17 +443,17 @@ impl InvocationResultMembership {
         let mut bloom = InvocationResultBloom::new(self.bloom_bits, self.bloom_hashes);
         let mut by_index: Vec<_> = by_key
             .iter()
-            .map(|(key, index)| {
+            .map(|(key, position)| {
                 bloom.insert(key);
-                (*index, key.clone())
+                (*position, key.clone())
             })
             .collect();
-        by_index.sort_unstable_by_key(|(index, _)| *index);
+        by_index.sort_unstable_by_key(|(position, _)| position.terminal);
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
-        for (index, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_key.insert(key.clone(), index);
-            recent_by_index.insert(index, key);
+        for (position, key) in by_index.into_iter().rev().take(self.capacity) {
+            recent_by_key.insert(key.clone(), position);
+            recent_by_index.insert(position.terminal, key);
         }
         self.state = InvocationResultMembershipState::Indexed {
             recent_by_key,
@@ -447,7 +464,7 @@ impl InvocationResultMembership {
 
     fn truncate_recent(
         capacity: usize,
-        recent_by_key: &mut OrdMap<IdempotencyKey, OplogIndex>,
+        recent_by_key: &mut OrdMap<IdempotencyKey, InvocationResultPosition>,
         recent_by_index: &mut OrdMap<OplogIndex, IdempotencyKey>,
     ) {
         while recent_by_key.len() > capacity {
@@ -586,6 +603,8 @@ pub struct AgentStatusRecord {
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
+    /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
+    pub current_invocation_started_at: Option<OplogIndex>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -653,6 +672,7 @@ impl Default for AgentStatusRecord {
             ephemeral_execution_begun: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
+            current_invocation_started_at: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,

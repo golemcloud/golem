@@ -361,6 +361,13 @@ fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntr
     entries
 }
 
+fn result_at(terminal: u64) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+    }
+}
+
 fn invocation_status(
     oplog_idx: u64,
     capacity: usize,
@@ -370,7 +377,7 @@ fn invocation_status(
 ) -> AgentStatusRecord {
     let mut invocation_results = InvocationResultMembership::new(capacity, 128, 3);
     for (key, index) in results {
-        invocation_results.insert((*key).clone(), OplogIndex::from_u64(*index));
+        invocation_results.insert((*key).clone(), result_at(*index));
     }
     invocation_results.set_revert_generation(revert_generation);
     AgentStatusRecord {
@@ -885,10 +892,10 @@ fn sample_status() -> AgentStatusRecord {
     };
     status
         .invocation_results
-        .insert(idempotency_key("k1"), OplogIndex::from_u64(10));
+        .insert(idempotency_key("k1"), result_at(10));
     status
         .invocation_results
-        .insert(idempotency_key("k2"), OplogIndex::from_u64(20));
+        .insert(idempotency_key("k2"), result_at(20));
     status.received_card_transfers.insert(
         transfer_id(1),
         ReceivedCardTransferState::Received {
@@ -1055,7 +1062,7 @@ fn hot_delta_only_writes_changed_fields() {
     let mut new = previous.clone();
     new.oplog_idx = OplogIndex::from_u64(50);
     new.invocation_results
-        .insert(idempotency_key("k3"), OplogIndex::from_u64(48));
+        .insert(idempotency_key("k3"), result_at(48));
 
     let mut core = new.clone();
     let parts = split_status(&mut core);
@@ -1224,7 +1231,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
     assert_eq!(
         service
@@ -1236,7 +1243,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 
@@ -1305,7 +1312,7 @@ async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
 }
 
@@ -1464,7 +1471,7 @@ async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result()
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 
@@ -1541,7 +1548,7 @@ async fn independent_catch_up_cannot_publish_over_newer_generation() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(6))
+        InvocationResultIndexLookup::Found(result_at(6))
     );
     assert_eq!(
         new_service
@@ -1582,7 +1589,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
     let mut malformed_metadata = serialize(&InvocationResultIndexMetadata {
         covered_through: OplogIndex::from_u64(2),
         revert_generation: 0,
-        current_idempotency_key: None,
+        requests: InvocationRequests::default(),
     })
     .unwrap();
     malformed_metadata.pop();
@@ -1660,7 +1667,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
 }
 
@@ -1745,7 +1752,7 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(6))
+        InvocationResultIndexLookup::Found(result_at(6))
     );
     let fields = service
         .key_value_storage

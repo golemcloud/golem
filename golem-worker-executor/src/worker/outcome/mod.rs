@@ -346,9 +346,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
-    /// Finds the accepted caller payload in retained history. Result indexes point at terminals,
-    /// so completed requests walk backwards from that terminal to their recorded start. No
-    /// resident request table is needed, including after index eviction or reconstruction.
+    /// Finds the accepted caller payload. A pending request is read from its pending entry. A
+    /// running or finished one is read from the request entry its status or result index holds,
+    /// so a duplicate request reads one entry however long the invocation ran.
     pub(in crate::worker) async fn accepted_invocation_payload(
         &self,
         key: &IdempotencyKey,
@@ -367,66 +367,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .1,
             ));
         }
-        let terminal = if let Some(index) = status.invocation_results.get(key) {
-            Some(*index)
+        let position = if let Some(position) = status.invocation_results.position(key) {
+            Some(*position)
         } else if status.invocation_results.might_contain(key) {
             self.resolve_old_invocation_result_index(&status, key)
                 .await?
         } else {
             None
         };
-        if terminal.is_none() && status.current_idempotency_key.as_ref() != Some(key) {
-            return Ok(None);
-        }
-        let mut last = terminal.unwrap_or(status.oplog_idx).as_u64();
-        let chunk_size = self
-            .deps
-            .config()
-            .invocation_results
-            .physical_index_catch_up_chunk_size
-            .max(1);
-        while last >= OplogIndex::INITIAL.as_u64() {
-            let first = last
-                .saturating_sub(chunk_size - 1)
-                .max(OplogIndex::INITIAL.as_u64());
-            // The handle also sees an ephemeral writer's handed-off but not yet stored tail.
-            let entries = self
+        let request = match position {
+            Some(position) => position.request,
+            None if status.current_idempotency_key.as_ref() == Some(key) => {
+                status.current_invocation_started_at
+            }
+            None => return Ok(None),
+        };
+        let request = request.ok_or_else(|| {
+            WorkerExecutorError::runtime("accepted invocation has no indexed request entry")
+        })?;
+        // The handle also sees an ephemeral writer's handed-off but not yet stored tail.
+        let entries = self.oplog.read_exact(request, 1).await?;
+        match entries.get(&request) {
+            Some(
+                OplogEntry::PendingAgentInvocation {
+                    invocation_id,
+                    payload,
+                    ..
+                }
+                | OplogEntry::AgentInvocationStarted {
+                    invocation_id,
+                    payload,
+                    ..
+                },
+            ) if invocation_id == key => self
                 .oplog
-                .read_exact(OplogIndex::from_u64(first), last - first + 1)
-                .await?;
-            for (index, entry) in entries.iter().rev() {
-                if status.deleted_regions.is_in_deleted_region(*index) {
-                    continue;
-                }
-                match entry {
-                    OplogEntry::PendingAgentInvocation {
-                        invocation_id: idempotency_key,
-                        payload,
-                        ..
-                    }
-                    | OplogEntry::AgentInvocationStarted {
-                        invocation_id: idempotency_key,
-                        payload,
-                        ..
-                    } if idempotency_key == key => {
-                        return self
-                            .oplog
-                            .download_payload(payload.clone())
-                            .await
-                            .map(Some)
-                            .map_err(WorkerExecutorError::runtime);
-                    }
-                    _ => {}
-                }
-            }
-            if first == OplogIndex::INITIAL.as_u64() {
-                break;
-            }
-            last = first - 1;
+                .download_payload(payload.clone())
+                .await
+                .map(Some)
+                .map_err(WorkerExecutorError::runtime),
+            _ => Err(WorkerExecutorError::runtime(
+                "indexed request entry does not hold the accepted invocation",
+            )),
         }
-        Err(WorkerExecutorError::runtime(
-            "accepted invocation has no retained request payload",
-        ))
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
@@ -461,8 +443,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             // An oplog that does not read is not a miss: the key may well have a result there.
             match self.resolve_old_invocation_result_index(&status, key).await {
-                Ok(oplog_idx) => oplog_idx
-                    .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx)),
+                Ok(position) => position.map(|position| {
+                    let oplog_idx = position.terminal;
+                    (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx)
+                }),
                 Err(error) => return LookupResult::Complete(Err(error.into())),
             }
         };
@@ -503,7 +487,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
-    ) -> Result<Option<OplogIndex>, UnreadableOplog> {
+    ) -> Result<Option<InvocationResultPosition>, UnreadableOplog> {
         let worker_service = self.deps.worker_service();
         let lookup = worker_service
             .lookup_invocation_result_index(
@@ -559,7 +543,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         crate::metrics::workers::record_invocation_result_resolution("oplog_fallback");
-        let mut current_idempotency_key = None;
+        let mut requests = InvocationRequests::default();
         let mut result = None;
         let mut first = OplogIndex::INITIAL;
         let chunk_size = self
@@ -579,12 +563,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 break;
             }
             fold_invocation_result_entries(
-                &mut current_idempotency_key,
+                &mut requests,
                 &status.deleted_regions,
                 &entries,
-                |candidate, index| {
+                |candidate, position| {
                     if candidate == key {
-                        result = Some(index);
+                        result = Some(position);
                     }
                 },
             );

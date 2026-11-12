@@ -2858,6 +2858,76 @@ test('retryable rejections past the window are unreachable', async () => {
   }
 });
 
+test('agent failures surface stderr and still reject unknown members', async () => {
+  const rejection = (start, extra = {}) => ({
+    version: 1,
+    type: 'invocationRejected',
+    attemptId: start.attemptId,
+    code: 'previous-invocation-failed',
+    message: 'intentional invocation failure',
+    retryable: false,
+    stderr: 'rejection stderr\n',
+    ...extra,
+  });
+  const failure = (extra = {}) => ({
+    version: 1,
+    type: 'invocationFinished',
+    outcome: {
+      kind: 'failure',
+      code: 'invocation-failed',
+      message: 'intentional invocation failure',
+      stderr: 'failure stderr\n',
+      ...extra,
+    },
+  });
+  const cases = [
+    {
+      reply: (start) => [rejection(start)],
+      expected: { code: 'previous-invocation-failed', stderr: 'rejection stderr\n' },
+    },
+    {
+      reply: (start) => [accepted(start), failure()],
+      expected: { code: 'invocation-failed', stderr: 'failure stderr\n' },
+    },
+    {
+      reply: (start) => [rejection(start, { stderr: undefined })],
+      expected: { code: 'previous-invocation-failed', stderr: undefined },
+    },
+    {
+      reply: (start) => [rejection(start, { extra: 'unknown' })],
+      expected: { code: 'malformed-message', stderr: undefined },
+    },
+    {
+      reply: (start) => [accepted(start), failure({ extra: 'unknown' })],
+      expected: { code: 'malformed-message', stderr: undefined },
+    },
+    {
+      reply: (start) => [rejection(start, { stderr: 7 })],
+      expected: { code: 'malformed-message', stderr: undefined },
+    },
+  ];
+  for (const { reply, expected } of cases) {
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        for (const message of reply(JSON.parse(data))) socket.send(JSON.stringify(message));
+      });
+    });
+    try {
+      const error = await plainMethod({ server: local.endpoint })().then(
+        () => assert.fail('a failed invocation succeeded'),
+        (error) => error,
+      );
+      assert.ok(error instanceof StreamingProtocolError, String(error));
+      assert.equal(error.code, expected.code);
+      assert.equal(error.stderr, expected.stderr);
+      if (expected.stderr !== undefined)
+        assert.equal(error.message, 'intentional invocation failure');
+    } finally {
+      await local.close();
+    }
+  }
+});
+
 test('a start the server never answers is unreachable after the window', async () => {
   let connections = 0;
   const local = await server(() => {

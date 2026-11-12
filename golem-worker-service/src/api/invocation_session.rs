@@ -29,6 +29,7 @@ use crate::service::worker::{
 };
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
@@ -82,6 +83,7 @@ const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 const INPUT_BYTE_BUDGET: usize = SESSION_BYTE_BUDGET - OUTPUT_BYTE_BUDGET;
 const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
+const MAX_FAILURE_STDERR_BYTES: usize = 1024 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
@@ -1164,6 +1166,7 @@ async fn serve_session_messages(
                     code,
                     message,
                     retryable: false,
+                    stderr: None,
                     version: 1,
                 },
             )
@@ -2062,6 +2065,7 @@ async fn fail_session(
             outcome: PublicInvocationOutcome::Failure {
                 code,
                 message: safe_rejection_message(code),
+                stderr: None,
             },
             version: 1,
         },
@@ -2116,8 +2120,16 @@ async fn translate_private_response(
                 worker_error = ?rejected.worker_error,
                 "Private invocation session response was rejected"
             );
-            Ok(vec![frame(text_message(
-                &PublicServerMessage::InvocationRejected {
+            let message = match agent_failure(rejected.worker_error.as_ref()) {
+                Some(failure) => PublicServerMessage::InvocationRejected {
+                    attempt_id: Some(attempt_id),
+                    code: failure.code,
+                    message: failure.message,
+                    retryable: false,
+                    stderr: failure.stderr,
+                    version: 1,
+                },
+                None => PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
                     code,
                     message: safe_rejection_message(code),
@@ -2125,9 +2137,11 @@ async fn translate_private_response(
                         code,
                         PublicErrorCode::ResourceExhausted | PublicErrorCode::RoutingMiss
                     ),
+                    stderr: None,
                     version: 1,
                 },
-            )?)])
+            };
+            Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Result(result) => {
             translate_result(&mut state, result, keyring)
@@ -2227,9 +2241,17 @@ async fn translate_private_response(
                         worker_error = ?failure.worker_error,
                         "Invocation session finished with failure"
                     );
-                    PublicInvocationOutcome::Failure {
-                        code: PublicErrorCode::InvocationFailed,
-                        message: "invocation failed".to_string(),
+                    match agent_failure(failure.worker_error.as_ref()) {
+                        Some(failure) => PublicInvocationOutcome::Failure {
+                            code: failure.code,
+                            message: failure.message,
+                            stderr: failure.stderr,
+                        },
+                        None => PublicInvocationOutcome::Failure {
+                            code: PublicErrorCode::InvocationFailed,
+                            message: "invocation failed".to_string(),
+                            stderr: None,
+                        },
                     }
                 }
                 None => {
@@ -2240,6 +2262,7 @@ async fn translate_private_response(
                     PublicInvocationOutcome::Failure {
                         code: PublicErrorCode::InvocationFailed,
                         message: "invocation failed".to_string(),
+                        stderr: None,
                     }
                 }
             };
@@ -2930,6 +2953,46 @@ fn is_routing_miss(rejected: &InvocationRejected) -> bool {
         })
 }
 
+/// A failure of the agent itself, which the caller sees as the agent reported it: its error text
+/// and what the failed invocation wrote to stderr. The unary HTTP API returns the same details.
+/// Other worker errors describe the platform, so the caller sees only the generic text of their
+/// public code.
+struct AgentFailure {
+    code: PublicErrorCode,
+    message: String,
+    stderr: Option<String>,
+}
+
+fn agent_failure(worker_error: Option<&WorkerExecutionError>) -> Option<AgentFailure> {
+    let (code, error, stderr) = match WorkerExecutorError::try_from(worker_error?.clone()).ok()? {
+        WorkerExecutorError::InvocationFailed { error, stderr } => {
+            (PublicErrorCode::InvocationFailed, error, stderr)
+        }
+        WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
+            (PublicErrorCode::PreviousInvocationFailed, error, stderr)
+        }
+        _ => return None,
+    };
+    Some(AgentFailure {
+        code,
+        message: error.message().to_string(),
+        stderr: (!stderr.is_empty()).then(|| stderr_tail(stderr)),
+    })
+}
+
+/// The end of a failed invocation's stderr, at most `MAX_FAILURE_STDERR_BYTES` long, so that the
+/// failure fits in one WebSocket message within the session's output budget.
+fn stderr_tail(stderr: String) -> String {
+    if stderr.len() <= MAX_FAILURE_STDERR_BYTES {
+        return stderr;
+    }
+    let mut start = stderr.len() - MAX_FAILURE_STDERR_BYTES;
+    while !stderr.is_char_boundary(start) {
+        start += 1;
+    }
+    stderr[start..].to_string()
+}
+
 fn safe_rejection_message(code: PublicErrorCode) -> String {
     match code {
         PublicErrorCode::UnsupportedSubprotocol => "required WebSocket subprotocol is unsupported",
@@ -2956,6 +3019,7 @@ fn safe_rejection_message(code: PublicErrorCode) -> String {
         PublicErrorCode::ResourceExhausted => "session resource limit exceeded",
         PublicErrorCode::ProducerError => "stream producer failed",
         PublicErrorCode::InvocationFailed => "invocation failed",
+        PublicErrorCode::PreviousInvocationFailed => "previous invocation failed",
         PublicErrorCode::ProtocolError => "invocation protocol failed",
         PublicErrorCode::RoutingMiss => {
             "the agent's shard is moving between executors; retry the invocation"
@@ -3224,6 +3288,7 @@ async fn send_text(sender: &Outbound, message: &PublicServerMessage) -> Result<(
                 code: *code,
                 message: safe_rejection_message(*code),
                 retryable: *retryable,
+                stderr: None,
                 version: *version,
             })
             .map_err(|_| ())?;
@@ -3247,6 +3312,7 @@ async fn send_rejection(
             code,
             message: message.into(),
             retryable: false,
+            stderr: None,
             version: 1,
         },
     )
@@ -3700,6 +3766,47 @@ mod tests {
             PublicErrorCode::InternalError
         );
         assert_eq!(PublicErrorCode::RoutingMiss.as_str(), "routing-miss");
+    }
+
+    /// A failure of the agent reaches the caller with the agent's error text and stderr, which
+    /// survive the private wire; a platform error keeps the generic text of its public code.
+    #[test]
+    fn agent_failures_carry_the_agent_error_and_stderr() {
+        let failure = |error: WorkerExecutorError| agent_failure(Some(&error.into()));
+        let guest_error = || golem_common::model::oplog::AgentError::Unknown("boom".to_string());
+
+        let failed = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: "trace\n".to_string(),
+        })
+        .unwrap();
+        assert_eq!(failed.code, PublicErrorCode::InvocationFailed);
+        assert_eq!(failed.message, "boom");
+        assert_eq!(failed.stderr.as_deref(), Some("trace\n"));
+
+        let previous = failure(WorkerExecutorError::PreviousInvocationFailed {
+            error: guest_error(),
+            stderr: String::new(),
+        })
+        .unwrap();
+        assert_eq!(previous.code, PublicErrorCode::PreviousInvocationFailed);
+        assert_eq!(previous.message, "boom");
+        assert_eq!(previous.stderr, None);
+
+        assert!(failure(WorkerExecutorError::unknown("internal detail")).is_none());
+        assert!(agent_failure(None).is_none());
+
+        // The kept tail starts at a character boundary: the cut falls inside the 'é'.
+        let stderr = format!("é{}", "x".repeat(MAX_FAILURE_STDERR_BYTES - 1));
+        let long = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: format!("dropped{stderr}"),
+        })
+        .unwrap();
+        assert_eq!(
+            long.stderr.unwrap(),
+            "x".repeat(MAX_FAILURE_STDERR_BYTES - 1)
+        );
     }
 
     #[test]

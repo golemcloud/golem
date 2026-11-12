@@ -28,8 +28,9 @@ use crate::model::{
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
     ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationResultBloom,
-    InvocationResultMembership, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    InvocationResultMembership, InvocationResultPosition, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
+    Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -829,6 +830,13 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     }
 }
 
+fn result_at(terminal: u64) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+    }
+}
+
 #[test]
 fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     let mut membership = InvocationResultMembership::new(2, 64, 3);
@@ -838,13 +846,13 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     let fourth = IdempotencyKey::new("fourth".to_string());
     let fifth = IdempotencyKey::new("fifth".to_string());
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(first.clone(), result_at(10));
+    membership.insert(second.clone(), result_at(20));
     assert!(membership.is_exact_complete());
 
-    membership.insert(third.clone(), OplogIndex::from_u64(30));
-    membership.insert(fourth.clone(), OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+    membership.insert(third.clone(), result_at(30));
+    membership.insert(fourth.clone(), result_at(40));
+    membership.insert(fifth.clone(), result_at(50));
 
     assert_eq!(membership.len(), 2);
     assert!(!membership.is_exact_complete());
@@ -858,6 +866,7 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     assert_eq!(membership.get(&third), None);
     assert_eq!(membership.get(&fourth), Some(&OplogIndex::from_u64(40)));
     assert_eq!(membership.get(&fifth), Some(&OplogIndex::from_u64(50)));
+    assert_eq!(membership.position(&fourth), Some(&result_at(40)));
     assert!(membership.might_contain(&first));
     assert!(membership.might_contain(&second));
     assert!(membership.might_contain(&third));
@@ -875,15 +884,16 @@ fn invocation_result_membership_updates_recency_for_repeated_keys() {
     let fifth = IdempotencyKey::new("fifth".to_string());
     let sixth = IdempotencyKey::new("sixth".to_string());
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
-    membership.insert(first.clone(), OplogIndex::from_u64(60));
-    membership.insert(sixth.clone(), OplogIndex::from_u64(70));
+    membership.insert(first.clone(), result_at(10));
+    membership.insert(second.clone(), result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth.clone(), result_at(50));
+    membership.insert(first.clone(), result_at(60));
+    membership.insert(sixth.clone(), result_at(70));
 
     assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(60)));
+    assert_eq!(membership.position(&first), Some(&result_at(60)));
     assert_eq!(membership.get(&second), None);
     assert_eq!(membership.get(&fifth), None);
     assert_eq!(membership.get(&sixth), Some(&OplogIndex::from_u64(70)));
@@ -899,11 +909,11 @@ fn invocation_result_membership_binary_round_trip_preserves_membership() {
     let third = IdempotencyKey::new("third".to_string());
     let fourth = IdempotencyKey::new("fourth".to_string());
     let fifth = IdempotencyKey::new("fifth".to_string());
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second, OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth, OplogIndex::from_u64(50));
+    membership.insert(first.clone(), result_at(10));
+    membership.insert(second, result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
     membership.set_revert_generation(4);
 
     let bytes = serialize(&membership).unwrap();
@@ -919,10 +929,7 @@ fn small_invocation_result_membership_serializes_without_a_bloom_filter() {
     use crate::serialization::{deserialize, serialize};
 
     let mut membership = InvocationResultMembership::default();
-    membership.insert(
-        IdempotencyKey::new("first".to_string()),
-        OplogIndex::from_u64(10),
-    );
+    membership.insert(IdempotencyKey::new("first".to_string()), result_at(10));
 
     assert!(membership.is_exact_complete());
     let bytes = serialize(&membership).unwrap();

@@ -31,8 +31,9 @@ pub use status::{
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
     DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
     ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    OpenEntityReplayScope, OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind,
-    PendingUpdateRef, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    InvocationResultPosition, OpenEntityReplayScope, OplogProcessorCheckpointState,
+    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
+    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]

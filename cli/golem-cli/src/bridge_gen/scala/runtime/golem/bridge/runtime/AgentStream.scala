@@ -20,7 +20,8 @@ object AgentStreamStep {
 }
 
 sealed abstract class AgentStreamTerminal(message: String) extends RuntimeException(message)
-final case class AgentStreamError(code: String, override val getMessage: String)
+/** `stderr` is what the agent wrote to stderr when a failure of the agent ended the invocation. */
+final case class AgentStreamError(code: String, override val getMessage: String, stderr: Option[String] = None)
     extends AgentStreamTerminal(getMessage)
 final case class AgentStreamCancelled(reason: String)
     extends AgentStreamTerminal(s"stream cancelled: $reason")

@@ -28,7 +28,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -132,12 +132,20 @@ impl InvocationGoal {
     }
 }
 
+/// The most bytes of events the filter holds while the target is unknown. Past it the oldest
+/// held events are dropped.
+const HELD_EVENT_BYTES: usize = 4 * 1024 * 1024;
+
 /// Selects the events of one invocation. A new connection first receives the agent's recent
-/// event history, so until the target is known the filter holds events per invocation.
+/// event history, and the target is known only when the server has accepted the invocation, so
+/// until then the filter holds events, at most `HELD_EVENT_BYTES` of them. When the target
+/// loses held events to that bound, a `ClientLagged` notice stands in for them.
 #[derive(Default)]
 struct TargetFilter {
     target: Option<Uuid>,
-    held: HashMap<Uuid, Vec<AgentEvent>>,
+    held: VecDeque<(Uuid, AgentEvent, usize)>,
+    held_bytes: usize,
+    dropped: HashMap<Uuid, u64>,
 }
 
 impl TargetFilter {
@@ -153,7 +161,15 @@ impl TargetFilter {
             Some(target) if target == invocation_id => vec![event],
             Some(_) => Vec::new(),
             None => {
-                self.held.entry(invocation_id).or_default().push(event);
+                let size = held_size(&event);
+                self.held.push_back((invocation_id, event, size));
+                self.held_bytes += size;
+                while self.held_bytes > HELD_EVENT_BYTES
+                    && let Some((dropped, _, size)) = self.held.pop_front()
+                {
+                    self.held_bytes -= size;
+                    *self.dropped.entry(dropped).or_default() += 1;
+                }
                 Vec::new()
             }
         }
@@ -162,10 +178,43 @@ impl TargetFilter {
     /// Sets the target and returns its held events.
     fn set_target(&mut self, target: Uuid) -> Vec<AgentEvent> {
         self.target = Some(target);
-        let events = self.held.remove(&target).unwrap_or_default();
-        self.held.clear();
+        let lagged = self
+            .dropped
+            .remove(&target)
+            .map(|number_of_missed_messages| AgentEvent::ClientLagged {
+                number_of_missed_messages,
+            });
+        let events = lagged
+            .into_iter()
+            .chain(
+                self.held
+                    .drain(..)
+                    .filter(|(invocation_id, _, _)| *invocation_id == target)
+                    .map(|(_, event, _)| event),
+            )
+            .collect();
+        self.held_bytes = 0;
+        self.dropped.clear();
         events
     }
+}
+
+/// The bytes a held event counts against `HELD_EVENT_BYTES`: its text and a fixed share, so
+/// many small events are bounded as well.
+fn held_size(event: &AgentEvent) -> usize {
+    let text = match event {
+        AgentEvent::StdOut { bytes, .. } | AgentEvent::StdErr { bytes, .. } => bytes.len(),
+        AgentEvent::Log {
+            context, message, ..
+        } => context.len() + message.len(),
+        AgentEvent::InvocationStart { function, .. }
+        | AgentEvent::InvocationFinished { function, .. } => function.len(),
+        AgentEvent::PluginError { .. }
+        | AgentEvent::SnapshotRecoverySucceeded { .. }
+        | AgentEvent::SnapshotRecoveryFailed { .. }
+        | AgentEvent::ClientLagged { .. } => 0,
+    };
+    std::mem::size_of::<AgentEvent>() + text
 }
 
 fn event_invocation_id(event: &AgentEvent) -> Option<Uuid> {
@@ -737,6 +786,43 @@ mod tests {
             filter.accept(stdout("target 2", Some(target))),
             vec![stdout("target 2", Some(target))]
         );
+    }
+
+    #[test]
+    fn target_filter_drops_the_oldest_held_events_past_its_bound() {
+        let target = Uuid::new_v4();
+        let earlier = Uuid::new_v4();
+        let timestamp = Timestamp::now_utc();
+        let mebibyte = |byte: u8, invocation_id| AgentEvent::StdOut {
+            timestamp,
+            bytes: vec![byte; 1024 * 1024],
+            invocation_id: Some(invocation_id),
+        };
+        let mut filter = TargetFilter::default();
+
+        // The target's first output is the oldest held event, so the bound drops it before the
+        // newer output of the earlier invocation.
+        for event in [
+            mebibyte(1, target),
+            mebibyte(2, earlier),
+            mebibyte(3, earlier),
+            mebibyte(4, earlier),
+            mebibyte(5, earlier),
+            mebibyte(6, target),
+        ] {
+            assert_eq!(filter.accept(event), vec![]);
+            assert!(filter.held_bytes <= HELD_EVENT_BYTES);
+        }
+        assert_eq!(
+            filter.set_target(target),
+            vec![
+                AgentEvent::ClientLagged {
+                    number_of_missed_messages: 1,
+                },
+                mebibyte(6, target),
+            ]
+        );
+        assert_eq!(filter.held_bytes, 0);
     }
 
     #[test]

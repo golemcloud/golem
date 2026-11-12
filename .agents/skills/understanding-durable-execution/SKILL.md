@@ -2173,7 +2173,14 @@ when a request is retried or forwarded: every retry finalizes it again against t
 A key that is already accepted with a different request is an `IdempotencyConflict` (REST 422):
 `worker/ingress.rs::ensure_matching_invocation_payload` compares the stored request with
 `AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
-sessions compare their stream descriptor instead (`worker/streaming/mod.rs`).
+sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
+is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+or the request position kept with every result (`InvocationResultPosition::request`, in the
+in-memory membership and in the persisted result index). The status fold sets it to the
+`AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
+one cancelled or denied before it started (`fields.rs::InvocationRequests`). A duplicate check
+therefore reads the same number of entries however long the invocation ran.
 
 Terminals name their invocation. Replay rejects an `AgentInvocationFinished` whose ID differs from
 the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
