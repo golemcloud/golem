@@ -90,7 +90,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             LifecycleTransition::CleanupFailed(error) => Err(error.clone()),
             LifecycleTransition::WaitingForPermit(waiting) => Ok(Some(waiting.start_attempt())),
-            LifecycleTransition::Running => this.startup_attempt.current(),
+            LifecycleTransition::Running(running) => {
+                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+                this.startup_attempt.current()
+            }
             LifecycleTransition::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             )),

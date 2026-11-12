@@ -25,23 +25,19 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
-use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{AgentMode, Principal};
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
-    RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardEpoch, ShardId,
+    AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScheduleId,
+    ScheduledAction, ShardAssignment, ShardEpoch, ShardId,
 };
-use golem_common::schema::SchemaValue;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -116,34 +112,12 @@ impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
         Ok(())
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         _delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
         unimplemented!()
     }
 }
@@ -188,19 +162,6 @@ impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
         unimplemented!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<golem_common::model::AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -213,15 +174,6 @@ impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
                 .await?;
         }
         Ok(true)
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
     }
 }
 
@@ -280,26 +232,6 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         unimplemented!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<golem_common::model::AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = invocation
-        else {
-            unreachable!()
-        };
-        self.executions.lock().unwrap().push(idempotency_key.value);
-        Ok(())
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -309,47 +241,24 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         if target_worker_fingerprint != self.fingerprint {
             return Ok(false);
         }
-        let ExactExistingDelivery::Invoke(invocation) = delivery else {
-            unreachable!()
-        };
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = *invocation
-        else {
+        let ExactExistingDelivery::WakeInvocation(idempotency_key) = delivery else {
             unreachable!()
         };
         self.executions.lock().unwrap().push(idempotency_key.value);
         Ok(true)
     }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        unreachable!()
-    }
 }
 
-type RecordedEphemeralEnqueue = (
-    OwnedAgentId,
-    Option<Vec<(String, String)>>,
-    Vec<AgentConfigEntryDto>,
-    Option<ComponentRevision>,
-    Option<AgentId>,
-    Principal,
-);
-
-struct EphemeralWorkerAccessMock {
-    recorded: Arc<Mutex<Option<RecordedEphemeralEnqueue>>>,
+/// Fails every wake delivery, first transiently when asked, then with the terminal error of an
+/// ephemeral agent that can no longer start.
+struct FailingWakeWorkerAccess {
     terminal: bool,
     fail_first_transiently: bool,
-    enqueue_count: Arc<AtomicUsize>,
+    attempts: Arc<AtomicUsize>,
 }
 
 #[async_trait]
-impl SchedulerWorkerAccess for EphemeralWorkerAccessMock {
+impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -388,67 +297,24 @@ impl SchedulerWorkerAccess for EphemeralWorkerAccessMock {
         unreachable!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
-        component_revision: Option<ComponentRevision>,
-        worker_parent: Option<AgentId>,
-        worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        let attempt = self.enqueue_count.fetch_add(1, Ordering::SeqCst);
-        *self.recorded.lock().unwrap() = Some((
-            owned_agent_id.clone(),
-            worker_env,
-            worker_agent_config,
-            component_revision,
-            worker_parent,
-            worker_creation_principal,
-        ));
-        if self.terminal {
-            Err(WorkerExecutorError::invalid_request(
-                INACTIVE_EPHEMERAL_AGENT_ERROR,
-            ))
-        } else if self.fail_first_transiently && attempt == 0 {
-            Err(WorkerExecutorError::invalid_request(
-                "Failed to upload invocation payload: temporary storage failure",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         _delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        unreachable!()
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        invocation: AgentInvocation,
-        component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        let principal = invocation
-            .principal()
-            .cloned()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("missing principal"))?;
-        self.enqueue_invocation(
-            owned_agent_id,
-            invocation,
-            None,
-            Vec::new(),
-            Some(component_revision),
-            None,
-            principal,
-        )
-        .await
+        let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+        if self.fail_first_transiently && attempt == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "temporarily unavailable",
+            ));
+        }
+        if self.terminal {
+            return Err(WorkerExecutorError::invalid_request(
+                crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR,
+            ));
+        }
+        Ok(true)
     }
 }
 
@@ -492,19 +358,6 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
         unimplemented!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<golem_common::model::AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        panic!("scheduled invocations must not use create-capable delivery")
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -523,7 +376,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
             return Err(WorkerExecutorError::runtime("injected completion failure"));
         }
         let kind = match delivery {
-            ExactExistingDelivery::Invoke(_) => "invoke",
+            ExactExistingDelivery::WakeInvocation(_) => "wake_invocation",
             ExactExistingDelivery::Resume => "resume",
             ExactExistingDelivery::CompletePromise(id) => {
                 self.promise_service
@@ -537,15 +390,6 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
             return Err(WorkerExecutorError::runtime("injected start failure"));
         }
         Ok(true)
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        unreachable!()
     }
 }
 
@@ -595,19 +439,6 @@ impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
         unimplemented!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<golem_common::model::AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -621,15 +452,6 @@ impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
         }
         self.attempts.fetch_add(1, Ordering::SeqCst);
         Err(WorkerExecutorError::runtime("injected delivery failure"))
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
     }
 }
 
@@ -679,23 +501,6 @@ impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
         unimplemented!()
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<golem_common::model::AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        Ok(())
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -710,15 +515,6 @@ impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
         tokio::time::sleep(Duration::from_millis(20)).await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
         Ok(true)
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        unreachable!()
     }
 }
 
@@ -1109,29 +905,15 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
             last_oplog_index: OplogIndex::from_u64(42),
             next_after: Duration::from_secs(60),
         },
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
         ScheduledAction::Resume {
             agent_created_by: AccountId::new(),
             owned_agent_id: owned_agent_id.clone(),
             target_worker_fingerprint: AgentFingerprint::new(),
-        },
-        ScheduledAction::InvokeEphemeral {
-            account_id: AccountId::new(),
-            owned_agent_id,
-            invocation: Box::new(agent_method_invocation()),
-            component_revision: ComponentRevision::INITIAL,
-            env: vec![("KEY".to_string(), "value".to_string())],
-            config: vec![AgentConfigEntryDto {
-                path: vec!["database".to_string()],
-                value: serde_json::Value::String("test".to_string()).into(),
-            }],
-            parent: Some(agent("parent")),
-            creation_principal: Box::new(Principal::anonymous()),
         },
     ]
 }
@@ -1195,28 +977,6 @@ async fn sqlite_scheduler_storage_roundtrips_all_action_variants() {
     assert_storage_roundtrips_all_action_variants(Arc::new(storage)).await;
 }
 
-fn agent_method_invocation() -> AgentInvocation {
-    AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::fresh(),
-        method_name: "run".to_string(),
-        input: SchemaValue::Record { fields: vec![] },
-        invocation_context: InvocationContextStack::fresh_rounded(),
-        principal: Principal::anonymous(),
-        scope_card: None,
-    }
-}
-
-fn agent_method_invocation_with_idempotency_key(idempotency_key: String) -> AgentInvocation {
-    AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::new(idempotency_key),
-        method_name: "run".to_string(),
-        input: SchemaValue::Record { fields: vec![] },
-        invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
-        scope_card: None,
-    }
-}
-
 /// The scheduler's span must cover one tick, not the whole background loop. A
 /// loop-lifetime span never closes, so it is never exported and it retains
 /// every event recorded inside it for as long as the process runs.
@@ -1258,27 +1018,6 @@ async fn schedule_returns_uuid_backed_id_and_cancel_removes_entry() {
         .unwrap();
 
     assert!(claimed.is_empty());
-}
-
-#[test]
-fn schedule_id_uses_same_deterministic_derivation_as_rpc_idempotency_keys() {
-    let base = IdempotencyKey::new("caller-provided-idempotency-key".to_string());
-    let oplog_index = OplogIndex::from_u64(42);
-
-    let rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
-    let schedule_id = ScheduleId::from_idempotency_key(&rpc_idempotency_key);
-    let same_rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
-    let different_rpc_idempotency_key = IdempotencyKey::derived(&base, OplogIndex::from_u64(43));
-
-    assert_eq!(schedule_id.id.to_string(), rpc_idempotency_key.value);
-    assert_eq!(
-        schedule_id,
-        ScheduleId::from_idempotency_key(&same_rpc_idempotency_key)
-    );
-    assert_ne!(
-        schedule_id,
-        ScheduleId::from_idempotency_key(&different_rpc_idempotency_key)
-    );
 }
 
 #[test]
@@ -1372,10 +1111,9 @@ async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_l
     for target_worker_fingerprint in [fingerprint, AgentFingerprint::new()] {
         svc.schedule(
             DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint,
             },
         )
@@ -1412,10 +1150,9 @@ async fn scheduled_invoke_delivery_failure_is_not_acknowledged() {
     );
     svc.schedule(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("delivery-failure")),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
@@ -1649,10 +1386,9 @@ async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
     for name in ["agent-1", "agent-2"] {
         svc.schedule(
             due_at,
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1696,10 +1432,9 @@ async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
     for _ in 0..2 {
         svc.schedule(
             due_at,
-            ScheduledAction::Invoke {
-                account_id: AccountId::new(),
+            ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
-                invocation: Box::new(agent_method_invocation()),
+                idempotency_key: IdempotencyKey::fresh(),
                 target_worker_fingerprint: fingerprint,
             },
         )
@@ -1774,14 +1509,9 @@ proptest! {
                     let schedule_id = svc
                         .schedule(
                             due_at,
-                            ScheduledAction::Invoke {
-                                account_id: AccountId::new(),
+                            ScheduledAction::WakeInvocation {
                                 owned_agent_id: owned_agent_id.clone(),
-                                invocation: Box::new(
-                                    agent_method_invocation_with_idempotency_key(
-                                        execution_id.clone(),
-                                    ),
-                                ),
+                                idempotency_key: IdempotencyKey::new(execution_id.clone()),
                                 target_worker_fingerprint: fingerprint,
                             },
                         )
@@ -1897,102 +1627,14 @@ proptest! {
 }
 
 #[test]
-async fn scheduled_ephemeral_invoke_skips_fingerprint_lookup_and_preserves_creation_data() {
-    let storage = Arc::new(InMemorySchedulerStorage::new());
-    let recorded = Arc::new(Mutex::new(None));
-    let enqueue_count = Arc::new(AtomicUsize::new(0));
-    let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
-        Arc::new(EphemeralWorkerAccessMock {
-            recorded: recorded.clone(),
-            terminal: false,
-            fail_first_transiently: false,
-            enqueue_count,
-        });
-    let svc = SchedulerServiceDefault::new(
-        storage,
-        create_shard_service_mock(),
-        worker_access,
-        create_oplog_service_mock().await,
-        Duration::from_secs(1000),
-        100,
-        Duration::from_secs(30),
-        10,
-        RetryConfig::max_attempts_3(),
-        64,
-        CancellationToken::new(),
-    );
-
-    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral"));
-    let parent = agent("caller");
-    let config = vec![AgentConfigEntryDto {
-        path: vec!["database".to_string()],
-        value: serde_json::Value::String("test".to_string()).into(),
-    }];
-    svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-        ScheduledAction::InvokeEphemeral {
-            account_id: AccountId::new(),
-            owned_agent_id: owned_agent_id.clone(),
-            invocation: Box::new(agent_method_invocation()),
-            component_revision: ComponentRevision::INITIAL,
-            env: vec![("KEY".to_string(), "value".to_string())],
-            config: config.clone(),
-            parent: Some(parent.clone()),
-            creation_principal: Box::new(Principal::anonymous()),
-        },
-    )
-    .await;
-
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        *recorded.lock().unwrap(),
-        Some((
-            owned_agent_id,
-            Some(vec![("KEY".to_string(), "value".to_string())]),
-            config,
-            Some(ComponentRevision::INITIAL),
-            Some(parent),
-            Principal::anonymous(),
-        ))
-    );
-}
-
-#[test]
-fn scheduled_action_constructor_indices_preserve_persisted_compatibility() {
-    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("target"));
-    let resume = ScheduledAction::Resume {
-        agent_created_by: AccountId::new(),
-        owned_agent_id: owned_agent_id.clone(),
-        target_worker_fingerprint: AgentFingerprint::new(),
-    };
-    let ephemeral = ScheduledAction::InvokeEphemeral {
-        account_id: AccountId::new(),
-        owned_agent_id,
-        invocation: Box::new(agent_method_invocation()),
-        component_revision: ComponentRevision::INITIAL,
-        env: vec![],
-        config: vec![],
-        parent: None,
-        creation_principal: Box::new(Principal::anonymous()),
-    };
-
-    assert_eq!(serialize(&resume).unwrap()[2], 3);
-    assert_eq!(serialize(&ephemeral).unwrap()[2], 4);
-}
-
-#[test]
 async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery() {
     let storage = Arc::new(InMemorySchedulerStorage::new());
     let enqueue_count = Arc::new(AtomicUsize::new(0));
     let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
-        Arc::new(EphemeralWorkerAccessMock {
-            recorded: Arc::new(Mutex::new(None)),
+        Arc::new(FailingWakeWorkerAccess {
             terminal: true,
             fail_first_transiently: false,
-            enqueue_count: enqueue_count.clone(),
+            attempts: enqueue_count.clone(),
         });
     let svc = SchedulerServiceDefault::new(
         storage,
@@ -2010,15 +1652,10 @@ async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery
 
     svc.schedule(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-        ScheduledAction::InvokeEphemeral {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
-            invocation: Box::new(agent_method_invocation()),
-            component_revision: ComponentRevision::INITIAL,
-            env: vec![],
-            config: vec![],
-            parent: None,
-            creation_principal: Box::new(Principal::anonymous()),
+            idempotency_key: IdempotencyKey::fresh(),
+            target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
     .await;
@@ -2038,11 +1675,10 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
     let storage = Arc::new(InMemorySchedulerStorage::new());
     let enqueue_count = Arc::new(AtomicUsize::new(0));
     let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
-        Arc::new(EphemeralWorkerAccessMock {
-            recorded: Arc::new(Mutex::new(None)),
+        Arc::new(FailingWakeWorkerAccess {
             terminal: false,
             fail_first_transiently: true,
-            enqueue_count: enqueue_count.clone(),
+            attempts: enqueue_count.clone(),
         });
     let svc = SchedulerServiceDefault::new(
         storage,
@@ -2060,15 +1696,10 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
 
     svc.schedule(
         DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
-        ScheduledAction::InvokeEphemeral {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
-            invocation: Box::new(agent_method_invocation()),
-            component_revision: ComponentRevision::INITIAL,
-            env: vec![],
-            config: vec![],
-            parent: None,
-            creation_principal: Box::new(Principal::anonymous()),
+            idempotency_key: IdempotencyKey::fresh(),
+            target_worker_fingerprint: AgentFingerprint::new(),
         },
     )
     .await;
@@ -2324,10 +1955,9 @@ fn exact_actions(
     fingerprint: AgentFingerprint,
 ) -> Vec<ScheduledAction> {
     vec![
-        ScheduledAction::Invoke {
-            account_id: AccountId::new(),
+        ScheduledAction::WakeInvocation {
             owned_agent_id: owned_agent_id.clone(),
-            invocation: Box::new(agent_method_invocation()),
+            idempotency_key: IdempotencyKey::fresh(),
             target_worker_fingerprint: fingerprint,
         },
         ScheduledAction::Resume {
@@ -2381,7 +2011,10 @@ async fn all_exact_deliveries_acknowledge_missing_stale_and_matching_targets() {
             assert_eq!(count.load(Ordering::SeqCst), 3);
             let mut delivered = deliveries.lock().unwrap().clone();
             delivered.sort_unstable();
-            assert_eq!(delivered, vec!["complete_promise", "invoke", "resume"]);
+            assert_eq!(
+                delivered,
+                vec!["complete_promise", "resume", "wake_invocation"]
+            );
             assert!(
                 promise_service
                     .all_completed()

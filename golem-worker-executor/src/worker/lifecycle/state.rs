@@ -54,7 +54,7 @@ pub enum LifecycleTransition<'a> {
     Initializing(InitializingPhase<'a>),
     Unloaded(UnloadedPhase<'a>),
     WaitingForPermit(WaitingPhase<'a>),
-    Running,
+    Running(&'a RunningWorker),
     Stopping,
     CleanupFailed(&'a WorkerExecutorError),
     Deleting,
@@ -174,7 +174,7 @@ impl WorkerLifecycle {
                     start_attempt,
                 })
             }
-            WorkerInstance::Running(_) => LifecycleTransition::Running,
+            WorkerInstance::Running(ref running) => LifecycleTransition::Running(running),
             WorkerInstance::Stopping(_) => LifecycleTransition::Stopping,
             WorkerInstance::CleanupFailed(ref error) => LifecycleTransition::CleanupFailed(error),
             WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {

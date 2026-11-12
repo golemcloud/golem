@@ -34,6 +34,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?;
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok(OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key,
             payload,
             invocation_context.trace_id,

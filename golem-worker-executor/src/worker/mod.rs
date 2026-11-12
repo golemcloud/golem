@@ -1088,6 +1088,7 @@ enum InvocationResult {
     Cached {
         result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
+    Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
     },
@@ -1246,6 +1247,8 @@ pub(crate) struct GetOrCreateWorkerResult {
     initial_component: Arc<golem_service_base::model::component::Component>,
     /// Ephemeral agents are fail-stop: reconstructing one from its lower oplog is allowed for
     /// observation and invocation-result lookup, but the instance must never be started again.
+    /// The one exception is an agent that never began executing (no `Restart`): it may run its
+    /// first execution, see [`acquisition::never_started_ephemeral_admission`].
     reconstructed_ephemeral: bool,
     newly_created: bool,
 }

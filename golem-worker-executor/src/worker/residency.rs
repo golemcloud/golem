@@ -281,7 +281,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn is_running_worker_idle(&self, running: &RunningWorker) -> bool {
         let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-        let has_pending_invocations = !self.pending_invocations().await.is_empty();
+        let has_pending_invocations = self.has_due_invocations().await;
         let has_queued_internal_work = {
             let mut queue = running.queue.write().await;
             queue.retain(|invocation| !invocation.is_abandoned());
@@ -420,7 +420,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return None;
                 }
 
-                let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                let has_pending_invocations = self.has_due_invocations().await;
                 if has_pending_invocations {
                     Some(EvictionClass::WarmRunnable)
                 } else {
@@ -484,7 +484,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     false
                 } else {
                     let eligibility = self.current_filesystem_pressure_eligibility(running);
-                    let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                    let has_pending_invocations = self.has_due_invocations().await;
                     let current_class = if has_pending_invocations {
                         EvictionClass::WarmRunnable
                     } else {
@@ -517,9 +517,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
                 _ => EvictionStopOutcome::CleanupFailed,
             };
-            if outcome == EvictionStopOutcome::Unloaded
-                && !self.pending_invocations().await.is_empty()
-            {
+            if outcome == EvictionStopOutcome::Unloaded && self.has_due_invocations().await {
                 // Only the invocation loop runs durable pending invocations, and their callers
                 // already started the worker and only wait. The start waits for memory admission.
                 // It is spawned because eviction can run inside the memory growth of another

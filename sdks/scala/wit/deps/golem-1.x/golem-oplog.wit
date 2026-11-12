@@ -504,7 +504,8 @@ interface oplog {
 
     record pending-agent-invocation-parameters {
         timestamp: datetime,
-        invocation: agent-invocation
+        invocation: agent-invocation,
+        not-before: option<datetime>,
     }
 
     variant update-description {
@@ -870,6 +871,7 @@ interface oplog {
 
     record raw-pending-agent-invocation-parameters {
         timestamp: datetime,
+        not-before: option<datetime>,
         idempotency-key: string,
         payload: oplog-payload,
         trace-id: string,

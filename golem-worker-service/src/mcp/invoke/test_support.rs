@@ -665,6 +665,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &IdempotencyKey,
         _: EnvironmentId,
         _: AuthCtx,
+        _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         unimplemented!()
     }

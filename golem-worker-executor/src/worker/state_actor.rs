@@ -1769,6 +1769,7 @@ mod tests {
     fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
         PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(key),
             manual_update_target_revision: None,
