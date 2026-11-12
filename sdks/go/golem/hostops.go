@@ -43,3 +43,8 @@ type agentPages interface {
 
 // agentIDEnvVar is how the executor tells the guest which agent instance it is.
 const agentIDEnvVar = "GOLEM_AGENT_ID"
+
+// agentIDNotReadable is the error for an agent that cannot read agentIDEnvVar.
+// The executor shows the variable only when the agent's permission card allows
+// the agent to read it.
+const agentIDNotReadable = agentIDEnvVar + " is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : " + agentIDEnvVar
