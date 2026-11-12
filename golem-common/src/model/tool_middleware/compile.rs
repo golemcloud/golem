@@ -138,11 +138,12 @@ pub fn compile_tool_middleware_chains(
     for tool in registered_tools {
         if let Err(validation_errors) = validate_tool(&tool.definition) {
             invalid_registry = true;
+            let descriptor = match tool.definition.name() {
+                Some(name) => format!("invalid registered tool descriptor `{name}`"),
+                None => "invalid registered tool descriptor".to_string(),
+            };
             for error in validation_errors {
-                errors.push(global_diagnostic(
-                    None,
-                    format!("invalid registered tool descriptor: {error}"),
-                ));
+                errors.push(global_diagnostic(None, format!("{descriptor}: {error}")));
             }
         }
     }
