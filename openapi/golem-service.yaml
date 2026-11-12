@@ -22994,6 +22994,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
       required:
       - timestamp
       - invocation

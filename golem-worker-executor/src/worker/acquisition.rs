@@ -655,6 +655,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let _ = sender.send(published);
                         if resolved {
                             worker.retire_if_shard_left_during_construction().await;
+                            if !worker.owner_retirement_requested.is_cancelled() {
+                                worker.register_pending_invocation_wakes().await;
+                            }
                         }
                     };
                     if !invocation_loops.spawn_construction(construction) {
@@ -769,6 +772,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // same creation is not reconstruction of a previously running ephemeral agent.
         let reconstructed_ephemeral =
             reconstructed_ephemeral && self.initialization_request.lock().unwrap().is_none();
+        // A reconstructed ephemeral agent that never began executing may still run the work it
+        // accepted; nothing of it has run yet, so this is its first execution, not a restart.
+        let never_started_admission = reconstructed_ephemeral
+            .then(|| {
+                never_started_ephemeral_admission(
+                    &current_status.load(),
+                    (initial_worker_metadata.owner_kind != OwnerKind::EphemeralExternalTool)
+                        .then(|| self.initialization_idempotency_key())
+                        .as_ref(),
+                )
+            })
+            .flatten();
+        let reconstructed_ephemeral = reconstructed_ephemeral && never_started_admission.is_none();
         let initialization = {
             let mut request = self.initialization_request.lock().unwrap();
             if newly_created {
@@ -932,7 +948,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ephemeral_invocation: StdMutex::new(if reconstructed_ephemeral {
                 EphemeralInvocationState::Accepted(None)
             } else {
-                EphemeralInvocationState::Available
+                match never_started_admission {
+                    Some(Some(key)) => EphemeralInvocationState::Accepted(Some(key)),
+                    _ => EphemeralInvocationState::Available,
+                }
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
@@ -1008,6 +1027,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         invocation_context,
                         principal,
                     },
+                    None,
                 )
                 .await?;
             let status = worker.state_actor.status().await;
@@ -1536,4 +1556,47 @@ pub fn merge_agent_env_with_default_env(
     }
 
     result
+}
+
+/// Restores first-execution admission for an ephemeral target created before its scheduled work
+/// is due. Reconstructing that target must not consume its first execution or admit a different
+/// method in place of its accepted work. An execution-begun marker or terminal status keeps the
+/// target observation-only; the startup gate separately enforces the deadline.
+///
+/// The admission a reconstructed ephemeral agent may still run, when it never began executing:
+/// `Some(Some(key))` for one scheduled method, `Some(None)` when no method was accepted yet.
+/// `None` keeps the agent observation-only. An agent with a constructor
+/// (`initialization_key`) is admitted only while its constructor reservation is still pending, or
+/// when a crash left only `Create`, which acquisition repairs by appending the reservation. A
+/// withdrawn reservation is not repaired: nothing could initialize the agent before the method
+/// runs.
+pub fn never_started_ephemeral_admission(
+    status: &AgentStatusRecord,
+    initialization_key: Option<&IdempotencyKey>,
+) -> Option<Option<IdempotencyKey>> {
+    let is_initialization = |pending: &golem_common::model::agent::PendingInvocationRef| {
+        initialization_key.is_some_and(|key| pending.has_idempotency_key(key))
+    };
+    if status.ephemeral_execution_begun
+        || matches!(
+            status.status,
+            AgentStatus::Failed | AgentStatus::Exited | AgentStatus::Interrupted
+        )
+        || (initialization_key.is_some()
+            && status.oplog_idx > OplogIndex::from_u64(2)
+            && !status.pending_invocations.iter().any(is_initialization))
+    {
+        return None;
+    }
+    let mut methods = status
+        .pending_invocations
+        .iter()
+        .filter(|pending| !pending.is_manual_update() && !is_initialization(pending));
+    match (methods.next(), methods.next()) {
+        (None, _) => Some(None),
+        (Some(pending), None) if pending.not_before.is_some() => {
+            Some(pending.idempotency_key().cloned())
+        }
+        _ => None,
+    }
 }

@@ -211,8 +211,7 @@ impl GenerationRegistry {
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(RegistryState {
-                admission: AdmissionState::Open,
-                replay_access: false,
+                admission: Admission::new(),
                 calls: 0,
                 nodes: 0,
                 generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -230,13 +229,7 @@ impl GenerationRegistry {
         effect: CallEffect,
     ) -> Result<CallLease, AccessError> {
         let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open => {}
-            AdmissionState::Transitioning => return Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => {
-                return Err(AccessError::Revoked);
-            }
-        }
+        state.admission.admit_call()?;
         state.calls = state
             .calls
             .checked_add(1)
@@ -298,76 +291,16 @@ impl GenerationRegistry {
             NodeLease {
                 registry: Arc::clone(self),
             },
-            matches!(
-                state.admission,
-                AdmissionState::Open | AdmissionState::Transitioning
-            ),
+            state.admission.can_return_node(),
         )
     }
 
-    pub(super) fn begin_transition(&self) -> Result<(), AccessError> {
-        let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open => {
-                state.admission = AdmissionState::Transitioning;
-                Ok(())
-            }
-            AdmissionState::Transitioning => Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => Err(AccessError::Revoked),
-        }
-    }
-
-    pub(super) fn enable_replay_access(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.admission == AdmissionState::Open {
-            state.replay_access = true;
-        }
-    }
-
     pub(super) fn replay_access_allowed(&self) -> bool {
-        self.state.lock().unwrap().replay_access
-    }
-
-    pub(super) fn begin_replay_drain(&self) -> Result<(), AccessError> {
-        let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open if state.replay_access => {
-                state.replay_access = false;
-                state.admission = AdmissionState::Transitioning;
-                Ok(())
-            }
-            AdmissionState::Open | AdmissionState::Transitioning => Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => Err(AccessError::Revoked),
-        }
-    }
-
-    pub(super) fn finish_transition(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.admission == AdmissionState::Transitioning {
-            state.admission = AdmissionState::Open;
-        }
-        self.changed.notify_waiters();
-    }
-
-    pub(super) fn seal(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.replay_access = false;
-        if state.admission != AdmissionState::Invalidated {
-            state.admission = AdmissionState::Sealed;
-        }
-        self.changed.notify_waiters();
-    }
-
-    pub(super) fn invalidate(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.replay_access = false;
-        state.admission = AdmissionState::Invalidated;
-        drop(state);
-        self.changed.notify_waiters();
+        self.state.lock().unwrap().admission.replay_access_allowed()
     }
 
     pub(super) fn is_invalidated(&self) -> bool {
-        self.state.lock().unwrap().admission == AdmissionState::Invalidated
+        self.state.lock().unwrap().admission.is_invalidated()
     }
 
     pub(super) async fn wait_for_invalidation(&self) {

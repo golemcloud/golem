@@ -2574,6 +2574,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: Some(timestamp()),
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
                 idempotency_key: IdempotencyKey::new("init-key".to_string()),
                 constructor_parameters: typed_string_value("constructor"),
@@ -2765,22 +2766,26 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
                 snapshot: multipart_snapshot(),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
                 idempotency_key: IdempotencyKey::new("process-key".to_string()),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
                 target_revision: ComponentRevision::new(5).unwrap(),
             }),

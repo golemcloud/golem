@@ -263,6 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::ensure_not_failed(self, owned_agent_id, agent_mode, status).await
     }
 
+    /// Acquires and starts the agent for an inspection (filesystem or wallet).
     pub(super) async fn get_or_create<Req: CanStartWorker>(
         &self,
         request: &Req,
@@ -280,19 +281,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Worker::start_if_needed(worker.clone()).await?;
             return Ok(worker);
         }
-        self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
-            .await
-    }
-
-    pub(super) async fn get_or_create_with_freshness<Req: CanStartWorker>(
-        &self,
-        request: &Req,
-        freshness_disposition: InvocationFreshnessDisposition,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         async {
             let (worker, _response_lease) = self
-                .get_or_create_pending_with_freshness(request, freshness_disposition)
+                .get_or_create_pending_with_freshness(
+                    request,
+                    InvocationFreshnessDisposition::MayExist,
+                )
                 .await?;
+            worker.ensure_inspection_may_start().await?;
             Worker::start_if_needed(worker.clone()).await?;
             Ok(worker)
         }

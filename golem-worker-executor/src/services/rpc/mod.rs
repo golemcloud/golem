@@ -112,6 +112,30 @@ where
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
+    /// Routes cancellation to the target executor, which validates the incarnation-bound receipt
+    /// and scheduling owner and commits pending removal before returning true. Removing only the
+    /// scheduler wake does not withdraw work already accepted in the target oplog.
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError>;
+
+    /// Routes acceptance to the target executor, which commits the invocation and deadline in
+    /// the expected incarnation's oplog without running guest code, then registers its wake.
+    /// The scheduler stores only the wake, not a second invocation payload.
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError>;
+
     async fn create_demand(
         &self,
         target: AgentTarget,

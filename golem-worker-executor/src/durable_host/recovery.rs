@@ -212,7 +212,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            InvocationMode::Replay,
                             uses_streams.then_some(&idempotency_key),
                         )
                         .instrument(span)
@@ -528,15 +527,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .switch_to_live()
                     .await?;
 
-                // Appending a Restart marker
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .add(OplogEntry::restart())
-                    .await?;
-
+                // The invocation loop committed this start's `Restart` before instantiation.
                 Ok(None)
             } else {
                 replay_decision
@@ -860,7 +851,7 @@ pub(in crate::durable_host) fn should_restart_after_shard_assignment_change(
         && (matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
-        ) || status.has_pending_work())
+        ) || status.has_pending_work(golem_common::model::Timestamp::now_utc()))
 }
 
 pub(in crate::durable_host) fn should_replay_invocation(

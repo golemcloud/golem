@@ -10771,6 +10771,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
     r#PendingUpdateParams:
       type: object
       title: r#PendingUpdateParams

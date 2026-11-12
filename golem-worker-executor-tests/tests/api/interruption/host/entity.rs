@@ -26,7 +26,7 @@ use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::services::{HasComponentService, HasOplog};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor::workerctx::{
@@ -226,12 +226,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 invocation_context: InvocationContextStack::fresh(),
                 principal: principal.clone(),
             };
-            // Replay mode suppresses primary invocation markers. The entity scope remains Live.
+            // Entity execution bypasses primary pending admission. The entity scope remains Live.
             let result = invoke_observed_and_traced(
                 lower_invocation(init, &metadata, Some(&parsed))?,
                 store,
                 instance,
-                InvocationMode::Replay,
                 None,
             )
             .await?;
@@ -259,7 +258,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 lower_invocation(method, &metadata, Some(&parsed))?,
                 store,
                 instance,
-                InvocationMode::Replay,
                 None,
             )
             .await
