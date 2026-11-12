@@ -1331,7 +1331,8 @@ not published yet; it carries no principal or context. Tests:
 `tests/rpc/held_response_restart.rs`.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
-interrupt, delete, resume, update, revert, and plugin changes never create an absent agent.
+interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
+reads, cancel and connect never create an absent agent.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
