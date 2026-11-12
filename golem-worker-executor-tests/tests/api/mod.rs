@@ -1187,6 +1187,101 @@ async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_err
     Ok(())
 }
 
+/// The same holds for an ephemeral agent whose delete failed while removing its durable state,
+/// after the agent's runtime and status actor had stopped. The inspection gate that refuses to
+/// make a read the agent's first start gives the deletion error instead of reading the stopped
+/// status actor.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_deletion_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
+    use golem_common::model::filesystem::FileReadHead;
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = executor
+        .start_agent(
+            &component.id,
+            agent_id!("EphemeralCounter", "failed-delete"),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+
+    // Armed once the delete reaches the durable state, so the failure lands in the removal of the
+    // derived state, after the runtime stopped and before the oplog is deleted.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let agent = agent.clone();
+        async move { executor.delete_worker(&agent).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_some());
+
+    let (frame, _) = first_read_frame(&executor, &agent, "/a.txt").await?;
+    let Some(get_file_contents_response::Result::Failure(error)) = frame else {
+        panic!("a read of an agent that still exists answered {frame:?}");
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?;
+    assert!(
+        matches!(&error, WorkerExecutorError::InvalidRequest { details }
+            if details.contains("being deleted")),
+        "{error:?}"
+    );
+
+    executor.delete_worker(&agent).await?;
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
+    assert_eq!(
+        read_head(&executor, &agent, "/a.txt").await?,
+        FileReadHead::Absent
+    );
+    Ok(())
+}
+
 /// A read, listing or wallet read that waits behind guest work when a delete claims the agent
 /// answers as for a missing agent, not with the deletion's failure.
 #[test]
