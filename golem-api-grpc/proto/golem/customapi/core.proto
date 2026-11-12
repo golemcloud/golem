@@ -4,6 +4,7 @@ package golem.customapi;
 
 import "golem/component/component_id.proto";
 import "golem/component/agent.proto";
+import "golem/http/http.proto";
 import "golem/schema/schema.proto";
 import "golem/schema/agent.proto";
 import "golem/common/empty.proto";
@@ -238,7 +239,7 @@ message RouteBehaviour {
     CompiledInputSchema constructor_input = 11;
     CompiledInputSchema method_input = 12;
     golem.component.AgentMode agent_mode = 13;
-    AgentRouteMode route_mode = 14;
+    golem.http.HttpRouteMode route_mode = 14;
     uint32 base_path_variables = 15;
     RequestBodySchema body = 16;
     optional DurableStreamRoutePolicy durable_streams = 17;
@@ -289,12 +290,6 @@ message RouteBehaviour {
   message DurableStreamRouteLoadPolicy {
     optional uint32 max_concurrent_readers_per_stream = 1;
     optional uint32 max_append_requests_per_second_per_stream = 2;
-  }
-
-  enum AgentRouteMode {
-    AGENT_ROUTE_MODE_UNSPECIFIED = 0;
-    REST = 1;
-    DURABLE_STREAMS = 2;
   }
 
   message CorsPreflight {

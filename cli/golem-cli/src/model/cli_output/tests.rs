@@ -3310,6 +3310,8 @@ fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> 
 }
 
 fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails> {
+    use golem_schema::http::HttpRouteMode;
+
     (
         arb_http_method(),
         proptest::collection::vec(arb_path_segment(), 0..2),
@@ -3341,9 +3343,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
             (
                 arb_small_string(),
                 arb_small_string(),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
                 proptest::option::of(1u32..=16),
                 proptest::option::of(1u32..=1000),
             )
@@ -3351,9 +3350,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     |(
                         input_slot,
                         output_slot,
-                        allow_external_writes,
-                        allow_stream_delete,
-                        allow_invocation_delete,
                         max_concurrent_readers_per_stream,
                         max_append_requests_per_second_per_stream,
                     )| Some(
@@ -3378,9 +3374,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                                 content_type: Some("application/octet-stream".to_string()),
                             },
                         ],
-                            allow_external_writes,
-                            allow_stream_delete,
-                            allow_invocation_delete,
                             load: Some(golem_common::model::agent::DurableStreamRouteLoadOptions {
                                 max_concurrent_readers_per_stream,
                                 max_append_requests_per_second_per_stream,
@@ -3389,6 +3382,12 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     ),
                 ),
         ],
+        proptest::option::of(proptest::sample::select(vec![
+            HttpRouteMode::DurableStreams,
+            HttpRouteMode::Plain,
+            HttpRouteMode::Sse,
+            HttpRouteMode::WebSocket,
+        ])),
     )
         .prop_map(
             |(
@@ -3399,6 +3398,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 auth_details,
                 allowed_patterns,
                 durable_streams,
+                mode,
             )| {
                 golem_common::model::agent::HttpEndpointDetails {
                     http_method,
@@ -3408,6 +3408,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     auth_details,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     durable_streams,
+                    mode,
                 }
             },
         )

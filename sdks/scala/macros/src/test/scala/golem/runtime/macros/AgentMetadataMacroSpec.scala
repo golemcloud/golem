@@ -205,7 +205,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     @endpoint(method = "POST", path = "/plain")
     def plain(value: String): Future[String]
 
-    @endpoint(method = "POST", path = "/process")
+    @endpoint(method = "POST", path = "/process", mode = "sse")
     @durableStreamSlot(
       endpointMethod = "POST",
       endpointPath = "/process",
@@ -225,9 +225,6 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     @durableStreams(
       endpointMethod = "POST",
       endpointPath = "/process",
-      allowExternalWrites = true,
-      allowStreamDelete = false,
-      allowInvocationDelete = false,
       maxConcurrentReadersPerStream = 8,
       maxAppendRequestsPerSecondPerStream = 25
     )
@@ -593,16 +590,18 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           ),
           process.slots.map(_.name) == List(Some("body"), Some("result")),
           process.slots.map(_.contentType) == List(Some("application/json"), Some("text/plain")),
-          process.allowExternalWrites.contains(true),
-          process.allowStreamDelete.contains(false),
-          process.allowInvocationDelete.contains(false),
+          durableStreamMetadata.methods
+            .find(_.name == "process")
+            .get
+            .httpEndpoints
+            .head
+            .mode
+            .contains(golem.runtime.http.HttpRouteMode.Sse),
           process.load.flatMap(_.maxConcurrentReadersPerStream).contains(8),
           process.load.flatMap(_.maxAppendRequestsPerSecondPerStream).contains(25),
-          defaults.allowExternalWrites.isEmpty,
-          defaults.allowStreamDelete.isEmpty,
-          defaults.allowInvocationDelete.isEmpty,
           defaults.load.isEmpty,
-          plain.durableStreams.isEmpty
+          plain.durableStreams.isEmpty,
+          plain.mode.isEmpty
         )
       }
     )
