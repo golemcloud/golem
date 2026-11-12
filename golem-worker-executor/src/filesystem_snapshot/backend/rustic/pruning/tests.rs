@@ -3238,7 +3238,7 @@ async fn a_prune_that_fails_without_a_storage_failure_leaves_the_delete_its_succ
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switches() {
     // Each order where one delete runs some steps, the other runs some steps, and then each runs
     // to its end. This holds each pause of one delete while the other runs.

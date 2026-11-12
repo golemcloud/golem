@@ -2039,6 +2039,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(
@@ -2046,6 +2047,17 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
         ),
     });
 
+    assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+
+    status.pending_invocations[0].not_before = Some(Timestamp::from(
+        Timestamp::now_utc().to_millis() + 3_600_000,
+    ));
+    assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+    status.pending_invocations[0].not_before = Some(Timestamp::from(0));
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
         &status
     ));

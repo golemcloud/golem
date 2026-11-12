@@ -596,6 +596,7 @@ message RemoteTransactionParameters {
 message PendingAgentInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocation invocation = 2;
+  google.protobuf.Timestamp not_before = 3;
 }
 
 message SnapshotBasedUpdateParameters {

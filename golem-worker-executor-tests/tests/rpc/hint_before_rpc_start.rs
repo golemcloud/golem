@@ -45,6 +45,38 @@ impl DispatchThenHangRpc {
 
 #[async_trait]
 impl Rpc for DispatchThenHangRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         agent: AgentTarget,

@@ -44,10 +44,11 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::agent::ScheduleId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -1180,6 +1181,34 @@ impl WorkerGrpcApi {
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
             .into();
+
+        if let Some(scheduled) = request.scheduled {
+            let owner = validate_protobuf_agent_id(scheduled.owner_agent_id)?;
+            let receipt = ScheduleId {
+                id: scheduled
+                    .schedule_id
+                    .ok_or_else(|| bad_request_error("Missing schedule_id"))?
+                    .into(),
+            };
+            let environment = scheduled
+                .target_environment_id
+                .ok_or_else(|| bad_request_error("Missing target_environment_id"))?
+                .try_into()
+                .map_err(|error| {
+                    bad_request_error(format!("invalid target_environment_id: {error}"))
+                })?;
+            return self
+                .worker_service
+                .cancel_scheduled_invocation(
+                    &OwnedAgentId::new(environment, &agent_id),
+                    &idempotency_key,
+                    receipt,
+                    &owner,
+                    auth,
+                )
+                .await
+                .map_err(Into::into);
+        }
 
         let canceled = self
             .worker_service

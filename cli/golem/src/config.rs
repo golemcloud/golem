@@ -1274,7 +1274,8 @@ fn validate(config: &GolemServerConfig) -> anyhow::Result<()> {
 }
 
 /// Prints the default configuration and the Postgres and S3 example for a `--dump-config*`
-/// flag. Returns `false` when `flag` is not a dump flag.
+/// flag. Returns `false` when `flag` is not a dump flag, and an error for an unknown
+/// `--dump-config*` flag.
 ///
 /// The output leaves out the launcher-owned keys and the paths derived from `data_dir`, so it is
 /// a valid `--config` file in which changing `data_dir` moves all local state.
@@ -1292,7 +1293,7 @@ pub fn dump_config(flag: &str) -> anyhow::Result<bool> {
             "Postgres and S3",
             figment(GolemServerConfig::postgres_s3_example)?,
         )],
-    ))
+    )?)
 }
 
 /// The configuration that `make` derives from [`REFERENCE_DATA_DIR`], without the launcher-owned

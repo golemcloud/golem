@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::Timestamp;
 
 /// Why a recovery-index member is stale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,7 +206,7 @@ impl DefaultWorkerService {
         matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
-        ) || status.has_pending_work()
+        ) || status.has_pending_work(Timestamp::now_utc())
             || !status.pending_durable_stream_cancellations.is_empty()
     }
 }

@@ -86,6 +86,41 @@ fn scheduled_action_fingerprints_roundtrip() {
 }
 
 #[test]
+fn scheduled_invocation_wake_roundtrips_without_payload() {
+    use golem_common::model::{AgentFingerprint, IdempotencyKey};
+    use golem_common::serialization::deserialize;
+
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Counter(\"scheduled\")".to_string(),
+        },
+    );
+    let fingerprint = AgentFingerprint::new();
+    let key = IdempotencyKey::new("scheduled-invocation".to_string());
+    let action = ScheduledAction::WakeInvocation {
+        owned_agent_id: owned_agent_id.clone(),
+        idempotency_key: key.clone(),
+        target_worker_fingerprint: fingerprint,
+    };
+    let decoded = deserialize::<ScheduledAction>(&serialize(&action).unwrap()).unwrap();
+    assert_eq!(decoded, action);
+    assert_eq!(decoded.owned_agent_id(), owned_agent_id);
+    let id = ScheduleId::for_invocation(fingerprint, &key);
+    assert_eq!(id.id, Uuid::new_v5(&fingerprint.0, key.value.as_bytes()));
+    assert_eq!(id, ScheduleId::for_invocation(fingerprint, &key));
+    assert_ne!(
+        id,
+        ScheduleId::for_invocation(AgentFingerprint::new(), &key)
+    );
+    assert_ne!(
+        id,
+        ScheduleId::for_invocation(fingerprint, &IdempotencyKey::fresh())
+    );
+}
+
+#[test]
 async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency() {
     let postgres = DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await;
     let db_name = format!("scheduler_{}", Uuid::new_v4().simple());
@@ -123,16 +158,11 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         agent_id: "scheduled".to_string(),
     };
     let environment_id = EnvironmentId::new();
-    let fingerprint = golem_common::model::AgentFingerprint::new();
-    let action = ScheduledAction::CompletePromise {
-        account_id: AccountId::new(),
-        target_worker_fingerprint: fingerprint,
-        environment_id,
-        promise_id: PromiseId {
-            agent_id: agent_id.clone(),
-            fingerprint,
-            oplog_idx: OplogIndex::from_u64(42),
-        },
+    let idempotency_key = golem_common::model::IdempotencyKey::fresh();
+    let action = ScheduledAction::WakeInvocation {
+        target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
+        owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+        idempotency_key,
     };
     let conflicting_action = ScheduledAction::Resume {
         agent_created_by: AccountId::new(),
@@ -164,6 +194,10 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id, schedule_id);
+    assert_eq!(
+        claimed[0].due_at.timestamp_millis(),
+        due_at.timestamp_millis()
+    );
     assert_eq!(claimed[0].action, action);
     assert!(
         storage
