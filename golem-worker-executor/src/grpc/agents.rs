@@ -16,7 +16,7 @@ use super::{
     AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AgentMetadata, AuthCtx,
     CancelInvocationRequest, DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest,
     ForkWorkerResponse, HasActiveAgents, HasAll, HasEvents, HasPromiseService, HasWorkerService,
-    HashMap, InvocationContextStack, LookupResult, OplogIndex, OwnedAgentId, RecvError,
+    HashMap, LookupResult, OplogIndex, OwnedAgentId, RecvError,
     ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
     UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
@@ -460,6 +460,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await;
         }
 
+        self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
@@ -472,18 +473,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
-            worker.cancel_invocation(idempotency_key).await?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
+            Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
+                .await?;
             Ok(true)
         } else if status.invocation_results.contains_key(&idempotency_key) {
             Ok(false)
@@ -493,17 +487,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
             match worker.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {
@@ -513,7 +499,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .iter()
                         .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
                     {
-                        worker.cancel_invocation(idempotency_key).await?;
+                        Self::not_found_if_deleting(
+                            &worker,
+                            worker.cancel_invocation(idempotency_key).await,
+                        )
+                        .await?;
                         Ok(true)
                     } else {
                         Err(WorkerExecutorError::invalid_request("Invocation not found"))
