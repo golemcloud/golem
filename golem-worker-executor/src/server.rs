@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Computing the worker startup future's layout exceeds rustc's default depth of 128.
-#![recursion_limit = "256"]
-
 use golem_common::SafeDisplay;
 use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
