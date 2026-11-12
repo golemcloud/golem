@@ -164,6 +164,12 @@ The command tree is metadata, not a spawned shell. A component cannot currently 
 
 On a command line, an enum value is matched without regard to letter case when that names exactly one case, so `literal` selects a case named `Literal`. Generated `--help` lists the positional arguments of a command with their summaries, and shows the possible values of an argument or option whose value is an enum.
 
+### Pick an exit code for a declared error
+
+A declared error needs an exit code from 1 to 255. Code 0 is refused, because it means success: the deployment rejects a tool that declares an error with code 0, and so does `golem build` when it generates a client for that tool. The built-in Bash tool returns the declared code as the status of the failed command, so `if`, `&&`, `||` and `$?` see the failure.
+
+In a shell, some codes already have a meaning: 124 is a time-out (the Bash tool's own time limit uses it), 126 is "cannot run", 127 is "not found", and 128 + N is "stopped by signal N" (130 is Ctrl+C, 137 is KILL). A tool can use them, for example to copy `timeout` or `git`, but a script that reads the code cannot tell them apart from these causes.
+
 ### Give a tool the caller's directory
 
 A tool is not a child process of its caller. It does not inherit a working directory or an environment; it receives only its input record. To start where the caller is, declare an option for the directory and name the `PWD` variable on it:
