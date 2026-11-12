@@ -474,14 +474,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn wait_for_unload_cleanup(&self) -> Result<(), WorkerExecutorError> {
         let instance = self.instance.lock().await;
         let cleanup = self.unload_cleanup.lock().unwrap().clone();
-        let missing_cleanup_error = match instance.deletion_runtime() {
-            WorkerInstance::CleanupFailed(error) if cleanup.is_none() => Some(error.clone()),
-            WorkerInstance::Running(_)
-            | WorkerInstance::Stopping(_)
-            | WorkerInstance::WaitingForPermit(_) => Some(WorkerExecutorError::runtime(
+        let missing_cleanup_error = if instance.runtime_active() {
+            Some(WorkerExecutorError::runtime(
                 "worker runtime has not stopped before cleanup wait",
-            )),
-            _ => None,
+            ))
+        } else {
+            instance
+                .cleanup_failure()
+                .filter(|_| cleanup.is_none())
+                .cloned()
         };
         drop(instance);
         if let Some(error) = missing_cleanup_error {

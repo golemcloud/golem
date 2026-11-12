@@ -639,6 +639,23 @@ fn oom_retry_preserves_startup_attempt() {
 }
 
 #[test]
+fn stale_startup_completion_keeps_failure_until_next_attempt() {
+    let tracker = StartupAttemptTracker::default();
+    let failed = tracker.begin(None);
+    let error = WorkerExecutorError::runtime("startup failed");
+
+    assert!(tracker.complete(failed, &Err(error.clone())));
+    assert_eq!(tracker.pending(), None);
+    assert_eq!(tracker.current().unwrap_err(), error);
+    assert!(!tracker.complete(failed, &Ok(())));
+    assert_eq!(tracker.current().unwrap_err(), error);
+
+    let next = tracker.begin(None);
+    assert_ne!(next, failed);
+    assert_eq!(tracker.current().unwrap(), Some(next));
+}
+
+#[test]
 fn startup_success_requires_matching_active_attempt() {
     let tracker = StartupAttemptTracker::default();
     let attempt = tracker.begin(None);

@@ -44,9 +44,15 @@ async fn waiting_stop_retains_admission_until_waiter_resolution_finishes() {
     let completed = waiting.complete(final_state);
     tokio::task::yield_now().await;
     assert!(
-        matches!(completed.state(), WorkerInstance::Unloaded { startup_failure: Some(error) }
+        matches!(completed.final_state(), FinalWorkerState::Unloaded { startup_failure: Some(error) }
         if error.to_string().contains("startup stopped"))
     );
+    assert!(matches!(
+        lifecycle.state(),
+        WorkerInstance::Unloaded {
+            startup_failure: Some(_)
+        }
+    ));
     assert!(exit.try_recv().unwrap().is_none());
     drop(completed);
     assert!(exit.await.is_err());
@@ -77,7 +83,11 @@ async fn loop_stop_retains_running_resources_until_waiter_resolution_finishes() 
     assert!(!commands.is_closed());
     let completed = running.complete(final_state);
     tokio::task::yield_now().await;
-    assert!(matches!(completed.state(), WorkerInstance::Unloaded { .. }));
+    assert!(matches!(
+        completed.final_state(),
+        FinalWorkerState::Unloaded { .. }
+    ));
+    assert!(matches!(lifecycle.state(), WorkerInstance::Unloaded { .. }));
     assert!(!commands.is_closed());
     drop(completed);
     assert!(commands.recv().await.is_none());
@@ -149,8 +159,12 @@ async fn overlapping_stops_retain_failure_disposition_and_shared_notification() 
         panic!("expected loop completion of overlapping stop");
     };
     let (phase, completed, pending) = stopping.complete(final_state);
-    assert!(matches!(phase, WorkerInstance::CleanupFailed(error)
+    assert!(matches!(phase, FinalWorkerState::CleanupFailed(error)
         if error.to_string().contains("cleanup failed")));
+    assert!(matches!(
+        lifecycle.state(),
+        WorkerInstance::CleanupFailed(_)
+    ));
     assert_eq!(pending, PendingLiveInvocationDisposition::Fail);
     let mut joined_wait = Box::pin(joined.wait());
     let mut original_wait = Box::pin(notify.wait());
@@ -159,4 +173,98 @@ async fn overlapping_stops_retain_failure_disposition_and_shared_notification() 
     completed.set();
     assert!(futures::poll!(joined_wait.as_mut()).is_ready());
     assert!(futures::poll!(original_wait.as_mut()).is_ready());
+}
+
+#[test]
+fn deletion_stop_leaves_a_stopped_runtime_without_a_second_stop() {
+    let mut lifecycle = WorkerLifecycle {
+        phase: WorkerInstance::Unloaded {
+            startup_failure: None,
+        },
+    };
+    let Some((DeleteOutcome::Started(_), Some(_sender))) = lifecycle.claim_deletion() else {
+        panic!("expected a started deletion");
+    };
+    let final_state = FinalWorkerState::Deleting;
+    let Some(StopPhase::Unloaded(unloaded)) =
+        lifecycle.begin_stop(StopOrigin::External, &final_state)
+    else {
+        panic!("expected the retained unloaded runtime");
+    };
+    assert!(matches!(
+        unloaded.complete(final_state),
+        FinalWorkerState::Deleting
+    ));
+
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::Deleting)
+    ));
+    assert!(lifecycle.ensure_not_deleting().is_err());
+    assert!(
+        lifecycle
+            .begin_stop(
+                StopOrigin::External,
+                &FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            )
+            .is_none()
+    );
+    assert!(matches!(
+        lifecycle.claim_deletion(),
+        Some((DeleteOutcome::AlreadyDeleting(_), None))
+    ));
+}
+
+#[test]
+fn deletion_retry_retains_cleanup_failure_and_completed_stages() {
+    let mut lifecycle = WorkerLifecycle {
+        phase: WorkerInstance::Stopping(StoppingWorker {
+            notify: OneShotEvent::new(),
+            final_state: FinalWorkerState::Deleting,
+            pending_live_invocations: PendingLiveInvocationDisposition::Fail,
+        }),
+    };
+    let Some((DeleteOutcome::Started(_), Some(first_attempt))) = lifecycle.claim_deletion() else {
+        panic!("expected a started deletion");
+    };
+    lifecycle.complete_deletion_stage(WorkerDeletionStage::BarriersClosed);
+    let failure = WorkerExecutorError::runtime("cleanup failed");
+    let final_state = FinalWorkerState::CleanupFailed(failure.clone());
+    let Some(StopPhase::Stopping(StoppingStop::InvocationLoop(stopping))) =
+        lifecycle.begin_stop(StopOrigin::InvocationLoop, &final_state)
+    else {
+        panic!("expected the retained stopping runtime");
+    };
+    let (completed, _notify, _pending) = stopping.complete(final_state);
+    assert!(matches!(completed, FinalWorkerState::CleanupFailed(_)));
+    assert_eq!(lifecycle.cleanup_failure(), Some(&failure));
+    assert!(lifecycle.ensure_not_deleting().is_err());
+
+    first_attempt.send(Err(failure.clone())).unwrap();
+    let Some((DeleteOutcome::Started(_), Some(_retry))) = lifecycle.claim_deletion() else {
+        panic!("expected a retry after the failed attempt");
+    };
+    assert!(matches!(
+        lifecycle.state(),
+        WorkerInstance::Deleting(deleting)
+            if deleting.completed_stage == WorkerDeletionStage::BarriersClosed
+    ));
+    assert_eq!(lifecycle.cleanup_failure(), Some(&failure));
+
+    lifecycle.deletion_cleanup_completed();
+    assert!(lifecycle.cleanup_failure().is_none());
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::Deleting)
+    ));
+}
+
+#[test]
+fn deletion_claims_nothing_before_initialization_completes() {
+    let mut lifecycle = WorkerLifecycle::unresolved();
+    assert!(lifecycle.claim_deletion().is_none());
+    assert!(matches!(lifecycle.state(), WorkerInstance::Unresolved));
+    assert!(lifecycle.ensure_not_deleting().is_ok());
 }
