@@ -655,10 +655,14 @@ describe("snapshotting", () => {
     await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/already initialized/)
   })
 
-  it("load fails when GOLEM_AGENT_ID is missing", async () => {
+  it("load fails with the missing card grant when GOLEM_AGENT_ID is not readable", async () => {
     __setGetEnvironmentForTest([])
     const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "x" })
-    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/GOLEM_AGENT_ID/)
+    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(
+      new Error(
+        "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+      ),
+    )
   })
 
   it("load rejects malformed multipart/mixed envelopes (no body)", async () => {

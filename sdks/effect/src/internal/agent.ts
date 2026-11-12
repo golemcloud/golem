@@ -1481,7 +1481,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   )
   const agentIdEntry = env.find(([k]) => k === "GOLEM_AGENT_ID")
   if (agentIdEntry === undefined) {
-    throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
+    throw new Error(
+      "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    )
   }
   const agentIdString = agentIdEntry[1]
   const [agentTypeName, typedConstructor, phantomId] = decodeAgentId(
