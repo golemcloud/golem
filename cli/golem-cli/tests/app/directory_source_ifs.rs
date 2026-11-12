@@ -409,6 +409,16 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         .cli([
             flag::YES,
             cmd::AGENT,
+            cmd::NEW,
+            "IfsProbeAgent(\"readonly-directory\")",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
             "files",
             "IfsProbeAgent(\"readonly-directory\")",
             "/workspace",
