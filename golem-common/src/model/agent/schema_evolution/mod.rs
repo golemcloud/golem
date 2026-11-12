@@ -19,6 +19,8 @@
 //! compatible only when the canonical text of every existing key still parses with
 //! the new schema and formats to the same text; any other change gives existing
 //! keyed agents new keys. This module reports the changes that are not compatible.
+//! An integer type can widen, because the text of an integer does not depend on
+//! its width; a float type cannot change width.
 
 use crate::base_model::agent::AgentTypeName;
 use crate::schema::agent::AgentTypeSchema;
@@ -112,6 +114,35 @@ fn discriminant_name(typ: &SchemaType) -> &'static str {
     }
 }
 
+/// The signedness and bit width of an integer type.
+fn integer_width(typ: &SchemaType) -> Option<(bool, u32)> {
+    match typ {
+        SchemaType::S8 { .. } => Some((true, 8)),
+        SchemaType::S16 { .. } => Some((true, 16)),
+        SchemaType::S32 { .. } => Some((true, 32)),
+        SchemaType::S64 { .. } => Some((true, 64)),
+        SchemaType::U8 { .. } => Some((false, 8)),
+        SchemaType::U16 { .. } => Some((false, 16)),
+        SchemaType::U32 { .. } => Some((false, 32)),
+        SchemaType::U64 { .. } => Some((false, 64)),
+        _ => None,
+    }
+}
+
+/// The key text of an integer is its decimal value for every integer type, so an
+/// integer type can change to another integer type that holds every value of the
+/// old one.
+fn holds_every_value(
+    (old_signed, old_bits): (bool, u32),
+    (new_signed, new_bits): (bool, u32),
+) -> bool {
+    match (old_signed, new_signed) {
+        (false, true) => new_bits > old_bits,
+        (true, false) => false,
+        _ => new_bits >= old_bits,
+    }
+}
+
 /// Resolve any [`SchemaType::Ref`] chain against the owning graph, returning
 /// the original (possibly ref) type if resolution fails so that downstream
 /// comparison still produces a stable result.
@@ -152,6 +183,20 @@ impl<'a> Checker<'a> {
         }
         let old = resolve(self.old_graph, old);
         let new = resolve(self.new_graph, new);
+
+        if let (Some(old_int), Some(new_int)) = (integer_width(old), integer_width(new)) {
+            if !holds_every_value(old_int, new_int) {
+                self.error(
+                    path,
+                    format!(
+                        "Type changed from {} to {}, which does not hold every value of the old type",
+                        discriminant_name(old),
+                        discriminant_name(new)
+                    ),
+                );
+            }
+            return;
+        }
 
         let old_disc = discriminant_name(old);
         let new_disc = discriminant_name(new);

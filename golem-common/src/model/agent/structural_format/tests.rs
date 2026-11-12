@@ -104,6 +104,30 @@ mod schema_native_tests {
         );
     }
 
+    /// Pins the float text: the shortest decimal that reads back to the same value of
+    /// the float's own width, without an exponent. Writing an `f32` through `f64`
+    /// would give `0.10000000149011612` for `0.1`.
+    #[test]
+    fn golden_float_text() {
+        let f32s = [0.1f32, 1e-7, 16777216.0, f32::MAX];
+        let f64s = [0.1f64, 1e-7, 1e21, -2.5];
+        let v = typed(
+            f32s.iter()
+                .map(|_| ("f32", SchemaType::f32()))
+                .chain(f64s.iter().map(|_| ("f64", SchemaType::f64())))
+                .collect(),
+            f32s.iter()
+                .map(|v| SchemaValue::F32(*v))
+                .chain(f64s.iter().map(|v| SchemaValue::F64(*v)))
+                .collect(),
+        );
+        assert_eq!(
+            roundtrip(&v),
+            "0.1,0.0000001,16777216.0,340282350000000000000000000000000000000.0,\
+             0.1,0.0000001,1000000000000000000000.0,-2.5"
+        );
+    }
+
     #[test]
     fn structural_composites_roundtrip() {
         let empty_record = SchemaType::record(vec![]);

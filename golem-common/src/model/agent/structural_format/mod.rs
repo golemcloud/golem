@@ -23,8 +23,9 @@
 //! The formatter writes exactly one text for each value, so equal values give
 //! equal text:
 //!
-//! - Integers are written in decimal without leading zeros; floats always have a
-//!   decimal point, and NaN and infinities are rejected.
+//! - Integers are written in decimal without leading zeros. A float is written as
+//!   the shortest decimal that reads back to the same value of its own width, with
+//!   no exponent and always with a decimal point; NaN and infinities are rejected.
 //! - Strings, chars and tagged strings use JSON escaping. Unicode code points are
 //!   kept as given, with no normalization.
 //! - A record is `(f1,f2,…)`; the root record has no parentheses. Trailing fields
