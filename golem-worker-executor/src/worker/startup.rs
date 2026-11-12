@@ -292,7 +292,9 @@ impl RunningWorker {
         let panic_parent = Arc::clone(&parent);
         let shutdown_parent = Arc::clone(&parent);
         let invocation_loops = parent.active_agents().invocation_loops();
-        let invocation_loop_task = async move {
+        // Box before the panic and shutdown wrappers capture this future, so their layouts
+        // do not embed the entire invocation loop state.
+        let invocation_loop_task = Box::pin(async move {
             RunningWorker::invocation_loop(
                 receiver,
                 active_clone,
@@ -312,7 +314,7 @@ impl RunningWorker {
             )
             .await;
             drop((memory_grant_registration, component_charge));
-        };
+        });
         let handle = invocation_loops.spawn(
             async move {
                 // Join-only ownership: interruption must finish the loop's commits and unload,

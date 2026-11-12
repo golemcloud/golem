@@ -29,7 +29,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -633,6 +633,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AccountId,
         _: AccountEmail,
+        _: Principal,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
