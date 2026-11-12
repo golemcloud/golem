@@ -953,11 +953,7 @@ impl RunningWorker {
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;
-            if let WorkerInstance::Running(running) = lifecycle.deletion_runtime_mut()
-                && running.start_attempt == start_attempt
-            {
-                running.owner_generation_started = true;
-            }
+            lifecycle.owner_generation_started(start_attempt);
         }
         let mut context = match Ctx::create(
             worker_metadata.created_by,

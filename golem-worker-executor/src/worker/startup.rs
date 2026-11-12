@@ -40,14 +40,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if this.owner_retirement_requested.is_cancelled() {
             return Err(this.retirement_error());
         }
-        match &*instance_guard {
-            WorkerInstance::Unloaded {
-                startup_failure: Some(err),
-            } if this.agent_mode() == AgentMode::Ephemeral => {
-                crate::metrics::ephemeral::record_inactive_invocation_failure();
-                Err(err.clone())
-            }
-            WorkerInstance::Unloaded { .. } => {
+        match instance_guard.transition() {
+            LifecycleTransition::Unloaded(unloaded) => {
+                if this.agent_mode() == AgentMode::Ephemeral
+                    && let Some(error) = unloaded.lifecycle().startup_failure()
+                {
+                    crate::metrics::ephemeral::record_inactive_invocation_failure();
+                    return Err(error.clone());
+                }
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
@@ -56,9 +56,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
                     Err(error) => {
-                        *instance_guard = WorkerInstance::Unloaded {
-                            startup_failure: Some(error.clone()),
-                        };
+                        unloaded.startup_failed(error.clone());
                         this.fail_pending_invocations(error.clone()).await;
                         drop(instance_guard);
                         if let Some(start_attempt) = start_attempt {
@@ -73,7 +71,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     && status.current_idempotency_key.is_some()
                 {
                     this.add_and_commit_oplog_internal(
-                        &instance_guard,
+                        unloaded.lifecycle(),
                         OplogEntry::resumed(),
                         None,
                     )
@@ -82,7 +80,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();
-                *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
+                unloaded.wait_for_permit(WaitingWorker::new(
                     this.clone(),
                     memory_requirement,
                     oom_retry_count,
@@ -90,16 +88,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
                 Ok(Some(start_attempt))
             }
-            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
-            WorkerInstance::WaitingForPermit(waiting) => Ok(Some(waiting.start_attempt)),
-            WorkerInstance::Running(_) => this.startup_attempt.current(),
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => Err(
-                WorkerExecutorError::invalid_request("Worker is being deleted"),
-            ),
-            WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => Err(
+            LifecycleTransition::CleanupFailed(error) => Err(error.clone()),
+            LifecycleTransition::WaitingForPermit(waiting) => Ok(Some(waiting.start_attempt())),
+            LifecycleTransition::Running => this.startup_attempt.current(),
+            LifecycleTransition::Deleting => Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            )),
+            LifecycleTransition::Unresolved(_) | LifecycleTransition::Initializing(_) => Err(
                 WorkerExecutorError::runtime("Worker initialization has not completed"),
             ),
-            WorkerInstance::Stopping(_) => panic!("impossible"),
+            LifecycleTransition::Stopping => {
+                Err(WorkerExecutorError::runtime("Worker is stopping"))
+            }
         }
     }
     pub(in crate::worker) fn mark_as_loading(&self, start_attempt: Uuid) {
@@ -148,7 +148,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn complete_startup_success(&self, start_attempt: Uuid) -> bool {
         let instance_guard = self.instance.lock().await;
-        let active_attempt = match &*instance_guard {
+        let active_attempt = match instance_guard.state() {
             WorkerInstance::Running(running) => Some(running.start_attempt),
             _ => None,
         };
@@ -210,44 +210,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_trace: WorkerTrace,
     ) {
         let mut instance_guard = this.instance.lock().await;
-        match &*instance_guard {
-            WorkerInstance::WaitingForPermit(waiting_worker)
-                if waiting_worker.start_attempt == start_attempt =>
-            {
-                this.interrupt_signal
-                    .reset_terminal_for_new_generation()
-                    .await;
-                let running = RunningWorker::new(
-                    this.owned_agent_id.clone(),
-                    this.queue.clone(),
-                    this.clone(),
-                    memory_grant,
-                    component_charge,
-                    concurrent_agent_permit,
-                    oom_retry_count,
-                    start_attempt,
-                    worker_trace,
-                )
+        if let LifecycleTransition::WaitingForPermit(waiting) = instance_guard.transition()
+            && waiting.start_attempt() == start_attempt
+        {
+            this.interrupt_signal
+                .reset_terminal_for_new_generation()
                 .await;
-                crate::metrics::workers::dec_worker_waiting_for_memory();
-                match running {
-                    Ok(running) => {
-                        crate::metrics::workers::inc_worker_memory_resident();
-                        *instance_guard = WorkerInstance::Running(running);
-                    }
-                    Err(error) => {
-                        this.complete_startup(start_attempt, Err(error.clone()));
-                        *instance_guard = WorkerInstance::Unloaded {
-                            startup_failure: Some(error),
-                        };
-                    }
+            let running = RunningWorker::new(
+                this.owned_agent_id.clone(),
+                this.queue.clone(),
+                this.clone(),
+                memory_grant,
+                component_charge,
+                concurrent_agent_permit,
+                oom_retry_count,
+                &waiting,
+                worker_trace,
+            )
+            .await;
+            crate::metrics::workers::dec_worker_waiting_for_memory();
+            match running {
+                Ok(running) => {
+                    crate::metrics::workers::inc_worker_memory_resident();
+                    waiting.install_running(running);
+                }
+                Err(error) => {
+                    this.complete_startup(start_attempt, Err(error.clone()));
+                    waiting.startup_failed(error);
                 }
             }
-            _ => {
-                debug!("worker was not waiting for permit anymore, not starting");
-                // The worker is not becoming resident: dropping `memory_grant`
-                // here returns its reservation to the gate.
-            }
+        } else {
+            debug!("worker was not waiting for permit anymore, not starting");
+            // The worker is not becoming resident: dropping `memory_grant`
+            // here returns its reservation to the gate.
         }
     }
 }
@@ -261,9 +256,10 @@ impl RunningWorker {
         component_charge: WorkerComponentCharge,
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
-        start_attempt: Uuid,
+        waiting: &WaitingPhase<'_>,
         worker_trace: WorkerTrace,
     ) -> Result<Self, WorkerExecutorError> {
+        let start_attempt = waiting.start_attempt();
         let completion = tasks::TaskScope::default();
         completion
             .bind(&parent.tasks)
@@ -326,7 +322,7 @@ impl RunningWorker {
                         panic_parent.complete_startup(start_attempt, Err(error.clone()));
                         panic_parent
                             .stop_internal(
-                                true,
+                                StopOrigin::InvocationLoop,
                                 Some(error.clone()),
                                 UnloadRequest::ordinary(UnloadReason::Panic),
                                 FinalWorkerState::CleanupFailed(error),
@@ -346,7 +342,7 @@ impl RunningWorker {
         );
 
         Ok(RunningWorker {
-            handle: Some(handle),
+            handle,
             sender,
             queue,
             waiting_for_command,
@@ -360,9 +356,9 @@ impl RunningWorker {
             owner_generation_started: false,
         })
     }
-    pub fn stop(mut self, unload_request: UnloadRequest) -> JoinHandle<()> {
+    pub fn stop(self, unload_request: UnloadRequest) -> JoinHandle<()> {
         *self.unload_request.lock().unwrap() = Some(unload_request);
-        self.handle.take().unwrap()
+        self.handle
     }
     pub(in crate::worker) async fn invocation_loop<Ctx: WorkerCtx>(
         receiver: UnboundedReceiver<WorkerCommand>,
@@ -572,7 +568,7 @@ impl WaitingWorker {
         });
 
         WaitingWorker {
-            handle: Some(handle),
+            handle,
             start_attempt,
         }
     }
@@ -580,8 +576,6 @@ impl WaitingWorker {
 
 impl Drop for WaitingWorker {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
+        self.handle.abort();
     }
 }

@@ -56,7 +56,7 @@ use super::status::{
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
     PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
-    WorkerStatusMetric,
+    WorkerLifecycle, WorkerStatusMetric,
 };
 use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
@@ -222,7 +222,7 @@ enum StatusJob {
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
-        _instance_guard: Option<OwnedMutexGuard<WorkerInstance>>,
+        _instance_guard: Option<OwnedMutexGuard<WorkerLifecycle>>,
         _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
         wallet_commit: Option<Box<WalletCommit>>,
         wallet_recovery: Option<Box<dyn FnOnce() + Send>>,
@@ -233,7 +233,7 @@ enum StatusJob {
         idempotency_key: IdempotencyKey,
         expected_result_generation: u64,
         expected_revert_generation: u64,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         done: oneshot::Sender<Result<bool, OplogError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
@@ -256,7 +256,7 @@ enum StatusJob {
     /// instance under that guard when it answers `Confirmed`.
     ConfirmFilesystemSnapshot {
         name: FilesystemSnapshotName,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         on_confirmed: OnConfirmed,
         done: oneshot::Sender<ConfirmOutcome>,
     },
@@ -380,7 +380,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
         published_authority_generation: Arc<AtomicU64>,
-        lifecycle: Arc<Mutex<WorkerInstance>>,
+        lifecycle: Arc<Mutex<WorkerLifecycle>>,
     ) -> Self {
         let task_owner = oplog.task_owner().cloned();
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
@@ -551,7 +551,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 {
                                     return Err(refusal.into());
                                 }
-                                if let WorkerInstance::Running(running) = &*instance_guard {
+                                if let WorkerInstance::Running(running) = instance_guard.state() {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
                                 Ok(true)
@@ -613,7 +613,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         let outcome = state.confirm_filesystem_snapshot(name).await;
                         if outcome == ConfirmOutcome::Confirmed {
-                            on_confirmed(&instance_guard);
+                            on_confirmed(instance_guard.state());
                         }
                         let _ = done.send(outcome);
                         drop(instance_guard);
@@ -633,7 +633,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     LifecycleJob::NotifyStatusChanged => {
                         let lifecycle_guard = lifecycle.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
-                        if let WorkerInstance::Running(running) = &*lifecycle_guard {
+                        if let WorkerInstance::Running(running) = lifecycle_guard.state() {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
@@ -790,7 +790,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         entry: OplogEntry,
         worker: Arc<Worker<Ctx>>,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
     ) -> Result<(), WorkerExecutorError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
@@ -857,7 +857,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         idempotency_key: IdempotencyKey,
         expected_result_generation: u64,
         expected_revert_generation: u64,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
     ) -> Result<bool, OplogError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
@@ -980,7 +980,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub(super) async fn append_confirmation(
         &self,
         name: FilesystemSnapshotName,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         on_confirmed: OnConfirmed,
     ) -> ConfirmOutcome {
         self.commit
@@ -1945,7 +1945,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
-        use super::{ConfirmOutcome, WorkerInstance};
+        use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
         let owned_agent_id = OwnedAgentId::new(
             EnvironmentId::new(),
@@ -1973,7 +1973,7 @@ mod tests {
             owned_agent_id,
         };
         drop(status_rx);
-        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerLifecycle::unresolved()))
             .lock_owned()
             .await;
 
@@ -1987,7 +1987,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn a_confirmation_gives_the_reply_of_the_status_task() {
-        use super::{ConfirmOutcome, WorkerInstance};
+        use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
         let owned_agent_id = OwnedAgentId::new(
             EnvironmentId::new(),
@@ -2020,7 +2020,7 @@ mod tests {
                 let _ = done.send(ConfirmOutcome::Superseded);
             }
         });
-        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerLifecycle::unresolved()))
             .lock_owned()
             .await;
 

@@ -1065,7 +1065,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(instance_guard) = caller_instance_guard.as_ref()
-                && let WorkerInstance::Running(running) = &**instance_guard
+                && let WorkerInstance::Running(running) = instance_guard.state()
             {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
@@ -1140,11 +1140,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(invocation);
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
-        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
+        let needs_start = matches!(instance_guard.state(), WorkerInstance::Unloaded { .. });
         drop(instance_guard);
         if needs_start {
             Self::start_if_needed(self.clone()).await?;
@@ -1171,7 +1171,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::GetWalletCards { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -1228,7 +1228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // and this method must not start one: the worker already reached a stopped state, which is
         // exactly the "not processing anything until the next explicit start" condition callers
         // wait for.
-        if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
+        if matches!(instance_guard.state(), WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
 
@@ -1239,7 +1239,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
