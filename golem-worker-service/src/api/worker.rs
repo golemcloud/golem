@@ -1044,6 +1044,7 @@ impl WorkerApi {
                 &agent_id,
                 &request.target_agent_id,
                 request.oplog_index_cutoff,
+                None,
                 auth,
             )
             .await?;

@@ -22,9 +22,11 @@ use super::{
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
+use crate::worker::CreateIntent;
 use golem_common::model::agent::{
     AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
 };
+use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -180,6 +182,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             principal,
             freshness_disposition,
+            CreateIntent::Create {
+                exclusive: !request.ignore_already_existing,
+                idempotency_key: request.idempotency_key.clone().map(Into::into),
+            },
         )
         .await?;
 
@@ -323,6 +329,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
                 &auth_ctx,
+                CreateRequest::new(
+                    CreateRequestKind::Fork,
+                    None,
+                    extract_principal(&request.principal),
+                    &InvocationContextStack::fresh(),
+                ),
             )
             .await?;
 

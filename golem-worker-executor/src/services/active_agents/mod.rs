@@ -76,10 +76,10 @@ use crate::worker::instance::{
 };
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
+use crate::worker::{CreateIntent, RetirementReason, Worker, WorkerCreationMode};
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
-use crate::worker::{RetirementReason, Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -348,6 +348,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
     }
@@ -363,6 +364,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -382,6 +384,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 principal,
                 freshness_disposition,
                 WorkerCreationMode::ComponentAgent,
+                create_intent,
             )
             .in_current_span()
             .await?;
@@ -412,6 +415,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 Principal::anonymous(),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
+                CreateIntent::UNKEYED_INVOCATION,
             )
             .in_current_span()
             .await?;
@@ -487,6 +491,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 principal,
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
+                CreateIntent::Create {
+                    exclusive: false,
+                    idempotency_key: Some(idempotency_key.clone()),
+                },
             )
             .in_current_span()
             .await?;

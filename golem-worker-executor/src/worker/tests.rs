@@ -1654,6 +1654,61 @@ fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
     assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
 }
 
+#[test]
+fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() {
+    let key = IdempotencyKey::new("create-key".to_string());
+    let principal = Principal::anonymous();
+    let context = InvocationContextStack::fresh();
+    let derived_phantom = Some(ephemeral_invocation_phantom_id(&key));
+    let chosen_phantom = Some(Uuid::new_v4());
+    let recorded = |intent: CreateIntent, phantom_id: Option<Uuid>| {
+        let request = intent.request(phantom_id, principal.clone(), &context);
+        (request.kind, request.idempotency_key)
+    };
+    let invocation = CreateIntent::Invocation {
+        idempotency_key: Some(key.clone()),
+    };
+    let create = |exclusive| CreateIntent::Create {
+        exclusive,
+        idempotency_key: Some(key.clone()),
+    };
+
+    assert_eq!(
+        recorded(invocation.clone(), None),
+        (CreateRequestKind::GetOrCreate, None)
+    );
+    assert_eq!(
+        recorded(invocation.clone(), derived_phantom),
+        (CreateRequestKind::Phantom, Some(key.clone()))
+    );
+    // A phantom ID that the invocation's key did not produce, such as a durable phantom chosen by
+    // its creator, is not identified by that key.
+    assert_eq!(
+        recorded(invocation, chosen_phantom),
+        (CreateRequestKind::Phantom, None)
+    );
+    assert_eq!(
+        recorded(create(true), None),
+        (CreateRequestKind::Exclusive, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(false), None),
+        (CreateRequestKind::GetOrCreate, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(false), chosen_phantom),
+        (CreateRequestKind::Phantom, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(true), chosen_phantom),
+        (CreateRequestKind::Phantom, Some(key))
+    );
+    assert_eq!(
+        recorded(CreateIntent::UNKEYED_INVOCATION, derived_phantom),
+        (CreateRequestKind::Phantom, None)
+    );
+}
+
 fn pending(key: &IdempotencyKey, not_before: Option<Timestamp>) -> PendingInvocationRef {
     PendingInvocationRef {
         timestamp: Timestamp::from(1_000),

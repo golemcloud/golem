@@ -700,6 +700,8 @@ message ForkStreamSlotRequest {
   bytes initial_content = 15;
   bool closed = 16;
   StreamSessionExpiryPolicy expiry_policy = 17;
+  // The caller that forks the slot: the principal of the fork target's create request.
+  optional golem.component.Principal principal = 18;
 }
 
 message ForkStreamSlotSuccess {
