@@ -165,10 +165,7 @@ pub(super) fn validate_mode(
         }
         HttpRouteMode::Sse | HttpRouteMode::WebSocket => {
             if !uses_streams {
-                return Err(format!(
-                    "{} requires streams; use durableStreams",
-                    mode.as_str()
-                ));
+                return Err(format!("{} requires streams; use plain", mode.as_str()));
             }
             let mut inputs = Vec::new();
             for field in method.input_schema.fields() {
@@ -713,6 +710,13 @@ mod tests {
             (
                 HttpRouteMode::Sse,
                 vec![],
+                SchemaType::string(),
+                true,
+                "requires streams; use plain",
+            ),
+            (
+                HttpRouteMode::Sse,
+                vec![],
                 item(),
                 true,
                 "sse mode not served yet",
@@ -773,7 +777,7 @@ mod tests {
                 vec![],
                 SchemaType::string(),
                 false,
-                "requires streams",
+                "requires streams; use plain",
             ),
             (
                 HttpRouteMode::Plain,
@@ -798,7 +802,9 @@ mod tests {
             }
             let error = validate_mode(&agent, &method, &endpoint, mode).unwrap_err();
             assert!(error.contains(message), "{mode:?}: {error}");
-            if !message.contains("not served yet") && mode != HttpRouteMode::DurableStreams {
+            if message.contains("use plain") {
+                assert!(validate_mode(&agent, &method, &endpoint, HttpRouteMode::Plain).is_ok());
+            } else if !message.contains("not served yet") && mode != HttpRouteMode::DurableStreams {
                 assert!(error.contains("durableStreams"), "{error}");
             }
         }

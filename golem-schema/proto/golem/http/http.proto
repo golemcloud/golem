@@ -3,10 +3,11 @@ syntax = "proto3";
 package golem.http;
 
 enum HttpRouteMode {
-  HTTP_ROUTE_MODE_DURABLE_STREAMS = 0;
-  HTTP_ROUTE_MODE_PLAIN = 1;
-  HTTP_ROUTE_MODE_SSE = 2;
-  HTTP_ROUTE_MODE_WEB_SOCKET = 3;
+  HTTP_ROUTE_MODE_UNSPECIFIED = 0;
+  HTTP_ROUTE_MODE_DURABLE_STREAMS = 1;
+  HTTP_ROUTE_MODE_PLAIN = 2;
+  HTTP_ROUTE_MODE_SSE = 3;
+  HTTP_ROUTE_MODE_WEB_SOCKET = 4;
 }
 
 message DurableStreamRouteOptions {

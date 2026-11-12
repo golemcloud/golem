@@ -24,6 +24,23 @@ import { s } from '../src/schema/markers';
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('agent HTTP routing (Phase 6)', () => {
+  it('validates public route mode spellings before emitting WIT metadata', () => {
+    for (const [mode, expected] of [
+      ['durableStreams', 'durable-streams'],
+      ['plain', 'plain'],
+      ['sse', 'sse'],
+      ['webSocket', 'web-socket'],
+      [undefined, undefined],
+    ] as const) {
+      expect(http.compileEndpoint(http.get('/events', { mode })).mode).toBe(expected);
+    }
+    for (const mode of ['websocket', 'SSE', 'durable-streams', 'web-socket', '', null, 0, {}]) {
+      expect(() => http.compileEndpoint(http.get('/events', { mode: mode as never }))).toThrow(
+        TypeError,
+      );
+    }
+  });
+
   it('publishes declared modes and leaves streaming defaults to the registry', () => {
     defineAgent({
       name: 'declaredRouteModes',

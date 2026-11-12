@@ -1477,45 +1477,56 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
  * @since 1.5.0
  * @category metadata
  */
-export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => ({
-  httpMethod: verbToWit(ep.verb),
-  pathSuffix: ep.pathSuffix.map(segmentToWit),
-  headerVars: ep.headerVars.map((h) => ({
-    headerName: h.header,
-    variableName: h.varName,
-  })),
-  queryVars: ep.queryVars.map((q) => ({
-    queryParamName: q.queryParam,
-    variableName: q.varName,
-  })),
-  authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
-  corsOptions: { allowedPatterns: [...ep.cors] },
-  mode:
-    ep.mode === "durableStreams"
-      ? "durable-streams"
-      : ep.mode === "webSocket"
-        ? "web-socket"
-        : ep.mode,
-  durableStreams:
-    ep.durableStreams === undefined
-      ? undefined
-      : {
-          slots: ep.durableStreams.slots.map((slot) => ({
-            source: { tag: slot.source, val: slot.slot },
-            name: slot.name,
-            contentType: slot.contentType,
-          })),
-          load:
-            ep.durableStreams.load === undefined
-              ? undefined
-              : {
-                  maxConcurrentReadersPerStream:
-                    ep.durableStreams.load.maxConcurrentReadersPerStream,
-                  maxAppendRequestsPerSecondPerStream:
-                    ep.durableStreams.load.maxAppendRequestsPerSecondPerStream,
-                },
-        },
-})
+export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => {
+  if (
+    ep.mode !== undefined &&
+    ep.mode !== "durableStreams" &&
+    ep.mode !== "plain" &&
+    ep.mode !== "sse" &&
+    ep.mode !== "webSocket"
+  ) {
+    throw new TypeError("mode must be durableStreams, plain, sse, or webSocket")
+  }
+  return {
+    httpMethod: verbToWit(ep.verb),
+    pathSuffix: ep.pathSuffix.map(segmentToWit),
+    headerVars: ep.headerVars.map((h) => ({
+      headerName: h.header,
+      variableName: h.varName,
+    })),
+    queryVars: ep.queryVars.map((q) => ({
+      queryParamName: q.queryParam,
+      variableName: q.varName,
+    })),
+    authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
+    corsOptions: { allowedPatterns: [...ep.cors] },
+    mode:
+      ep.mode === "durableStreams"
+        ? "durable-streams"
+        : ep.mode === "webSocket"
+          ? "web-socket"
+          : ep.mode,
+    durableStreams:
+      ep.durableStreams === undefined
+        ? undefined
+        : {
+            slots: ep.durableStreams.slots.map((slot) => ({
+              source: { tag: slot.source, val: slot.slot },
+              name: slot.name,
+              contentType: slot.contentType,
+            })),
+            load:
+              ep.durableStreams.load === undefined
+                ? undefined
+                : {
+                    maxConcurrentReadersPerStream:
+                      ep.durableStreams.load.maxConcurrentReadersPerStream,
+                    maxAppendRequestsPerSecondPerStream:
+                      ep.durableStreams.load.maxAppendRequestsPerSecondPerStream,
+                  },
+          },
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Validation

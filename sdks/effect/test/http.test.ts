@@ -385,6 +385,21 @@ describe("Http compileMount / compileEndpoint", () => {
     expect(agentVersion()).toEqual({ _tag: "SystemVar", name: "agent-version" })
   })
 
+  it("validates public route mode spellings before emitting WIT metadata", () => {
+    for (const [mode, expected] of [
+      ["durableStreams", "durable-streams"],
+      ["plain", "plain"],
+      ["sse", "sse"],
+      ["webSocket", "web-socket"],
+      [undefined, undefined],
+    ] as const) {
+      expect(compileEndpoint(get("/events", { mode })).mode).toBe(expected)
+    }
+    for (const mode of ["websocket", "SSE", "durable-streams", "web-socket", "", null, 0, {}]) {
+      expect(() => compileEndpoint(get("/events", { mode: mode as never }))).toThrow(TypeError)
+    }
+  })
+
   it("endpoint with no auth option emits undefined authDetails (inherits)", () => {
     const w = compileEndpoint(get("/x"))
     expect(w.authDetails).toBeUndefined()

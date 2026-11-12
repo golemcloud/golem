@@ -20,6 +20,7 @@ impl TryFrom<i32> for HttpRouteMode {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match proto::HttpRouteMode::try_from(value).map_err(|e| e.to_string())? {
+            proto::HttpRouteMode::Unspecified => Err("Invalid or missing HTTP route mode".into()),
             proto::HttpRouteMode::DurableStreams => Ok(Self::DurableStreams),
             proto::HttpRouteMode::Plain => Ok(Self::Plain),
             proto::HttpRouteMode::Sse => Ok(Self::Sse),
@@ -120,6 +121,28 @@ impl From<DurableStreamRouteLoadOptions> for proto::DurableStreamRouteLoadOption
             max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
             max_append_requests_per_second_per_stream: value
                 .max_append_requests_per_second_per_stream,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn route_modes_round_trip_and_reject_unspecified_or_unknown_values() {
+        for mode in [
+            HttpRouteMode::DurableStreams,
+            HttpRouteMode::Plain,
+            HttpRouteMode::Sse,
+            HttpRouteMode::WebSocket,
+        ] {
+            let encoded = proto::HttpRouteMode::from(mode) as i32;
+            assert_eq!(HttpRouteMode::try_from(encoded).unwrap(), mode);
+        }
+        for invalid in [0, -1, 5] {
+            assert!(HttpRouteMode::try_from(invalid).is_err());
         }
     }
 }

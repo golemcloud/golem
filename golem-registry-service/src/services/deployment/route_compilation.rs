@@ -1346,6 +1346,17 @@ mod tests {
                     assert_eq!(call.route_mode, expected);
                     let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =
                         RouteBehaviour::CallAgent(call.clone()).into();
+                    let mut missing_mode = proto.clone();
+                    let Some(
+                        golem_api_grpc::proto::golem::customapi::route_behaviour::Kind::CallAgent(
+                            missing_mode_call,
+                        ),
+                    ) = &mut missing_mode.kind
+                    else {
+                        panic!()
+                    };
+                    missing_mode_call.route_mode = 0;
+                    assert!(RouteBehaviour::try_from(missing_mode).is_err());
                     let RouteBehaviour::CallAgent(restored) =
                         RouteBehaviour::try_from(proto).unwrap()
                     else {

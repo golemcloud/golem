@@ -556,6 +556,15 @@ function resolveEndpointPath(
 
 /** Compile a single {@link HttpEndpointSpec} to a WIT `http-endpoint-details`. */
 export function compileEndpoint(spec: HttpEndpointSpec): HttpEndpointDetails {
+  if (
+    spec.mode !== undefined &&
+    spec.mode !== 'durableStreams' &&
+    spec.mode !== 'plain' &&
+    spec.mode !== 'sse' &&
+    spec.mode !== 'webSocket'
+  ) {
+    throw new TypeError('mode must be durableStreams, plain, sse, or webSocket');
+  }
   const { pathSuffix, inlineQuery } = resolveEndpointPath(spec.path, 'endpoint');
 
   const explicitQuery = spec.query
