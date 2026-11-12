@@ -34,7 +34,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
-    IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
+    IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig, ScanCursor,
+    StringFilterComparator,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
@@ -946,7 +947,7 @@ async fn assert_management_finds_no_agent(
     );
 
     let cancel = executor
-        .cancel_invocation(agent, &IdempotencyKey::fresh())
+        .cancel_invocation(agent, &InvocationId(uuid::Uuid::new_v4()))
         .await
         .unwrap_err();
     assert!(

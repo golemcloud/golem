@@ -20,9 +20,13 @@ const hostModules = [
 ]);
 hostModules.push([
   "golem:agent/invocation-context@2.0.0",
-  `export function caller() {
-    return { original: { tag: "anonymous" }, immediate: { tag: "anonymous" } };
-  }`,
+  `
+        const anonymous = { tag: "anonymous" };
+        export const caller = () => ({ original: anonymous, immediate: anonymous });
+        export const invocationId = () => {
+          throw new Error("Unexpected host call: golem:agent/invocation-context@2.0.0");
+        };
+      `,
 ]);
 register("./host-module-hooks.mjs", import.meta.url, {
   data: { modules: hostModules },

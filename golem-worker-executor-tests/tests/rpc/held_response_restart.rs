@@ -592,8 +592,8 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
 /// `try_call_counter` activates a durable `RpcCounter` target and calls it. The activation creates
 /// the target, but the executor stops before the caller receives the activation result, so the
 /// caller's activation has no committed `End`. After a restart the caller repeats the activation with
-/// the same idempotency key, which is the key the target's `Create` entry records, and the target
-/// runs its constructor once.
+/// the same idempotency key. The target's `Create` entry records its normalized owner key, and the
+/// target runs its constructor once.
 #[test]
 #[timeout("3m")]
 async fn durable_rpc_activation_repeats_its_key_after_restart(
@@ -694,7 +694,10 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         create_requests[0].kind,
         golem_common::model::oplog::CreateRequestKind::GetOrCreate
     );
-    assert_eq!(create_requests[0].idempotency_key, activations[0]);
+    assert_eq!(
+        create_requests[0].idempotency_key,
+        Some(InvocationRequestKey::Internal(activations[0].clone().unwrap()).owner_key("inc_by"))
+    );
     assert_eq!(
         create_requests[0].principal,
         Principal::Agent(AgentPrincipal {
