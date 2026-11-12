@@ -119,15 +119,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                if let FinalWorkerState::Unloaded { startup_failure } =
-                    unloaded.complete(final_state)
-                {
-                    self.resolve_pending_queue_on_unload(
-                        startup_failure.as_ref(),
-                        pending_live_invocations,
-                    )
+                let final_state = unloaded.complete(final_state);
+                self.resolve_pending_queue_on_stop(&final_state, pending_live_invocations)
                     .await;
-                }
                 StopResult::Stopped
             }
             StopPhase::CleanupFailed(failed) => {
@@ -146,10 +140,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                if let FinalWorkerState::Inactive(error) = inactive.complete(final_state) {
-                    self.resolve_pending_queue_on_unload(Some(&error), pending_live_invocations)
-                        .await;
-                }
+                let final_state = inactive.complete(final_state);
+                self.resolve_pending_queue_on_stop(&final_state, pending_live_invocations)
+                    .await;
                 StopResult::Stopped
             }
             StopPhase::WaitingForPermit(waiting) => {
@@ -330,8 +323,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
     }
-    /// Resolves resident waiters for the final state that a stop of a running, waiting or
-    /// stopping worker installed.
+    /// Resolves resident waiters for the final state that a stop installed.
     async fn resolve_pending_queue_on_stop(
         &self,
         final_state: &FinalWorkerState,
