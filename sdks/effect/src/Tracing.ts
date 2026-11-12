@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Exit, Layer, Option, Tracer, type Scope } from "effect"
 import type * as ContextHost from "golem:api/context@1.5.0"
+import { composeWithCurrent } from "./internal/customScope.js"
 import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
 import { safeStringify } from "./Logging.js"
 
@@ -283,6 +284,22 @@ export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
     return makeGolemTracer(host)
   }),
 )
+
+/**
+ * Adds the current fiber's custom durability scope hook to a replacement tracer. Provide the
+ * result instead of `tracer` when replacing the Tracer inside an agent, tool or middleware;
+ * `Durability.wrap` fails with a defect under a tracer without the hook. Outside the Golem
+ * runtime, `tracer` is returned unchanged.
+ *
+ * ```ts
+ * const tracer = yield* Tracing.compose(myTracer)
+ * yield* program.pipe(Effect.withTracer(tracer))
+ * ```
+ *
+ * @since 1.6.0
+ * @category layers
+ */
+export const compose: (tracer: Tracer.Tracer) => Effect.Effect<Tracer.Tracer> = composeWithCurrent
 
 // ---------------------------------------------------------------------------
 // Invocation-context helpers

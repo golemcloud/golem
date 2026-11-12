@@ -4,6 +4,7 @@ import type * as Streams from "golem:tool/streams@0.1.0"
 import { Cause, Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
 import { immediateCaller } from "../../host/InvocationContextClient.js"
+import { withCustomScopes } from "../customScope.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
 const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
@@ -194,7 +195,7 @@ export async function invokeRegistered(
       ? registered.layer.pipe(Layer.provideMerge(HostLive))
       : HostLive
     const result = await Effect.runPromise(
-      Effect.scoped(Effect.provide(program, runtimeLayer)) as Effect.Effect<
+      Effect.scoped(Effect.provide(withCustomScopes(program), runtimeLayer)) as Effect.Effect<
         Common.InvocationResult,
         unknown,
         never

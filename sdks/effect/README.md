@@ -858,10 +858,13 @@ work before the body exits, including on failure or interruption; structured fin
 does not make concurrent custom scopes supported. Ordinary built-in durability is not subject to
 this restriction when no custom operation is active.
 
-On typed success or typed failure, `wrap` encodes the response and calls
-`finishCustomDurableInvocation`. On defect, interruption, response encoding failure, or any other
-unfinished exit, scope cleanup **drops** the live invocation instead of finishing it. This is the
+On typed success or typed failure, `wrap` encodes the response and finishes the live invocation.
+On defect, interruption, response encoding failure, or any other unfinished exit, it **drops** the
+live invocation instead of finishing it. This is the
 1.6 recovery contract: never manufacture a terminal result for work that did not complete.
+The SDK tracks each fiber's custom scope through a hook in the Golem tracer. Code that replaces the
+Tracer inside an agent, tool or middleware must provide `yield* Tracing.compose(tracer)` instead;
+under a tracer without the hook, `wrap` fails with a defect.
 The four function types are `readLocal`, `writeLocal`, `readRemote`, and `writeRemote`.
 The host records nesting in `Start.parent_start_index`, not in a function-type payload.
 

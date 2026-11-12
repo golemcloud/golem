@@ -1,11 +1,20 @@
-import { Cause, Effect, Exit, Result, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Result, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type * as DurabilityHost from "golem:durability/durability@1.6.0"
+import { CustomInvocationContextClient } from "../host/CustomInvocationContextClient.js"
 import { DurabilityClient } from "../host/DurabilityClient.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "../WitCodec.js"
 import type { SchemaValue } from "./schema-model/model.js"
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from "./schema-model/wit.js"
 import { DurabilityHostError } from "./durabilityMode.js"
+import {
+  awaitChildren,
+  closeScope,
+  CurrentCustomScope,
+  currentCustomScope,
+  registerChild,
+  releaseChild,
+} from "./customScope.js"
 
 const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
 
@@ -66,51 +75,6 @@ export const observeFunctionCall = (
   Effect.flatMap(DurabilityClient, (client) =>
     Effect.try({
       try: () => client.observeFunctionCall(iface, function_),
-      catch: (cause) => new DurabilityHostError(cause),
-    }),
-  )
-
-/**
- * Opens an invocation in an Effect scope. An unfinished live resource is dropped
- * when the scope closes, including after interruption or a defect.
- * Resource scoping does not isolate concurrent fibers. Use sequential, properly nested execution
- * only; unrelated host calls while the operation waits can acquire its scope and replay incorrectly.
- * Do not detach work. All children must terminate before the resource closes, including on failure.
- * @since 1.6.0
- * @category host bindings
- */
-export const beginCustomDurableInvocation = (
-  functionName: string,
-  request: CoreTypes.TypedSchemaValue,
-  functionType: DurableFunctionType,
-): Effect.Effect<
-  DurabilityHost.CustomDurableInvocation,
-  DurabilityHostError,
-  Scope.Scope | DurabilityClient
-> =>
-  Effect.gen(function* () {
-    const client = yield* DurabilityClient
-    return yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => client.beginCustomDurableInvocation(functionName, request, functionType),
-        catch: (cause) => new DurabilityHostError(cause),
-      }),
-      (invocation) =>
-        invocation.tag === "live"
-          ? Effect.sync(() => client.drop(invocation.val)).pipe(Effect.ignore)
-          : Effect.void,
-    )
-  })
-
-/** @since 1.6.0 @category host bindings */
-export const finishCustomDurableInvocation = (
-  invocation: DurabilityHost.LiveCustomDurableInvocation,
-  response: CoreTypes.TypedSchemaValue,
-  forcedCommit = false,
-): Effect.Effect<void, DurabilityHostError, DurabilityClient> =>
-  Effect.flatMap(DurabilityClient, (client) =>
-    Effect.try({
-      try: () => client.finish(invocation, response, forcedCommit),
       catch: (cause) => new DurabilityHostError(cause),
     }),
   )
@@ -191,6 +155,60 @@ const sdkErrorsToDefects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 const sameFunctionType = (left: DurableFunctionType, right: DurableFunctionType): boolean =>
   left.tag === right.tag
 
+const tryHostPromise = <A>(f: () => Promise<A>) =>
+  Effect.tryPromise({ try: f, catch: (cause) => new DurabilityHostError(cause) })
+
+/**
+ * Runs a live body in its own child fiber, in the operation's scope, and finishes the
+ * operation once the body and every child operation registered under its scope ended.
+ * The live invocation is always dropped under its own scope, then the scope is closed.
+ */
+const runLive = <A, E, R, RF>(
+  live: DurabilityHost.LiveCustomDurableInvocation,
+  body: Effect.Effect<A, E, R>,
+  finishWith: (
+    exit: Exit.Exit<A, E>,
+  ) => Effect.Effect<CoreTypes.TypedSchemaValue | undefined, DurabilityDecodeError, RF>,
+  forcedCommit: boolean,
+) =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const client = yield* DurabilityClient
+      const scopes = yield* CustomInvocationContextClient
+      const parent = yield* currentCustomScope
+      const token = scopes.run(parent, () => scopes.enterLive(live))
+      const done = yield* registerChild(parent)
+      const cleanup = Effect.suspend(() => {
+        try {
+          scopes.run(token, () => client.drop(live))
+        } finally {
+          closeScope(scopes, token, parent)
+        }
+        return releaseChild(parent, done)
+      })
+      return yield* Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(Effect.scoped(body)).pipe(
+          Effect.provideService(CurrentCustomScope, token),
+        )
+        const awaited = yield* Effect.exit(restore(Fiber.await(fiber)))
+        if (Exit.isFailure(awaited)) {
+          yield* Fiber.interrupt(fiber)
+          yield* awaitChildren(token)
+          return yield* Effect.failCause(awaited.cause)
+        }
+        const exit = awaited.value
+        yield* awaitChildren(token)
+        const response = yield* finishWith(exit)
+        if (response !== undefined) {
+          yield* tryHostPromise(() => client.finishAsync(live, response, forcedCommit)).pipe(
+            Effect.provideService(CurrentCustomScope, token),
+          )
+        }
+        return yield* exit
+      }).pipe(Effect.ensuring(cleanup))
+    }),
+  )
+
 const run = <
   RequestS extends Schema.Top,
   SuccessS extends Schema.Top,
@@ -202,66 +220,59 @@ const run = <
   body: Effect.Effect<SuccessS["Type"], ErrorS["Type"], R>,
   error: ErrorS | undefined,
 ) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const requestCodec = yield* toWitCodec(opts.requestSchema)
-      const responseCodec = (yield* toWitCodec(
-        error === undefined ? opts.success : Schema.Result(opts.success, error),
-      )) as WitCodec<Schema.Top>
-      const requestValue = yield* encodeTyped(requestCodec, request, "request-encode")
-      yield* observeFunctionCall(opts.iface, opts.function)
-      const functionName = opts.iface === "" ? opts.function : `${opts.iface}::${opts.function}`
-      const invocation = yield* beginCustomDurableInvocation(
-        functionName,
-        requestValue,
-        opts.functionType,
-      )
-      if (invocation.tag === "replayed") {
-        const entry = invocation.val
-        if (
-          entry.functionName !== functionName ||
-          !sameFunctionType(entry.functionType, opts.functionType)
-        ) {
-          return yield* Effect.fail(
-            new DurabilityReplayMismatchError(
-              functionName,
-              entry.functionName,
-              opts.functionType,
-              entry.functionType,
-              entry.entryVersion,
-            ),
-          )
-        }
-        const decoded = yield* decodeTyped(responseCodec, entry.response)
-        if (error === undefined) return decoded as SuccessS["Type"]
-        const result = decoded as Result.Result<SuccessS["Type"], ErrorS["Type"]>
-        return Result.isSuccess(result) ? result.success : yield* Effect.fail(result.failure)
+  Effect.gen(function* () {
+    const client = yield* DurabilityClient
+    const requestCodec = yield* toWitCodec(opts.requestSchema)
+    const responseCodec = (yield* toWitCodec(
+      error === undefined ? opts.success : Schema.Result(opts.success, error),
+    )) as WitCodec<Schema.Top>
+    const requestValue = yield* encodeTyped(requestCodec, request, "request-encode")
+    yield* currentCustomScope
+    yield* observeFunctionCall(opts.iface, opts.function)
+    const functionName = opts.iface === "" ? opts.function : `${opts.iface}::${opts.function}`
+    // A live admission must be entered and dropped, so admission is not interruptible.
+    const invocation = yield* Effect.uninterruptible(
+      tryHostPromise(() =>
+        client.beginCustomDurableInvocationAsync(functionName, requestValue, opts.functionType),
+      ),
+    )
+    if (invocation.tag === "replayed") {
+      const entry = invocation.val
+      if (
+        entry.functionName !== functionName ||
+        !sameFunctionType(entry.functionType, opts.functionType)
+      ) {
+        return yield* Effect.fail(
+          new DurabilityReplayMismatchError(
+            functionName,
+            entry.functionName,
+            opts.functionType,
+            entry.functionType,
+            entry.entryVersion,
+          ),
+        )
       }
-      const exit = yield* Effect.exit(body)
-      if (Exit.isSuccess(exit)) {
-        const response = yield* encodeTyped(
+      const decoded = yield* decodeTyped(responseCodec, entry.response)
+      if (error === undefined) return decoded as SuccessS["Type"]
+      const result = decoded as Result.Result<SuccessS["Type"], ErrorS["Type"]>
+      return Result.isSuccess(result) ? result.success : yield* Effect.fail(result.failure)
+    }
+    // Defects, interruptions and response encode failures leave the invocation unfinished.
+    const finishWith = (exit: Exit.Exit<SuccessS["Type"], ErrorS["Type"]>) => {
+      if (Exit.isSuccess(exit))
+        return encodeTyped(
           responseCodec,
           error === undefined ? exit.value : Result.succeed(exit.value),
           "response-encode",
         )
-        yield* finishCustomDurableInvocation(invocation.val, response, opts.forcedCommit ?? false)
-        return exit.value
-      }
-      if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) {
-        return yield* Effect.failCause(exit.cause)
-      }
+      if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause)) return Effect.undefined
       const failure = exit.cause.reasons.find(Cause.isFailReason)
-      if (failure !== undefined && error !== undefined) {
-        const response = yield* encodeTyped(
-          responseCodec,
-          Result.fail(failure.error),
-          "response-encode",
-        )
-        yield* finishCustomDurableInvocation(invocation.val, response, opts.forcedCommit ?? false)
-      }
-      return yield* Effect.failCause(exit.cause)
-    }),
-  )
+      return failure !== undefined && error !== undefined
+        ? encodeTyped(responseCodec, Result.fail(failure.error), "response-encode")
+        : Effect.undefined
+    }
+    return yield* runLive(invocation.val, body, finishWith, opts.forcedCommit ?? false)
+  })
 
 /**
  * Records a custom operation's result. Sequential and properly nested execution only.

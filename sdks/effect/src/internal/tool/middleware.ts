@@ -3,8 +3,10 @@ import type * as UnderlyingWit from "golem:tool/underlying@0.1.0"
 import type * as StreamsWit from "golem:tool/streams@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
 import { Cause, Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
+import { CustomInvocationContextLive } from "../../host/CustomInvocationContextClient.js"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
 import { immediateCaller, InvocationContextLive } from "../../host/InvocationContextClient.js"
+import { withCustomScopes } from "../customScope.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
 import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
@@ -852,7 +854,13 @@ export const toolMiddlewareGuest = {
       if (entry.layer)
         context = await Effect.runPromise(Layer.buildWithScope(entry.layer, invocationScope))
       const result = await Effect.runPromise(
-        Effect.provide(effect as Effect.Effect<Common.InvocationResult, MiddlewareError>, context),
+        Effect.provide(
+          Effect.provide(
+            withCustomScopes(effect as Effect.Effect<Common.InvocationResult, MiddlewareError>),
+            context,
+          ),
+          CustomInvocationContextLive,
+        ),
       )
       active = false
       const stdoutOutput = result.stdout ? ownership.own(result.stdout) : undefined

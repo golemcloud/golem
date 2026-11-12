@@ -22,40 +22,62 @@ let begins: Array<{
   request: TypedSchemaValue
   functionType: DurableFunctionType
 }> = []
-let finishes: Array<{ response: TypedSchemaValue; forcedCommit: boolean }> = []
+let finishes: Array<{ functionName: string; response: TypedSchemaValue; forcedCommit: boolean }> =
+  []
 let drops = 0
+let events: string[] = []
+
+/** Appends to the ordered host event log shared with the runtime context mock. */
+export const __record = (event: string): void => {
+  events.push(event)
+}
 
 export class LiveCustomDurableInvocation {
-  consumed = false
-  static finish(
+  finished = false
+  disposed = false
+  constructor(readonly functionName: string) {}
+  enter(): void {
+    __record(`enter:${this.functionName}`)
+  }
+  static finishAsync(
     invocation: LiveCustomDurableInvocation,
     response: TypedSchemaValue,
     forcedCommit: boolean,
-  ): void {
-    invocation.consumed = true
-    finishes.push({ response, forcedCommit })
+  ): Promise<void> {
+    if (invocation.disposed) return Promise.reject(new Error("finish after drop"))
+    __record(`finish:${invocation.functionName}`)
+    return Promise.resolve().then(() => {
+      invocation.finished = true
+      finishes.push({ functionName: invocation.functionName, response, forcedCommit })
+    })
   }
   [Symbol.dispose](): void {
-    if (!this.consumed) {
-      this.consumed = true
-      drops++
-    }
+    if (this.disposed) throw new Error("double drop")
+    this.disposed = true
+    __record(`drop:${this.functionName}`)
+    if (!this.finished) drops++
   }
 }
 
 export const observeFunctionCall = (iface: string, function_: string): void => {
   observed.push([iface, function_])
 }
-export const beginCustomDurableInvocation = (
+
+export const beginCustomDurableInvocationAsync = (
   functionName: string,
   request: TypedSchemaValue,
   functionType: DurableFunctionType,
 ) => {
   begins.push({ functionName, request, functionType })
-  if (live) return { tag: "live", val: new LiveCustomDurableInvocation() } as const
+  __record(`begin:${functionName}`)
+  if (live)
+    return Promise.resolve({
+      tag: "live",
+      val: new LiveCustomDurableInvocation(functionName),
+    } as const)
   const entry = replay.shift()
-  if (entry === undefined) throw new Error("empty replay queue")
-  return { tag: "replayed", val: entry } as const
+  if (entry === undefined) return Promise.reject(new Error("empty replay queue"))
+  return Promise.resolve({ tag: "replayed", val: entry } as const)
 }
 
 export const __setIsLive = (value: boolean): void => {
@@ -67,7 +89,9 @@ export const __seedReplay = (entry: PersistedDurableFunctionInvocation): void =>
 export const __getObservedCalls = () => [...observed]
 export const __getBeginCalls = () => [...begins]
 export const __getFinishCalls = () => [...finishes]
+/** Live invocations dropped without a completed finish. */
 export const __getDrops = () => drops
+export const __getEvents = () => [...events]
 export const __resetAll = (): void => {
   live = true
   replay = []
@@ -75,5 +99,6 @@ export const __resetAll = (): void => {
   begins = []
   finishes = []
   drops = 0
+  events = []
 }
 export const __reset = __resetAll
