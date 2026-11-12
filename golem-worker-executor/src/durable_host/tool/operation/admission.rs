@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use super::{
-    AttachmentController, BodyAdmissionState, LiveAttachmentPreparationRollback, OplogIndex,
-    OwnerToolOperation, SerializableToolAdmissionRefusal, ToolAttachmentAdmissionRejection,
-    ToolLiveAdmissionOutcome, ToolLiveAdmissionState, ToolOperationWinner, WorkerExecutorError,
+    AttachmentController, BodyAdmissionState, LiveAttachmentPreparationRollback, OperationState,
+    OplogIndex, OwnerToolOperation, SerializableToolAdmissionRefusal,
+    ToolAttachmentAdmissionRejection, ToolLiveAdmissionOutcome, ToolLiveAdmissionState,
+    ToolOperationWinner, WorkerExecutorError,
 };
 
 impl LiveAttachmentPreparationRollback {
@@ -42,17 +43,16 @@ impl OwnerToolOperation {
         stderr: Option<AttachmentController>,
     ) -> bool {
         let mut state = self.owner.state.lock().unwrap();
-        let operation = state
-            .operations
-            .get_mut(&self.id)
-            .expect("owner tool operation must remain registered");
-        if operation.winner.is_terminal() {
-            drop(state);
-            for attachment in stdin.iter().chain(stdout.iter()).chain(stderr.iter()) {
-                attachment.fence_owner();
+        let operation = match state.operations.get_mut(&self.id) {
+            Some(operation) if !operation.state.winner().is_terminal() => operation,
+            _ => {
+                drop(state);
+                for attachment in stdin.iter().chain(stdout.iter()).chain(stderr.iter()) {
+                    attachment.fence_owner();
+                }
+                return false;
             }
-            return false;
-        }
+        };
         operation.stdin = stdin;
         operation.stdout = stdout;
         operation.stderr = stderr;
@@ -82,7 +82,7 @@ impl OwnerToolOperation {
             ToolLiveAdmissionState::Live => {
                 return ToolLiveAdmissionOutcome::Admitted;
             }
-            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+            ToolLiveAdmissionState::ResourceExhaustedPending(_)
             | ToolLiveAdmissionState::ResourceExhaustedHandled => {
                 return ToolLiveAdmissionOutcome::ResourceExhausted;
             }
@@ -94,10 +94,10 @@ impl OwnerToolOperation {
             let Some(operation) = state.operations.get(&self.id) else {
                 return ToolLiveAdmissionOutcome::Fenced;
             };
-            if state.admission_closed {
+            if !state.phase.is_open() {
                 return ToolLiveAdmissionOutcome::Fenced;
             }
-            match operation.winner {
+            match operation.state.winner() {
                 ToolOperationWinner::Open => {}
                 ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
                     return ToolLiveAdmissionOutcome::Cancelled;
@@ -130,10 +130,10 @@ impl OwnerToolOperation {
         let Some(operation) = state.operations.get(&self.id) else {
             return ToolLiveAdmissionOutcome::Fenced;
         };
-        if state.admission_closed {
+        if !state.phase.is_open() {
             return ToolLiveAdmissionOutcome::Fenced;
         }
-        match operation.winner {
+        match operation.state.winner() {
             ToolOperationWinner::Open => {}
             ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
                 return ToolLiveAdmissionOutcome::Cancelled;
@@ -156,21 +156,22 @@ impl OwnerToolOperation {
         boundary: Option<SerializableToolAdmissionRefusal>,
     ) -> ToolLiveAdmissionOutcome {
         let mut state = self.owner.state.lock().unwrap();
-        if state.admission_closed {
+        if !state.phase.is_open() {
             return ToolLiveAdmissionOutcome::Fenced;
         }
         let Some(operation) = state.operations.get_mut(&self.id) else {
             return ToolLiveAdmissionOutcome::Fenced;
         };
-        match operation.winner {
+        match operation.state.winner() {
             ToolOperationWinner::Open => {
+                let Some(open) = operation.state.open_terminal() else {
+                    return ToolLiveAdmissionOutcome::Fenced;
+                };
                 self.admission_refusal.lock().unwrap().observed = boundary;
-                operation.winner = ToolOperationWinner::SelectingOrdinary;
-                operation
-                    .winner_tx
-                    .send_replace(ToolOperationWinner::SelectingOrdinary);
-                *live_admission =
-                    ToolLiveAdmissionState::ResourceExhaustedPending { preselected: true };
+                open.reserve_ordinary();
+                *live_admission = ToolLiveAdmissionState::ResourceExhaustedPending(
+                    ToolAttachmentAdmissionRejection::LiveReserved,
+                );
                 ToolLiveAdmissionOutcome::ResourceExhausted
             }
             ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
@@ -257,31 +258,33 @@ impl OwnerToolOperation {
         let mut admission = self.live_admission.lock().await;
         let outcome = if matches!(
             *admission,
-            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+            ToolLiveAdmissionState::ResourceExhaustedPending(_)
                 | ToolLiveAdmissionState::ResourceExhaustedHandled
         ) {
             ToolLiveAdmissionOutcome::ResourceExhausted
         } else {
             let state = self.owner.state.lock().unwrap();
             match state.operations.get(&self.id) {
-                Some(operation) if state.owner_winner.is_none() => match operation.winner {
-                    ToolOperationWinner::Open => {
-                        let mut evidence = self.admission_refusal.lock().unwrap();
-                        evidence.observed = Some(refusal);
-                        evidence.historical_observed = true;
-                        // Reconstruction can still fail in an owned child. Do not reserve
-                        // its parent's terminal while that child must elect owner failure.
-                        *admission =
-                            ToolLiveAdmissionState::ResourceExhaustedPending { preselected: false };
-                        operation.winner_tx.send_replace(operation.winner.clone());
-                        self.owner.changed.notify_waiters();
-                        ToolLiveAdmissionOutcome::ResourceExhausted
+                Some(operation) if state.phase.winner().is_none() => {
+                    match operation.state.winner() {
+                        ToolOperationWinner::Open => {
+                            let mut evidence = self.admission_refusal.lock().unwrap();
+                            evidence.observed = Some(refusal);
+                            evidence.historical_observed = true;
+                            // Reconstruction can still fail in an owned child. Do not reserve
+                            // its parent's terminal while that child must elect owner failure.
+                            *admission = ToolLiveAdmissionState::ResourceExhaustedPending(
+                                ToolAttachmentAdmissionRejection::Recorded,
+                            );
+                            operation.state.notify_observers();
+                            self.owner.changed.notify_waiters();
+                            ToolLiveAdmissionOutcome::ResourceExhausted
+                        }
+                        ToolOperationWinner::SelectingCancelled
+                        | ToolOperationWinner::Cancelled => ToolLiveAdmissionOutcome::Cancelled,
+                        _ => ToolLiveAdmissionOutcome::Fenced,
                     }
-                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
-                        ToolLiveAdmissionOutcome::Cancelled
-                    }
-                    _ => ToolLiveAdmissionOutcome::Fenced,
-                },
+                }
                 _ => ToolLiveAdmissionOutcome::Fenced,
             }
         };
@@ -302,9 +305,9 @@ impl OwnerToolOperation {
         &self,
     ) -> Option<ToolAttachmentAdmissionRejection> {
         let mut live_admission = self.live_admission.lock().await;
-        if let ToolLiveAdmissionState::ResourceExhaustedPending { preselected } = *live_admission {
+        if let ToolLiveAdmissionState::ResourceExhaustedPending(rejection) = *live_admission {
             *live_admission = ToolLiveAdmissionState::ResourceExhaustedHandled;
-            Some(ToolAttachmentAdmissionRejection { preselected })
+            Some(rejection)
         } else {
             None
         }
@@ -313,14 +316,14 @@ impl OwnerToolOperation {
     pub(crate) async fn has_pending_live_admission_rejection(&self) -> bool {
         matches!(
             *self.live_admission.lock().await,
-            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+            ToolLiveAdmissionState::ResourceExhaustedPending(_)
         )
     }
 
     pub(crate) async fn live_attachment_admission_was_rejected(&self) -> bool {
         matches!(
             *self.live_admission.lock().await,
-            ToolLiveAdmissionState::ResourceExhaustedPending { .. }
+            ToolLiveAdmissionState::ResourceExhaustedPending(_)
                 | ToolLiveAdmissionState::ResourceExhaustedHandled
         )
     }
@@ -354,37 +357,34 @@ impl OwnerToolOperation {
             .unwrap()
             .operations
             .get(&self.id)
-            .map(|operation| operation.admission)
+            .map(|operation| operation.state.admission())
     }
 
-    pub(crate) fn transition_admission(
-        &self,
-        expected: BodyAdmissionState,
-        next: BodyAdmissionState,
-    ) -> bool {
-        let valid = matches!(
-            (expected, next),
-            (BodyAdmissionState::Staging, BodyAdmissionState::Ready)
-                | (BodyAdmissionState::Staging, BodyAdmissionState::Running)
-                | (BodyAdmissionState::Registered, BodyAdmissionState::Running)
-                | (
-                    BodyAdmissionState::Staging | BodyAdmissionState::Ready,
-                    BodyAdmissionState::SettledWithoutBody
-                )
-        );
-        if !valid {
-            return false;
-        }
+    pub(crate) fn settle_without_body(&self, expected: BodyAdmissionState) -> bool {
+        self.transition_admission(|state| state.settle_without_body(expected))
+    }
+
+    pub(crate) fn mark_body_ready(&self) -> bool {
+        self.transition_admission(OperationState::mark_body_ready)
+    }
+
+    pub(crate) fn start_body_without_lane(&self) -> bool {
+        self.transition_admission(OperationState::start_body_without_lane)
+    }
+
+    fn transition_admission(&self, transition: impl FnOnce(&mut OperationState) -> bool) -> bool {
         let mut state = self.owner.state.lock().unwrap();
-        let operation = &mut state.operations.get_mut(&self.id).unwrap();
-        if operation.admission != expected || operation.winner.is_terminal() {
+        let Some(operation) = state.operations.get_mut(&self.id) else {
+            return false;
+        };
+        let previous = operation.state.admission();
+        if !transition(&mut operation.state) {
             return false;
         }
-        operation.admission = next;
         tracing::debug!(
             operation_id = self.id,
-            previous_admission = ?expected,
-            admission = ?next,
+            previous_admission = ?previous,
+            admission = ?operation.state.admission(),
             "Transitioned tool body admission"
         );
         true

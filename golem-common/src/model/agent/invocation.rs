@@ -630,6 +630,7 @@ pub struct TimestampedAgentInvocation {
 #[desert(evolution())]
 pub struct PendingInvocationRef {
     pub timestamp: Timestamp,
+    pub not_before: Option<Timestamp>,
     /// Index of the `PendingAgentInvocation` oplog entry holding the full payload.
     pub oplog_index: OplogIndex,
     /// Semantic idempotency key of the invocation. `None` for manual updates.
@@ -639,6 +640,10 @@ pub struct PendingInvocationRef {
 }
 
 impl PendingInvocationRef {
+    pub fn is_due(&self, now: Timestamp) -> bool {
+        self.not_before.is_none_or(|deadline| deadline <= now)
+    }
+
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
         self.idempotency_key.as_ref()
     }

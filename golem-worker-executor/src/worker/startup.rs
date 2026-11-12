@@ -92,7 +92,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::CleanupFailed(error) => Err(error.clone()),
             WorkerInstance::WaitingForPermit(waiting) => Ok(Some(waiting.start_attempt)),
-            WorkerInstance::Running(_) => this.startup_attempt.current(),
+            WorkerInstance::Running(running) => {
+                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+                this.startup_attempt.current()
+            }
             WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => Err(
                 WorkerExecutorError::invalid_request("Worker is being deleted"),
             ),

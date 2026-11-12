@@ -5819,6 +5819,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let pending_spans = pending_context.to_oplog_data();
         let pending = oplog
             .add(OplogEntry::pending_agent_invocation(
+                None,
                 key.clone(),
                 payload,
                 pending_context.trace_id,

@@ -32,7 +32,6 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::owner::AgentOwnerPattern;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
@@ -160,7 +159,6 @@ pub struct WasmRpcEntryPayload {
     /// replay.
     pub remote_agent_type: Arc<AgentTypeSchema>,
     pub remote_method_streams: Arc<BTreeMap<String, bool>>,
-    pub remote_component_revision: ComponentRevision,
     pub remote_owner: AgentOwnerPattern,
 }
 

@@ -5933,7 +5933,7 @@
     "PublicOplogEntryPendingAgentInvocation": {
       "type": "object",
       "required": ["type", "timestamp", "invocation"],
-      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" } },
+      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" }, "notBefore": { "type": ["string", "null"] } },
       "additionalProperties": false
     },
     "PublicOplogEntryPendingUpdate": {
