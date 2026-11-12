@@ -311,7 +311,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 
     /// Resolves an agent that already exists and starts it. This never creates an agent: a
-    /// missing agent, or one that a running delete has claimed, gives `AgentNotFound`.
+    /// missing agent, or one that a running delete has claimed, gives `AgentNotFound`. It also
+    /// refuses to make an inspection the first start of an ephemeral agent.
     pub(super) async fn get_existing_running<Req: CanStartWorker>(
         &self,
         request: &Req,
