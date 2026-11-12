@@ -3960,6 +3960,170 @@ async fn promise_of_a_deleted_incarnation_does_not_reach_the_recreated_agent(
     Ok(())
 }
 
+/// Agent deletion and an ordinary completion of one of the deleted incarnation's promises race.
+/// The completion is paused between its check that the promise exists and its write of the
+/// result. Deletion must not remove the incarnation's promises while that write is outstanding:
+/// the write would then land after the removal and leave a row that nothing removes.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn promise_completion_racing_agent_deletion_leaves_no_row_of_the_deleted_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::promise::promise_namespace_of;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+
+    struct DurableStateRemovalReached(Arc<tokio::sync::Notify>);
+
+    #[async_trait]
+    impl WorkerDeletionHook for DurableStateRemovalReached {
+        async fn before_stage(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            stage: WorkerDeletionStage,
+        ) -> Result<(), WorkerExecutorError> {
+            if stage == WorkerDeletionStage::DurableStateRemoved {
+                self.0.notify_one();
+            }
+            Ok(())
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let storage: Arc<Mutex<Option<Arc<dyn KeyValueStorage + Send + Sync>>>> = Arc::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                let storage = storage.clone();
+                move |inner| {
+                    *storage.lock().unwrap() = Some(inner.clone());
+                    Arc::new(FaultInjectingKeyValueStorage::new(inner, faults.clone()))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let storage = storage
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the executor uses key-value storage");
+    let removal_reached = Arc::new(tokio::sync::Notify::new());
+    executor.set_worker_deletion_hook(Arc::new(DurableStateRemovalReached(
+        removal_reached.clone(),
+    )));
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "promise-completion-racing-delete");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let old_promise_id = promise_id_from_value(
+        &executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?,
+    );
+    let old_namespace = promise_namespace_of(&worker_id, old_promise_id.fingerprint);
+
+    // A completion first checks that the promise exists, then writes its result; both storage
+    // calls are labelled `complete`. The first gate lets the check through and arms the second,
+    // which holds the write.
+    let check = faults.pause_next("complete");
+    let mut completion = tokio::spawn({
+        let executor = executor.clone();
+        let promise_id = old_promise_id.clone();
+        async move { executor.complete_promise(&promise_id, vec![1]).await }.in_current_span()
+    });
+    check.entered().await;
+    let write = faults.pause_next("complete");
+    check.release();
+    tokio::select! {
+        _ = write.entered() => {}
+        result = &mut completion => bail!("the completion did not reach its write: {result:?}"),
+    }
+
+    let mut deletion = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    removal_reached.notified().await;
+    // Deletion now removes the incarnation's durable state, promises included. It must wait for
+    // the paused write; the bound only ends the wait for a deletion that must not finish.
+    let early_deletion = tokio::time::timeout(Duration::from_secs(3), &mut deletion).await;
+    let deletion_finished_during_write = early_deletion.is_ok();
+    write.release();
+    let completion = completion.await?;
+    match early_deletion {
+        Ok(deletion) => deletion??,
+        Err(_) => deletion.await??,
+    }
+
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace.clone())
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new(),
+        "no promise row of the deleted incarnation may remain"
+    );
+    assert!(
+        !deletion_finished_during_write,
+        "deletion finished while a completion was between its check and its write"
+    );
+    completion?;
+
+    // The re-created agent's promise is untouched by the deleted incarnation's completion.
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let new_promise_id = promise_id_from_value(
+        &executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?,
+    );
+    assert_ne!(new_promise_id.fingerprint, old_promise_id.fingerprint);
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(promise_namespace_of(&worker_id, new_promise_id.fingerprint))
+            .await
+            .map_err(|e| anyhow!(e))?
+            .len(),
+        1,
+        "the re-created agent's promise must be pending and uncompleted"
+    );
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace)
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new()
+    );
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn p3_promise_suspend_survives_executor_restart(

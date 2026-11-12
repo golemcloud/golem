@@ -29,6 +29,7 @@ use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use futures::future::BoxFuture;
 
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PromiseId};
@@ -181,7 +182,10 @@ pub trait PromiseService: Send + Sync {
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    /// Persists completion and notifies registered handles without activating an agent.
+    /// Persists completion and notifies registered handles without activating an agent. The
+    /// caller excludes a concurrent removal of the agent's promises: `complete` through
+    /// `PromiseWorkerAccess::run_excluding_removal`, scheduled completion through the agent's
+    /// oplog lifecycle guard, which deletion holds too.
     async fn complete_without_wakeup(
         &self,
         promise_id: PromiseId,
@@ -326,6 +330,14 @@ pub trait PromiseWorkerAccess: Send + Sync {
         &self,
         promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Runs `operation`, which checks and writes one of the agent's promises, while no removal of
+    /// the agent's state runs on this executor (`WorkerService::run_excluding_removal`).
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError>;
 }
 
 pub struct DefaultPromiseService {
@@ -463,8 +475,16 @@ impl PromiseService for DefaultPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        // Agent deletion removes the deleted incarnation's promises while it excludes this
+        // operation. The existence check and the write therefore both precede that removal, which
+        // then removes the row too, or both follow it and find no promise. Activation runs after
+        // the exclusion ends.
         let written = self
-            .complete_without_wakeup(promise_id.clone(), data)
+            .worker_access
+            .run_excluding_removal(
+                &promise_id.agent_id,
+                self.complete_without_wakeup(promise_id.clone(), data),
+            )
             .await?;
         // Retry activation even for duplicate completions: persistence may have succeeded before
         // an earlier activation failed.
@@ -680,6 +700,16 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
 
         Ok(())
     }
+
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.worker_service
+            .run_excluding_removal(agent_id, operation)
+            .await
+    }
 }
 
 /// The storage namespace of the promises of one agent incarnation.
@@ -799,6 +829,14 @@ mod tests {
             _promise_id: &PromiseId,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
+        }
+
+        async fn run_excluding_removal<'a>(
+            &self,
+            _agent_id: &AgentId,
+            operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+        ) -> Result<bool, WorkerExecutorError> {
+            operation.await
         }
     }
 
@@ -942,6 +980,14 @@ mod tests {
             _promise_id: &PromiseId,
         ) -> Result<(), WorkerExecutorError> {
             Err(WorkerExecutorError::runtime("activation refused"))
+        }
+
+        async fn run_excluding_removal<'a>(
+            &self,
+            _agent_id: &AgentId,
+            operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+        ) -> Result<bool, WorkerExecutorError> {
+            operation.await
         }
     }
 

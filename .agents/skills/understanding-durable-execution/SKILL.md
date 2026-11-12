@@ -133,10 +133,16 @@ indexes of the deleted incarnation; an ID of the deleted incarnation finds no en
 `PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
 Delete removes the deleted incarnation's promise namespace after its oplog, because promises
 cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
-promises, and a crash between the two leaves rows that no live ID reaches. Ordinary
-promise completion activates only the incarnation that created the promise, through
-`enqueue_exact_existing(.., Resume)`; it never creates an agent, and a missing or re-created
-agent is left alone.
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
