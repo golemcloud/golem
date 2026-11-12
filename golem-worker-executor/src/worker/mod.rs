@@ -416,16 +416,23 @@ struct StartupAttemptTracker {
     state: StdMutex<StartupAttemptState>,
 }
 
+/// The logical start that callers join. One attempt can span stops, delays and permit
+/// reacquisition, so it is tracked apart from the lifecycle phase.
 #[derive(Default)]
-struct StartupAttemptState {
-    pending: Option<Uuid>,
-    failure: Option<WorkerExecutorError>,
+enum StartupAttemptState {
+    #[default]
+    Idle,
+    Pending(Uuid),
+    Failed(WorkerExecutorError),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DeletionHandle {
     completion: Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>,
 }
+
+/// Publishes the result of one deletion attempt to its `DeletionHandle`.
+type DeletionSender = oneshot::Sender<Result<(), WorkerExecutorError>>;
 
 pub(crate) enum DeleteOutcome {
     Started(DeletionHandle),
@@ -486,9 +493,17 @@ pub trait WorkerDeletionHook: Send + Sync {
 
 #[derive(Debug)]
 struct DeletingWorker {
-    runtime: Box<WorkerInstance>,
+    runtime: DeletionRuntime,
     handle: DeletionHandle,
     completed_stage: WorkerDeletionStage,
+}
+
+/// The runtime that a deletion retains from the resolved worker it claimed. The deletion's stop,
+/// or its successful cleanup retry, leaves `Stopped`.
+#[derive(Debug)]
+enum DeletionRuntime {
+    Retained(WorkerRuntime),
+    Stopped,
 }
 
 /// Represents worker that may be running or suspended.
@@ -892,8 +907,20 @@ enum WorkerInstance {
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
-    StoppedForDeletion,
     Deleting(DeletingWorker),
+}
+
+/// The phases that hold or report a worker runtime, which a stop can end. Each is also a
+/// `WorkerInstance` phase; a deletion retains one of them.
+#[derive(Debug)]
+enum WorkerRuntime {
+    Unloaded {
+        startup_failure: Option<WorkerExecutorError>,
+    },
+    CleanupFailed(WorkerExecutorError),
+    WaitingForPermit(WaitingWorker),
+    Running(RunningWorker),
+    Stopping(StoppingWorker),
 }
 
 impl WorkerInstance {
@@ -1109,7 +1136,7 @@ pub(crate) struct FilesystemPressureEligibility {
     last_effect_completion: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum FinalWorkerState {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,

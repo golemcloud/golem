@@ -48,11 +48,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !self.active_agents().contains_worker_generation(self).await {
             return Ok(None);
         }
-        let retry_cleanup = matches!(
-            instance.deletion_runtime(),
-            WorkerInstance::CleanupFailed(_)
-        );
-        let (outcome, sender) = instance.claim_deletion();
+        let retry_cleanup = instance.cleanup_failure().is_some();
+        let Some((outcome, sender)) = instance.claim_deletion() else {
+            return Err(WorkerExecutorError::runtime(
+                "Worker deletion found no initialized runtime",
+            ));
+        };
         let started = matches!(outcome, DeleteOutcome::Started(_));
         drop(instance);
         drop(cleanup);
@@ -143,13 +144,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.tasks.stop_roots_and_wait().await;
             self.durable_stream_attachment_reconciler.stop().await;
             retirement.await?;
-            let cleanup_error = {
-                let instance = self.instance.lock().await;
-                match instance.deletion_runtime() {
-                    WorkerInstance::CleanupFailed(error) => Some(error.clone()),
-                    _ => None,
-                }
-            };
+            let cleanup_error = self.instance.lock().await.cleanup_failure().cloned();
             if let Some(error) = cleanup_error {
                 // A shutdown failure observed by this attempt belongs to its immutable result.
                 // Only an explicit claim made after the failure may join or retry final cleanup.
@@ -513,7 +508,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 }
 
 impl DeletionHandle {
-    pub(in crate::worker) fn new() -> (Self, oneshot::Sender<Result<(), WorkerExecutorError>>) {
+    pub(in crate::worker) fn new() -> (Self, DeletionSender) {
         let (sender, receiver) = oneshot::channel();
         let completion = async move {
             receiver.await.unwrap_or_else(|_| {
@@ -546,7 +541,7 @@ impl DeleteOutcome {
 
 impl WorkerInstance {
     pub(in crate::worker) fn ensure_not_deleting(&self) -> Result<(), WorkerExecutorError> {
-        if matches!(self, Self::Deleting(_) | Self::StoppedForDeletion) {
+        if matches!(self, Self::Deleting(_)) {
             Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             ))
@@ -556,24 +551,6 @@ impl WorkerInstance {
     }
 
     pub(in crate::worker) fn deletion_owns_retirement(&self) -> bool {
-        matches!(self, Self::Deleting(_) | Self::StoppedForDeletion)
-    }
-
-    pub(in crate::worker) fn deletion_runtime(&self) -> &Self {
-        match self {
-            Self::Deleting(deleting) => &deleting.runtime,
-            instance => instance,
-        }
-    }
-
-    pub(in crate::worker) fn retained_cleanup_failure(&self) -> Option<&WorkerExecutorError> {
-        match self.deletion_runtime() {
-            Self::CleanupFailed(error) => Some(error),
-            Self::Stopping(stopping) => match &stopping.final_state {
-                FinalWorkerState::CleanupFailed(error) => Some(error),
-                _ => None,
-            },
-            _ => None,
-        }
+        matches!(self, Self::Deleting(_))
     }
 }

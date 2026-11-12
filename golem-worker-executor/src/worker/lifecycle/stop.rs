@@ -119,7 +119,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                if let WorkerInstance::Unloaded { startup_failure } = unloaded.complete(final_state)
+                if let FinalWorkerState::Unloaded { startup_failure } =
+                    unloaded.complete(final_state)
                 {
                     self.resolve_pending_queue_on_unload(
                         startup_failure.as_ref(),
@@ -147,19 +148,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 let completed = waiting.complete(final_state);
-                match completed.state() {
-                    WorkerInstance::Unloaded { startup_failure } => {
+                match completed.final_state() {
+                    FinalWorkerState::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
                             pending_live_invocations,
                         )
                         .await;
                     }
-                    WorkerInstance::CleanupFailed(error) => {
+                    FinalWorkerState::CleanupFailed(error) => {
                         self.resolve_pending_readiness_awaiters_on_stop(Some(error))
                             .await;
                     }
-                    _ => {}
+                    FinalWorkerState::Deleting => {}
                 }
                 StopResult::Stopped
             }
@@ -171,20 +172,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // As in the `Running` arm: the worker is unloaded from here on, so a start can
                 // register the next generation's grant before this loop task exits.
                 self.release_linear_memory_grant();
-                let (phase, notify, pending_live_invocations) = stopping.complete(final_state);
-                match phase {
-                    WorkerInstance::Unloaded { startup_failure } => {
+                let (final_state, notify, pending_live_invocations) =
+                    stopping.complete(final_state);
+                match final_state {
+                    FinalWorkerState::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
                             pending_live_invocations,
                         )
                         .await;
                     }
-                    WorkerInstance::CleanupFailed(error) => {
-                        self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                    FinalWorkerState::CleanupFailed(error) => {
+                        self.resolve_pending_readiness_awaiters_on_stop(Some(&error))
                             .await;
                     }
-                    _ => {}
+                    FinalWorkerState::Deleting => {}
                 }
                 notify.set();
                 StopResult::Stopped
@@ -261,19 +263,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // the old generation's grant.
                         self.release_linear_memory_grant();
                         let completed = running.complete(final_state);
-                        match completed.state() {
-                            WorkerInstance::Unloaded { startup_failure } => {
+                        match completed.final_state() {
+                            FinalWorkerState::Unloaded { startup_failure } => {
                                 self.resolve_pending_queue_on_unload(
                                     startup_failure.as_ref(),
                                     pending_live_invocations,
                                 )
                                 .await;
                             }
-                            WorkerInstance::CleanupFailed(error) => {
+                            FinalWorkerState::CleanupFailed(error) => {
                                 self.resolve_pending_readiness_awaiters_on_stop(Some(error))
                                     .await;
                             }
-                            _ => {}
+                            FinalWorkerState::Deleting => {}
                         }
                         StopResult::Stopped
                     }
@@ -334,8 +336,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
 
                 let pending_live_invocations = instance_guard.finish_external_stop();
-                match instance_guard.deletion_runtime() {
-                    WorkerInstance::Unloaded { startup_failure } => {
+                match instance_guard.stop_outcome() {
+                    Some(FinalWorkerState::Unloaded { startup_failure }) => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
                             pending_live_invocations
@@ -343,11 +345,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await;
                     }
-                    WorkerInstance::CleanupFailed(error) => {
-                        self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                    Some(FinalWorkerState::CleanupFailed(error)) => {
+                        self.resolve_pending_readiness_awaiters_on_stop(Some(&error))
                             .await;
                     }
-                    _ => {}
+                    Some(FinalWorkerState::Deleting) | None => {}
                 }
                 drop(instance_guard);
 
@@ -665,30 +667,29 @@ pub(in crate::worker) fn merge_run_loop_failure(
     instance: &mut WorkerInstance,
     error: WorkerExecutorError,
 ) {
-    match instance {
-        WorkerInstance::Stopping(stopping) => {
-            stopping.final_state = merge_final_worker_state(
-                std::mem::replace(
-                    &mut stopping.final_state,
-                    FinalWorkerState::Unloaded {
-                        startup_failure: None,
-                    },
-                ),
-                FinalWorkerState::CleanupFailed(error),
-            );
-        }
-        WorkerInstance::CleanupFailed(_) => {}
-        _ => *instance = WorkerInstance::CleanupFailed(error),
+    if let Some(stopping) = instance.stopping_mut() {
+        stopping.final_state = merge_final_worker_state(
+            std::mem::replace(
+                &mut stopping.final_state,
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            ),
+            FinalWorkerState::CleanupFailed(error),
+        );
+    } else if instance.cleanup_failure().is_none() {
+        instance.install_runtime(WorkerRuntime::CleanupFailed(error));
     }
 }
 
 pub(in crate::worker) fn complete_stopping_worker(
-    mut stopping: StoppingWorker,
+    stopping: StoppingWorker,
     final_state: FinalWorkerState,
-) -> (WorkerInstance, OneShotEvent) {
-    stopping.final_state = merge_final_worker_state(stopping.final_state, final_state);
-    let notify = stopping.notify;
-    (stopping.final_state.into_instance(), notify)
+) -> (FinalWorkerState, OneShotEvent) {
+    (
+        merge_final_worker_state(stopping.final_state, final_state),
+        stopping.notify,
+    )
 }
 
 pub(in crate::worker) fn invocation_keys_to_fail(
@@ -723,18 +724,6 @@ pub(in crate::worker) fn invocation_keys_to_fail(
     }
 
     keys
-}
-
-impl FinalWorkerState {
-    pub(in crate::worker) fn into_instance(self) -> WorkerInstance {
-        match self {
-            FinalWorkerState::Unloaded { startup_failure } => {
-                WorkerInstance::Unloaded { startup_failure }
-            }
-            FinalWorkerState::CleanupFailed(error) => WorkerInstance::CleanupFailed(error),
-            FinalWorkerState::Deleting => WorkerInstance::StoppedForDeletion,
-        }
-    }
 }
 
 impl UnloadReason {

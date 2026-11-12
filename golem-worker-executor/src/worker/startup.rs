@@ -411,22 +411,20 @@ impl RunningWorker {
 impl StartupAttemptTracker {
     pub(in crate::worker) fn begin(&self, existing: Option<Uuid>) -> Uuid {
         let mut state = self.state.lock().unwrap();
-        let attempt = existing.or(state.pending).unwrap_or_else(Uuid::new_v4);
-        state.pending = Some(attempt);
-        state.failure = None;
+        let attempt = existing.or(state.pending()).unwrap_or_else(Uuid::new_v4);
+        *state = StartupAttemptState::Pending(attempt);
         attempt
     }
 
     pub(in crate::worker) fn pending(&self) -> Option<Uuid> {
-        self.state.lock().unwrap().pending
+        self.state.lock().unwrap().pending()
     }
 
     pub(in crate::worker) fn current(&self) -> Result<Option<Uuid>, WorkerExecutorError> {
-        let state = self.state.lock().unwrap();
-        match (state.pending, state.failure.as_ref()) {
-            (Some(attempt), _) => Ok(Some(attempt)),
-            (None, Some(error)) => Err(error.clone()),
-            (None, None) => Ok(None),
+        match &*self.state.lock().unwrap() {
+            StartupAttemptState::Idle => Ok(None),
+            StartupAttemptState::Pending(attempt) => Ok(Some(*attempt)),
+            StartupAttemptState::Failed(error) => Err(error.clone()),
         }
     }
 
@@ -436,11 +434,13 @@ impl StartupAttemptTracker {
         result: &Result<(), WorkerExecutorError>,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
-        if state.pending != Some(attempt) {
+        if state.pending() != Some(attempt) {
             return false;
         }
-        state.failure = result.as_ref().err().cloned();
-        state.pending = None;
+        *state = match result {
+            Ok(()) => StartupAttemptState::Idle,
+            Err(error) => StartupAttemptState::Failed(error.clone()),
+        };
         true
     }
 
@@ -453,6 +453,15 @@ impl StartupAttemptTracker {
             return false;
         }
         self.complete(attempt, &Ok(()))
+    }
+}
+
+impl StartupAttemptState {
+    fn pending(&self) -> Option<Uuid> {
+        match self {
+            Self::Pending(attempt) => Some(*attempt),
+            Self::Idle | Self::Failed(_) => None,
+        }
     }
 }
 
