@@ -304,6 +304,7 @@ message RawPendingAgentInvocationParameters {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
+  google.protobuf.Timestamp not_before = 6;
 }
 
 message RawPendingUpdateParameters {

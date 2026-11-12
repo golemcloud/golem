@@ -22993,6 +22993,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
       required:
       - timestamp
       - invocation
@@ -25382,12 +25385,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
       required:
@@ -26214,6 +26211,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
@@ -26317,6 +26316,13 @@ components:
       - staticBindings
       - filesystemBindings
       - fileResponseHeaders
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
     InitialAgentFile:
       title: InitialAgentFile
       type: object

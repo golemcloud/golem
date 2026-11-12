@@ -98,9 +98,10 @@ Both print every command and its exit code. To compile by hand:
 
 - `golem-rust` (path `../../../../../sdks/rust/golem-rust`) with
   `export_golem_agentic`.
-- `wit-bindgen` from `https://github.com/golemcloud/wit-bindgen`, branch
-  `wit-bindgen-golem-1.6`, `=0.59.0`, features `async`, `async-spawn` (the
-  fork the SDK uses; macro output needs it in the consumer crate).
+- `wit-bindgen` from `https://github.com/golemcloud/wit-bindgen`, with the same
+  `rev` and `version` as the `wit-bindgen` dependency in
+  `sdks/rust/golem-rust/Cargo.toml`, features `async`, `async-spawn` (the fork
+  the SDK uses; macro output needs it in the consumer crate).
 - `golem-ai-llm`, `golem-ai-llm-openai`, `golem-ai-llm-anthropic` `=0.5.4`,
   all with `default-features = false`. Their default `golem` feature pulls
   `golem-rust =3.0.0-rc5` from crates.io with its own agent exports, which

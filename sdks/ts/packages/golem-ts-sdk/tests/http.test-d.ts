@@ -131,9 +131,6 @@ void http.post('/events', {
         contentType: 'application/vnd.golem.events',
       },
     ],
-    allowExternalWrites: true,
-    allowStreamDelete: false,
-    allowInvocationDelete: false,
     load: {
       maxConcurrentReadersPerStream: 8,
       maxAppendRequestsPerSecondPerStream: 25,
@@ -156,11 +153,11 @@ void http.post('/events', {
     slots: [{ source: 'input' }],
   },
 });
-// @ts-expect-error deletion flags are booleans
+// @ts-expect-error deletion switches are not route options
 void http.post('/events', {
   durableStreams: {
     slots: [],
-    allowStreamDelete: 'false',
+    allowStreamDelete: false,
   },
 });
 // @ts-expect-error load limits are numbers

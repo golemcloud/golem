@@ -299,6 +299,7 @@ oplog_entry! {
         wit_raw_type: "raw-pending-agent-invocation-parameters"
         wit_public_type: "pending-agent-invocation-parameters"
         raw {
+            not_before: Option<Timestamp>,
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
@@ -306,7 +307,8 @@ oplog_entry! {
             invocation_context: Vec<SpanData>,
         }
         public {
-            invocation: PublicAgentInvocation
+            invocation: PublicAgentInvocation,
+            not_before: Option<Timestamp>,
         }
     },
     /// An update request arrived and will be applied as soon the worker restarts

@@ -511,7 +511,7 @@ mod tests {
                 "If-None-Match, Stream-Expires-At, Stream-Forked-From, Content-Type",
                 StatusCode::NO_CONTENT,
             ),
-            (AgentRouteMode::Rest, "Producer-Id", StatusCode::FORBIDDEN),
+            (AgentRouteMode::Plain, "Producer-Id", StatusCode::FORBIDDEN),
             (
                 AgentRouteMode::DurableStreams,
                 "X-Unexpected",

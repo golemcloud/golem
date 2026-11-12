@@ -52,6 +52,7 @@ fn strategy(target: u64, admission: u64, snapshot: u64) -> OplogEntry {
 fn manual_invocation(target: u64) -> OplogEntry {
     OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::from(1_000),
+        not_before: None,
         idempotency_key: golem_common::model::IdempotencyKey::fresh(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
             target_revision: revision(target),
@@ -324,12 +325,14 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
         pending_invocations: vec![
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
+                not_before: None,
                 oplog_index: idx(6),
                 idempotency_key: Some(golem_common::model::IdempotencyKey::fresh()),
                 manual_update_target_revision: None,
             },
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
+                not_before: None,
                 oplog_index: idx(7),
                 idempotency_key: None,
                 manual_update_target_revision: Some(revision(4)),

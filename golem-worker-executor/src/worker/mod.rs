@@ -155,6 +155,9 @@ use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
+use crate::worker::lifecycle::state::{
+    LifecycleTransition, StopOrigin, WaitingPhase, WorkerLifecycle,
+};
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
@@ -452,10 +455,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     deps: All<Ctx>,
     card_interest_index: Arc<CardInterestIndex>,
-    instance: Arc<Mutex<WorkerInstance>>,
+    instance: Arc<Mutex<WorkerLifecycle>>,
     unload_cleanup: StdMutex<Option<invocation_loop::UnloadCleanup>>,
     resolved: OnceCell<ResolvedWorkerData<Ctx>>,
-    initialization_complete: AtomicBool,
     initialization_request: StdMutex<Option<(InvocationContextStack, Principal)>>,
 }
 
@@ -677,12 +679,12 @@ pub struct HydratedInvocation {
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn is_resolved(&self) -> bool {
-        self.initialization_complete.load(Ordering::Acquire)
+        self.resolved.get().is_some()
     }
 
     pub(crate) fn can_discard_unresolved(&self) -> bool {
         self.instance.try_lock().is_ok_and(|instance| {
-            matches!(&*instance, WorkerInstance::Unresolved)
+            matches!(instance.state(), WorkerInstance::Unresolved)
                 && self.initialization_request.lock().unwrap().is_none()
         })
     }
@@ -864,7 +866,7 @@ pub struct WorkerTrace {
 
 #[derive(Debug)]
 struct WaitingWorker {
-    handle: Option<JoinHandle<()>>,
+    handle: JoinHandle<()>,
     start_attempt: Uuid,
 }
 
@@ -920,7 +922,7 @@ enum WorkerInterruptState {
 
 #[derive(Debug)]
 struct RunningWorker {
-    handle: Option<JoinHandle<()>>,
+    handle: JoinHandle<()>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     waiting_for_command: Arc<AtomicBool>,
@@ -1086,6 +1088,7 @@ enum InvocationResult {
     Cached {
         result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
+    Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
     },
@@ -1244,6 +1247,8 @@ pub(crate) struct GetOrCreateWorkerResult {
     initial_component: Arc<golem_service_base::model::component::Component>,
     /// Ephemeral agents are fail-stop: reconstructing one from its lower oplog is allowed for
     /// observation and invocation-result lookup, but the instance must never be started again.
+    /// The one exception is an agent that never began executing (no `Restart`): it may run its
+    /// first execution, see [`acquisition::never_started_ephemeral_admission`].
     reconstructed_ephemeral: bool,
     newly_created: bool,
 }

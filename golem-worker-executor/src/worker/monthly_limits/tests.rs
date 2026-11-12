@@ -952,7 +952,7 @@ fn non_running_monthly_lifecycles(
                 completed_stage: super::super::WorkerDeletionStage::Claimed,
             }),
             WorkerInstance::WaitingForPermit(super::super::WaitingWorker {
-                handle: None,
+                handle: tokio::spawn(async {}),
                 start_attempt: attempt,
             }),
             WorkerInstance::Stopping(super::super::StoppingWorker {

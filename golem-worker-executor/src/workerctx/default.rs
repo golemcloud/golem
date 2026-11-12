@@ -698,7 +698,7 @@ impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await

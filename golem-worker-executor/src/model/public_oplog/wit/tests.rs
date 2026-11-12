@@ -27,8 +27,8 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
-    AgentInvocationStartedParams, CancelledParams, EndParams, SnapshotParams, StartParams,
-    SuccessfulUpdateParams,
+    AgentInvocationStartedParams, CancelledParams, EndParams, PendingAgentInvocationParams,
+    SnapshotParams, StartParams, SuccessfulUpdateParams,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
@@ -53,6 +53,46 @@ fn test_card(card_id: CardId) -> Card {
         expires_at: None,
         system_card: false,
         managed_by: None,
+    }
+}
+
+#[test]
+fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let encoded = oplog::OplogEntry::try_from(raw.clone()).unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            raw.clone().into()
+        );
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            not_before,
+        });
+        let encoded = oplog::PublicOplogEntry::try_from(public).unwrap();
+        let oplog::PublicOplogEntry::PendingAgentInvocation(params) = encoded else {
+            panic!("expected pending invocation")
+        };
+        assert_eq!(
+            params.not_before.map(super::timestamp_from_datetime),
+            not_before
+        );
     }
 }
 

@@ -34,6 +34,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?;
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok(OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key,
             payload,
             invocation_context.trace_id,
@@ -128,7 +129,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request: DurableStreamingInvocationRequest,
         acceptance_match: DurableStreamingAcceptanceMatch,
         producer: Arc<DurableStreamStore>,
-        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        instance_guard: OwnedMutexGuard<WorkerLifecycle>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
             Some(
@@ -623,7 +624,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .map_err(|refusal| self.refused_by(refusal))?;
         }
-        if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
+        if !retained_acceptance && let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);

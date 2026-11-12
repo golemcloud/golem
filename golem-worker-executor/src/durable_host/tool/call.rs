@@ -762,7 +762,7 @@ where
                     .ok_or_else(|| anyhow!("owner generation fenced replayed tool invocation"))?;
                 accessor.with(|mut access| {
                     durability::install_cancellation_effect(access.get(), &operation)
-                });
+                })?;
                 return Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                     durability,
                     operation,
@@ -827,7 +827,7 @@ where
                 .ok_or_else(|| anyhow!("owner generation fenced tool invocation"))?;
             accessor.with(|mut access| {
                 durability::install_cancellation_effect(access.get(), &operation)
-            });
+            })?;
             let _permit = prepared.permit;
             Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                 durability,

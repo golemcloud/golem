@@ -493,11 +493,12 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
-    /// Called when a worker is about to be invoked
+    /// Called when a worker is about to be invoked. Returns false if the pending invocation
+    /// was removed before it could start; the caller must skip execution and result persistence.
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> Result<bool, WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
     async fn on_agent_invocation_finished(&mut self);

@@ -3603,7 +3603,7 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
@@ -9480,6 +9480,38 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,
@@ -9585,6 +9617,38 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,

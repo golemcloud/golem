@@ -77,9 +77,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// session runs its drop policy. A replayed session is dropped at the point the guest
     /// dropped the call in the recorded run, which is expected.
     pub(super) fn discard_after_guest_drop(mut self) {
-        if !self.is_live {
-            self.parked_undelivered_replay = true;
-        }
+        self.state.discard_after_guest_drop();
     }
 
     /// Snapshots everything a cancellation recorder / terminal guard needs from this live
@@ -106,7 +104,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         DroppedCall {
             start_idx: self.start_idx,
             function_type: self.retry.function_type().clone(),
-            request_upload: self.request_upload.clone(),
+            request_upload: self.state.request_upload(),
             entity_admission: self.entity_admission,
             trap_context: self.trap_context(),
             live_call_permit,
@@ -146,13 +144,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         partial: Option<Pair::Resp>,
     ) -> Result<(), WorkerExecutorError> {
-        // Terminal: mark finished up front so a fallible step below does not drop the handle as
-        // "unfinished".
-        self.finished = true;
-        if self.is_live {
-            if self.persisted {
+        if self.is_live() {
+            self.state = self
+                .take_executing_call()?
+                .enter_direct_terminal()
+                .into_session();
+            if self.state.is_recorded_execution() {
                 let oplog = ctx.state.oplog.clone();
-                let dropped_call = self.dropped_call_snapshot(self.live_call_permit.clone());
+                let dropped_call = self.dropped_call_snapshot(self.state.clone_permit());
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
                 // inline or eagerly uploaded.
@@ -166,10 +165,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .await?;
             }
         } else {
-            let replay = self
-                .replay
-                .take()
-                .expect("cancel() in replay called on a live handle");
+            let (replay, released) = self.take_replay_call()?.begin_cancellation();
+            self.state = released.into_session();
             let resolution = ctx.state.replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
             DurableCallCoordinator::new(ctx)
@@ -213,12 +210,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         self.ensure_accessor_terminal_supported("cancel_access")?;
-        self.finished = true;
         let function_type = self.retry.function_type().clone();
-        if self.is_live {
-            if self.persisted {
+        if self.is_live() {
+            if self.state.is_recorded_execution() {
                 let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-                let mut guard = self.terminal_guard();
+                let mut guard = self.terminal_guard()?;
                 let result = Self::persist_cancellation(oplog, &mut guard, partial).await;
                 if let Err(err) = result {
                     guard.disarm();
@@ -226,14 +222,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 end_durable_function_access(store, get_ctx, function_type, false).await?;
                 guard.disarm();
+            } else {
+                self.state = self
+                    .take_executing_call()?
+                    .enter_direct_terminal()
+                    .into_session();
             }
         } else {
             let replay_state =
                 store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-            let replay = self
-                .replay
-                .take()
-                .expect("cancel_access() in replay called on a live handle");
+            let (replay, released) = self.take_replay_call()?.begin_cancellation();
+            self.state = released.into_session();
             let resolution = replay_state.await_resolution(replay).await?;
             expect_cancelled_resolution(&resolution)?;
             end_durable_function_access(store, get_ctx, function_type, false).await?;
@@ -260,10 +259,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        debug_assert!(
-            !self.is_live,
-            "cancel_access_deferred() called on a live handle"
-        );
         let context = self.trap_context();
         if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
             self.abandon_for_trap();
@@ -271,11 +266,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         self.ensure_accessor_terminal_supported("cancel_access_deferred")
             .map_err(|source| TerminalCallError::new(source, context))?;
-        self.finished = true;
-        let replay = self
-            .replay
-            .take()
-            .expect("cancel_access_deferred() called on a live handle");
+        let (replay, released) = self
+            .take_replay_call()
+            .map_err(|source| TerminalCallError::new(source, context))?
+            .begin_cancellation();
+        self.state = released.into_session();
         let (replay_state, activity) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -456,59 +451,5 @@ async fn upload_partial_response<Resp: Into<HostResponse> + Send + 'static>(
             )?))
         }
         None => Ok(None),
-    }
-}
-
-impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> {
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-        if self.is_live
-            && self.persisted
-            && (P::CANCEL_ON_TOOL_TRAP || self.entity_admission)
-            && self.tool_trap_disposal.load(Ordering::Acquire)
-        {
-            let permit = self.live_call_permit.take();
-            Cancellable::unfinished_drop(
-                self.dropped_call_snapshot(permit),
-                self.cleanup_sink.as_ref(),
-            );
-            return;
-        }
-        if self.teardown_probe().is_tearing_down() {
-            tracing::debug!(
-                start_idx = %self.start_idx,
-                "durable call abandoned during executor shutdown"
-            );
-            return;
-        }
-        if self.is_live {
-            if self.persisted {
-                let live_call_permit = self.live_call_permit.take();
-                // A live call dropped without finish/cancel: run the compile-time drop policy.
-                P::unfinished_drop(
-                    self.dropped_call_snapshot(live_call_permit),
-                    self.drop_sink.as_ref(),
-                );
-            }
-            // Not persisted: there is nothing on disk to reconcile.
-        } else {
-            if self.parked_undelivered_replay {
-                // Expected: the recorded terminal was never delivered to the guest live
-                // (`Cancelled { partial: None }` or an `End` marked `CompletionDiscarded`) and
-                // the deterministic guest dropped this future at the same point it did live.
-                tracing::debug!(
-                    "parked undelivered durable call replay handle for Start {} dropped by the guest",
-                    self.start_idx
-                );
-            } else {
-                // A replay handle must never enqueue a live cancellation; just note the anomaly.
-                tracing::warn!(
-                    "replay durable call handle for Start {} dropped without finishing",
-                    self.start_idx
-                );
-            }
-        }
     }
 }

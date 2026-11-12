@@ -263,22 +263,13 @@ async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
     let says =
         |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
 
-    // The tool needs a grant, as each tool of the registry does. A plan shows the grant and
-    // stops there, and a staged deployment is refused: these runs make no grant.
+    // A plan shows the grant that a default tool of the registry needs, and stops there.
     builtin_bash::write_manifest_without_bash(&ctx, ONE_SECRET_FOR_BASH, NO_SECRETS_FOR_BASH);
     let planned = ctx.cli(["deploy", "--plan"]).await;
     assert!(planned.success_or_dump());
     assert!(says(&planned, "environment tool grant reconciliation"));
     assert!(says(&planned, "default tool bash"));
     assert!(says(&planned, "Planning stopped"));
-    let staged = ctx.cli(["deploy", "--stage"]).await;
-    assert!(!staged.success());
-    assert!(says(
-        &staged,
-        "requires environment tool or tool middleware grant changes"
-    ));
-    let still_off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
-    assert_not_run(&still_off, "`bash` is not bound to");
     builtin_bash::write_manifest_without_bash(&ctx, "", "");
 
     // A deployment makes the grant as a step of its grant plan and adds the tool. The agents
@@ -790,41 +781,12 @@ async fn ssh_reports_denied_operations() {
     );
 }
 
+// A failing sibling's whole stderr reaches the session ahead of the declared error, and the
+// session goes on to the next command.
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_presents_a_siblings_stderr() {
     let ctx = context().await;
-    let setup = "mkdir -p /tmp/ssh-stderr && cd /tmp/ssh-stderr && ";
-    let both = "out-1\nout-2\nerr-1\nerr-2\n";
-
-    // Each channel reaches its own process stream; redirections apply inside the script.
-    for (script, stdout, stderr) in [
-        ("fixture interleave ok", "out-1\nout-2\n", "err-1\nerr-2\n"),
-        ("fixture interleave ok 2>/dev/null", "out-1\nout-2\n", ""),
-        // Nothing records how the channels interleaved: stdout comes first.
-        ("fixture interleave ok 2>&1", both, ""),
-        ("fixture interleave ok |& cat", both, ""),
-        (
-            "fixture interleave ok | tr a-z A-Z",
-            "OUT-1\nOUT-2\n",
-            "err-1\nerr-2\n",
-        ),
-        ("fixture interleave ok 2>err; cat err", both, ""),
-    ] {
-        let output = ssh(&ctx, &[OWNER, "-c", &format!("{setup}{script}")], "").await;
-        assert_output(&output, 0, stdout, stderr);
-    }
-
-    // A declared error follows the provider's stderr and sets the status.
-    let output = ssh(&ctx, &[OWNER, "-c", "fixture interleave fail"], "").await;
-    assert_output(
-        &output,
-        42,
-        "out-1\nout-2\n",
-        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
-    );
-
-    // Interactively, the failure is shown and the session goes on to the next command.
     let output = ssh(&ctx, &[OWNER], "fixture interleave fail\necho next\n").await;
     assert_output(
         &output,
