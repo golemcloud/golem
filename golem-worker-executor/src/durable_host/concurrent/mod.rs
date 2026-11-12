@@ -16,7 +16,7 @@
 //!
 //! A durable host call is identified by the [`OplogIndex`] of its `Start` entry. While live,
 //! the call eagerly appends a `Start` (capturing its request) and later an `End` (its response)
-//! or a `Cancelled`. During replay the [`ConcurrentReplayResolver`] matches each completed
+//! or a `Cancelled`. During replay the cursor's per-Start registry matches each completed
 //! `End`/`Cancelled` back to the awaiting [`DurableCallSession`] via a [`ReplayableOneshot`], so the two
 //! halves of a call no longer have to be adjacent in the oplog — which is what lets us track
 //! async, parallel host functions.
@@ -25,7 +25,7 @@
 //! p3 `Accessor` entry points ([`DurableCallSession::start_access_with`] and friends) run concurrently;
 //! host methods still taking `&mut self` remain serialized by the store borrow.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;

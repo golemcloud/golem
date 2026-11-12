@@ -56,14 +56,13 @@ impl CursorTx<'_> {
         // Replay is over: any durable call whose `Start` was committed but whose terminal never was
         // is incomplete. Wake every still-suspended awaiter so it returns `Incomplete` instead of
         // sleeping forever waiting for a cursor that will not advance again.
-        self.st.concurrent_resolver.fail_all_pending_incomplete();
+        self.st.starts.fail_all_pending_incomplete();
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
         // just failed with `Incomplete`, and the cursor will not read again. Retained `Start`s are
         // deliberately kept: a still-unadmitted owner claims them after this switch (its terminal,
         // if retained, resolves it; otherwise it observes `Incomplete` exactly like a claim whose
         // terminal the cursor never reached), and durable-call admission keeps replaying such
         // calls while any retained `Start` exists (see `WorkerState::durable_call_is_live`).
-        self.st.claimed_starts.clear();
         self.st.custom_subtrees.clear();
         self.st.replay_buffer.clear();
         self.notify_progress = true;
@@ -92,8 +91,7 @@ impl CursorTx<'_> {
             return Ok(LivePublicationOutcome::ReplayResumed);
         }
 
-        let mut incomplete_reconstructions =
-            self.st.concurrent_resolver.pending_reconstruction_starts();
+        let mut incomplete_reconstructions = self.st.starts.pending_reconstruction_starts();
         if let Some(first_start) = incomplete_reconstructions.iter().min().copied() {
             let mut next = first_start.next();
             while next <= replay_target && !incomplete_reconstructions.is_empty() {
@@ -126,7 +124,7 @@ impl CursorTx<'_> {
         // body has validated and dropped the reconstruction guard.
         if !self
             .st
-            .concurrent_resolver
+            .starts
             .only_pending_reconstruction_fences_remain(&incomplete_reconstructions)
         {
             return Ok(LivePublicationOutcome::ReconstructionClaimsActive);

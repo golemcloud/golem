@@ -30,7 +30,7 @@ impl CursorTx<'_> {
     ) -> Result<(), WorkerExecutorError> {
         let start_idx = terminal_start_index(entry).unwrap_or(read_idx);
         debug_assert!(
-            self.st.retained_starts.contains_key(&start_idx),
+            self.st.starts.get_retained(&start_idx).is_some(),
             "retained commits target a retained Start"
         );
         self.commit_entry(read_idx, entry, Some(start_idx)).await
@@ -224,7 +224,7 @@ impl CursorTx<'_> {
                 // Hints can precede even the claim of their future entity Start. Validate the
                 // exact reference before retaining its prefix; a released claim cannot recreate it.
                 if wallet.entity_replay_wallet(parent).is_err()
-                    && !self.st.claimed_starts.contains(&parent)
+                    && !self.st.starts.is_claimed_ahead(&parent)
                     && self.custom_subtree_root(parent).is_none()
                     && self
                         .future_entity_start_can_be_claimed(read_idx, parent)
@@ -681,7 +681,7 @@ impl CursorTx<'_> {
         if let Some(start_index) = terminal_start_index(entry) {
             let resolution = self.terminal_resolution(start_index, idx, entry);
             self.st
-                .concurrent_resolver
+                .starts
                 .resolve_if_pending(start_index, idx, resolution);
         }
     }
@@ -709,10 +709,9 @@ impl CursorTx<'_> {
             && !matches!(event, ReplayEvent::ReplayFinished)
         {
             self.st
-                .retained_starts
-                .get_mut(&start_idx)
+                .starts
+                .get_retained_deferred_events_mut(&start_idx)
                 .expect("replay events are deferred to a retained Start")
-                .deferred_events
                 .push((entry_idx, event));
             return;
         }

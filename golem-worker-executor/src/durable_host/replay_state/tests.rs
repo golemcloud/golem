@@ -36,6 +36,7 @@ struct InMemoryOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     /// Every index served by `read_exact`, in order.
     reads: std::sync::Mutex<Vec<OplogIndex>>,
+    fail_next_read_at: std::sync::Mutex<Option<OplogIndex>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
     tasks: crate::worker::tasks::WorkerTasks,
 }
@@ -45,6 +46,7 @@ impl InMemoryOplog {
         Self {
             entries: std::sync::Mutex::new(Vec::new()),
             reads: std::sync::Mutex::new(Vec::new()),
+            fail_next_read_at: std::sync::Mutex::new(None),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
             tasks: Default::default(),
         }
@@ -156,6 +158,18 @@ impl Oplog for InMemoryOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let mut failure = self.fail_next_read_at.lock().unwrap();
+        if *failure == Some(oplog_index) {
+            *failure = None;
+            return Err(UnreadableOplog::new(
+                &test_agent_id().agent_id,
+                crate::services::oplog::OplogReadError::source_failure(
+                    crate::services::oplog::OplogReadSource::Other("test"),
+                    "registration lookahead failed",
+                ),
+            ));
+        }
+        drop(failure);
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -1164,7 +1178,11 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
         );
         assert!(state.entity_route_members.is_empty());
         assert_eq!(
-            state.retained_entity_counts.get(&OplogIndex::from_u64(2)),
+            state
+                .starts
+                .retained_summary()
+                .entities
+                .get(&OplogIndex::from_u64(2)),
             Some(&2)
         );
     }
@@ -1182,7 +1200,9 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
             .state
             .lock()
             .await
-            .retained_entity_counts
+            .starts
+            .retained_summary()
+            .entities
             .get(&OplogIndex::from_u64(2)),
         Some(&1)
     );
@@ -1209,7 +1229,9 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
             .state
             .lock()
             .await
-            .retained_entity_counts
+            .starts
+            .retained_summary()
+            .entities
             .is_empty()
     );
     let reads = oplog.reads.lock().unwrap().clone();
@@ -1288,11 +1310,11 @@ async fn disposal_refusal_retained_membership_ignores_observational_owner() {
     {
         let state = rs.cursor.state.lock().await;
         assert!(state.entity_start_routes.is_empty());
-        assert!(state.retained_entity_counts.is_empty());
+        assert!(state.starts.retained_summary().entities.is_empty());
         assert!(
             state
-                .retained_starts
-                .values()
+                .starts
+                .retained_values()
                 .all(|retained| retained.enclosing_entities.is_empty())
         );
     }
@@ -2211,7 +2233,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
     )
     .await;
     let state = replay.cursor.state.lock().await;
-    assert!(state.concurrent_resolver.is_awaited(start_index));
+    assert!(state.starts.is_awaited(start_index));
     owner
         .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
         .await;
@@ -2229,7 +2251,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
             .state
             .lock()
             .await
-            .concurrent_resolver
+            .starts
             .is_pending(start_index)
     );
     assert_eq!(replay.last_replayed_index(), start_index);
@@ -2944,9 +2966,7 @@ async fn typed_claim_mismatch_does_not_leak_pending() {
     );
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2)),
         "failed typed claim must not leave a pending awaiter"
     );
 }
@@ -2988,13 +3008,11 @@ async fn predicate_probe_retains_unclaimed_start_and_drains_awaited_terminals() 
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal.concurrent_resolver.is_pending(start_idx),
+            !internal.starts.is_pending(start_idx),
             "End(A) drained by the probe must resolve A's awaiter"
         );
         assert!(
-            !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(3)),
+            !internal.starts.is_pending(OplogIndex::from_u64(3)),
             "the probe must not claim Start(B) on behalf of its owner"
         );
     }
@@ -3169,7 +3187,7 @@ async fn lone_start_reports_incomplete_outcome_and_unregisters() {
     }
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal.concurrent_resolver.is_pending(start_idx),
+        !internal.starts.is_pending(start_idx),
         "incomplete outcome must unregister the awaiter"
     );
 }
@@ -3214,13 +3232,13 @@ async fn dropped_awaiter_terminal_drains_without_residue() {
 
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal.concurrent_resolver.is_pending(start_idx),
+        !internal.starts.is_pending(start_idx),
         "draining the terminal of a dropped awaiter must drop its registration"
     );
 }
 
 /// A scan-ahead (identity-keyed) claim whose awaiter was dropped without awaiting must leave
-/// no `claimed_starts` residue once the cursor passes the claimed `Start`, and no resolver
+/// no claimed-ahead residue once the cursor passes the claimed `Start`, and no resolver
 /// residue once it passes the terminal — dead registrations from cancelled accessor futures
 /// must not accumulate or steal entries from later positional readers.
 #[test]
@@ -3285,19 +3303,15 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
 
     let internal = rs.cursor.state.lock().await;
     assert!(
-        internal.claimed_starts.is_empty(),
-        "passing the claimed Start must remove it from claimed_starts"
+        !internal.starts.has_claimed_ahead(),
+        "passing the claimed Start must remove its claimed-ahead obligation"
     );
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(3)),
+        !internal.starts.is_pending(OplogIndex::from_u64(3)),
         "draining the terminal of the dropped scan-ahead claim must drop its registration"
     );
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2)),
         "the resolved call must not stay registered"
     );
 }
@@ -4047,6 +4061,277 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
         .unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
     barrier.acknowledge();
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn unregister_after_scan_ahead_prefetch_keeps_exact_terminal_drainage() {
+    // B's terminal is ready while both its Start and A's intervening operation remain unread.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        start_with_parent(2),
+        remove_retry_policy(),
+        end_for(3, 73),
+        delivered_for(3),
+        end_for(2, 41),
+    ])
+    .await;
+    let b = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let (start, mut receiver, reconstruction) = b.into_parts();
+    assert_eq!(start, OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, delivery_marker, .. })
+            if end_idx == OplogIndex::from_u64(5)
+                && delivery_marker == Some(OplogIndex::from_u64(6))
+    ));
+    rs.cursor.state.lock().await.starts.unregister(start);
+    drop(reconstruction);
+    {
+        let state = rs.cursor.state.lock().await;
+        assert!(state.starts.is_claimed_ahead(&start));
+        assert!(state.starts.owns_terminal(start, OplogIndex::from_u64(5)));
+        assert!(!state.starts.owns_terminal(start, OplogIndex::from_u64(7)));
+    }
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.start_idx(), OplogIndex::from_u64(2));
+    let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    let barrier = rs
+        .await_completion_delivery(start, OplogIndex::from_u64(6), None)
+        .await
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    barrier.acknowledge();
+    assert!(matches!(
+        rs.await_resolution_outcome(a).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+    assert!(!rs.has_unclaimed_retained_starts());
+    let state = rs.cursor.state.lock().await;
+    assert!(!state.starts.has_claimed_ahead());
+    assert!(!state.starts.has_claim(start));
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn unregister_waiting_scan_ahead_claim_drains_start_but_not_terminal() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 73),
+        end_for(2, 41),
+    ])
+    .await;
+    let b = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let (start, mut receiver, reconstruction) = b.into_parts();
+    assert_eq!(start, OplogIndex::from_u64(3));
+    rs.cursor.state.lock().await.starts.unregister(start);
+    drop(reconstruction);
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.start_idx(), OplogIndex::from_u64(2));
+    let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::End { start_index, .. } if start_index == start));
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert!(matches!(
+        rs.await_resolution_outcome(a).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert!(!rs.cursor.state.lock().await.starts.has_claimed_ahead());
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn registration_lookahead_failure_preserves_committed_claim_effects() {
+    for path in ["head", "ahead", "retained"] {
+        let retained = path == "retained";
+        let start_index = OplogIndex::from_u64(if path == "head" { 2 } else { 3 });
+        let card = stored_test_card(CardId::new());
+        let mut entries = vec![OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        }];
+        if path != "head" {
+            entries.push(start_now());
+            entries.push(start_with_parent(2));
+        } else {
+            entries.push(start_now());
+        }
+        if retained {
+            entries.push(OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                card: Box::new(card.clone()),
+                wallet_generation: 0,
+                transfer_id: None,
+            });
+        }
+        let positional_index = OplogIndex::from_u64(entries.len() as u64 + 1);
+        entries.push(remove_retry_policy());
+        entries.push(end_for(start_index.into(), 73));
+        entries.push(delivered_for(start_index.into()));
+        if path != "head" {
+            entries.push(end_for(2, 41));
+        }
+        let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+        let mut owner = if retained {
+            let owner = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(owner.start_idx(), OplogIndex::from_u64(2));
+            rs.drain_awaited_terminals().await.unwrap();
+            assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+            assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+            assert!(rs.has_unclaimed_retained_starts());
+            assert_eq!(rs.pending_card_derivation(card.card_id()).await, None);
+            assert!(rs.take_new_replay_events().is_empty());
+            Some(owner)
+        } else {
+            None
+        };
+
+        // Identity scanning starts at 2. Registration alone scans from this Start's successor,
+        // so the injected read failure cannot be mistaken for a failed identity lookup.
+        *oplog.fail_next_read_at.lock().unwrap() = Some(start_index.next());
+        let result = if path == "head" {
+            rs.claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+        } else {
+            rs.claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            )
+            .await
+        };
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("registration lookahead failed"),
+            "{path}: {error}"
+        );
+        assert!(oplog.fail_next_read_at.lock().unwrap().is_none(), "{path}");
+        {
+            let state = rs.cursor.state.lock().await;
+            assert!(!state.starts.is_pending(start_index), "{path}");
+            assert!(!state.starts.has_claim(start_index), "{path}");
+            assert_eq!(
+                state.starts.is_claimed_ahead(&start_index),
+                path == "ahead",
+                "{path}"
+            );
+        }
+        assert!(!rs.has_unclaimed_retained_starts(), "{path}");
+        assert_eq!(
+            rs.last_replayed_index(),
+            OplogIndex::from_u64(match path {
+                "head" => 2,
+                "ahead" => 1,
+                "retained" => 4,
+                _ => unreachable!(),
+            }),
+            "{path}"
+        );
+        assert_eq!(
+            rs.last_replayed_non_hint_index(),
+            if path == "ahead" {
+                OplogIndex::NONE
+            } else {
+                start_index
+            },
+            "{path}"
+        );
+        if retained {
+            assert_eq!(
+                rs.pending_card_derivation(card.card_id()).await,
+                Some((card.clone(), 0)),
+            );
+            assert_eq!(
+                rs.take_new_replay_events(),
+                vec![ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation: 0
+                }],
+            );
+        }
+        if path == "ahead" {
+            let claimed = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(claimed.start_idx(), OplogIndex::from_u64(2));
+            owner = Some(claimed);
+        }
+        // Head and retained Starts were already consumed. The failed ahead claim must still
+        // drain its Start rather than retaining it for a second caller.
+        let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert_eq!(index, positional_index, "{path}");
+        assert!(
+            matches!(entry, OplogEntry::RemoveRetryPolicy { .. }),
+            "{path}"
+        );
+        assert!(!rs.has_unclaimed_retained_starts(), "{path}");
+        assert!(
+            !rs.cursor.state.lock().await.starts.has_claimed_ahead(),
+            "{path}"
+        );
+        drop(owner);
+    }
 }
 
 #[test]
@@ -7009,15 +7294,14 @@ async fn drain_retains_unclaimed_start_for_its_owner() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2)),
+            !internal.starts.is_pending(OplogIndex::from_u64(2)),
             "drain must resolve A across the unclaimed Start(B)"
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(3)),
+                .starts
+                .get_retained(&OplogIndex::from_u64(3))
+                .is_some(),
             "Start(B) must be retained for its owner"
         );
     }
@@ -7030,6 +7314,10 @@ async fn drain_retains_unclaimed_start_for_its_owner() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
+
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert!(rs.has_unclaimed_retained_starts());
 
     // B's owner arrives later (guest re-execution reaches its call): the claim adopts the
     // retained Start instead of erroring or claiming something else, and resolves with the End
@@ -7089,8 +7377,8 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
     {
         let internal = rs.cursor.state.lock().await;
         let retained_b = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(4))
+            .starts
+            .get_retained(&OplogIndex::from_u64(4))
             .expect("Start(B) must be retained for its owner");
         assert_eq!(
             retained_b
@@ -7110,8 +7398,9 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(7)),
+                .starts
+                .get_retained(&OplogIndex::from_u64(7))
+                .is_some(),
             "the drain retains Start(C) after skipping the hint"
         );
     }
@@ -7570,11 +7859,12 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
 #[test]
 async fn retained_start_counts_are_published_per_quota_class() {
     // [RecoverySucceeded, Start(A=2 now), Start(B=3 p3 http send), Start(C=4 rpc invoke),
-    //  Start(D=5 resolution), End(A=2→6), End(B=3→7), End(C=4→8), End(D=5→9)] — resolving A
-    // commits past B, C and D, retaining all three. Only a call charged to the same quota as a
+    //  Start(B2=5 p3 http send), Start(D=6 resolution), End(A=2→7), End(B=3→8),
+    //  End(C=4→9), End(B2=5→10), End(D=6→11)] — resolving A
+    // commits past B, C, B2 and D, retaining all four. Only a call charged to the same quota as a
     // retained Start may still be its late owner: B keeps HTTP-charged calls unfresh, C keeps
-    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting a
-    // retained Start clears its class again while the others stay published.
+    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting the
+    // last retained Start in a class clears that class while the others stay published.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -7582,11 +7872,13 @@ async fn retained_start_counts_are_published_per_quota_class() {
         start_now(),
         start_named(HostFunctionName::P3HttpClientSend),
         start_named(HostFunctionName::GolemRpcWasmRpcInvoke),
+        start_named(HostFunctionName::P3HttpClientSend),
         start_resolution(),
         end_for(2, 42),
         end_for(3, 43),
         end_for(4, 44),
         end_for(5, 45),
+        end_for(6, 46),
     ])
     .await;
     assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
@@ -7600,7 +7892,7 @@ async fn retained_start_counts_are_published_per_quota_class() {
         .await
         .unwrap();
     match rs.await_resolution(handle_a).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
@@ -7616,14 +7908,25 @@ async fn retained_start_counts_are_published_per_quota_class() {
         .unwrap();
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
     assert!(
-        !rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
-        "adopting the only HTTP-charged retained Start makes HTTP calls fresh again"
+        rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
+        "adopting one HTTP-charged Start must not clear the other HTTP Start's charge"
     );
     assert!(
         rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc),
         "a retained RPC-charged Start is unaffected by an HTTP adoption"
     );
     assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b2 = rs
+        .claim_concurrent_start(
+            &HostFunctionName::P3HttpClientSend,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b2.start_idx(), OplogIndex::from_u64(5));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
 
     let handle_c = rs
         .claim_concurrent_start(
@@ -7646,9 +7949,14 @@ async fn retained_start_counts_are_published_per_quota_class() {
         )
         .await
         .unwrap();
-    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(5));
+    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(6));
     assert!(!rs.has_unclaimed_retained_starts());
-    for (handle, end) in [(handle_b, 7), (handle_c, 8), (handle_d, 9)] {
+    for (handle, end) in [
+        (handle_b, 8),
+        (handle_b2, 10),
+        (handle_c, 9),
+        (handle_d, 11),
+    ] {
         match rs.await_resolution(handle).await.unwrap() {
             Resolution::Completed { end_idx, .. } => {
                 assert_eq!(end_idx, OplogIndex::from_u64(end))
@@ -8133,7 +8441,7 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
             timestamp: Timestamp::now_utc(),
         },
         start_now(),
-        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
         end_for(3, 43),
         end_for(2, 42),
     ])
@@ -8150,17 +8458,20 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
     rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(
         rs.has_unclaimed_retained_starts(),
         "exhaust_replay_prefix keeps retained Starts"
     );
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.release_retained_starts_at_live_invocation_end()
         .await
         .unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
     let err = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -8269,7 +8580,7 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
             timestamp: Timestamp::now_utc(),
         },
         start_now(),
-        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
         end_for(2, 42),
         end_for(3, 43),
     ])
@@ -8289,28 +8600,31 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) retained");
         assert_eq!(
             retained.terminal.as_ref().map(|(idx, _)| *idx),
             Some(OplogIndex::from_u64(5))
         );
     }
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) still visible");
         assert!(retained.terminal.is_none(), "hidden End must be detached");
     }
     assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.set_replay_target(OplogIndex::from_u64(2)).await.unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 }
 
 #[test]
@@ -8343,8 +8657,8 @@ async fn retained_start_publishes_the_non_hint_position_only_when_claimed() {
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) retained");
         assert_eq!(
             retained.terminal.as_ref().map(|(idx, _)| *idx),
@@ -8444,11 +8758,7 @@ async fn drain_parks_on_positional_marker() {
     rs.drain_awaited_terminals().await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
-        assert!(
-            internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2))
-        );
+        assert!(internal.starts.is_pending(OplogIndex::from_u64(2)));
     }
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
 
@@ -8489,9 +8799,7 @@ async fn drain_parks_on_unawaited_end() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2)),
+            internal.starts.is_pending(OplogIndex::from_u64(2)),
             "drain must not resolve A across an unawaited End"
         );
     }
@@ -8776,8 +9084,8 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
         let internal = rs.cursor.state.lock().await;
         for idx in [3, 4] {
             let retained = internal
-                .retained_starts
-                .get(&OplogIndex::from_u64(idx))
+                .starts
+                .get_retained(&OplogIndex::from_u64(idx))
                 .unwrap_or_else(|| panic!("Start at {idx} must be retained"));
             assert!(
                 retained.terminal.is_some(),
@@ -8847,13 +9155,14 @@ async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal.concurrent_resolver.is_pending(start_idx),
+            !internal.starts.is_pending(start_idx),
             "an Incomplete resolution must unregister the awaiter"
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(3))
+                .starts
+                .get_retained(&OplogIndex::from_u64(3))
+                .is_some()
         );
     }
     assert!(rs.has_unclaimed_retained_starts());
@@ -9068,10 +9377,10 @@ async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup(
     assert_eq!(replay.last_replayed_index(), start_index);
     {
         let state = replay.cursor.state.lock().await;
-        assert!(!state.concurrent_resolver.is_awaited(start_index));
+        assert!(!state.starts.is_awaited(start_index));
         assert!(
             state
-                .concurrent_resolver
+                .starts
                 .owns_terminal(start_index, OplogIndex::from_u64(4))
         );
     }
@@ -9294,9 +9603,7 @@ async fn deferred_root_error_ignores_live_retry_from_descendant() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal
-                .concurrent_resolver
-                .is_awaited(OplogIndex::from_u64(3)),
+            internal.starts.is_awaited(OplogIndex::from_u64(3)),
             "the retry_from descendant must still have a live awaiter"
         );
     }
@@ -10180,9 +10487,7 @@ async fn concurrent_replay_call_permutation_fuzz() {
         let internal = rs.cursor.state.lock().await;
         for (i, &si) in start_idx.iter().enumerate() {
             assert!(
-                !internal
-                    .concurrent_resolver
-                    .is_pending(OplogIndex::from_u64(si)),
+                !internal.starts.is_pending(OplogIndex::from_u64(si)),
                 "seed {seed}: call {i} left a registered awaiter"
             );
         }
@@ -10442,9 +10747,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
         let internal = rs.cursor.state.lock().await;
         for (i, &si) in start_idx.iter().enumerate() {
             assert!(
-                !internal
-                    .concurrent_resolver
-                    .is_pending(OplogIndex::from_u64(si)),
+                !internal.starts.is_pending(OplogIndex::from_u64(si)),
                 "seed {seed}: item {i} left a registered awaiter"
             );
         }
@@ -11018,21 +11321,11 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     assert!(rs.at_replay_tail(), "replay must reach live at the end");
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(5))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(8))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(11))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(12)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2))
+            && !internal.starts.is_pending(OplogIndex::from_u64(5))
+            && !internal.starts.is_pending(OplogIndex::from_u64(8))
+            && !internal.starts.is_pending(OplogIndex::from_u64(11))
+            && !internal.starts.is_pending(OplogIndex::from_u64(12)),
         "no resolver awaiter may remain pending after a full replay"
     );
 }
@@ -11148,7 +11441,13 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
             // Observe the actual pending/deferred batch without releasing its receipts. All
             // projection tasks may finish while a Store has yet to receive any of these events.
             let events = if delayed_entity {
-                rs.cursor.state.lock().await.retained_starts[&start]
+                rs.cursor
+                    .state
+                    .lock()
+                    .await
+                    .starts
+                    .get_retained(&start)
+                    .unwrap()
                     .deferred_events
                     .iter()
                     .map(|(_, event)| event.clone())
@@ -13501,7 +13800,7 @@ async fn admission_refusal_retires_only_terminal_less_claims() {
             .state
             .lock()
             .await
-            .concurrent_resolver
+            .starts
             .has_claim(unfinished.start_idx())
     );
     assert!(
@@ -14429,8 +14728,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
         .unwrap();
         let mut consumption_error = None;
         let mut reconstruction = parent.map(|parent| {
-            ConcurrentReplayResolver::default()
-                .register_reconstruction(parent, Some(Arc::downgrade(&wallet)))
+            ReplayStarts::default().register_reconstruction(parent, Some(Arc::downgrade(&wallet)))
         });
         let reconstruction_hold = reconstruction.clone();
         while replay.last_replayed_index() < OplogIndex::from_u64(22) {

@@ -1518,7 +1518,7 @@ grant → same-key durable repair
 <p id="http-recipient-input"><strong>A consumed recipient can still depend on the guest.</strong> If response B consumes response A's transmission future while A remains unconsumed, B cannot finish until a later guest action releases A. After demand, B parks on its input before opening a durable call. Cancelling B's read and dropping or retaining its reader therefore permits invocation settlement and reconstruction before A is released in a later invocation. Once the input resolves, B records its terminal and any guest delivery or discard. Actual outgoing network I/O remains active under the source transmission's own task; the recipient does not duplicate that ownership.</p>
 
 <h3>Replay path: classification is total</h3>
-<p>Replay claims the matching <code>Start</code>, resolves its terminal through <code>ConcurrentReplayResolver</code>, and classifies the resolution with <code>classify_replay_resolution</code> (<code>concurrent/call.rs</code>). The function is total — every recorded shape has exactly one meaning — and shared by guest-delivery paths.</p>
+<p>Replay claims the matching <code>Start</code>, resolves its terminal through <code>ReplayStarts</code> under the cursor lock, and classifies the resolution with <code>classify_replay_resolution</code> (<code>concurrent/call.rs</code>). The function is total — every recorded shape has exactly one meaning — and shared by guest-delivery paths.</p>
 
 <div class="table-wrap">
 <table>
@@ -1681,7 +1681,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <h3 id="entry-ownership">Entry ownership: retained Starts and attributed positional reads</h3>
 <p>Claims are not the only readers that drive the cursor. Positional retry-policy reads, a direct call awaiting its own <code>End</code>, or a sibling's terminal drain all move the head forward. Kind and owner are validated before consumption:</p>
 <ul>
-  <li><strong>An unclaimed durable-call <code>Start</code> is neither consumed nor waited on.</strong> Its owner may be a concurrent host task that needs the very <code>Store</code> the reader holds — an entity body waiting for admission, an accessor task behind a Store-holding direct call — so parking on it would deadlock replay, and consuming it as a marker would steal the owner's claim. The cursor commits past it and <em>retains</em> it (<code>CursorState::retained_starts</code>, in oplog order, with its terminal once the cursor reaches that too). The owner's later claim checks retained <code>Start</code>s before the head (<code>claim_retained_start</code>); this ordering is required because a <code>CompletionDelivered</code> marker at the head may belong to a retained <code>Start</code>, and a claim that stopped at the marker first would block forever.</li>
+  <li><strong>An unclaimed durable-call <code>Start</code> is neither consumed nor waited on.</strong> Its owner may be a concurrent host task that needs the very <code>Store</code> the reader holds — an entity body waiting for admission, an accessor task behind a Store-holding direct call — so parking on it would deadlock replay, and consuming it as a marker would steal the owner's claim. The cursor commits past it and <em>retains</em> it (<code>ReplayStart::Retained</code> in <code>CursorState::starts</code>, in oplog order, with its terminal once the cursor reaches that too). The owner's later claim checks retained <code>Start</code>s before the head (<code>claim_retained_start</code>); this ordering is required because a <code>CompletionDelivered</code> marker at the head may belong to a retained <code>Start</code>, and a claim that stopped at the marker first would block forever.</li>
   <li><strong>Retaining is not consuming.</strong> A retained <code>Start</code> and the terminal attached to it are committed through <code>commit_retained_entry</code>, which leaves <code>last_replayed_non_hint_index</code> untouched; <code>publish_claimed_position</code> publishes them only when the owner claims the <code>Start</code>. A durable call that derives its retry point from that index therefore sees the same value the live run saw as the oplog tip before its own <code>Start</code> was appended, not a position advanced by entries nobody has consumed. Replay events follow the same rule: a <code>CardDerived</code> or <code>CardInstalled</code> hint trailing a retained <code>Start</code> or its terminal is a side effect of that call, looked up by its owner when it replays the terminal (<code>pending_card_derivation</code>); publishing it while the <code>Start</code> is merely retained would let an intervening authority boundary apply it first. Events recorded during a retained commit are therefore deferred on the <code>RetainedStart</code> (<code>deferred_events</code>) and published (<code>publish_deferred_events</code>) when the <code>Start</code> leaves the retained map — claimed, adopted into a custom subtree, folded into the abandoned tolerance, or released at the live invocation end.</li>
   <li><strong>Local repair retains history.</strong> An incomplete call completes its original <code>Start</code>. Nonresumable resources report typed loss instead of abandoning a suffix.</li>
   <li><strong>Positional reads are attributed per <code>Store</code>.</strong> Entity bodies share the owner's cursor, so <code>get_oplog_entry(scope)</code> accepts only entries whose <code>OplogEntry::entity_attribution()</code> matches the reading Store: the primary agent consumes entries with no entity parent, an entity body only entries recorded under its own invocation <code>Start</code>. A reader that finds another Store's entry at the head parks only while that Store can still consume it (the primary while the cursor replays; an entity body whose <code>Start</code> is claimed, retained or scan-ahead claimed). Anything else is dead history nobody will reconstruct, and <code>check_parked_positional_read</code> reports it as divergence instead of hanging. The invocation-boundary reader never waits on another Store.</li>
@@ -1690,6 +1690,39 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>Quotas are charged by quota class.</strong> Per-call quotas are charged before Start admission, so refusal leaves no call record. <code>durable_call_is_fresh(QuotaClass)</code> exempts a replay owner only when its class still has an unclaimed retained Start. Other classes do not suppress charges. HTTP covers P3 HTTP, MCP and external durable streams; RPC covers Golem invokes.</li>
 </ul>
 <p>A retained <code>Start</code> remains claimable only by its identity-validated owner. See <code>replay_state/tests.rs</code> for retained-start and delivery-marker coverage, and <code>tests/tool_streaming.rs</code> for body admission and overlapping reconstruction.</p>
+
+<h3 id="replay-start-states">Each replay Start owns its remaining cursor obligations</h3>
+<p><code>ReplayStarts</code> keeps one state per active <code>Start</code> under the existing cursor lock. <code>Retained</code> holds unclaimed history and its deferred events. A claimed entry tracks two independent facts: whether the cursor still owes its <code>Start</code>, and whether its terminal is <code>Waiting</code> or <code>Prefetched</code>. The derived retained-key index selects only retained entries; it does not scan every pending call.</p>
+<figure id="replay-start-state-diagram" class="diagram">
+<svg class="dg" viewBox="0 0 900 300" role="img" aria-labelledby="replay-start-state-title replay-start-state-desc">
+  <title id="replay-start-state-title">Start consumption and host resolution are independent</title>
+  <desc id="replay-start-state-desc">Ahead and consumed Starts can each wait for a terminal or have a prefetched terminal. Prefetch sends the host result without moving the cursor. Consuming the Start leaves terminal ownership intact. Guest delivery remains separate.</desc>
+  <defs><marker id="arr-rs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/></marker></defs>
+  <rect class="box" x="30" y="25" width="300" height="65"/>
+  <text x="45" y="50" class="title">Ahead + Waiting</text>
+  <text x="45" y="73" class="lbl">Start still owed; sender retained</text>
+  <rect class="box accent" x="560" y="25" width="310" height="65"/>
+  <text x="575" y="50" class="title">Ahead + Prefetched</text>
+  <text x="575" y="73" class="lbl">Host result sent; exact End still owed</text>
+  <path class="arrow" style="marker-end:url(#arr-rs)" d="M330 58 H558"/>
+  <text x="445" y="45" text-anchor="middle" class="lbl">prefetch marked End</text>
+  <rect class="box" x="30" y="200" width="300" height="65"/>
+  <text x="45" y="225" class="title">Consumed + Waiting</text>
+  <text x="45" y="248" class="lbl">Start consumed; sender retained</text>
+  <rect class="box" x="560" y="200" width="310" height="65"/>
+  <text x="575" y="225" class="title">Consumed + Prefetched</text>
+  <text x="575" y="248" class="lbl">Only the exact End still needs draining</text>
+  <path class="arrow" style="marker-end:url(#arr-rs)" d="M330 233 H558"/>
+  <text x="445" y="220" text-anchor="middle" class="lbl">prefetch marked End</text>
+  <path class="arrow" style="marker-end:url(#arr-rs)" d="M180 90 V198"/>
+  <text x="190" y="147" class="lbl">consume Start</text>
+  <path class="arrow" style="marker-end:url(#arr-rs)" d="M715 90 V198"/>
+  <text x="725" y="147" class="lbl">consume Start</text>
+</svg>
+<figcaption>All four claimed combinations are valid. A committed terminal removes the consumed claim; the guest may still wait for its delivery marker.</figcaption>
+</figure>
+<p><code>UnregisteredAhead</code> keeps only the Start-consumption obligation. It exists before fallible registration lookahead, survives a lookup failure, and also results from explicitly unregistering a waiting ahead claim. Dropping a receiver is different: the registry retains terminal ownership so a sibling can drain its records. Unregistering a prefetched claim keeps the exact-terminal obligation.</p>
+<p>Registration failure never rewinds an already-consumed Start or restores already-published retained events. Accepted cursor work continues after its caller cancels. Explicit prefix finalization wakes pending calls as incomplete and preserves retained Starts; merely reaching the replay target does not bulk-clear claims. The final-terminal path rechecks the receiver under the cursor lock before declaring a call incomplete. Guest-delivery tokens, subtree ancestry and historical reconstruction guards keep their own lifetimes.</p>
 
 <h3>Positional operations at the replay tail</h3>
 <p>Positional retry-policy reads use <code>get_oplog_entry_or_continue_live</code> and <code>prepare_live_continuation_at_replay_tail</code>. They wait for delivery gates and retain unclaimed Starts owned by other readers. Continuation at <code>ReplayEnded</code> requires the primary agent or an incomplete entity; completed entities cannot fall through to live effects. Wrong recorded entries remain mismatches. Transaction-protocol reads remain strict.</p>
