@@ -60,6 +60,7 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
+use golem_common::schema::{ParsedAgentId, SchemaType, SchemaValue, TypedSchemaValue};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::Serializer;
@@ -69,6 +70,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -427,18 +429,53 @@ pub const AGENT_ID_READ_GRANT: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT
 
 /// Returns whether the initial permissions let their holder read its own [`AGENT_ID_ENV_VAR`].
 ///
-/// The check evaluates the initial card alone, for a representative agent of the type (an agent
-/// with no constructor arguments), with the same card algebra the executor uses to filter the
-/// environment of the agent. At runtime the wallet of the agent can also hold other cards, so the
-/// result is an approximation: it can report no access when another card grants the read.
+/// The check evaluates the initial card alone, with the same card algebra the executor uses to
+/// filter the environment of the agent, for each of the [`representative_agent_names`] of the
+/// type. It reports access only when every one of them can read the variable.
+///
+/// The result is an approximation in both directions. Another card in the wallet of the agent can
+/// grant the read, so the check can report no access for an agent that has it. A scope card or an
+/// inherited card can also remove the read, so the check can report access for an agent that does
+/// not have it.
 pub fn initial_permission_allows_agent_id_read(
     permissions: &AgentTypeInitialPermissions,
     context: &RecipientMonomorphizationContext,
 ) -> bool {
-    let agent_name = match &context.owner {
-        RecipientOwnerContext::AgentType(agent_type) => format!("{}()", agent_type.0),
-        RecipientOwnerContext::ComponentExternalToolOwner => format!("{}()", context.component.0),
+    let agent_type = match &context.owner {
+        RecipientOwnerContext::AgentType(agent_type) => agent_type.clone(),
+        RecipientOwnerContext::ComponentExternalToolOwner => {
+            AgentTypeName(context.component.0.clone())
+        }
     };
+    let card = StoredCard::Polymorphic(permissions.to_polymorphic_card());
+    representative_agent_names(&agent_type)
+        .into_iter()
+        .all(|agent_name| card_allows_agent_id_read_for(&card, context, agent_name))
+}
+
+/// The names of the agents of a type that [`initial_permission_allows_agent_id_read`] evaluates:
+/// the agent with no constructor arguments, and the same agent with a phantom ID. Ephemeral
+/// agents, forked agents and agents served through a phantom mount have a phantom ID in their
+/// name, and a card pattern can match one of the two names and not the other.
+fn representative_agent_names(agent_type: &AgentTypeName) -> Vec<String> {
+    [None, Some(Uuid::nil())]
+        .into_iter()
+        .map(|phantom_id| {
+            let no_parameters = TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: Vec::new() },
+            );
+            ParsedAgentId::new(agent_type.clone(), no_parameters, phantom_id).to_string()
+        })
+        .collect()
+}
+
+/// Returns whether the card lets the agent with the given name read its own [`AGENT_ID_ENV_VAR`].
+fn card_allows_agent_id_read_for(
+    card: &StoredCard,
+    context: &RecipientMonomorphizationContext,
+    agent_name: String,
+) -> bool {
     let agent_context = AgentPermissionMonomorphizationContext {
         account: context.account.clone(),
         application: context.application.clone(),
@@ -458,8 +495,7 @@ pub fn initial_permission_allows_agent_id_read(
         },
         resource: EnvResourcePattern::VarName(EnvVarName(AGENT_ID_ENV_VAR.to_string())),
     });
-    let card = StoredCard::Polymorphic(permissions.to_polymorphic_card());
-    agent_effective_surface_from_wallet(&agent_context, [&card])
+    agent_effective_surface_from_wallet(&agent_context, [card])
         .authorize(&read)
         .unwrap_or(false)
 }
@@ -729,7 +765,8 @@ pub(crate) fn render_output_schema(
 mod tests {
     use super::{
         AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard,
-        agent_type_reads_agent_id_from_env, app_raw, initial_permission_allows_agent_id_read,
+        agent_type_reads_agent_id_from_env, app_raw, card_allows_agent_id_read_for,
+        initial_permission_allows_agent_id_read, representative_agent_names,
         resolve_initial_permission, show_exported_agent_constructors,
     };
     use golem_common::model::Empty;
@@ -743,6 +780,7 @@ mod tests {
     };
     use golem_common::model::card::{
         AgentMethodName, AgentResourcePattern, AgentVerb, PolymorphicManifestPermissionPattern,
+        StoredCard,
     };
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
     use golem_common::model::environment::EnvironmentName;
@@ -1079,13 +1117,39 @@ mod tests {
     }
 
     #[test]
-    fn card_with_env_grant_on_every_agent_of_the_type_allows_agent_id_read() {
-        assert!(agent_card_allows_agent_id_read(
+    fn card_with_env_grant_on_every_agent_of_the_type_warns_for_an_agent_with_a_phantom_id() {
+        assert!(!agent_card_allows_agent_id_read(
             &["env(?component/Cart(*)) @ ?agent : read : GOLEM_AGENT_ID"],
             &[],
             &[],
             &[]
         ));
+    }
+
+    #[test]
+    fn representative_agent_names_are_the_agent_with_and_without_a_phantom_id() {
+        assert_eq!(
+            representative_agent_names(&AgentTypeName("Cart".to_string())),
+            vec![
+                "Cart()".to_string(),
+                "Cart()[00000000-0000-0000-0000-000000000000]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_id_read_grant_allows_the_agent_with_and_without_a_phantom_id() {
+        let context = test_context();
+        let card = parsed_card(&[AGENT_ID_READ_GRANT], &[], &[], &[]);
+        let permissions = resolve_initial_permission(Some(card), &[], &context);
+        let card = StoredCard::Polymorphic(permissions.to_polymorphic_card());
+
+        for agent_name in representative_agent_names(&AgentTypeName("Cart".to_string())) {
+            assert!(
+                card_allows_agent_id_read_for(&card, &context, agent_name.clone()),
+                "{agent_name}"
+            );
+        }
     }
 
     #[test]
