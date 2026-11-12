@@ -48,6 +48,8 @@ golem agent oplog <agent_id> --serve
 
 The `--html` parameter writes the same viewer into a self-contained HTML file with the entries embedded, which is useful for sharing a moderately sized oplog.
 
+The raw oplog holds the values of your users. To attach an oplog to a bug report, add `--obfuscate`: the CLI then replaces the customer values with tokens before it writes the report. See [Sharing an Oplog](/next/debug/oplog-export) for what the report keeps and what it removes.
+
 See the [CLI agent reference](/next/cli/agents) for more information about how to search the oplog. One debugging scenario can be to look for all oplog entries belonging to a given **idempotency key** that was provided with an invocation that did not behave as expected. Another can be looking for occurrences of external HTTP requests or log entries.
 
 ### Applying changes to an agent

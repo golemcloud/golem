@@ -1,0 +1,294 @@
+import { Callout } from "nextra/components"
+
+# Sharing an oplog
+
+An obfuscated oplog export is a report for a bug report. It holds the history of the one agent that the command names, and the customer values in it are tokens:
+
+```shell copy
+golem agent oplog <AGENT_ID> --obfuscate --html report.html
+```
+
+Without `--obfuscate`, `golem agent oplog` prints the raw oplog. The raw output holds the values of your users and is not safe to share.
+
+## What the report contains
+
+Each part of the report is one of these:
+
+- Golem metadata ([table A](#table-a-golem-metadata-that-the-report-keeps)),
+- a documented exception ([table B](#table-b-documented-exceptions)),
+- or a token.
+
+A part without a rule is a token. Nothing is kept because a heuristic judged it harmless. A keep option (`--keep-scalars`, `--keep-shape`, `--keep-error-text`) keeps more data. Each one is a leak that you select for one export; see [Options that keep more data](#options-that-keep-more-data).
+
+## Who sees the raw data
+
+The CLI reads the raw oplog with your own permissions, through the same REST oplog reads as `golem agent oplog`: the oplog pages, the oplog search and the read of a single entry. It obfuscates the entries on your machine. So obfuscation protects the report that you share. It does not protect the read.
+
+The user who exports needs the permission to read the oplog of the agent (`oplog : read`). Each read is an ordinary oplog read with the same permission check as `golem agent oplog`. The export has no permission of its own. A user who can export an agent can also print its raw oplog. Golem cannot give a user an obfuscated-only view of an oplog.
+
+<Callout type="warning">
+  Do not give `oplog : read` to a person only so that the person can make obfuscated reports. The same permission prints the raw oplog.
+</Callout>
+
+The raw entries stay in the memory of the CLI process. The CLI writes only the report: to stdout, or with `--html` to the file. With `--serve --obfuscate`, the browser receives only obfuscated pages and the status fields of the agent (see [Served viewer](#served-viewer)).
+
+The server sanitises secrets and quota tokens before the CLI receives an entry, so the CLI never receives them.
+
+## Tokens and the token key
+
+A token replaces a value. Its text form is `<domain>:<32 hex characters>`, for example `str:` followed by 32 hex characters. The domain names the kind of value, not its type:
+
+- `str` for text, and for the tag tokens and unit tokens of `--keep-shape` and `--keep-scalars`;
+- `list`, `map` and `bytes`;
+- `subtree` for a hidden variant, enum, flags, option, result or union;
+- `scalar:bool`, `scalar:int`, `scalar:float`, `scalar:datetime`, `scalar:duration` and `scalar:quantity`, so a number token looks like `scalar:int:` followed by 32 hex characters;
+- `agent` for an agent reference (below).
+
+Inside one export, equal values give equal tokens, so the report shows which values are equal. For example, the same string in an RPC input and in a key-value key gives one token. A schema-less value and a typed value of the same logical value also give one token. Equal text in two domains gives two different tokens. So a reader who knows the value at one place of the report learns every other place where the same value is. A bool has only two values, so equal bool tokens show which bools are equal.
+
+Each CLI process makes a random 32-byte key from the random source of the operating system the first time it obfuscates. The key stays in memory only. The CLI never writes it to a report, a file or a log. When the process stops, the key is gone. Then nobody can compute the token of a guessed value, so nobody can test guesses against the tokens, also not for a bool or a small number. A reader can still learn the value behind a token from the report itself: from equal tokens, from a value that a keep option shows next to its token, from the order of map entries with `--keep-shape` (see [`--keep-shape`](#--keep-shape)), or from knowledge outside the report.
+
+One process has one key:
+
+- one `golem agent oplog --obfuscate` command is one export with its own key;
+- `golem agent oplog --serve --obfuscate` uses one key for every page of the viewer session, so a token stays the same from page to page. A new start of the viewer makes a new key.
+
+So two exports give different tokens for the same value, also two exports of the same agent. Compare two reports by their structure (entry kinds, indices, host function names and the other kept metadata), not by their tokens. There is nothing to configure, rotate or keep secret: no setting, no environment variable and no key file.
+
+An agent reference is `agent { token }`: one `agent` token over the full agent ID text. It shows no agent type name, no constructor parameter and no component ID. The HTML viewer and the header of the text output show it as `agent:` with the first 12 hex characters of the token and `…`, for example `agent:9c41e2a07b3d…`. The entries of the text output and the structured output hold the full token.
+
+The same agent ID gives the same token everywhere in one report: the header `root`, `Create.agent_id`, `Create.parent`, the target of an RPC call, `OplogProcessorCheckpoint.target_agent_id`, card holders and agent IDs inside typed values. Two agents with different IDs give different tokens. An agent ID that is not typed as an agent ID is not an agent reference: the agent ID text in a `get-agent-type-by-agent-id` request is a `str` token, and an agent ID inside a schema-less RPC value is a record of tokens.
+
+The agent fingerprint (`Create.instance_id`) and every other fingerprint inside entries are tokens.
+
+<Callout type="warning">
+  Tokens are pseudonyms inside one report, not anonymisation. Equal values have equal tokens, so a reader who knows one value can find every place where it occurs.
+</Callout>
+
+## Table A: Golem metadata that the report keeps
+
+The report keeps the metadata that Golem itself creates:
+
+- entry kinds and indices; `start_index`, `parent_start_index`, invocation IDs and delivery markers; the other oplog indices of entries, for example the target of a jump, a revert or an error retry;
+- host function names and durable function types. A durable function that the agent code defines itself keeps its name too: that name is a name from customer code (B3);
+- the owner kind and agent mode of `Create`, and the span kind of a started span;
+- component revisions in the entry structure, retry state, log levels and `OplogErrorKind`;
+- the fixed Golem error texts (see [Errors](#errors));
+- resource type names and owners;
+- the outcome cases of cards and spans;
+- the entity kind, start index and call mode of an entity attribution;
+- the case of the Golem enums of the entry structure, for example the kind of an invocation, of an invocation result and of an update, also without `--keep-shape`.
+
+Table A keeps no component ID. A component ID inside a payload, for example `GolemApiGetAgents.component_id`, is a token, also with every keep option. The report writes kept metadata as `text`, `number`, `timestamp` and `flag` nodes, and a kept case as a `case` node without a token, never as a token. With `--keep-shape`, the bits of a customer flags value are `flag` nodes too, so a `flag` node is not always Golem metadata.
+
+The host-field allowlist keeps these fields of host calls. It applies only when the CLI knows the host function of the entry and the payload has the type that the function writes. For an `End` or `Cancelled` entry, the host function is the function of its `Start`.
+
+| Host field                                                                                           | Kept                                                                                                                                                                    | Not kept                                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The `result` of a host response, and the result of an invocation | The case: ok or error | The ok payload follows the default rules. The error payload follows the next row. A result nested deeper in the response shows its case only with `--keep-shape` |
+| The error payload of the `result` of a host response, and the Golem error types of host calls (see below) | The case of every enum and variant in it, such as a filesystem or socket error code, the kind of a durable stream error (`DurableStreamError.kind`) or the reason of a failed card install (`CardInstallFailure`) | Its text is error text. Option presence and lengths show only with `--keep-shape`. A customer value inside it stays customer data |
+| The request of an RPC invocation or a scheduled RPC invocation                                       | The method name (B3)                                                                                                                                                    | The input                                                                                                                                                                                                             |
+| A read of the agent config (`golem::agent::get_config_value`)                                        | The path (B1)                                                                                                                                                           | The value. The keys of `wasi:config/store` reads and the names in environment reads are tokens                                                                                                                       |
+| The HTTP method of an outgoing request                                                               | The standard methods                                                                                                                                                    | The text of `Other`: the case stays, the text is a token                                                                                                                                                              |
+| The HTTP status of a response                                                                        | The status code                                                                                                                                                         | The headers                                                                                                                                                                                                           |
+| A fork                                                                                               | `oplog_index_cut_off`                                                                                                                                                   |                                                                                                                                                                                                                       |
+| A random-bytes request                                                                               | The length                                                                                                                                                              | The returned bytes                                                                                                                                                                                                    |
+| The agent types that `get-agent-type`, `get-all-agent-types` and `get-agent-type-by-agent-id` return | The agent type, constructor, method, parameter and dependency names, the types of the parameters and results, and the component revision, also without `--keep-shape` | Descriptions, prompt hints, HTTP and config details, the source language and the mode, and the implementing component and account                                                                                    |
+
+The Golem error types are also kept where they occur outside a `result`, for example inside an invocation result. They are `SerializableRpcError`, `SerializableHttpErrorCode`, `FileSystemError`, `SerializableP3FileSystemError`, `SerializableSocketError`, `SerializableP3SocketErrorCode`, `SerializableP3IpNameLookupError`, `SerializableStreamError`, `SerializableWebsocketError`, `SerializableRdbmsError`, `SecretRevealError`, `PermissionCardRevokeError`, `PermissionCardDeriveError`, `SerializablePermissionError`, `SerializableToolRpcError`, `SerializableP3HttpClientSendResult`, `SerializableHostFailureKind` and `AgentError`.
+
+The agent types are declarations: the values that an agent was created with stay in its initialization invocation, and they are tokens. A component revision inside another host payload is a `scalar:int` token.
+
+The allowlist names a host function, a direction and a field. A new host function is customer data until a rule names it. A host value that is the customer's own value, such as the input and the output of an entity invocation or the input of an MCP tool call, gets no allowlist rule. The allowlist goes by the function name in the entry. The report cannot tell a Golem host call from a durable function that the agent code defines itself when both have the same name and the same request type graph, including its type IDs. Agent code can copy that graph on purpose; the report then applies the allowlist of the host function. Two kept fields are free text, the RPC method name and the config path, so such a function can put any text into the report in clear.
+
+## Table B: documented exceptions
+
+| #   | Exception                                                                                                                                       | Mode                                               |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| B1  | Env and config entry names: the names in `Create.env`, the paths of the local agent config and the paths of agent config reads                  | Always                                             |
+| B2  | `--keep-scalars`: numbers, bools, datetimes, durations, and the mantissa, scale and unit of quantities                                         | Opt-in                                             |
+| B3  | Names from customer code: agent type names, method names, the names of custom durable functions, type names and field names                    | Always                                             |
+| B3  | Case, flag and union tag names in values                                                                                                        | With `--keep-shape`; always in type descriptions   |
+| B4  | `--keep-shape`: discriminants, presence, and list, map and byte lengths                                                                        | Opt-in                                             |
+| B5  | `--keep-error-text`: the free text of error messages, denial reasons, update details and error strings in host responses                        | Opt-in                                             |
+| B6  | Entry timestamps, span start and finish times, the sizes of omitted entries and snapshots, and component and memory sizes                       | Always                                             |
+| B7  | HTTP status codes and standard HTTP methods                                                                                                     | Always                                             |
+| B8  | Quantity units that the schema declares                                                                                                         | Always in type descriptions; in values with B2     |
+
+B3 keeps agent type names where they are names from customer code: method names, type names, and the constructor, method and parameter names of the agent types that a host call returns. An agent reference does not show an agent type name. The case names of the Golem enums and error types in table A are kept without `--keep-shape`.
+
+## Errors
+
+The public `Error` entry holds only the error message, not the kind of the error. So the report does not show an error kind such as `TransientError` or `PermanentError`.
+
+The report keeps a message that is exactly equal to one of the fixed Golem texts:
+
+- `Ephemeral agent cannot suspend`
+- `Ephemeral fuel exhausted`
+- `Ephemeral sleep too long`
+- `Exceeded per-invocation HTTP call limit`
+- `Exceeded per-invocation RPC call limit`
+- `Exceeded plan function table limit`
+- `Exceeded plan memory limit`
+- `Out of memory`
+- `Read-only agent method attempted a side effect`
+- `Stack overflow`
+- `Terminated by quota`
+
+The match is exact: no prefix, no suffix and no other letter case. A kept text is a `text` node. Every other message is one `str` token. `OplogErrorKind` is kept. A customer message that is exactly equal to a fixed text shows; it shows only that equality.
+
+`FailedUpdate.details` keeps a stable code at its start, for example `UPDATE_SNAPSHOT_UNAVAILABLE`. A text that is only the code is a `text` node. A text that continues with `: ` after the code is a record of the `code` and the `detail`, and the detail is a token. Every other text is one token.
+
+These texts are error text: tokens by default, and `str { value }` with `--keep-error-text` (B5):
+
+- `Error` messages that are not fixed texts, and the detail of `FailedUpdate.details`;
+- denial reasons (`Start.denial`), the errors of snapshot loads and of oplog processing;
+- the failure text of an invocation result and of an external tool;
+- the strings inside the error payload of a host response and inside the Golem error types of host calls, for example the message of a durable stream error, the details of an RPC error, and the name of a custom tool error and the command path of an invalid tool command.
+
+## What the report removes
+
+Each item below becomes a token, or is removed completely where the item says so:
+
+- customer values in invocations, RPC calls, host calls (every request and response field that table A does not name), stream records, tool, MCP and entity inputs and outputs, and log messages and their context;
+- `env` and config values (the names stay, B1);
+- idempotency keys, trace and span IDs, trace states, span links and attributes, card, transfer and transaction IDs, entity names, tool names and command paths, retry policy names, predicates and policies, filesystem snapshot names, plugins, the invocation context and the wallet pin;
+- resource IDs, consumed fuel, retry priorities and other numbers that Golem writes into the entries: these are `scalar` tokens, so `--keep-scalars` shows them;
+- error free text (see [Errors](#errors));
+- snapshot data and the data of snapshot-based updates: removed completely, the MIME type and the size stay;
+- in schemas held as data: docs, aliases, examples, deprecation notes, `Role::Other`, restriction and discriminator literals, and numeric and length bounds. A type description keeps the kinds, the names, the known roles, the declared units and their allowed suffixes, and the definitions;
+- agent IDs (they become `agent:` tokens) and fingerprints;
+- component IDs and component names, also inside host payloads such as `GolemApiGetAgents.component_id`;
+- environment and account IDs, for example `Create.environment_id` and `Create.created_by`;
+- the text of `--query`.
+
+The server replaces secrets, quota tokens and permission cards with a fixed placeholder string before the CLI receives an entry, so the report shows them as the `str` token of that string. A secret, quota token, permission card or stream value that still reaches the CLI becomes `redacted { reason }`, with the reason `secret`, `quotaToken`, `permissionCard` or `stream`. The header `root` holds no component ID and no environment ID.
+
+## Options that keep more data
+
+Each `--keep-*` option needs `--obfuscate`, and so does `--max-entry-bytes`. `--omit-payloads` cannot be used with `--obfuscate`. Each wrong combination is a CLI error.
+
+### `--keep-scalars`
+
+**What it shows:** numbers, bools, datetimes, durations, and the mantissa, scale and unit of quantities. A quantity unit that the schema does not declare shows as a token. The option never shows byte lists, discriminants, lengths or text. The structured output keeps the token next to the value, so a reader learns the value of that token everywhere in the report.
+
+Records and tuples always show their fields and elements, so `--keep-scalars` shows every number in them. Without `--keep-shape`, a number inside a list (also a fixed-size list), a map, a variant, an option, a result, a union or flags stays inside the token of that value, and the coverage document holds this note:
+
+> Numbers inside lists, maps, variants, options, results and unions stay inside the token of their container; add --keep-shape to show them.
+
+**What it leaks:** amounts, counters, numeric IDs, dates in values, resource IDs, consumed fuel, and each bool and small number that a token hides.
+
+### `--keep-shape`
+
+**What it shows:** the case of a variant, enum, option, result or union, the flags that are set, the lengths of lists, maps and byte values, the elements of a non-empty list that is not a byte list, and the entries of a map (sorted, not in the stored order). The values stay tokens. A string stays one token, so its length does not show. A typed case shows its name and its index; a schema-less case shows only its index.
+
+A union in a value without a type, for example the generic value of an RPC call, shows a token of its tag, not the tag, because no type declares the tag. So the caller's side of an RPC call shows a tag token where the typed value of the callee shows the tag.
+
+**What it leaks:** whether an optional value was present, which case occurred, item counts and payload sizes. The map entries are sorted by their values, so their order can show which token stands for which value: for example, in a map with the keys `false` and `true`, the first key token stands for `false`.
+
+### `--keep-error-text`
+
+**What it shows:** the error text of [Errors](#errors) as it is. It does not expand values that stay collapsed without `--keep-shape`: in a value, option presence, branches and lengths around the text stay hidden. The fields of an entry are different: an optional field of an entry, such as `Start.denial`, is in the report only when the entry has it, with or without `--keep-shape`, and the cases of table A always show. A customer value inside an error, for example a custom error value of a remote agent, stays a token.
+
+**What it leaks:** everything that the error texts contain.
+
+<Callout type="warning">
+  The kept text can contain any customer value, for example a URL, an input value or a file name in an error message.
+</Callout>
+
+## RPC calls in the report
+
+The report holds only the agent that the command names. Its RPC entries stay in its history, and the target of a call is an agent reference.
+
+The oplog holds the RPC values of the caller without a schema. So they stay schema-less in the report, and the coverage document lists them in `schemaLessRpcValues`. In a schema-less value, a nested agent ID stays a plain record of tokens, and with `--keep-scalars` a quantity shows its unit as a token.
+
+The history of the called agent is not in the report. A separate export of that agent has its own token key, so the tokens of the two reports cannot be compared.
+
+## Searching
+
+`--query` runs on the server on the raw values, with the same oplog search as `golem agent oplog --query`. So a query can select entries by a value that the report hides. The header holds `filtered: true`, never the query text: a reader knows that the report is filtered, not by which query. The export reads the search results to the end, so no entry stays unsearched.
+
+For an `End` or `Cancelled` entry whose `Start` the query did not select, the CLI reads that `Start` only to find its host function, within `--max-entry-bytes`. The `Start` does not go into the report.
+
+A search in the report finds only the tokens and the kept data that the report holds. A token that stays inside the token of a collapsed value is not in the report, so a search does not find it. To find every place of one value, search for its token in the structured output. The search box of the viewer is limited: it searches a shortened text of each entry, so it can miss a token far into a large entry, and it finds a kept scalar by its value, not by its token. The text output also shows a kept scalar by its value. A token from another export finds nothing.
+
+With `--serve --obfuscate`, the query of the viewer also runs on the server on the raw values, with your permissions, and the viewer shows the matches obfuscated. The search box of the served page keeps the query that you typed: the served page is a local session, not a report. Share an `--html` file or the structured output, not the served page or a screenshot of its search box.
+
+See [Searching for oplog entries](/next/cli/agents#searching-for-oplog-entries) for the query syntax.
+
+## Not a snapshot, not for replay
+
+The CLI reads the pages one after the other, and the agent can run during the export. The report holds tokens, so it cannot be replayed or imported into Golem.
+
+Before the first read and after the last read, the CLI reads the `Create` entry of the agent and compares the fingerprints. When the agent was deleted and created again during the export, the export fails. A page read that fails, for example a read that you are not allowed to make, also fails the export. A failed read of one omitted entry does not fail the export (see [Large entries and coverage](#large-entries-and-coverage)).
+
+The export also fails when the entry at index 1 is not a `Create` entry, or when the oplog page omits the `Create` entry and its size is above `--max-entry-bytes`: the export needs its fingerprint. For a `Create` entry that is too large, export again with a larger `--max-entry-bytes`.
+
+A failed export ends with an error and a non-zero exit code. It does not change an existing `--html` file. On stdout, the documents that the export wrote before the failure stay, and the sequence of documents has no coverage document. A complete export always ends with the coverage document.
+
+## Large entries and coverage
+
+Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default). The CLI reads an omitted entry in full only when its size is at most `--max-entry-bytes` (default 16 MiB). A larger entry, or an entry whose read fails, stays omitted with its kind, timestamp and size, and with the reason `tooLarge` or `hydrationFailed`. The coverage document lists it in `hydrationFailures`, and the export continues with the next entry. The CLI never reads an omitted entry whose size is above `--max-entry-bytes`. The option does not limit the entries that the oplog pages include.
+
+A larger `--max-entry-bytes` reads larger entries and uses more memory on your machine. Each read stays one ordinary request with the limits of the server.
+
+An `End` or `Cancelled` entry needs the host function of its `Start` for table A. The CLI reads each `Start` at most once. When the `Start` stays unknown (it is above `--max-entry-bytes`, or its read fails), the whole response is customer data and becomes tokens, and the coverage document lists the entry in `startUnknown`.
+
+The coverage document has these fields:
+
+- `incomplete`: `true` when `hydrationFailures` or `startUnknown` has `discovered` greater than 0. `schemaLessRpcValues` does not make a report incomplete.
+- `hydrationFailures`, `startUnknown` and `schemaLessRpcValues`: each list is `{ shown, discovered }`. `shown` holds at most 100 items, and `discovered` counts all of them. A `hydrationFailures` item is `{ index, kind, size, reason }`, a `startUnknown` item is `{ index, startIndex }`, and a `schemaLessRpcValues` item is `{ index, path }`, where `path` is `request.input`, `response.result.ok` or `response.result.completed.ok`.
+- `notes`: the `--keep-scalars` note (see [`--keep-scalars`](#--keep-scalars)).
+
+## Reading the report
+
+### Text output
+
+The text output prints the header, with the root as `agent:…`, then the entries, then the coverage. An omitted entry prints as `OMITTED ENTRY` with its kind, timestamp, size and reason. When `incomplete` is set, the coverage ends with the sentence "Some entries are not in the report in full."
+
+### Structured output
+
+In the structured formats (`--format json`, `yaml` and the other structured formats), the export emits a sequence of documents of three types, in place of the `agent.oplog` documents of the plain command. The schemas mark them as `multi-document` output; the plain `agent.oplog` output stays a `stream`.
+
+1. `agent.oplog-export-header` first: `obfuscate`, `keepScalars`, `keepShape`, `keepErrorText`, `filtered`, `root`, `cliVersion` and `generatedAt`.
+2. One `agent.oplog-export-entry` for each entry, in index order: `index`, `timestamp`, `kind`, `attribution` (only for an entry of an entity), and exactly one of `body` and `omitted` (`reason` and `size`).
+3. `agent.oplog-export-coverage` last.
+
+Parse stdout as a sequence of documents and branch on `$type`. A sequence without the coverage document is from a failed export. To get the schemas, run:
+
+```shell copy
+golem output-schema --type agent.oplog-export-header --type agent.oplog-export-entry --type agent.oplog-export-coverage
+```
+
+Every node of the report has a `kind`. A `body` is a `record` whose field names are the field names of the public oplog entry.
+
+| `kind`                                   | Default                                                                                                                      | With keep options                                                                                                             |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `record`                                 | The field names and the field nodes                                                                                          | The same                                                                                                                      |
+| `tuple`                                  | The element nodes                                                                                                            | The same                                                                                                                      |
+| `case`                                   | The `caseKind` (variant, enum, flags, option, result or union) and a `subtree` token; a kept Golem case shows the case name | `--keep-shape`: the case name or `caseIndex` and the payload; a schema-less union shows a `tagToken`                         |
+| `list`                                   | A `list` token                                                                                                               | `--keep-shape`: the `length` and the element nodes                                                                            |
+| `map`                                    | A `map` token                                                                                                                | `--keep-shape`: the `length` and the entries, sorted                                                                          |
+| `bytes`                                  | A `bytes` token                                                                                                              | `--keep-shape`: the `length`                                                                                                  |
+| `scalar`                                 | The `scalarKind` and a `scalar` token                                                                                        | `--keep-scalars`: the `value`                                                                                                 |
+| `quantity`                               | A `scalar:quantity` token                                                                                                    | `--keep-scalars`: the `mantissa`, the `scale`, and the `unit` or a `unitToken`                                               |
+| `str`                                    | A `str` token                                                                                                                | `--keep-error-text`: the `value` of error text                                                                                |
+| `agent`                                  | An `agent` token                                                                                                             | The same                                                                                                                      |
+| `redacted`                               | The `reason`                                                                                                                 | The same                                                                                                                      |
+| `typeDescription`                        | The description of a schema held as data                                                                                     | The same                                                                                                                      |
+| `text`, `number`, `timestamp` and `flag` | Kept metadata, in clear                                                                                                      | `--keep-shape`: also the bits of a customer flags value as `flag` nodes                                                        |
+
+### HTML file
+
+`--html FILE` writes the viewer with the obfuscated entries. A banner above the entries shows the keep options, `filtered`, the coverage lists, the notes and the `incomplete` sentence. The page title is the root reference. The viewer shows other tokens shortened to their domain and the first 8 hex characters, for example `str:1f89a8ab…`, with the full token in the tooltip. The CLI writes a temporary file and renames it after the coverage, so a failed export does not change an existing file. `--open` opens the file. The _Load JSON_ button of the viewer reads a plain `--format json` dump, not the export documents.
+
+### Served viewer
+
+`--serve --obfuscate` starts the local viewer and obfuscates each page with the key of the viewer process:
+
+- The CLI reads the `Create` entry before the server starts. A failure there, also an omitted `Create` entry above `--max-entry-bytes`, stops the command.
+- The served page holds the export header, the start index, the query and the page size, and no agent ID, component name or component ID. The root shows as `agent:…`.
+- Each page request checks the `Create` entry before and after the page. When the agent was deleted and created again, the request answers HTTP 409 with the text "The agent was deleted and created again. Restart the viewer to read the new agent." The status request of the viewer answers the same.
+- The status panel gets only these status fields of the agent: `status`, `lastOplogIndex`, `retryCount`, `componentRevision`, `pendingInvocationCount`, `skippedRegions` and `deletedRegions`. It never gets the last error, the agent ID, `env` or config.
+- The banner shows the coverage of the pages that the viewer has loaded.
+- The search box keeps the query that you typed (see [Searching](#searching)).
