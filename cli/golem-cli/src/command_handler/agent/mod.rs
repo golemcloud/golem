@@ -60,6 +60,7 @@ use crate::model::text_format::{log_fuzzy_match, log_text_view};
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use golem_common::model::invocation_session_public::PublicErrorCode;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
@@ -536,7 +537,7 @@ impl AgentCommandHandler {
         let agent_id_match = agent_id_match
             .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
-        let mode = if trigger {
+        if trigger {
             log_action(
                 "Triggering",
                 format!(
@@ -545,7 +546,6 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Schedule
         } else {
             log_action(
                 "Invoking",
@@ -555,8 +555,7 @@ impl AgentCommandHandler {
                     method_name.log_color_highlight()
                 ),
             );
-            AgentInvocationMode::Await
-        };
+        }
 
         let method_uses_streams = agent_type
             .methods
@@ -661,6 +660,42 @@ impl AgentCommandHandler {
 
         let environment = &agent_id_match.environment;
 
+        if !trigger {
+            let invocation = invocation_session::invoke_scalar(
+                self.ctx.clone(),
+                invocation_session::ScalarInvocationArgs {
+                    application_name: environment.application_name.to_string(),
+                    environment_name: environment.environment_name.to_string(),
+                    agent_type: agent_type.clone(),
+                    parsed_agent_id: agent_id,
+                    method_name: method_name.clone(),
+                    method_parameters,
+                    idempotency_key,
+                    invocation_goal: connect_handle.as_ref().and_then(|(goal, _)| goal.clone()),
+                },
+            )
+            .await;
+            if let Some((goal, handle)) = connect_handle.take() {
+                if let Some(goal) = goal {
+                    goal.set_output_written();
+                }
+                let _ = timeout(Duration::from_secs(3), handle).await;
+            }
+            let invocation = invocation.map_err(|error| {
+                self.with_previous_invocation_failed_hint(error, &agent_id_match)
+            })?;
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_output(InvokeResultView::new_agent_invoke(
+                    invocation.idempotency_key,
+                    invocation.result,
+                    &agent_type,
+                    &method_name,
+                ))?;
+            return Ok(());
+        }
+
         let request = AgentInvocationRequest {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
@@ -672,7 +707,7 @@ impl AgentCommandHandler {
             method_name: method_name.clone(),
             method_parameters: ExternalSchemaValue::try_from(method_parameters)
                 .map_err(anyhow::Error::msg)?,
-            mode,
+            mode: AgentInvocationMode::Schedule,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
             deployment_revision: None,
@@ -699,22 +734,10 @@ impl AgentCommandHandler {
             let _ = timeout(Duration::from_secs(3), handle).await;
         }
 
-        if trigger {
-            log_action("Triggered", "invocation");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_trigger(accepted_key))?;
-        } else {
-            logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    accepted_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
-        }
+        log_action("Triggered", "invocation");
+        self.ctx
+            .log_handler()
+            .log_output(InvokeResultView::new_trigger(accepted_key))?;
 
         Ok(())
     }
@@ -2798,12 +2821,19 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let Some(service_error) = error.downcast_ref::<ServiceError>() else {
+        let rendered = if let Some(service_error) = error
+            .downcast_ref::<ServiceError>()
+            .filter(|service_error| service_error.is_previous_invocation_failed())
+        {
+            service_error.render()
+        } else if let Some(failure) = error
+            .downcast_ref::<invocation_session::InvocationFailure>()
+            .filter(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed)
+        {
+            failure.to_string()
+        } else {
             return error;
         };
-        if !service_error.is_previous_invocation_failed() {
-            return error;
-        }
 
         let command = render_revert_command(
             &crate::command_name(),
@@ -2817,7 +2847,7 @@ impl AgentCommandHandler {
 
         anyhow!(
             "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            service_error.render(),
+            rendered,
             command,
         )
     }

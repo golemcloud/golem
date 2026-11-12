@@ -17,7 +17,6 @@ use crate::log::{log_error, logln};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::{TextOutput, format_message_highlight, format_warn};
 use anyhow::anyhow;
-use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::agent::{AgentTypeSchema, OutputSchema};
@@ -84,7 +83,7 @@ impl TextOutput for InvokeResultView {
 impl InvokeResultView {
     pub fn new_agent_invoke(
         idempotency_key: IdempotencyKey,
-        result: AgentInvocationResult,
+        result: Option<TypedSchemaValue>,
         agent_type: &AgentTypeSchema,
         method_name: &str,
     ) -> Self {
@@ -137,7 +136,7 @@ impl InvokeResultView {
     }
 
     fn try_get_agent_results(
-        result: &AgentInvocationResult,
+        result: &Option<TypedSchemaValue>,
         agent_type: &AgentTypeSchema,
         method_name: &str,
     ) -> anyhow::Result<(bool, Option<TypedSchemaValue>)> {
@@ -151,10 +150,6 @@ impl InvokeResultView {
             return Ok((true, None));
         }
 
-        let Some(ref typed) = result.result else {
-            return Ok((false, None));
-        };
-
-        Ok((false, Some(typed.as_inner().clone())))
+        Ok((false, result.clone()))
     }
 }

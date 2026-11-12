@@ -121,6 +121,72 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally server.close()
   }
 
+  // Answers the start with `answer` and returns what the caller receives.
+  private def answered(answer: (Peer, Json) => Unit): Throwable = {
+    val server = new ServerSocket(0)
+    val failed = Promise[Unit]()
+    val peer = Future {
+      val p = new Peer(server.accept())
+      try {
+        answer(p, p.receive())
+        Await.result(failed.future, 10.seconds)
+      } finally { p.close(); server.close() }
+    }
+    val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
+      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+    try {
+      val error = intercept[Throwable] {
+        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil), 15.seconds)
+      }
+      failed.success(())
+      Await.result(peer, 10.seconds)
+      error
+    } finally server.close()
+  }
+  private def accept(p: Peer, start: Json): Unit = p.send(message("invocationAccepted",
+    "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+    "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
+
+  test("an agent failure rejection surfaces the agent's stderr") {
+    val error = answered((p, start) => p.send(message("invocationRejected", "attemptId" -> field(start, "attemptId"),
+      "code" -> Json.string("previous-invocation-failed"), "message" -> Json.string("agent panicked"),
+      "retryable" -> Json.bool(false), "stderr" -> Json.string("panic output\n"))))
+    error match {
+      case rejected: BridgeInvocationRejectedException =>
+        assertEquals(rejected.code, "previous-invocation-failed")
+        assertEquals(rejected.serverMessage, "agent panicked")
+        assertEquals(rejected.stderr, Some("panic output\n"))
+        assertEquals(rejected.getMessage, "previous-invocation-failed: agent panicked")
+      case other => fail(s"unexpected error: $other")
+    }
+  }
+
+  test("a failed invocation surfaces the agent's stderr") {
+    val error = answered { (p, start) =>
+      accept(p, start)
+      p.send(message("invocationFinished", "outcome" -> Json.obj("kind" -> Json.string("failure"),
+        "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"), "stderr" -> Json.string("panic output\n"))))
+    }
+    assertEquals(error, AgentStreamError("invocation-failed", "agent panicked", Some("panic output\n")))
+  }
+
+  test("an unknown member beside stderr is still rejected") {
+    val rejection = answered((p, start) => p.send(message("invocationRejected", "attemptId" -> field(start, "attemptId"),
+      "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"),
+      "retryable" -> Json.bool(false), "stderr" -> Json.string("panic output\n"), "extra" -> Json.string("x"))))
+    assert(!rejection.isInstanceOf[BridgeInvocationRejectedException], rejection.toString)
+    assert(rejection.getMessage.contains("malformed invocationRejected message fields"), rejection.toString)
+    val failure = answered { (p, start) =>
+      accept(p, start)
+      p.send(message("invocationFinished", "outcome" -> Json.obj("kind" -> Json.string("failure"),
+        "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"),
+        "stderr" -> Json.string("panic output\n"), "extra" -> Json.string("x"))))
+    }
+    assert(!failure.isInstanceOf[AgentStreamError], failure.toString)
+    assert(failure.getMessage.contains("malformed invocation outcome fields"), failure.toString)
+  }
+
   for ((scenario, code, retryable) <- List(
     ("initial", "invalid-attachment-state", true),
     ("accepted-start", "invalid-attachment-state", true),

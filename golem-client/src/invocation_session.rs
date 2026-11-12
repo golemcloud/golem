@@ -2682,9 +2682,9 @@ where
                                         ));
                                     }
                                 }
-                                PublicInvocationOutcome::Failure { code, message } => {
+                                PublicInvocationOutcome::Failure { code, message, stderr } => {
                                     completion_failure =
-                                        Some(format!("{}: {message}", code.as_str()));
+                                        Some(failure_text(*code, message, stderr.as_deref()));
                                 }
                             }
                             finished = true;
@@ -2702,6 +2702,14 @@ where
     let _ = cancel_input.send(true);
     let _ = cancel_output.send(true);
     result
+}
+
+/// The text of a failed or rejected invocation, followed by what the agent wrote to stderr.
+fn failure_text(code: PublicErrorCode, message: &str, stderr: Option<&str>) -> String {
+    match stderr {
+        Some(stderr) => format!("{}: {message}\n{stderr}", code.as_str()),
+        None => format!("{}: {message}", code.as_str()),
+    }
 }
 
 fn admit_native_output_frame(
@@ -3573,12 +3581,18 @@ where
     match frame.frame() {
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         | ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => Ok(false),
-        ServerFrame::Message(PublicServerMessage::InvocationRejected { code, message, .. }) => {
+        ServerFrame::Message(PublicServerMessage::InvocationRejected {
+            code,
+            message,
+            stderr,
+            ..
+        }) => {
             send_generated_result(
                 result_tx,
-                Err(SessionTransportError::Protocol(format!(
-                    "{}: {message}",
-                    code.as_str()
+                Err(SessionTransportError::Protocol(failure_text(
+                    *code,
+                    message,
+                    stderr.as_deref(),
                 ))),
             );
             Ok(true)
@@ -3811,9 +3825,11 @@ where
             inputs.clear();
             let failure = match outcome {
                 PublicInvocationOutcome::Success => None,
-                PublicInvocationOutcome::Failure { code, message } => {
-                    Some(format!("{}: {message}", code.as_str()))
-                }
+                PublicInvocationOutcome::Failure {
+                    code,
+                    message,
+                    stderr,
+                } => Some(failure_text(*code, message, stderr.as_deref())),
             };
             if let Some(message) = failure {
                 send_generated_result(
@@ -4949,6 +4965,7 @@ mod tests {
                             PublicInvocationOutcome::Failure {
                                 code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                                 message: "worker failed".to_string(),
+                                stderr: None,
                             }
                         } else {
                             PublicInvocationOutcome::Success
@@ -5743,6 +5760,7 @@ mod tests {
                         code: PublicErrorCode::Unauthorized,
                         message: "invocation is not authorized".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -6186,6 +6204,7 @@ mod tests {
                         outcome: PublicInvocationOutcome::Failure {
                             code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                             message: "worker failed".to_string(),
+                            stderr: None,
                         },
                         version: 1,
                     })
@@ -6375,6 +6394,7 @@ mod tests {
                         outcome: PublicInvocationOutcome::Failure {
                             code: golem_common::model::invocation_session_public::PublicErrorCode::InternalError,
                             message: "worker failed".to_string(),
+                            stderr: None,
                         },
                         version: 1,
                     })
@@ -7202,6 +7222,7 @@ mod tests {
                                     code: PublicErrorCode::InvalidAttachmentState,
                                     message: "old attachment remains".to_string(),
                                     retryable: second_rejection.unwrap_or(false),
+                                    stderr: None,
                                     version: 1,
                                 })
                                 .unwrap()
@@ -7730,6 +7751,7 @@ mod tests {
                         code: PublicErrorCode::ValidationError,
                         message: "rejected".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -7802,6 +7824,7 @@ mod tests {
                         code: PublicErrorCode::InputConflict,
                         message: "input conflict".to_string(),
                         retryable: false,
+                        stderr: None,
                         version: 1,
                     })
                     .unwrap()
@@ -8319,6 +8342,7 @@ mod tests {
             code: PublicErrorCode::RoutingMiss,
             message: "moving".to_string(),
             retryable: true,
+            stderr: None,
             version: 1,
         }
     }

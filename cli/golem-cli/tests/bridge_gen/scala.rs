@@ -805,6 +805,29 @@ class StreamRuntimeTest extends munit.FunSuite {
       val canonical = Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get
       assertEquals(Json.parse(canonical).toOption.get.render, canonical)
     }
+    val serverMessages = Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.filter { vector =>
+      Json.asString(Json.requireField(vector, "direction").toOption.get).toOption.get == "server"
+    }.map { vector =>
+      val name = Json.asString(Json.requireField(vector, "name").toOption.get).toOption.get
+      val message = Json.parse(Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get).toOption.get
+      assertEquals(StreamSessionProtocol.validateServerMessage(message), Json.asString(Json.requireField(vector, "type").toOption.get).toOption.get, name)
+      name -> message
+    }.toMap
+    val rejection = StreamSessionProtocol.invocationRejection(serverMessages("invocation-rejected-previous-invocation-failed"))
+    assertEquals(rejection.code, "previous-invocation-failed")
+    assertEquals(rejection.serverMessage, "intentional invocation failure")
+    assertEquals(rejection.stderr, Some("intentional failure stderr\n"))
+    assertEquals(StreamSessionProtocol.invocationRejection(serverMessages("invocation-rejected")).stderr, None)
+    def failureOutcome(name: String): Json = Json.requireField(serverMessages(name), "outcome").toOption.get
+    assertEquals(StreamSessionProtocol.invocationFailure(failureOutcome("invocation-finished-failure-with-stderr")),
+      AgentStreamError("invocation-failed", "intentional invocation failure", Some("intentional failure stderr\n")))
+    assertEquals(StreamSessionProtocol.invocationFailure(failureOutcome("invocation-finished-failure")).stderr, None)
+    intercept[BridgeException](StreamSessionProtocol.validateServerMessage(Json.parse(
+      """{"code":"invocation-failed","extra":"x","message":"m","retryable":false,"stderr":"e","type":"invocationRejected","version":1}""").toOption.get))
+    intercept[BridgeException](StreamSessionProtocol.invocationFailure(Json.parse(
+      """{"code":"invocation-failed","extra":"x","kind":"failure","message":"m","stderr":"e"}""").toOption.get))
+    intercept[BridgeException](StreamSessionProtocol.invocationFailure(Json.parse(
+      """{"code":"invocation-failed","kind":"failure","message":"m","stderr":1}""").toOption.get))
     val malformed = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
     val invalid = Json.asArray(Json.requireField(malformed, "vectors").toOption.get).toOption.get.find { vector =>
       Json.field(vector, "name").flatMap(Json.asString(_).toOption).contains("invalid-json")
