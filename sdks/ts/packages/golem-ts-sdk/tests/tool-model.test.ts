@@ -2291,17 +2291,29 @@ describe('internal extended tool model', () => {
     const withExitCode = (exitCode: number) =>
       new ExtendedToolType(
         '1.0.0',
-        command('probe', {
-          body: body({
-            errors: [{ name: 'failed', doc: emptyDoc(), kind: 'runtime-error', exitCode }],
-          }),
+        command('exit-probe', {
+          subcommands: [
+            command('fail', {
+              body: body({
+                errors: [{ name: 'failed', doc: emptyDoc(), kind: 'runtime-error', exitCode }],
+              }),
+            }),
+          ],
         }),
       );
 
     expect(() => validateExtendedTool(withExitCode(0))).toThrowError(
       expect.objectContaining({
         code: 'invalid-metadata-value',
-        message: 'error exit code must be an integer in [1, 255]: 0',
+        message:
+          'error case "failed" in command "exit-probe fail" has exit code 0, which means success; ' +
+          'a declared error needs an exit code from 1 to 255',
+      }),
+    );
+    expect(() => validateExtendedTool(withExitCode(256))).toThrowError(
+      expect.objectContaining({
+        code: 'invalid-metadata-value',
+        message: 'error exit code must be an integer in [1, 255]: 256',
       }),
     );
     for (const exitCode of [1, 255]) {

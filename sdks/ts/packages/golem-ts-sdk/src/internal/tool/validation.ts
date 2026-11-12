@@ -58,7 +58,7 @@ interface ValueScopeEntry {
 export function validateExtendedTool(tool: ExtendedToolType): void {
   validateTreeShape(tool.root);
   const codecs: SchemaCodec[] = [];
-  visitCommand(tool.root, [], codecs);
+  visitCommand(tool.root, [], [], codecs);
   try {
     mergeGraphDefs(codecs.map((codec) => codec.graph));
   } catch (error) {
@@ -88,6 +88,7 @@ function validateTreeShape(root: ExtendedCommandNode): void {
 
 function visitCommand(
   node: ExtendedCommandNode,
+  parentPath: readonly string[],
   ancestorGlobals: readonly ExtendedGlobals[],
   codecs: SchemaCodec[],
 ): void {
@@ -96,9 +97,10 @@ function visitCommand(
   checkSiblingNames(node);
   validateGlobals(node.globals, ancestorGlobals, codecs);
 
+  const commandPath = [...parentPath, node.name];
   const inScope = [...ancestorGlobals, node.globals];
-  if (node.body) validateBody(node.body, inScope, codecs);
-  node.subcommands.forEach((child) => visitCommand(child, inScope, codecs));
+  if (node.body) validateBody(node.body, commandPath, inScope, codecs);
+  node.subcommands.forEach((child) => visitCommand(child, commandPath, inScope, codecs));
 }
 
 function validateGlobals(
@@ -121,6 +123,7 @@ function validateGlobals(
 
 function validateBody(
   body: ExtendedCommandBody,
+  commandPath: readonly string[],
   inScopeGlobals: readonly ExtendedGlobals[],
   codecs: SchemaCodec[],
 ): void {
@@ -229,6 +232,12 @@ function validateBody(
     checkIdentifier('error-case name', errorCase.name);
     insertName(errorNames, errorCase.name);
     checkOneOf('error kind', errorCase.kind, ['usage-error', 'runtime-error']);
+    if (errorCase.exitCode === 0) {
+      toolBuildError(
+        'invalid-metadata-value',
+        `error case "${errorCase.name}" in command "${commandPath.join(' ')}" has exit code 0, which means success; a declared error needs an exit code from 1 to 255`,
+      );
+    }
     checkIntegerRange('error exit code', errorCase.exitCode, 1, 0xff);
     if (errorCase.payloadCodec) {
       validateCodec(errorCase.payloadCodec, `error ${errorCase.name}`);
