@@ -407,6 +407,10 @@ describe("Polar billing", () => {
   })
 
   describe("webhooks", () => {
+    /** The `subscription.past_due` state of `sub_1` after a payment failed at `failedAt`. */
+    const pastDue = (accountId: string, failedAt: Date) =>
+      subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString(), modified_at: "2026-12-04T10:00:00Z" })
+
     it("moves the account to the paid plan when its subscription is active", async () => {
       const { jar, accountId } = await signedIn()
 
@@ -501,17 +505,25 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("moves the account to Free when the payment of the price alone fails, and back after the payment", async () => {
+    it("keeps Paid in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
       const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
+      const graceEnd = new Date(failedAt.getTime() + config.pastDueGraceMs)
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId, priceOnly))
-      const response = await deliver(
-        "subscription.past_due",
-        subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" })
-      )
+      const response = await deliver("subscription.past_due", pastDue(accountId, failedAt))
 
       expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      expect(await page(jar)).toContain(
+        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDate.format(graceEnd)}.`
+      )
+
+      await sweep(new Date(graceEnd.getTime() - MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await sweep(new Date(graceEnd.getTime() + MINUTE))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       const html = await page(jar)
       expect(html).toContain("<h1>Free</h1>")
@@ -523,13 +535,32 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("suspends the account when an order with overage is not paid, until the order is paid", async () => {
+    it("keeps Paid when Polar gets the payment in the past-due grace", async () => {
       const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId))
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.past_due", pastDue(accountId, failedAt))
+      await deliver("order.paid", order(accountId, paidLater))
+      await deliver("subscription.updated", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
+      await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
 
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      expect(upstreams.planChanges()).toHaveLength(1)
+      expect(await page(jar)).not.toContain("The last payment for Paid failed")
+    })
+
+    it("suspends the account after the past-due grace when an order with overage is not paid, until the order is paid", async () => {
+      const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId))
+      await deliver("subscription.past_due", pastDue(accountId, failedAt))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
       const html = await page(jar)
       expect(html).toContain("<h1>Suspended</h1>")
@@ -591,7 +622,7 @@ describe("Polar billing", () => {
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId, { product_id: randomUUID(), created_at: "2026-11-01T10:00:00Z" }))
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.past_due", pastDue(accountId, new Date(Date.now() - config.pastDueGraceMs - MINUTE)))
 
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })

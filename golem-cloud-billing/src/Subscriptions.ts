@@ -92,6 +92,12 @@ export interface SubscriptionsShape {
     from: Date,
     to: Date
   ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
+  /** The accounts with a `past_due` subscription of the product whose payment failed between `from` and `to`. */
+  readonly pastDue: (
+    productId: string,
+    from: Date,
+    to: Date
+  ) => Effect.Effect<ReadonlyArray<string>, SubscriptionsError>
   /** The subscription of the product that changed last, for the plan page. */
   readonly latest: (
     accountId: string,
@@ -294,6 +300,14 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
         [productId, from, to]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
 
+    const pastDue = (productId: string, from: Date, to: Date) =>
+      query<{ account_id: string }>(
+        `SELECT DISTINCT account_id::text AS account_id
+           FROM polar_subscriptions
+          WHERE product_id = $1 AND status = 'past_due' AND past_due_at BETWEEN $2 AND $3`,
+        [productId, from, to]
+      ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
+
     const latest = (accountId: string, productId: string) =>
       query<SubscriptionRow>(
         `SELECT ${columns}
@@ -351,6 +365,7 @@ export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Databa
       pendingOrders,
       ending,
       awaitingPayment,
+      pastDue,
       latest,
       isDelivered,
       markDelivered,

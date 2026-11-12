@@ -14,6 +14,7 @@ import {
 } from "./Page.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
+import { pastDueGraceEnd } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -165,6 +166,10 @@ export const routes = HttpRouter.use((router) =>
             account,
             plan,
             subscription,
+            pastDueGraceEnd:
+              plan === "paid" && subscription !== undefined
+                ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
+                : undefined,
             checkoutPending,
             cliCommand,
             limits,

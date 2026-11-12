@@ -170,6 +170,8 @@ export interface SignedInPageOptions {
   readonly plan: PlanState
   /** The subscription of the paid product that changed last, if the account had one. */
   readonly subscription: Subscription | undefined
+  /** When the past-due grace of the subscription ends, on the paid plan after a failed payment. */
+  readonly pastDueGraceEnd: Date | undefined
   /** Polar has redirected back after a payment, and the plan has not changed yet. */
   readonly checkoutPending: boolean
   readonly cliCommand: string
@@ -197,6 +199,9 @@ const renewal = (subscription: Subscription | undefined) => {
     : html`<p class="lead">Your subscription renews on ${date}.</p>`
 }
 
+const pastDueNotice = (end: Date) =>
+  html`<p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDate.format(end)}. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
+
 const planHero = (options: SignedInPageOptions) => {
   if (options.checkoutPending) {
     return html`<span class="eyebrow">Your plan</span>
@@ -207,7 +212,7 @@ const planHero = (options: SignedInPageOptions) => {
     case "paid":
       return html`<span class="eyebrow">Your plan</span>
         <h1>Paid</h1>
-        ${renewal(options.subscription)}
+        ${options.pastDueGraceEnd === undefined ? renewal(options.subscription) : pastDueNotice(options.pastDueGraceEnd)}
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`

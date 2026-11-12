@@ -61,6 +61,11 @@ export interface BillingConfigShape {
     readonly suspended: string
   }
   readonly overagePrices: OveragePrices
+  /**
+   * How long an account keeps the paid plan after a payment of its subscription fails, in
+   * milliseconds (see `Settlement.ts`). Polar retries the payment in this time.
+   */
+  readonly pastDueGraceMs: number
   readonly polar: {
     /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
     readonly apiUrl: URL
@@ -89,6 +94,8 @@ const decimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/
 
 const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
   Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })))
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
  * The connection settings use the environment variables of the registry service
@@ -148,6 +155,14 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     perDurableGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH"),
     perEphemeralGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH")
   }),
+  pastDueGraceMs: Config.Int("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS").pipe(
+    Config.withDefault(7),
+    Config.mapEffect((days) =>
+      days < 0
+        ? invalid(`GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS must be 0 or more, got ${days}`)
+        : Effect.succeed(days * DAY_MS)
+    )
+  ),
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
     accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),
