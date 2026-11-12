@@ -229,7 +229,7 @@ function validateBody(
     checkIdentifier('error-case name', errorCase.name);
     insertName(errorNames, errorCase.name);
     checkOneOf('error kind', errorCase.kind, ['usage-error', 'runtime-error']);
-    checkIntegerRange('error exit code', errorCase.exitCode, 0, 0xff);
+    checkIntegerRange('error exit code', errorCase.exitCode, 1, 0xff);
     if (errorCase.payloadCodec) {
       validateCodec(errorCase.payloadCodec, `error ${errorCase.name}`);
       codecs.push(errorCase.payloadCodec);

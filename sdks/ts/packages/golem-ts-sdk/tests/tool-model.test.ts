@@ -2287,6 +2287,28 @@ describe('internal extended tool model', () => {
     }
   });
 
+  it('rejects a declared error with exit code 0 and accepts exit codes from 1 to 255', () => {
+    const withExitCode = (exitCode: number) =>
+      new ExtendedToolType(
+        '1.0.0',
+        command('probe', {
+          body: body({
+            errors: [{ name: 'failed', doc: emptyDoc(), kind: 'runtime-error', exitCode }],
+          }),
+        }),
+      );
+
+    expect(() => validateExtendedTool(withExitCode(0))).toThrowError(
+      expect.objectContaining({
+        code: 'invalid-metadata-value',
+        message: 'error exit code must be an integer in [1, 255]: 0',
+      }),
+    );
+    for (const exitCode of [1, 255]) {
+      expect(() => validateExtendedTool(withExitCode(exitCode))).not.toThrow();
+    }
+  });
+
   it('rejects invalid runtime-only metadata discriminants', () => {
     const tool = new ExtendedToolType(
       '1.0.0',
