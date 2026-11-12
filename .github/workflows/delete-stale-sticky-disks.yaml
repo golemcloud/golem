@@ -1,0 +1,42 @@
+name: Delete stale CI sticky disks
+on:
+  push:
+    branches:
+      - ci/delete-stale-sticky-disks
+permissions:
+  contents: read
+  actions: read
+jobs:
+  delete:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Delete approved superseded PR run disks
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : "${BLACKSMITH_STICKYDISK_TOKEN:?}" "${BLACKSMITH_INSTALLATION_MODEL_ID:?}" "${BLACKSMITH_REGION:?}"
+          for run in 43047693460 43201276128; do
+            test "$(gh api "repos/golemcloud/golem/actions/runs/$run" --jq .status)" = completed
+          done
+          api="${BLACKSMITH_BACKEND_URL:-https://api.blacksmith.sh}"
+          repo="${GITHUB_REPO_NAME:-$GITHUB_REPOSITORY}"
+          test "$repo" = golemcloud/golem
+          echo "Region: $BLACKSMITH_REGION; repository: $repo"
+          failed=0
+          while IFS= read -r key; do
+            [[ "$key" =~ ^golemcloud/golem-(native-binaries|executor-test-binaries|service-test-binaries|builtin-artifacts|cli-binary|scala-ivy|test-components)-(43047693460|43201276128)-producer-attempt1$ ]]
+            body=$(jq -nc --arg r "$repo" --arg k "$key" --arg i "$BLACKSMITH_INSTALLATION_MODEL_ID" --arg g "$BLACKSMITH_REGION" \
+              '{repo_name:$r, stickydisk_key:$k, installation_model_id:$i, region:$g, arch:"amd64", type:"stickydisk"}')
+            status=$(curl -sS -o response.json -w '%{http_code}' -X DELETE "$api/stickydisks" \
+              -H "Authorization: Bearer $BLACKSMITH_STICKYDISK_TOKEN" -H 'Content-Type: application/json' -d "$body")
+            echo "$status $key"
+            if [[ "$status" != 2?? ]]; then
+              cat response.json
+              failed=1
+            fi
+          done < .github/sticky-cleanup/keys.txt
+          test "$failed" = 0

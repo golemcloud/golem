@@ -1,0 +1,14 @@
+golemcloud/golem-native-binaries-43047693460-producer-attempt1
+golemcloud/golem-executor-test-binaries-43047693460-producer-attempt1
+golemcloud/golem-service-test-binaries-43047693460-producer-attempt1
+golemcloud/golem-builtin-artifacts-43047693460-producer-attempt1
+golemcloud/golem-cli-binary-43047693460-producer-attempt1
+golemcloud/golem-scala-ivy-43047693460-producer-attempt1
+golemcloud/golem-test-components-43047693460-producer-attempt1
+golemcloud/golem-native-binaries-43201276128-producer-attempt1
+golemcloud/golem-executor-test-binaries-43201276128-producer-attempt1
+golemcloud/golem-service-test-binaries-43201276128-producer-attempt1
+golemcloud/golem-builtin-artifacts-43201276128-producer-attempt1
+golemcloud/golem-cli-binary-43201276128-producer-attempt1
+golemcloud/golem-scala-ivy-43201276128-producer-attempt1
+golemcloud/golem-test-components-43201276128-producer-attempt1
