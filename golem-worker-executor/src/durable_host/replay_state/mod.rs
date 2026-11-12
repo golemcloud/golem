@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::QuotaClass;
-use crate::durable_host::concurrent::{
-    ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
-};
+use crate::durable_host::concurrent::{ReplayCallHandle, Resolution, ResolutionOutcome};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
@@ -192,9 +190,11 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
+mod starts;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
+pub(crate) use starts::ReplayStarts;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -600,7 +600,7 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Counts of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor
+    /// Counts of the retained entries in [`CursorState::starts`]: unclaimed `Start`s the cursor
     /// has already committed past, in total and per quota class. Written while `state` is held
     /// and read lock-free so durable-call admission and quota charging can tell "the cursor is
     /// exhausted" apart from "every recorded call has been
@@ -808,7 +808,6 @@ struct CursorState {
     entity_start_routes: HashMap<OplogIndex, Vec<OplogIndex>>,
     /// Reverse routes let an entity terminal retire only that entity's subtree membership.
     entity_route_members: HashMap<OplogIndex, HashSet<OplogIndex>>,
-    retained_entity_counts: HashMap<OplogIndex, usize>,
     /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
     /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
     /// the recorded guest callback boundary.
@@ -821,17 +820,10 @@ struct CursorState {
     /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
     /// trip us up.
     pending_fork_starts: HashSet<OplogIndex>,
-    /// Matches replayed `End`/`Cancelled` entries to the concurrent
-    /// [`crate::durable_host::concurrent::DurableCallSession`]s awaiting them, keyed by their `Start` index.
-    /// Fed only from the committed-consume hook. Lives under the cursor lock because awaited-terminal
-    /// detection, terminal resolution, and `Start`-claim registration are all part of the cursor
-    /// transaction; the rare slow-path `unregister` re-acquires the lock from outside a transaction.
-    concurrent_resolver: ConcurrentReplayResolver,
-    /// `Start` entries ahead of the cursor that were already claimed out-of-position by
-    /// [`CursorTx::claim_owned_start`] (identity-keyed scan-ahead claims). When the cursor reaches
-    /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
-    /// positional reader; its resolver awaiter was registered at claim time.
-    claimed_starts: HashSet<OplogIndex>,
+    /// Retained Starts and claimed replay obligations, keyed by their Start index. All lifecycle
+    /// mutations share the cursor lock: retention, ahead consumption, registration and terminal
+    /// routing cannot race. Explicit unregistration outside a transaction re-acquires this lock.
+    starts: ReplayStarts,
     /// Replay-inert subtrees. Completed custom durable invocations replay as one logical subtree:
     /// once a root `Start` is claimed, descendant `Start`s are replay-inert implementation details
     /// of that recorded operation and are drained with their terminals while resolving the root.
@@ -840,24 +832,9 @@ struct CursorState {
     /// them again. The map stores every known member index for each root so nested descendants
     /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
-    /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
-    /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
-    /// closed them if the cursor has reached it.
-    ///
-    /// Concurrent host tasks append their `Start`s in scheduling order, so a reader driving the
-    /// cursor (a positional marker read, a direct call awaiting its own `End`, a sibling's
-    /// terminal drain) may reach a `Start` that belongs to a call the guest has issued but whose
-    /// host task has not been admitted yet. Such a reader is not entitled to that entry: it must
-    /// neither consume it as its own (kind/ownership validation happens at claim time) nor park
-    /// on it, because the owner may need the same Store the parked reader holds. The cursor
-    /// therefore commits past it and retains it here, where the owner's later claim finds it in
-    /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
-    /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
-    /// target shrink or external history cut deletes their region.
-    retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
 }
 
-/// One entry of [`CursorState::retained_starts`].
+/// One retained entry of [`CursorState::starts`].
 #[derive(Debug)]
 struct RetainedStart {
     entry: OplogEntry,
@@ -874,10 +851,10 @@ struct RetainedStart {
     deferred_events: Vec<(OplogIndex, ReplayEvent)>,
 }
 
-/// Lock-free publication of how many `Start`s [`CursorState::retained_starts`] holds, in total
-/// and per [`QuotaClass`]. Rewritten from the retained map whenever it changes (only under a held
-/// [`ReplayCursor::state`] lock); each counter is read independently, so readers see a consistent
-/// value per counter but need no snapshot across them.
+/// Lock-free publication of how many retained `Start`s [`CursorState::starts`] holds, in total
+/// and per [`QuotaClass`]. Copies the registry's incremental summary whenever retention changes
+/// (only under a held [`ReplayCursor::state`] lock); each counter is read independently, so
+/// readers see a consistent value per counter but need no snapshot across them.
 #[derive(Debug, Default)]
 struct RetainedStartCounts {
     total: AtomicUsize,
@@ -886,26 +863,14 @@ struct RetainedStartCounts {
 }
 
 impl RetainedStartCounts {
-    fn publish<'a>(&self, retained: impl Iterator<Item = &'a OplogEntry>) {
-        let (mut total, mut http, mut rpc) = (0usize, 0usize, 0usize);
-        for entry in retained {
-            let OplogEntry::Start { function_name, .. } = entry else {
-                unreachable!("only Start entries are retained");
-            };
-            total += 1;
-            match QuotaClass::of_recorded_call(function_name) {
-                Some(QuotaClass::Http) => http += 1,
-                Some(QuotaClass::Rpc) => rpc += 1,
-                None => {}
-            }
-        }
-        self.total.store(total, Ordering::Release);
-        self.http.store(http, Ordering::Release);
-        self.rpc.store(rpc, Ordering::Release);
+    fn publish(&self, retained: &starts::RetainedSummary) {
+        self.total.store(retained.total, Ordering::Release);
+        self.http.store(retained.http, Ordering::Release);
+        self.rpc.store(retained.rpc, Ordering::Release);
     }
 
     fn clear(&self) {
-        self.publish(std::iter::empty());
+        self.publish(&starts::RetainedSummary::default());
     }
 
     fn any(&self) -> bool {

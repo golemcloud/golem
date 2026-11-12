@@ -80,8 +80,8 @@ impl ReplayState {
             },
             (last_oplog_index.as_u64() + 1).saturating_sub(metadata_floor.as_u64()),
         );
-        let concurrent_resolver = ConcurrentReplayResolver::default();
-        let reconstruction_claims = concurrent_resolver.reconstruction_claims();
+        let starts = ReplayStarts::default();
+        let reconstruction_claims = starts.reconstruction_claims();
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
@@ -108,14 +108,11 @@ impl ReplayState {
                 entity_replay_horizon: OplogIndex::NONE,
                 entity_start_routes: HashMap::new(),
                 entity_route_members: HashMap::new(),
-                retained_entity_counts: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
-                concurrent_resolver,
-                claimed_starts: HashSet::new(),
+                starts,
                 custom_subtrees: HashMap::new(),
-                retained_starts: std::collections::BTreeMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
