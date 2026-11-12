@@ -1622,7 +1622,8 @@ impl TestWorkerExecutor {
     }
 
     /// Queues an interrupt of `kind` on the loaded worker, as a shard move or an executor-side
-    /// stop does. Unlike the interrupt API, it also reaches a worker whose status is idle.
+    /// stop does. Unlike the interrupt API, it reaches an idle worker with any kind of interrupt,
+    /// not only with a simulated crash of a durable agent.
     pub async fn interrupt_loaded_worker(
         &self,
         agent_id: &AgentId,
