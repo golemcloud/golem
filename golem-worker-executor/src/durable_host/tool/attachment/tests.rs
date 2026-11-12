@@ -122,6 +122,124 @@ async fn owner_terminal_waits_for_durable_producer_restoration() {
     );
 }
 
+#[test]
+#[test_r::timeout("30s")]
+async fn owner_publication_preserves_local_failure_delivery() {
+    for delivered in [false, true] {
+        let (producer, consumer, _) = pair(4);
+        producer.configure_live();
+        producer.fail(ByteStreamFailure::Abandoned).unwrap();
+        let mut stream = consumer.into_stream_producer();
+        if delivered {
+            assert!(matches!(
+                std::future::poll_fn(|cx| stream.poll_read(cx))
+                    .await
+                    .unwrap(),
+                AttachmentStreamRead::Failure {
+                    failure: ByteStreamFailure::Abandoned,
+                    terminal_index: None,
+                }
+            ));
+        }
+        let publication = producer
+            .controller()
+            .accept_owner_terminal(ByteStreamFailure::Cancelled, |_, publication| publication)
+            .unwrap();
+        assert!(futures::poll!(std::future::poll_fn(|cx| stream.poll_read(cx))).is_pending());
+        let end = golem_common::model::OplogIndex::from_u64(9);
+        publication.publish(end);
+        let read = std::future::poll_fn(|cx| stream.poll_read(cx))
+            .await
+            .unwrap();
+        if delivered {
+            assert!(
+                matches!(read, AttachmentStreamRead::Terminal { terminal_index: Some(index), .. } if index == end)
+            );
+        } else {
+            assert!(matches!(read, AttachmentStreamRead::Failure {
+                failure: ByteStreamFailure::Abandoned,
+                terminal_index: Some(index),
+            } if index == end));
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn late_publication_preserves_restored_selection_and_delivery() {
+    for observed in [false, true] {
+        for pending in [false, true] {
+            let (producer, consumer, observer) = pair(4);
+            producer.configure_live();
+            let controller = producer.controller();
+            let publication = controller
+                .accept_cancellation(std::convert::identity)
+                .unwrap();
+            let end = golem_common::model::OplogIndex::from_u64(9);
+            controller
+                .restore_terminal(
+                    ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned),
+                    false,
+                    end,
+                    pending,
+                )
+                .unwrap();
+            if observed {
+                controller.observe_terminal(end);
+                controller.observe_terminal(golem_common::model::OplogIndex::from_u64(13));
+            }
+            publication.publish(end);
+            assert!(matches!(
+                observer.wait_terminal().await,
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)
+            ));
+            let mut stream = consumer.into_stream_producer();
+            let read = std::future::poll_fn(|cx| stream.poll_read(cx))
+                .await
+                .unwrap();
+            if observed {
+                assert!(
+                    matches!(read, AttachmentStreamRead::Terminal { terminal_index: Some(index), .. } if index == end)
+                );
+            } else {
+                assert!(matches!(read, AttachmentStreamRead::Failure {
+                    failure: ByteStreamFailure::Abandoned,
+                    terminal_index: Some(index),
+                } if index == end));
+            }
+        }
+    }
+}
+
+#[test]
+async fn resource_exhaustion_idempotence_does_not_replace_recorded_origin() {
+    for host in [false, true] {
+        let (producer, _consumer, _) = pair(4);
+        let controller = producer.controller();
+        let end = golem_common::model::OplogIndex::from_u64(9);
+        controller
+            .restore_terminal(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+                host,
+                end,
+                false,
+            )
+            .unwrap();
+        producer.fail(ByteStreamFailure::ResourceExhausted).unwrap();
+        assert_eq!(controller.metadata().host_resource_exhausted, host);
+        assert!(
+            controller
+                .restore_terminal(
+                    ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+                    !host,
+                    end,
+                    false,
+                )
+                .is_err()
+        );
+    }
+}
+
 #[derive(Default)]
 struct WakeCount(AtomicU64);
 
@@ -311,7 +429,13 @@ async fn prepared_terminal_restores_recorded_selection_and_original_end() {
     ));
     assert!(matches!(consumer.read_next().await, AttachmentRead::End));
     assert_eq!(
-        observer.attachment.state.lock().unwrap().terminal_end,
+        observer
+            .attachment
+            .state
+            .lock()
+            .unwrap()
+            .terminal
+            .recorded_end(),
         Some(golem_common::model::OplogIndex::from_u64(9))
     );
     assert!(
@@ -439,7 +563,13 @@ async fn prepared_terminal_hides_publication_and_retains_dropped_acknowledgment(
         ByteStreamCloseCause::Finished
     ));
     assert_eq!(
-        observer.attachment.state.lock().unwrap().terminal_end,
+        observer
+            .attachment
+            .state
+            .lock()
+            .unwrap()
+            .terminal
+            .recorded_end(),
         Some(golem_common::model::OplogIndex::from_u64(42))
     );
 }
@@ -467,7 +597,13 @@ async fn prepared_terminal_repeated_sanitized_transition_and_selection_race() {
         Err(StreamWriteError::Closed(ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(message))))
             if message == "stream producer failed"));
     assert_eq!(
-        observer.attachment.state.lock().unwrap().terminal_end,
+        observer
+            .attachment
+            .state
+            .lock()
+            .unwrap()
+            .terminal
+            .recorded_end(),
         Some(golem_common::model::OplogIndex::from_u64(7))
     );
 
@@ -527,7 +663,16 @@ async fn prepared_terminal_failure_fences_without_publishing_selected_cause() {
             consumer.read_next().await,
             AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
         ));
-        assert_eq!(observer.attachment.state.lock().unwrap().terminal_end, None);
+        assert_eq!(
+            observer
+                .attachment
+                .state
+                .lock()
+                .unwrap()
+                .terminal
+                .recorded_end(),
+            None
+        );
     }
 }
 

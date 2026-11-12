@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::{
-    AsContextMut, AttachmentCharge, AttachmentMode, AttachmentReservationOutcome,
-    AttachmentStreamBuffer, AttachmentStreamProducer, AttachmentStreamRead, AttachmentWriteBody,
-    BufferedChunk, ByteStreamCloseCause, ByteStreamFailure, Context, Destination, Ordering,
-    OwnedSemaphorePermit, Pin, Poll, StreamProducer, StreamResult, VecBuffer, WriteBuffer,
+    AsContextMut, AttachmentCharge, AttachmentReservationOutcome, AttachmentStreamBuffer,
+    AttachmentStreamProducer, AttachmentStreamRead, AttachmentWriteBody, BufferedChunk,
+    ByteStreamCloseCause, ByteStreamFailure, Context, Destination, Ordering, OwnedSemaphorePermit,
+    Pin, Poll, StreamProducer, StreamResult, VecBuffer, WriteBuffer,
 };
 #[cfg(test)]
 use super::{Bytes, RawAttachmentStreamProducer};
@@ -186,10 +186,8 @@ impl AttachmentStreamProducer {
 
         let produced = {
             let mut state = attachment.state.lock().unwrap();
-            let chunks_visible = matches!(state.mode, AttachmentMode::Live)
-                || matches!(state.mode, AttachmentMode::Completion { published: true });
-            let terminal_visible = !state.terminal_pending
-                && (chunks_visible || matches!(state.mode, AttachmentMode::TerminalOnly));
+            let chunks_visible = state.mode.chunks_visible();
+            let terminal_visible = state.terminal.is_available() && state.mode.terminal_visible();
             if state.owner_fenced {
                 Produced::OwnerFenced
             } else if state
@@ -210,27 +208,27 @@ impl AttachmentStreamProducer {
                 state.reader_waker = Some(cx.waker().clone());
                 Produced::Pending
             } else {
-                match state.terminal.clone() {
+                match state.terminal.available_cause() {
                     Some(ByteStreamCloseCause::Finished) => {
-                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                        Produced::Terminal(StreamResult::Dropped, state.terminal.recorded_end())
                     }
                     Some(ByteStreamCloseCause::Failed(failure))
-                        if !state.terminal_item_delivered =>
+                        if !state.terminal.failure_item_delivered() =>
                     {
-                        state.terminal_item_delivered = true;
+                        state.terminal.mark_failure_delivered();
                         Produced::Item(
                             AttachmentStreamRead::Failure {
                                 failure,
-                                terminal_index: state.terminal_end,
+                                terminal_index: state.terminal.recorded_end(),
                             },
                             None,
                         )
                     }
                     Some(ByteStreamCloseCause::Failed(_)) => {
-                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                        Produced::Terminal(StreamResult::Dropped, state.terminal.recorded_end())
                     }
                     Some(ByteStreamCloseCause::ConsumerCancelled) => {
-                        Produced::Terminal(StreamResult::Cancelled, state.terminal_end)
+                        Produced::Terminal(StreamResult::Cancelled, state.terminal.recorded_end())
                     }
                     None => {
                         state.reader_waker = Some(cx.waker().clone());

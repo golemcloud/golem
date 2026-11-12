@@ -95,8 +95,7 @@ impl AttachmentProducer {
 
     #[cfg(test)]
     pub(crate) fn configure_completion(&self) -> bool {
-        self.attachment
-            .configure(AttachmentMode::Completion { published: false })
+        self.attachment.configure(AttachmentMode::CompletionStaged)
     }
 
     #[cfg(test)]
@@ -147,8 +146,8 @@ impl AttachmentWriter {
     ) -> Result<Result<PreparedAttachmentTerminal, ()>, StreamWriteError> {
         let operation = self.attachment.begin_producer_operation()?;
         let state = self.attachment.state.lock().unwrap();
-        if let Some(selected) = &state.terminal {
-            return if close_cause_eq(selected, &cause) {
+        if let Some(selected) = state.terminal.selected_cause() {
+            return if close_cause_eq(&selected, &cause) {
                 Ok(Err(()))
             } else {
                 Err(StreamWriteError::Closed(selected.clone()))
@@ -297,8 +296,7 @@ impl AttachmentConsumer {
 
     #[cfg(test)]
     pub(crate) fn configure_completion(&self) -> bool {
-        self.attachment
-            .configure(AttachmentMode::Completion { published: false })
+        self.attachment.configure(AttachmentMode::CompletionStaged)
     }
 
     pub(crate) fn into_stream_producer(self) -> AttachmentStreamProducer {
@@ -328,10 +326,9 @@ impl AttachmentConsumer {
             let mut pending_chunk = None;
             let read = {
                 let mut state = self.attachment.state.lock().unwrap();
-                let chunks_visible = matches!(state.mode, AttachmentMode::Live)
-                    || matches!(state.mode, AttachmentMode::Completion { published: true });
-                let terminal_visible = !state.terminal_pending
-                    && (chunks_visible || matches!(state.mode, AttachmentMode::TerminalOnly));
+                let chunks_visible = state.mode.chunks_visible();
+                let terminal_visible =
+                    state.terminal.is_available() && state.mode.terminal_visible();
                 if state
                     .chunks
                     .front()
@@ -349,12 +346,12 @@ impl AttachmentConsumer {
                 } else if !terminal_visible {
                     None
                 } else {
-                    match state.terminal.clone() {
+                    match state.terminal.available_cause() {
                         Some(ByteStreamCloseCause::Finished) => Some(AttachmentRead::End),
                         Some(ByteStreamCloseCause::Failed(failure))
-                            if !state.terminal_item_delivered =>
+                            if !state.terminal.failure_item_delivered() =>
                         {
-                            state.terminal_item_delivered = true;
+                            state.terminal.mark_failure_delivered();
                             Some(AttachmentRead::Item(Err(failure)))
                         }
                         Some(ByteStreamCloseCause::Failed(_))
@@ -417,23 +414,18 @@ impl AttachmentObserver {
     #[cfg(test)]
     pub(crate) fn terminal(&self) -> Option<ByteStreamCloseCause> {
         let state = self.attachment.state.lock().unwrap();
-        (!state.terminal_pending)
-            .then(|| state.terminal.clone())
-            .flatten()
+        state.terminal.available_cause()
     }
 
     pub(crate) fn terminal_snapshot(&self) -> Option<AttachmentTerminalSnapshot> {
         let state = self.attachment.state.lock().unwrap();
-        if state.terminal_pending {
-            return None;
-        }
         state
             .terminal
-            .clone()
+            .available_cause()
             .map(|_cause| AttachmentTerminalSnapshot {
                 #[cfg(test)]
                 cause: _cause,
-                host_resource_exhausted: state.host_resource_exhausted,
+                host_resource_exhausted: state.terminal.host_resource_exhausted(),
             })
     }
 }
@@ -498,24 +490,10 @@ impl AttachmentController {
     ) -> anyhow::Result<()> {
         let mut state = self.attachment.state.lock().unwrap();
         anyhow::ensure!(!state.owner_fenced, "historical attachment owner is fenced");
-        if let Some(selected) = state.terminal_end {
-            anyhow::ensure!(
-                selected == end
-                    && state
-                        .terminal
-                        .as_ref()
-                        .is_some_and(|selected| close_cause_eq(selected, &cause))
-                    && state.host_resource_exhausted == host_resource_exhausted,
-                "recorded terminal conflicts with an existing durable selection"
-            );
-        }
-        // A journal delivery may precede regeneration of the terminal's producer.
-        state.terminal = Some(cause);
-        state.terminal_pending = pending;
-        state.owner_terminal_reserved = false;
-        state.terminal_item_delivered = state.observed_terminal == Some(end);
-        state.host_resource_exhausted = host_resource_exhausted;
-        state.terminal_end = Some(end);
+        let observed = state.observed_terminal;
+        state
+            .terminal
+            .restore(cause, host_resource_exhausted, end, pending, observed)?;
         let reader = state.reader_waker.take();
         drop(state);
         self.attachment.changed.notify_waiters();
@@ -542,11 +520,9 @@ impl AttachmentController {
         enqueue: impl FnOnce(AttachmentTerminalPublication) -> R,
     ) -> Option<R> {
         let mut state = self.attachment.state.lock().unwrap();
-        if state.terminal.is_some() || state.owner_fenced {
+        if state.owner_fenced || !state.terminal.accept(cause, false).ok()? {
             return None;
         }
-        state.terminal = Some(cause);
-        state.terminal_pending = true;
         Some(enqueue(AttachmentTerminalPublication {
             attachment: self.attachment.clone(),
             _operation: None,
@@ -555,26 +531,16 @@ impl AttachmentController {
 
     pub(in crate::durable_host::tool) fn producer_disposal_owned_elsewhere(&self) -> bool {
         let state = self.attachment.state.lock().unwrap();
-        state.owner_fenced
-            || state.owner_terminal_reserved
-            || (state.terminal_end.is_none()
-                && !state.terminal_pending
-                && matches!(
-                    state.terminal,
-                    Some(ByteStreamCloseCause::ConsumerCancelled)
-                ))
+        state.owner_fenced || state.terminal.disposal_owned_elsewhere()
     }
 
     /// Keeps producer destruction from selecting abandonment before the owner commits its End.
     pub(crate) fn reserve_owner_terminal(&self, failure: ByteStreamFailure) {
         let mut state = self.attachment.state.lock().unwrap();
-        if state.identity.is_none() || state.owner_fenced || state.terminal.is_some() {
+        if state.identity.is_none() || state.owner_fenced {
             return;
         }
-        state.host_resource_exhausted = matches!(failure, ByteStreamFailure::ResourceExhausted);
-        state.terminal = Some(ByteStreamCloseCause::Failed(failure));
-        state.terminal_pending = true;
-        state.owner_terminal_reserved = true;
+        state.terminal.reserve_owner(failure);
     }
 
     /// Accepts an owner reservation without replacing an earlier producer selection.
@@ -586,28 +552,11 @@ impl AttachmentController {
             AttachmentTerminalPublication,
         ) -> R,
     ) -> Option<R> {
-        use golem_common::model::oplog::attachment::ToolAttachmentTerminal;
-
         let mut state = self.attachment.state.lock().unwrap();
-        if state.owner_fenced
-            || state.terminal_end.is_some()
-            || (state.terminal_pending && !state.owner_terminal_reserved)
-        {
+        if state.owner_fenced {
             return None;
         }
-        state.owner_terminal_reserved = false;
-        if state.terminal.is_none() {
-            state.host_resource_exhausted = matches!(failure, ByteStreamFailure::ResourceExhausted);
-            state.terminal = Some(ByteStreamCloseCause::Failed(failure));
-        }
-        let terminal = if state.host_resource_exhausted {
-            ToolAttachmentTerminal::HostResourceExhausted
-        } else {
-            ToolAttachmentTerminal::Application(durability::cause_to_model(
-                state.terminal.as_ref().expect("owner selected a terminal"),
-            ))
-        };
-        state.terminal_pending = true;
+        let terminal = state.terminal.accept_owner(failure)?;
         Some(enqueue(
             terminal,
             AttachmentTerminalPublication {
@@ -631,9 +580,7 @@ impl AttachmentController {
                     !state.owner_fenced,
                     "attachment owner was fenced during terminal publication"
                 );
-                if !state.terminal_pending
-                    && let Some(end) = state.terminal_end
-                {
+                if let Some(end) = state.terminal.published_end() {
                     anyhow::ensure!(
                         expected.is_none_or(|expected| expected == end),
                         "attachment restored a different durable terminal"
@@ -651,9 +598,7 @@ impl AttachmentController {
     ) {
         let mut state = self.attachment.state.lock().unwrap();
         state.observed_terminal = Some(end);
-        if state.terminal_end == Some(end) {
-            state.terminal_item_delivered = true;
-        }
+        state.terminal.observe(end);
     }
 
     pub(in crate::durable_host::tool) fn observe_write(
@@ -699,8 +644,7 @@ impl AttachmentController {
     }
 
     pub(crate) fn configure_completion(&self) -> bool {
-        self.attachment
-            .configure(AttachmentMode::Completion { published: false })
+        self.attachment.configure(AttachmentMode::CompletionStaged)
     }
 
     pub(crate) fn publish_completion(&self) -> bool {
@@ -718,11 +662,7 @@ impl AttachmentController {
             if state.owner_fenced {
                 return;
             }
-            if matches!(state.mode, AttachmentMode::Pending) {
-                state.chunks.clear();
-                state.buffered_bytes = 0;
-                state.mode = AttachmentMode::TerminalOnly;
-            }
+            state.prepare_terminal_only();
             state.reader_waker.take()
         };
         self.attachment.changed.notify_waiters();
