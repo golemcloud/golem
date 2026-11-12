@@ -199,6 +199,11 @@ async fn test_scala_http_router_e2e() -> anyhow::Result<()> {
         );
         assert_eq!(response.text().await?, "immutable scala file\n");
     }
+    assert!(
+        ctx.cli([cmd::AGENT, cmd::NEW, "HttpDocuments(\"alice\")"])
+            .await
+            .success_or_dump()
+    );
     let response = client
         .get(format!("{base}/scala-documents/alice/latest"))
         .send()

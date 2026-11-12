@@ -47,7 +47,7 @@ use crate::worker::invocation::InvokeResult;
 use crate::worker::{
     CreateWorkerInstanceError, EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
     PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker, UnloadReason,
-    WorkerCommand, WorkerInstance, complete_stopping_worker,
+    WorkerCommand, complete_stopping_worker,
 };
 use crate::workerctx::default::Context;
 use golem_common::model::AgentInvocationKind;
@@ -834,8 +834,8 @@ async fn idle_over_limit_update_publishes_suspend_only_after_cleanup() {
     assert_eq!(*events.lock().unwrap(), ["cleanup", "suspend"]);
 }
 
-fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
-    let (instance, notify) = complete_stopping_worker(
+fn complete_stopping(final_state: FinalWorkerState) -> FinalWorkerState {
+    let (final_state, notify) = complete_stopping_worker(
         StoppingWorker {
             notify: golem_common::one_shot::OneShotEvent::new(),
             final_state: FinalWorkerState::Unloaded {
@@ -846,7 +846,7 @@ fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
         final_state,
     );
     notify.set();
-    instance
+    final_state
 }
 
 #[test]
@@ -1158,8 +1158,8 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
     );
     metrics.advance(4000);
     deletion.release();
-    let instance = publication.await.unwrap();
-    assert!(matches!(instance, WorkerInstance::Unloaded { .. }));
+    let final_state = publication.await.unwrap();
+    assert!(matches!(final_state, FinalWorkerState::Unloaded { .. }));
     assert!(!held.load(Ordering::Acquire));
     assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
     assert_eq!(
@@ -1251,7 +1251,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
     assert!(!held.load(Ordering::Acquire));
     assert_eq!(cleanup.wait().await.unwrap_err(), cleanup_error);
 
-    let instance = publish_unload_outcome(
+    let final_state = publish_unload_outcome(
         Some(cleanup_error),
         None,
         |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
@@ -1260,7 +1260,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
         },
     )
     .await;
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+    assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
     metrics.assert_finished("unload", "released_with_failure");
     assert_eq!(
         metrics.value(
@@ -1939,7 +1939,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         1.0
     );
 
-    let instance = publish_unload_outcome(
+    let final_state = publish_unload_outcome(
         Some(cleanup_error.clone()),
         None,
         |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
@@ -1948,8 +1948,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         },
     )
     .await;
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
-    assert!(!matches!(instance, WorkerInstance::Stopping(_)));
+    assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
     assert!(
         !control
             .calls()
@@ -1983,7 +1982,9 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         ),
         1.0
     );
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(error) if error == cleanup_error));
+    assert!(
+        matches!(final_state, FinalWorkerState::CleanupFailed(error) if error == cleanup_error)
+    );
     assert_eq!(
         control
             .calls()

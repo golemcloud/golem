@@ -58,6 +58,7 @@ pub struct AgentMetadata {
     pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
+    pub create_request: oplog::CreateRequest,
 }
 
 impl AgentMetadata {

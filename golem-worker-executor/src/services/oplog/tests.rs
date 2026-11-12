@@ -90,6 +90,12 @@ macro_rules! create_oplog_entry {
             local_agent_config: $config,
             original_phantom_id: $phantom_id,
             instance_id: $instance_id,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }))
     };
 }
@@ -289,6 +295,12 @@ pub(super) fn make_agent_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -6661,6 +6673,12 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             initial_active_plugins: HashSet::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     }
     .rounded();
@@ -6827,6 +6845,12 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             initial_active_plugins: HashSet::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     }
     .rounded();
@@ -13840,6 +13864,12 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
     .rounded();
 
@@ -14034,6 +14064,12 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
             local_agent_config: Vec::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }))
         .rounded()
     };

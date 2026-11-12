@@ -123,6 +123,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
+                    create_request,
                 } = *parameters;
                 owner_kind
                     .validate_instance_name(&agent_id.agent_id)
@@ -193,6 +194,7 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    create_request,
                 };
 
                 let fingerprint = AgentFingerprint(instance_id);

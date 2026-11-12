@@ -95,6 +95,12 @@ fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 
@@ -862,6 +868,12 @@ fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata 
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Ephemeral,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 

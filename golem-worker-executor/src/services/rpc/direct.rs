@@ -415,6 +415,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     agent_id: self_agent_id.clone(),
                 }),
                 freshness_disposition,
+                CreateIntent::Create {
+                    exclusive: false,
+                    idempotency_key: idempotency_key.as_ref().map(|key| {
+                        InvocationRequestKey::Internal(key.clone()).owner_key(method_name)
+                    }),
+                },
             )
             .await?;
 
@@ -522,6 +528,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 &self_stack,
                 principal.clone(),
                 freshness_disposition,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(request_key.owner_key(&method_name)),
+                },
             )
             .await?;
             let metadata = worker.get_initial_worker_metadata();
@@ -631,10 +640,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
 
+        let request_key = InvocationRequestKey::Internal(idempotency_key.clone());
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             owned_agent_id,
-            &InvocationRequestKey::Internal(idempotency_key.clone()).owner_key(&method_name),
+            &request_key.owner_key(&method_name),
             InvocationFreshnessDisposition::MayExist,
         )
         .await?;
@@ -649,6 +659,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             &self_stack,
             principal.clone(),
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::Invocation {
+                idempotency_key: Some(request_key.owner_key(&method_name)),
+            },
         )
         .await?;
         if worker.get_initial_worker_metadata().fingerprint != expected_callee_fingerprint {
@@ -1028,6 +1041,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 &self_stack,
                 principal.clone(),
                 freshness_disposition,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(request_key.owner_key(&method_name)),
+                },
             )
             .await?;
             let metadata = worker.get_initial_worker_metadata();

@@ -17,13 +17,23 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// Records the idempotency key of every `inc_by` dispatch. The dispatch at position `held` reaches
-/// the target, which runs its effect and returns, but the caller never receives the response: the
-/// call stays pending until the executor is dropped. With `hold_first_cancel`, the first scheduled
-/// invocation cancellation is held the same way after the target commits it.
+/// Which call reaches the target but never returns to the caller: the call stays pending until the
+/// executor is dropped.
+#[derive(Clone, Copy)]
+enum Hold {
+    /// The first target activation, after the target agent exists.
+    Activation,
+    /// The `inc_by` dispatch at this position, after the target ran its effect.
+    Response(usize),
+}
+
+/// Records the idempotency key of every target activation and every `inc_by` dispatch, and holds
+/// the call selected by `hold`. With `hold_first_cancel`, the first scheduled invocation
+/// cancellation is held the same way after the target commits it.
 struct HoldResponseRpc {
     inner: Arc<dyn Rpc>,
-    held: usize,
+    hold: Hold,
+    activations: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
     effect_applied: Arc<tokio::sync::Notify>,
     hold_first_cancel: bool,
@@ -93,7 +103,13 @@ impl Rpc for HoldResponseRpc {
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
-        self.inner
+        let hold = {
+            let mut activations = self.activations.lock().unwrap();
+            activations.push(key.clone());
+            matches!(self.hold, Hold::Activation) && activations.len() == 1
+        };
+        let demand = self
+            .inner
             .create_demand(
                 agent,
                 environment_id,
@@ -107,7 +123,12 @@ impl Rpc for HoldResponseRpc {
                 key,
                 freshness,
             )
-            .await
+            .await;
+        if hold {
+            self.effect_applied.notify_one();
+            std::future::pending::<()>().await;
+        }
+        demand
     }
 
     async fn invoke_and_await(
@@ -129,7 +150,7 @@ impl Rpc for HoldResponseRpc {
         let hold = method == "inc_by" && {
             let mut attempts = self.attempts.lock().unwrap();
             attempts.push(key.clone());
-            attempts.len() == self.held + 1
+            matches!(self.hold, Hold::Response(held) if attempts.len() == held + 1)
         };
         let result = self
             .inner
@@ -309,7 +330,8 @@ async fn held_response_restart_case(
             move |rpc| {
                 Arc::new(HoldResponseRpc {
                     inner: rpc,
-                    held,
+                    hold: Hold::Response(held),
+                    activations: Arc::default(),
                     attempts: attempts.clone(),
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: false,
@@ -443,7 +465,8 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
             move |rpc| {
                 Arc::new(HoldResponseRpc {
                     inner: rpc,
-                    held: 0,
+                    hold: Hold::Response(0),
+                    activations: Arc::default(),
                     attempts: Arc::default(),
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: true,
@@ -563,5 +586,135 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
             .into_typed::<u64>()?,
         0
     );
+    Ok(())
+}
+
+/// `try_call_counter` activates a durable `RpcCounter` target and calls it. The activation creates
+/// the target, but the executor stops before the caller receives the activation result, so the
+/// caller's activation has no committed `End`. After a restart the caller repeats the activation with
+/// the same idempotency key, which is the key the target's `Create` entry records, and the target
+/// runs its constructor once.
+#[test]
+#[timeout("3m")]
+async fn durable_rpc_activation_repeats_its_key_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let activations = Arc::new(Mutex::new(Vec::new()));
+    let created = Arc::new(tokio::sync::Notify::new());
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let activations = activations.clone();
+            let created = created.clone();
+            move |rpc| {
+                Arc::new(HoldResponseRpc {
+                    inner: rpc,
+                    hold: Hold::Activation,
+                    activations: activations.clone(),
+                    attempts: Arc::default(),
+                    effect_applied: created.clone(),
+                    hold_first_cancel: false,
+                    cancel_results: Arc::default(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let caller_id = agent_id!("RpcAuthTester", "held-activation-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let target_id = agent_id!("RpcCounter", "held-activation-target");
+    let target = AgentId::from_agent_id(component.id, &target_id).map_err(anyhow::Error::msg)?;
+    let key = IdempotencyKey::fresh();
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        let key = key.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &caller_id,
+                    &key,
+                    "try_call_counter",
+                    data_value!("held-activation-target"),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(30), created.notified()).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    invocation.abort();
+    let _ = invocation.await;
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &caller_id,
+            &key,
+            "try_call_counter",
+            data_value!("held-activation-target"),
+        ),
+    )
+    .await??;
+
+    let activations = activations.lock().unwrap().clone();
+    assert_eq!(activations.len(), 2, "activation keys: {activations:?}");
+    assert!(activations[0].is_some(), "activation keys: {activations:?}");
+    assert_eq!(
+        activations[1], activations[0],
+        "the repaired activation must reuse the key of the activation whose result was lost"
+    );
+    let create_requests = executor
+        .stored_oplog(&target)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(create_requests.len(), 1);
+    assert_eq!(
+        create_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::GetOrCreate
+    );
+    assert_eq!(create_requests[0].idempotency_key, activations[0]);
+    assert_eq!(
+        create_requests[0].principal,
+        Principal::Agent(AgentPrincipal {
+            agent_id: caller.clone(),
+        })
+    );
+    let initializations = executor
+        .get_oplog(&target, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(started.invocation, PublicAgentInvocation::AgentInitialization(_)))
+        })
+        .count();
+    assert_eq!(initializations, 1, "the target constructor must run once");
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 1);
     Ok(())
 }

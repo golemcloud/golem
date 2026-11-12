@@ -536,6 +536,7 @@ before (value) {}
                         local_agent_config,
                         original_phantom_id,
                         instance_id,
+                        create_request: _,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),

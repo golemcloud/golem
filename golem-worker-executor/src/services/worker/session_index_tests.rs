@@ -139,6 +139,12 @@ fn create_entry(
         local_agent_config: vec![],
         original_phantom_id: None,
         instance_id: fingerprint.0,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 
@@ -709,6 +715,12 @@ fn agent_metadata_with_identity(
         original_phantom_id: None,
         fingerprint,
         agent_mode,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
