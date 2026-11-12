@@ -3160,6 +3160,39 @@ fn scheduled_start_is_a_datetime_token() {
     );
 }
 
+/// A reader can predict numbers that Golem writes, such as consumed fuel or a resource ID, so
+/// they must not share a token with an equal customer number.
+#[test]
+fn golem_numbers_do_not_name_customer_tokens() {
+    let scalar_token = |node: &ReportNode| match node {
+        ReportNode::Scalar(node) => node.token.0.clone(),
+        other => panic!("not a scalar: {other:?}"),
+    };
+    let keep = KeepFlags::default();
+    let finished = every_entry_kind()
+        .into_iter()
+        .find(|e| e.entry.entry_type() == "AgentInvocationFinished")
+        .unwrap();
+    let fuel = scalar_token(field(
+        &rendered(keep, &finished, None).entry,
+        "consumedFuel",
+    ));
+    let customer = scalar_token(&render(keep, &SchemaValue::U64(0x5EC2E7)));
+    assert!(customer.starts_with("scalar:int:"), "{customer}");
+    assert!(fuel.starts_with("golem:int:"), "{fuel}");
+    assert_ne!(fuel[fuel.len() - 32..], customer[customer.len() - 32..]);
+
+    let key = key();
+    let ctx = ObfuscationContext::new(&key, keep);
+    for value in [SchemaValue::U32(0), SchemaValue::Bool(false)] {
+        let trusted = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Trusted));
+        let error = scalar_token(&Walker::new(&ctx).schemaless(&value, Region::Error));
+        let customer = scalar_token(&render(keep, &value));
+        assert_eq!(trusted, error);
+        assert_ne!(trusted, customer);
+    }
+}
+
 /// IDs that must not appear in a report. Each ID field of `every_entry_kind` gets one.
 fn secret_uuid(n: u128) -> Uuid {
     Uuid::from_u128(0x5ec2_e700_0000_0000_0000_0000_0000_0000 + n)

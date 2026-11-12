@@ -668,40 +668,42 @@ impl<'r, 'a> Walker<'r, 'a> {
     /// A leaf value. `declared_unit` is true when a quantity's unit is declared by its type.
     fn leaf(&mut self, value: &SchemaValue, region: Region, declared_unit: bool) -> ReportNode {
         let scalars = self.ctx.keep().scalars;
-        let scalar = |walker: &Self, kind: ScalarKind, domain: &str, shown: serde_json::Value| {
+        // Golem writes the numbers of trusted and error regions, so a reader can often predict
+        // them. Their own domain keeps such a known value from naming an equal customer token.
+        let prefix = if region == Region::Customer {
+            "scalar"
+        } else {
+            "golem"
+        };
+        let scalar = |walker: &Self, kind: ScalarKind, name: &str, shown: serde_json::Value| {
             ReportNode::Scalar(ScalarNode {
                 scalar_kind: kind,
                 value: scalars.then_some(shown),
-                token: walker.token(domain, &encode(value)),
+                token: walker.token(&format!("{prefix}:{name}"), &encode(value)),
             })
         };
         match value {
-            SchemaValue::Bool(v) => scalar(self, ScalarKind::Bool, "scalar:bool", (*v).into()),
-            SchemaValue::S8(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::S16(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::S32(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::S64(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::U8(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::U16(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::U32(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::U64(v) => scalar(self, ScalarKind::Int, "scalar:int", (*v).into()),
-            SchemaValue::F32(v) => scalar(
-                self,
-                ScalarKind::Float,
-                "scalar:float",
-                float_json(*v as f64),
-            ),
-            SchemaValue::F64(v) => scalar(self, ScalarKind::Float, "scalar:float", float_json(*v)),
+            SchemaValue::Bool(v) => scalar(self, ScalarKind::Bool, "bool", (*v).into()),
+            SchemaValue::S8(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::S16(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::S32(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::S64(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::U8(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::U16(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::U32(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::U64(v) => scalar(self, ScalarKind::Int, "int", (*v).into()),
+            SchemaValue::F32(v) => scalar(self, ScalarKind::Float, "float", float_json(*v as f64)),
+            SchemaValue::F64(v) => scalar(self, ScalarKind::Float, "float", float_json(*v)),
             SchemaValue::Datetime { value: datetime } => scalar(
                 self,
                 ScalarKind::Datetime,
-                "scalar:datetime",
+                "datetime",
                 datetime.to_rfc3339().into(),
             ),
             SchemaValue::Duration(duration) => scalar(
                 self,
                 ScalarKind::Duration,
-                "scalar:duration",
+                "duration",
                 duration.nanoseconds.into(),
             ),
             SchemaValue::Char(c) => self.str_leaf(c.encode_utf8(&mut [0u8; 4]), region),
@@ -720,7 +722,7 @@ impl<'r, 'a> Walker<'r, 'a> {
                 unit: (scalars && declared_unit).then(|| quantity.unit.clone()),
                 unit_token: (scalars && !declared_unit)
                     .then(|| self.token("str", &encode_str(&quantity.unit))),
-                token: self.token("scalar:quantity", &encode(value)),
+                token: self.token(&format!("{prefix}:quantity"), &encode(value)),
             }),
             SchemaValue::Secret(_) => redacted(RedactionReason::Secret),
             SchemaValue::QuotaToken(_) => redacted(RedactionReason::QuotaToken),

@@ -324,12 +324,14 @@ impl Walker<'_, '_> {
         self.schemaless(&SchemaValue::List { elements }, Region::Customer)
     }
 
+    /// A number or bool that Golem writes, such as consumed fuel: a token in a `golem` domain
+    /// that `--keep-scalars` shows.
     fn int(&mut self, value: i64) -> ReportNode {
-        self.schemaless(&SchemaValue::S64(value), Region::Customer)
+        self.schemaless(&SchemaValue::S64(value), Region::Trusted)
     }
 
     fn uint(&mut self, value: u64) -> ReportNode {
-        self.schemaless(&SchemaValue::U64(value), Region::Customer)
+        self.schemaless(&SchemaValue::U64(value), Region::Trusted)
     }
 
     /// A time chosen by the guest, such as when a scheduled invocation may start: a datetime
@@ -344,7 +346,7 @@ impl Walker<'_, '_> {
     }
 
     fn boolean(&mut self, value: bool) -> ReportNode {
-        self.schemaless(&SchemaValue::Bool(value), Region::Customer)
+        self.schemaless(&SchemaValue::Bool(value), Region::Trusted)
     }
 
     fn err_text(&self, value: &str) -> ReportNode {
@@ -1033,7 +1035,7 @@ impl Walker<'_, '_> {
             }) => Fields::new()
                 .add(
                     "id",
-                    self.schemaless(&SchemaValue::U64(id.0), Region::Customer),
+                    self.schemaless(&SchemaValue::U64(id.0), Region::Trusted),
                 )
                 .add("name", text(resource_name.clone()))
                 .add("owner", text(owner.clone()))
@@ -1133,7 +1135,7 @@ impl Walker<'_, '_> {
                             .add("name", self.str_leaf(policy_name, Region::Customer))
                             .add(
                                 "priority",
-                                self.schemaless(&SchemaValue::U32(*priority), Region::Customer),
+                                self.schemaless(&SchemaValue::U32(*priority), Region::Trusted),
                             )
                             .add("predicate", self.tok(predicate))
                             .add("policy", self.tok(policy))
