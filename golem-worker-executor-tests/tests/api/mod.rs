@@ -2945,6 +2945,160 @@ async fn simulated_crash(
     Ok(())
 }
 
+/// A simulated crash of an idle durable agent restarts it: the instance is rebuilt from the
+/// oplog, the crash itself writes no oplog entry, and the next invocation sees the state of the
+/// earlier ones.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn simulated_crash_of_an_idle_agent_rebuilds_it_from_the_oplog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Counter", "simulated-crash-idle-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for expected in [1u32, 2] {
+        let count = executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(count, expected);
+    }
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let loads_before_crash = executor.instance_load_count(&worker_id);
+    let oplog_before_crash = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .len();
+
+    executor.simulated_crash(&worker_id).await?;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.instance_load_count(&worker_id) <= loads_before_crash {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the idle agent was not rebuilt after a simulated crash"))?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert_eq!(
+        executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .len(),
+        oplog_before_crash
+    );
+
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(count, 3);
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// A simulated crash of a failed agent is refused with an error that names the status, because a
+/// failed agent does not recover. The agent stays failed and its oplog does not change.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn simulated_crash_of_a_failed_agent_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InterruptWorkerRequest, interrupt_worker_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "simulated-crash-failed-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(0u64),
+        )
+        .await;
+    assert!(result.is_err());
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(15))
+        .await?;
+    let oplog_before_crash = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .len();
+
+    let response = executor
+        .client
+        .clone()
+        .interrupt_worker(InterruptWorkerRequest {
+            agent_id: Some(worker_id.clone().into()),
+            recover_immediately: true,
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        })
+        .await?
+        .into_inner();
+    let error = match response.result {
+        Some(interrupt_worker_response::Result::Failure(error)) => {
+            WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?
+        }
+        other => bail!("expected the simulated crash to be refused, got {other:?}"),
+    };
+    assert!(
+        matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.contains("the agent is Failed")),
+        "expected an invalid request that names the Failed status, got: {error}"
+    );
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.status, AgentStatus::Failed);
+    assert_eq!(
+        executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .len(),
+        oplog_before_crash
+    );
+
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
