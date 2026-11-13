@@ -2432,10 +2432,20 @@ fn translate_result(
     let mut mappings = Vec::new();
     let result = match result.result {
         Some(invocation_session_result::Result::NoResult(_)) => PublicInvocationResult::None,
+        Some(invocation_session_result::Result::MethodResult(value))
+            if state.output_schema.is_none() =>
+        {
+            let value = decode_public_session_schema_value(value)
+                .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
+            if !matches!(value, SchemaValue::Tuple { elements } if elements.is_empty()) {
+                return Err(AdapterError::protocol(
+                    "private invocation returned a value for a unit method",
+                ));
+            }
+            PublicInvocationResult::None
+        }
         Some(invocation_session_result::Result::MethodResult(value)) => {
-            let schema = state.output_schema.clone().ok_or_else(|| {
-                AdapterError::protocol("private invocation returned a value for a unit method")
-            })?;
+            let schema = state.output_schema.clone().unwrap();
             let value = decode_public_session_schema_value(value)
                 .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
             let graph = state.graph.clone().unwrap();
@@ -4545,6 +4555,72 @@ mod tests {
         )
         .await
         .expect("a received cancellation may race with a terminal not yet observed by the client");
+    }
+
+    #[test]
+    fn method_results_distinguish_unit_from_an_explicit_empty_tuple() {
+        for output_schema in [None, Some(SchemaType::tuple(Vec::new()))] {
+            let mut state = AdapterState::new();
+            state.graph = Some(SchemaGraph::anonymous(SchemaType::tuple(Vec::new())));
+            state.output_schema = output_schema.clone();
+            let value: ProtoSchemaValue = SchemaValue::Tuple {
+                elements: Vec::new(),
+            }
+            .try_into()
+            .unwrap();
+            let frames = translate_result(
+                &mut state,
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(value)),
+                    ..Default::default()
+                },
+                &keyring(),
+            )
+            .unwrap();
+            let Message::Text(text) = &frames[0].message else {
+                panic!("method result was not text")
+            };
+            let PublicServerMessage::InvocationResult {
+                result, mappings, ..
+            } = golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap()
+            else {
+                panic!("method result translated to the wrong public message")
+            };
+            assert!(mappings.is_empty());
+            match (output_schema, *result) {
+                (None, PublicInvocationResult::None) => {}
+                (Some(schema), PublicInvocationResult::Value { graph, value }) => {
+                    assert_eq!(graph.root, schema);
+                    assert_eq!(
+                        value,
+                        serde_json::json!({ "kind": "tuple", "value": { "elements": [] } })
+                    );
+                }
+                other => panic!("method result did not match its output schema: {other:?}"),
+            }
+        }
+
+        for value in [
+            SchemaValue::U8(7),
+            SchemaValue::Tuple {
+                elements: vec![SchemaValue::U8(7)],
+            },
+        ] {
+            let Err(error) = translate_result(
+                &mut AdapterState::new(),
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(
+                        value.try_into().unwrap(),
+                    )),
+                    ..Default::default()
+                },
+                &keyring(),
+            ) else {
+                panic!("unit method accepted a non-unit value")
+            };
+            assert_eq!(error.code, PublicErrorCode::ProtocolError);
+        }
     }
 
     #[test]
