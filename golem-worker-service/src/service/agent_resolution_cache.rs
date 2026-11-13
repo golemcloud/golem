@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, ResolvedAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
@@ -23,12 +24,30 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
+/// The account whose application the registry resolves the names in. With an owner email, it is
+/// the account of that email. Without one, the registry resolves the names in the account of the
+/// caller, so two callers with the same names get the environments of their own accounts.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+enum AgentResolutionOwner {
+    Email(String),
+    Caller(AccountId),
+}
+
+impl AgentResolutionOwner {
+    fn new(owner_account_email: Option<&str>, auth_ctx: &AuthCtx) -> Self {
+        match owner_account_email {
+            Some(email) => Self::Email(email.to_string()),
+            None => Self::Caller(auth_ctx.access_account_id()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
     app_name: String,
     env_name: String,
     agent_type_name: String,
-    owner_account_email: Option<String>,
+    owner: AgentResolutionOwner,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -37,7 +56,7 @@ struct PinnedAgentResolutionCacheKey {
     env_name: String,
     agent_type_name: String,
     deployment_revision: DeploymentRevision,
-    owner_account_email: Option<String>,
+    owner: AgentResolutionOwner,
 }
 
 struct CurrentDeploymentRevisions {
@@ -95,7 +114,7 @@ impl AgentResolutionCache {
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
-            owner_account_email: owner_account_email.map(|s| s.to_string()),
+            owner: AgentResolutionOwner::new(owner_account_email, auth_ctx),
         };
 
         // Check if we have a cached but stale entry and remove it before get_or_insert
@@ -148,7 +167,7 @@ impl AgentResolutionCache {
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
             deployment_revision,
-            owner_account_email: owner_account_email.map(|s| s.to_string()),
+            owner: AgentResolutionOwner::new(owner_account_email, auth_ctx),
         };
 
         let registry = self.registry_service.clone();
@@ -281,18 +300,22 @@ mod tests {
     use golem_common::base_model::account::AccountId;
     use golem_common::base_model::application::ApplicationId;
     use golem_common::model::Empty;
+    use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::{
         AgentMode, AgentTypeName, RegisteredAgentType, RegisteredAgentTypeImplementer,
         ResolvedAgentType, Snapshotting,
     };
     use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::EffectiveSurface;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::plan::PlanId;
     use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
     use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
     use golem_service_base::clients::registry::RegistryServiceError;
-    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
     use uuid::Uuid;
@@ -339,6 +362,7 @@ mod tests {
     struct MockRegistryService {
         env_id: EnvironmentId,
         revision: AtomicU64,
+        per_caller: bool,
     }
 
     impl MockRegistryService {
@@ -346,6 +370,17 @@ mod tests {
             Self {
                 env_id,
                 revision: AtomicU64::new(0),
+                per_caller: false,
+            }
+        }
+
+        /// Resolves names without an owner email in the account of the caller, as the registry
+        /// does: the environment ID is the account ID of the caller.
+        fn per_caller() -> Self {
+            Self {
+                env_id: EnvironmentId(Uuid::nil()),
+                revision: AtomicU64::new(0),
+                per_caller: true,
             }
         }
 
@@ -472,12 +507,17 @@ mod tests {
             _environment_name: &EnvironmentName,
             _agent_type_name: &AgentTypeName,
             _deployment_revision: Option<DeploymentRevision>,
-            _owner_account_email: Option<&str>,
-            _auth_ctx: &AuthCtx,
+            owner_account_email: Option<&str>,
+            auth_ctx: &AuthCtx,
         ) -> Result<ResolvedAgentType, RegistryServiceError> {
             let rev = self.revision.load(Ordering::SeqCst);
+            let env_id = if self.per_caller && owner_account_email.is_none() {
+                EnvironmentId(auth_ctx.access_account_id().0)
+            } else {
+                self.env_id
+            };
             Ok(make_resolved(
-                self.env_id,
+                env_id,
                 DeploymentRevision::new(rev).unwrap_or(DeploymentRevision::INITIAL),
             ))
         }
@@ -546,6 +586,21 @@ mod tests {
 
     fn make_auth() -> AuthCtx {
         AuthCtx::System
+    }
+
+    fn user_auth(account_id: AccountId) -> AuthCtx {
+        AuthCtx::User(UserAuthCtx {
+            account_id,
+            account_email: AccountEmail::new(format!("{account_id}@test")),
+            account_plan_id: PlanId(Uuid::new_v4()),
+            account_roles: BTreeSet::new(),
+            effective_surface: EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
+            delegation_surface: None,
+        })
     }
 
     fn make_cache(registry: Arc<dyn RegistryService>) -> AgentResolutionCache {
@@ -692,6 +747,55 @@ mod tests {
             .resolve(&app, &env, &agent, Some("bob@test.com"), &make_auth())
             .await;
         assert!(r3.is_ok());
+    }
+
+    #[test]
+    async fn test_names_without_owner_resolve_in_the_account_of_each_caller() {
+        let registry = Arc::new(MockRegistryService::per_caller());
+        let cache = make_cache(registry);
+
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+        let alice = AccountId(Uuid::new_v4());
+        let bob = AccountId(Uuid::new_v4());
+
+        let for_alice = cache
+            .resolve(&app, &env, &agent, None, &user_auth(alice))
+            .await
+            .unwrap();
+        let for_bob = cache
+            .resolve(&app, &env, &agent, None, &user_auth(bob))
+            .await
+            .unwrap();
+
+        assert_eq!(for_alice.environment_id, EnvironmentId(alice.0));
+        assert_eq!(for_bob.environment_id, EnvironmentId(bob.0));
+    }
+
+    #[test]
+    async fn test_pinned_names_without_owner_resolve_in_the_account_of_each_caller() {
+        let registry = Arc::new(MockRegistryService::per_caller());
+        let cache = make_cache(registry);
+
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+        let rev = DeploymentRevision::INITIAL;
+        let alice = AccountId(Uuid::new_v4());
+        let bob = AccountId(Uuid::new_v4());
+
+        let for_alice = cache
+            .resolve_pinned(&app, &env, &agent, rev, None, &user_auth(alice))
+            .await
+            .unwrap();
+        let for_bob = cache
+            .resolve_pinned(&app, &env, &agent, rev, None, &user_auth(bob))
+            .await
+            .unwrap();
+
+        assert_eq!(for_alice.environment_id, EnvironmentId(alice.0));
+        assert_eq!(for_bob.environment_id, EnvironmentId(bob.0));
     }
 
     #[test]
