@@ -367,6 +367,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .operator_authorized_oplog_processor_invocation
             .load(Ordering::Acquire)
     }
+
+    /// Whether a completed invocation with `result` can change the state of the agent. Every
+    /// result except an `AgentMethod` one does: initialization, manual update, snapshot load and
+    /// save, oplog processing and external tools. An agent method does unless it is `read_only`.
+    fn invocation_changes_state(
+        &self,
+        full_function_name: &str,
+        result: &AgentInvocationResult,
+    ) -> bool {
+        match result {
+            AgentInvocationResult::AgentMethod { .. } => self
+                .public_state
+                .worker()
+                .agent_method_invalidates_read_only_cache(full_function_name),
+            AgentInvocationResult::AgentInitialization
+            | AgentInvocationResult::ManualUpdate
+            | AgentInvocationResult::LoadSnapshot { .. }
+            | AgentInvocationResult::SaveSnapshot { .. }
+            | AgentInvocationResult::ProcessOplogEntries { .. }
+            | AgentInvocationResult::ExternalTool { .. } => true,
+        }
+    }
 }
 
 #[async_trait]
@@ -959,7 +981,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-            if let Some(recorded_result) = response {
+            if let Some((finished_index, recorded_result)) = response {
                 if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!(
@@ -971,6 +993,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                             output.result.redacted_debug()
                         ),
                     ));
+                }
+                if self.invocation_changes_state(full_function_name, &recorded_result) {
+                    self.state.last_state_change = Some(finished_index);
                 }
                 debug!("Function {full_function_name} finished");
                 return Ok(());
@@ -999,23 +1024,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
             // Classify the just-completed invocation up front so we can
             // bump the read-only cache epoch on successful mutating
-            // completion. For non-AgentMethod results
-            // (initialization, manual update, snapshot
-            // load/save, oplog processing) we always invalidate — these
-            // are all state-changing. For AgentMethod results we ask the
-            // worker whether the method is `read_only`.
-            let invalidates_read_only_cache = match &output.result {
-                AgentInvocationResult::AgentMethod { .. } => self
-                    .public_state
-                    .worker()
-                    .agent_method_invalidates_read_only_cache(full_function_name),
-                AgentInvocationResult::AgentInitialization
-                | AgentInvocationResult::ManualUpdate
-                | AgentInvocationResult::LoadSnapshot { .. }
-                | AgentInvocationResult::SaveSnapshot { .. }
-                | AgentInvocationResult::ProcessOplogEntries { .. }
-                | AgentInvocationResult::ExternalTool { .. } => true,
-            };
+            // completion.
+            let invalidates_read_only_cache =
+                self.invocation_changes_state(full_function_name, &output.result);
 
             // Only `AgentMethod` results need the method name persisted so the
             // public oplog renderer can resolve the correct output schema.
@@ -1060,6 +1071,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // result for the now-mutated state.
             if invalidates_read_only_cache {
                 self.public_state.worker().bump_read_only_cache_epoch();
+                self.state.last_state_change = Some(finished_index);
             }
 
             // Capture the agent's oplog index right after
