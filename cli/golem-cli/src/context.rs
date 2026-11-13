@@ -23,7 +23,7 @@ use crate::config::{
     AuthenticationSource, Config, NamedProfile,
 };
 use crate::config::{ClientConfig, ProfileName, resolved_builtin_local_url};
-use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, ProfileMissing};
 use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
 use crate::model::app::{
     ApplicationConfig, ApplicationPreload, ApplicationSourceMode, ComponentPresetName,
@@ -404,9 +404,13 @@ impl Context {
         environment: ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<Self> {
         let mut profile = self.profile.clone();
-        if let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? {
-            profile.profile.auth = stored.profile.auth;
-        }
+        // The built-in profiles are always in the config; a custom one can be gone.
+        let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? else {
+            bail!(ProfileMissing {
+                profile: profile.name,
+            });
+        };
+        profile.profile.auth = stored.profile.auth;
         Ok(Self {
             config_dir: self.config_dir.clone(),
             format: self.format,

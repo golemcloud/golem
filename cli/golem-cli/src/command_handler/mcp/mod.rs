@@ -35,7 +35,7 @@ use crate::context::Context;
 use crate::error::service::{ServiceError, ServiceErrorKind};
 use crate::error::{
     ContextInitHintError, HintError, InputRequired, LoginRequired, NonSuccessfulExit,
-    OutsideEnvironment, PipedExitCode, PromptAnswer,
+    OutsideEnvironment, PipedExitCode, ProfileMissing, PromptAnswer,
 };
 use crate::log::{
     LogColorize, Output, OutputCapture, discard_held_log, error_message_for_output, log_action,
@@ -536,6 +536,9 @@ fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
     if find_cause::<OutsideEnvironment>(error).is_some() {
         return ToolError::new("outside-environment");
     }
+    if find_cause::<ProfileMissing>(error).is_some() {
+        return ToolError::new("profile-not-found");
+    }
     if let Some(service) = find_cause::<ServiceError>(error)
         && let Some(code) = service.error_code()
     {
@@ -784,7 +787,13 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     let _ = capture.take();
     let ctx = match server_ctx.for_tool_call(confirmed, environment.clone()) {
         Ok(ctx) => Arc::new(ctx),
-        Err(error) => return error_result("command-failed", error_message_for_output(&error)),
+        Err(error) => {
+            let tool_error = classify(&error, tool);
+            let message = tool_error
+                .message
+                .unwrap_or_else(|| error_message_for_output(&error));
+            return error_envelope(&tool_error.code, message, tool_error.details);
+        }
     };
     let mut lazy = LazyContext::with_context(global_flags.clone(), hooks, ctx.clone());
     let result = CommandHandler::<Hooks>::handle_subcommand(&mut lazy, command.subcommand).await;
@@ -869,7 +878,7 @@ mod tests {
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
     use crate::command_table::CommandRow;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
-    use crate::error::{LoginRequired, PromptAnswer};
+    use crate::error::{LoginRequired, ProfileMissing, PromptAnswer};
     use crate::model::format::Format;
     use inquire::{Select, Text};
     use serde_json::{Value, json};
@@ -1063,6 +1072,10 @@ mod tests {
             login: "profile cloud".to_string(),
         });
         assert_eq!(reported(login, "agent_get")["error"], "login-required");
+        let missing = anyhow::Error::new(ProfileMissing {
+            profile: crate::config::ProfileName("gone".to_string()),
+        });
+        assert_eq!(reported(missing, "agent_get")["error"], "profile-not-found");
         assert_eq!(
             reported(anyhow::anyhow!("anything else"), "agent_get")["error"],
             "command-failed"

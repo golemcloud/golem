@@ -166,6 +166,26 @@ impl Display for LoginRequired {
 
 impl Error for LoginRequired {}
 
+/// The profile that a process selected at start, such as `golem mcp serve`, is no longer in the
+/// config, so its login token cannot be read.
+#[derive(Debug)]
+pub struct ProfileMissing {
+    pub profile: ProfileName,
+}
+
+impl Display for ProfileMissing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The profile {} that this process started with is no longer in the config. Create \
+             it again, or start this process with another profile",
+            self.profile
+        )
+    }
+}
+
+impl Error for ProfileMissing {}
+
 /// A command named an environment other than the one that the process works in,
 /// such as the environment that `golem mcp serve` was started in.
 #[derive(Debug)]
