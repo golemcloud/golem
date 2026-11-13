@@ -4091,6 +4091,33 @@ test('stable connections keep a call alive past the reconnect window', async () 
   }
 });
 
+test('aborting a pending connection preserves the abort reason', async () => {
+  const controller = new AbortController();
+  const reason = new Error('stop the pending connection');
+  const held = new Set();
+  const tcp = createTcpServer((socket) => {
+    held.add(socket);
+    controller.abort(reason);
+  });
+  tcp.listen(0, '127.0.0.1');
+  await once(tcp, 'listening');
+  try {
+    const error = await plainMethod({
+      server: { type: 'custom', url: `http://127.0.0.1:${tcp.address().port}`, token: 'test' },
+      reconnectWindowMs: 'unlimited',
+    })
+      .abortable(controller.signal)
+      .then(
+        () => assert.fail('an aborted connection succeeded'),
+        (error) => error,
+      );
+    assert.equal(error, reason);
+  } finally {
+    for (const socket of held) socket.destroy();
+    await new Promise((resolve) => tcp.close(resolve));
+  }
+});
+
 test('aborting a start that cannot connect stops its retries', async () => {
   const local = await refusingServer(Array(1000).fill(503), () => assert.fail('upgraded'));
   try {

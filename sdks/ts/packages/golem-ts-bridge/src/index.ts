@@ -3901,8 +3901,8 @@ class StreamingSession {
         await this.connect(timeoutMs);
         return;
       } catch (error) {
-        if (!(error instanceof RetryableStreamingConnectionError) || this.signal?.aborted)
-          throw error;
+        throwIfAborted(this.signal);
+        if (!(error instanceof RetryableStreamingConnectionError)) throw error;
         // An attempt cut short by the end of the window keeps the earlier cause.
         const cutShort = timeoutMs < CONNECT_ATTEMPT_TIMEOUT_MS && error.timedOut;
         this.attemptFailed(cutShort ? (this.lastFailure ?? error.failure) : error.failure);
