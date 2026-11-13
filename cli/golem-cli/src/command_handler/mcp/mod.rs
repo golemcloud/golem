@@ -513,22 +513,30 @@ fn platform_error_id(code: &str) -> String {
     code.to_lowercase().replace('_', "-")
 }
 
-fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
-    if let Some(input) = error
+/// The first cause of type `T` of `error`, also inside the `Arc<anyhow::Error>` that the CLI's
+/// shared caches keep as their error, which hides its own causes from `source`.
+fn find_cause<T: std::error::Error + Send + Sync + 'static>(error: &anyhow::Error) -> Option<&T> {
+    error
         .chain()
-        .find_map(|cause| cause.downcast_ref::<InputRequired>())
-    {
+        .find_map(|cause| cause.downcast_ref::<T>())
+        .or_else(|| {
+            error
+                .downcast_ref::<Arc<anyhow::Error>>()
+                .and_then(|shared| find_cause(shared))
+        })
+}
+
+fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
+    if let Some(input) = find_cause::<InputRequired>(error) {
         return input_required(input, tool);
     }
-    if error.chain().any(|cause| cause.is::<LoginRequired>()) {
+    if find_cause::<LoginRequired>(error).is_some() {
         return ToolError::new("login-required");
     }
-    if error.chain().any(|cause| cause.is::<OutsideEnvironment>()) {
+    if find_cause::<OutsideEnvironment>(error).is_some() {
         return ToolError::new("outside-environment");
     }
-    if let Some(service) = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<ServiceError>())
+    if let Some(service) = find_cause::<ServiceError>(error)
         && let Some(code) = service.error_code()
     {
         let mut tool_error = ToolError::new(platform_error_id(code));
@@ -548,7 +556,7 @@ fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
         }
         return tool_error;
     }
-    if let Some(HintError::EnvironmentHasNoDeployment) = error.downcast_ref::<HintError>() {
+    if let Some(HintError::EnvironmentHasNoDeployment) = find_cause::<HintError>(error) {
         return ToolError::new(platform_error_id(error_code::ENVIRONMENT_NOT_DEPLOYED));
     }
     ToolError::new("command-failed")
@@ -1038,10 +1046,17 @@ mod tests {
                 additional_fields: Default::default(),
             }),
         };
-        let report = reported(not_found.into(), "agent_get");
-        assert_eq!(report["error"], "agent-not-found");
-        assert_eq!(report["payload"]["status"], 404);
-        assert_eq!(report["payload"]["service"], "Worker");
+        let shared = std::sync::Arc::new(anyhow::Error::from(not_found));
+        // As `get_component_revision_by_id` reports a failure of its cache, also with a context.
+        for wrapped in [
+            anyhow::anyhow!(shared.clone()),
+            anyhow::anyhow!(shared).context("Failed to get the component"),
+        ] {
+            let report = reported(wrapped, "agent_get");
+            assert_eq!(report["error"], "agent-not-found");
+            assert_eq!(report["payload"]["status"], 404);
+            assert_eq!(report["payload"]["service"], "Worker");
+        }
 
         let login = anyhow::Error::new(LoginRequired {
             login: "profile cloud".to_string(),
