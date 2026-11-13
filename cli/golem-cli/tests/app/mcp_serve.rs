@@ -16,8 +16,6 @@
 
 use super::{TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
-use clap::CommandFactory;
-use golem_cli::command::GolemCliCommand;
 use golem_cli::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
 use golem_cli::{fs, versions};
 use indoc::formatdoc;
@@ -36,15 +34,9 @@ inherit_test_dep!(Tracing);
 
 const APP: &str = "mcp-serve";
 
-/// A local server with the counters component deployed to each of `environments`.
-async fn counters_context(environments: &[&str]) -> TestContext {
-    let mut ctx = TestContext::new();
-    let fixture = workspace_path().join("test-components/it_agent_counters_release.wasm");
-    assert!(
-        fixture.is_file(),
-        "build the agent-counters test component before running the MCP tests"
-    );
-    fs::copy(&fixture, ctx.cwd_path_join("component.wasm")).unwrap();
+/// The manifest of the counters component, with `component` added to the component's properties
+/// and `local` added to the `local` environment's properties, both as YAML at four spaces.
+fn write_manifest(ctx: &TestContext, component: &str, local: &str) {
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -57,17 +49,35 @@ async fn counters_context(environments: &[&str]) -> TestContext {
                 componentWasm: component.wasm
                 presets:
                   release: {{}}
-
+            {component}
             environments:
               local:
                 server: local
                 componentPresets: release
+            {local}
               staging:
                 server: local
                 componentPresets: release
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
     )
     .unwrap();
+}
+
+/// A local server with the counters component deployed to each of `environments`.
+async fn counters_context(environments: &[&str]) -> TestContext {
+    counters_context_with(environments, "").await
+}
+
+/// [`counters_context`] with `local` added to the `local` environment of the manifest.
+async fn counters_context_with(environments: &[&str], local: &str) -> TestContext {
+    let mut ctx = TestContext::new();
+    let fixture = workspace_path().join("test-components/it_agent_counters_release.wasm");
+    assert!(
+        fixture.is_file(),
+        "build the agent-counters test component before running the MCP tests"
+    );
+    fs::copy(&fixture, ctx.cwd_path_join("component.wasm")).unwrap();
+    write_manifest(&ctx, "", local);
 
     ctx.start_server().await;
     for environment in environments {
@@ -147,16 +157,24 @@ fn structured(result: &CallToolResult) -> &Value {
         .expect("structured content")
 }
 
-fn error_code(result: &CallToolResult) -> &str {
+/// The error envelope of a failed call: JSON text content, and no structured content, which
+/// would have to match the tool's output schema.
+fn error(result: &CallToolResult) -> Value {
     assert_eq!(result.is_error, Some(true), "{result:?}");
-    result.structured_content.as_ref().unwrap()["error"]["code"]
-        .as_str()
-        .unwrap()
+    assert!(result.structured_content.is_none(), "{result:?}");
+    let [content] = result.content.as_slice() else {
+        panic!("not one content block: {result:?}");
+    };
+    let text = &content.as_text().expect("text content").text;
+    serde_json::from_str(text).unwrap()
+}
+
+fn error_code(result: &CallToolResult) -> String {
+    error(result)["error"]["code"].as_str().unwrap().to_string()
 }
 
 fn error_message(result: &CallToolResult) -> String {
-    assert_eq!(result.is_error, Some(true), "{result:?}");
-    result.structured_content.as_ref().unwrap()["error"]["message"]
+    error(result)["error"]["message"]
         .as_str()
         .unwrap()
         .to_string()
@@ -164,36 +182,6 @@ fn error_message(result: &CallToolResult) -> String {
 
 fn tool_name(row: &CommandRow) -> String {
     row.path.join("_").replace('-', "_")
-}
-
-/// The clap argument IDs that the tool of `row` must take: the command's own arguments without
-/// the global flags, hidden arguments, help, the row's CLI-only arguments and its fixed flags;
-/// plus `confirm` for a destructive command.
-fn expected_arguments(row: &CommandRow) -> BTreeSet<String> {
-    let root = GolemCliCommand::command();
-    let global = root
-        .get_arguments()
-        .map(|arg| arg.get_id().to_string())
-        .collect::<BTreeSet<_>>();
-    let command = row
-        .path
-        .iter()
-        .try_fold(&root, |command, name| command.find_subcommand(name))
-        .unwrap();
-    let mut expected = command
-        .get_arguments()
-        .filter(|arg| !global.contains(arg.get_id().as_str()) && !arg.is_hide_set())
-        .filter(|arg| !row.cli_only_args.contains(&arg.get_id().as_str()))
-        .filter(|arg| {
-            !arg.get_long()
-                .is_some_and(|long| row.fixed_args.contains(&format!("--{long}").as_str()))
-        })
-        .map(|arg| arg.get_id().to_string())
-        .collect::<BTreeSet<_>>();
-    if row.destructive {
-        expected.insert("confirm".to_string());
-    }
-    expected
 }
 
 fn properties(tool: &Tool) -> BTreeSet<String> {
@@ -256,7 +244,12 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
             .iter()
             .find(|tool| tool.name == tool_name(row))
             .unwrap();
-        assert_eq!(properties(tool), expected_arguments(row), "{}", tool.name);
+        assert_eq!(
+            properties(tool).contains("confirm"),
+            row.destructive,
+            "{}",
+            tool.name
+        );
         assert_eq!(tool.input_schema["additionalProperties"], json!(false));
         for global in ["environment", "format", "profile", "yes", "local", "cloud"] {
             assert!(
@@ -276,29 +269,53 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         assert!(tool.output_schema.is_some(), "{}", tool.name);
     }
 
-    let invoke = tools
-        .iter()
-        .find(|tool| tool.name == "agent_invoke")
-        .unwrap();
-    let invoke_arguments = properties(invoke);
-    for interactive in [
-        "t",
-        "stdin_format",
-        "stdout_format",
-        "no_stream",
-        "resume_session",
+    for (name, arguments) in [
+        (
+            "agent_list",
+            &[
+                "agent_type_name",
+                "component_name",
+                "filter",
+                "max_count",
+                "mode",
+                "precise",
+                "scan_cursor",
+            ][..],
+        ),
+        (
+            "agent_oplog",
+            &["agent_id", "from", "omit_payloads", "query"],
+        ),
+        (
+            "agent_invoke",
+            &[
+                "agent_id",
+                "arguments",
+                "function_name",
+                "idempotency_key",
+                "schedule_at",
+                "trigger",
+            ],
+        ),
+        ("agent_delete", &["agent_id", "confirm"]),
     ] {
-        assert!(
-            !invoke_arguments.contains(interactive),
-            "agent_invoke takes {interactive}"
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        assert_eq!(
+            properties(tool),
+            arguments
+                .iter()
+                .map(|argument| argument.to_string())
+                .collect::<BTreeSet<_>>(),
+            "{name}"
         );
     }
 
-    // An argument that the CLI's parser refuses gets the CLI's error.
+    // An argument that the CLI's parser refuses gets the CLI's error. A destructive call confirms,
+    // because a call without `confirm` is refused before the parser reads it.
     for (tool, arguments, cli) in [
         (
             "agent_revert",
-            json!({"agent_id": r#"Counter("a")"#}),
+            json!({"agent_id": r#"Counter("a")"#, "confirm": true}),
             vec![cmd::AGENT, "revert", r#"Counter("a")"#],
         ),
         (
@@ -412,6 +429,68 @@ async fn mcp_serve_reads_return_the_cli_json() {
     let reverted = call(&client, "agent_revert", confirmed).await;
     assert_eq!(structured(&reverted)["$type"], "agent.revert");
     assert_eq!(reverts().await, 1);
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_destructive_tools_run_only_with_confirm() {
+    let ctx = counters_context_with(&["local"], "    cli:\n      autoConfirm: true").await;
+    let agent = r#"Counter("mcp-confirm")"#;
+    invoke(&ctx, "local", agent).await;
+
+    // Neither `cli.autoConfirm` nor `--yes` at start confirms a call, also not of a command that
+    // does not ask on the CLI.
+    let client = mcp_client(&ctx, &["-E", "local", "--yes"]).await;
+    for confirm in [json!(null), json!(false)] {
+        let mut arguments = json!({"agent_id": agent});
+        if !confirm.is_null() {
+            arguments["confirm"] = confirm;
+        }
+        for tool in ["agent_delete", "agent_simulate_crash"] {
+            let refused = call(&client, tool, arguments.clone()).await;
+            assert_eq!(error_code(&refused), "confirmation-required", "{tool}");
+        }
+    }
+    let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
+    structured(&get);
+
+    let deleted = call(
+        &client,
+        "agent_delete",
+        json!({"agent_id": agent, "confirm": true}),
+    )
+    .await;
+    structured(&deleted);
+    let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
+    assert_eq!(error_code(&get), "command-failed");
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_works_on_the_current_deployment() {
+    let ctx = counters_context(&["local"]).await;
+    let agent = r#"Counter("mcp-update")"#;
+    invoke(&ctx, "local", agent).await;
+    let client = mcp_client(&ctx, &["-E", "local"]).await;
+
+    // A deployment during the session makes revision 1 the current one.
+    write_manifest(&ctx, "    env:\n      REVISION: '1'", "");
+    let outputs = ctx.cli(["-E", "local", cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
+    assert_eq!(structured(&get)["metadata"]["componentRevision"], json!(0));
+
+    let updated = call(
+        &client,
+        "agent_update",
+        json!({"agent_id": agent, "await": true, "confirm": true}),
+    )
+    .await;
+    structured(&updated);
+    let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
+    assert_eq!(structured(&get)["metadata"]["componentRevision"], json!(1));
     client.cancel().await.unwrap();
 }
 

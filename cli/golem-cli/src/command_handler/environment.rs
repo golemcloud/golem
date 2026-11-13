@@ -116,7 +116,7 @@ impl EnvironmentCommandHandler {
             {
                 self.environment_is_required_error(mode)?;
             }
-            return Ok(pinned.clone());
+            return self.current_pinned_environment(pinned).await;
         }
 
         let resolved = match self.ctx.environment_reference() {
@@ -366,7 +366,7 @@ impl EnvironmentCommandHandler {
                 if !mode.allowed(environment_reference) {
                     self.environment_is_required_error(mode)?;
                 }
-                return Ok(pinned.clone());
+                return self.current_pinned_environment(pinned).await;
             }
             EnvironmentReference::ApplicationEnvironment {
                 application_name,
@@ -390,6 +390,34 @@ impl EnvironmentCommandHandler {
             bail!(outside());
         }
         Ok(resolved)
+    }
+
+    /// The pinned environment as the server has it now, with its current deployment. Only its
+    /// identity is pinned: an environment that was deleted and created again under the same name
+    /// is another environment.
+    async fn current_pinned_environment(
+        &self,
+        pinned: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let server_environment = self
+            .get_server_environment_or_err(&pinned.application_id, &pinned.environment_name)
+            .await?;
+        if server_environment.id != pinned.environment_id {
+            bail!(OutsideEnvironment {
+                requested: format!(
+                    "{}/{} ({})",
+                    pinned.application_name.0, pinned.environment_name.0, server_environment.id
+                ),
+                environment: format!(
+                    "{}/{} ({})",
+                    pinned.application_name.0, pinned.environment_name.0, pinned.environment_id
+                ),
+            });
+        }
+        self.ensure_diff_model_version_compatible(ResolvedEnvironmentIdentity {
+            server_environment,
+            ..pinned.clone()
+        })
     }
 
     async fn get_server_environment(
