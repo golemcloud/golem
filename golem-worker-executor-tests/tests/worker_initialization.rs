@@ -61,6 +61,9 @@ inherit_test_dep!(
 
 const CACHE_TTL: Duration = Duration::from_millis(50);
 
+#[path = "create_config_admission.rs"]
+mod create_config_admission;
+
 #[test]
 #[timeout("2 minutes")]
 async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
@@ -290,6 +293,396 @@ async fn grpc_create_records_its_kind_key_and_principal(
     Ok(())
 }
 
+#[test]
+#[timeout("2 minutes")]
+async fn pre_create_single_flight_admits_each_caller_against_the_winner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::worker::CreateIntent;
+
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    for (scenario, first_exclusive, second_exclusive, keyed, identical) in [
+        ("exclusive-exclusive", true, true, false, false),
+        ("keyed-retry", true, true, true, true),
+        ("keyed-conflict", true, true, true, false),
+        ("exclusive-join", true, false, false, false),
+        ("join-exclusive", false, true, false, false),
+    ] {
+        for reverse in [false, true] {
+            let id = target(&seed, &format!("pre-create-{scenario}-{reverse}"));
+            let first_value = if reverse { "right" } else { "left" };
+            let second_value = if identical {
+                first_value
+            } else if reverse {
+                "left"
+            } else {
+                "right"
+            };
+            let first_principal = if reverse {
+                Principal::anonymous()
+            } else {
+                Principal::Agent(AgentPrincipal {
+                    agent_id: seed.agent_id(),
+                })
+            };
+            let key = keyed.then(IdempotencyKey::fresh);
+            let create = |value: &'static str, exclusive: bool, principal: Principal| {
+                let seed = seed.clone();
+                let id = id.clone();
+                let key = key.clone();
+                async move {
+                    Worker::get_or_create_suspended_with_freshness(
+                        seed.all(),
+                        &id,
+                        Some(vec![("OWNER".into(), value.into())]),
+                        vec![],
+                        None,
+                        None,
+                        &InvocationContextStack::fresh(),
+                        principal,
+                        InvocationFreshnessDisposition::MayExist,
+                        CreateIntent::Create {
+                            exclusive,
+                            idempotency_key: key,
+                        },
+                    )
+                    .await
+                }
+            };
+            let gate = faults.pause_next("read_cached_agent_mode");
+            let mut first = Box::pin(create(
+                first_value,
+                first_exclusive,
+                first_principal.clone(),
+            ));
+            assert!(poll!(&mut first).is_pending());
+            gate.entered().await;
+            assert!(executor.stored_oplog(&id.agent_id).await.is_empty());
+            let second_principal = if identical {
+                first_principal.clone()
+            } else if reverse {
+                Principal::Agent(AgentPrincipal {
+                    agent_id: seed.agent_id(),
+                })
+            } else {
+                Principal::anonymous()
+            };
+            let mut second = Box::pin(create(second_value, second_exclusive, second_principal));
+            assert!(poll!(&mut second).is_pending());
+            assert!(executor.stored_oplog(&id.agent_id).await.is_empty());
+            gate.release();
+            // Observe the follower before the construction leader's response.
+            let second = second.await;
+            let first = first.await?;
+            let winner = first.get_initial_worker_metadata();
+            match second {
+                Ok(worker) => {
+                    assert!(
+                        !second_exclusive || identical,
+                        "{scenario}, reverse={reverse}"
+                    );
+                    assert_eq!(
+                        worker.get_initial_worker_metadata().fingerprint,
+                        winner.fingerprint
+                    );
+                    assert_eq!(
+                        worker
+                            .get_initial_worker_metadata()
+                            .create_request
+                            .principal,
+                        first_principal
+                    );
+                }
+                Err(WorkerExecutorError::AgentAlreadyExists { .. }) => {
+                    assert!(second_exclusive && !keyed, "{scenario}, reverse={reverse}");
+                }
+                Err(WorkerExecutorError::CreateIdempotencyKeyConflict { .. }) => {
+                    assert!(
+                        second_exclusive && keyed && !identical,
+                        "{scenario}, reverse={reverse}"
+                    );
+                }
+                Err(error) => anyhow::bail!("{scenario}, reverse={reverse}: {error:?}"),
+            }
+            let creates: Vec<_> = executor
+                .stored_oplog(&id.agent_id)
+                .await
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    OplogEntry::Create { parameters, .. } => Some(parameters),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(creates.len(), 1);
+            assert_eq!(
+                creates[0].env,
+                vec![("OWNER".to_string(), first_value.to_string())]
+            );
+            assert_eq!(creates[0].create_request.principal, first_principal);
+            assert_eq!(creates[0].create_request.idempotency_key, key);
+            assert_eq!(
+                creates[0].create_request.kind,
+                if first_exclusive {
+                    CreateRequestKind::Exclusive
+                } else {
+                    CreateRequestKind::GetOrCreate
+                }
+            );
+            let joined = acquire(&seed, &id).await?;
+            assert_eq!(
+                joined.get_initial_worker_metadata().fingerprint,
+                winner.fingerprint
+            );
+            assert_eq!(joined.get_initial_worker_metadata().env, winner.env);
+            assert_eq!(
+                joined
+                    .get_initial_worker_metadata()
+                    .create_request
+                    .principal,
+                first_principal
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn grpc_create_reports_typed_conflicts_and_keeps_the_winner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    let metadata = seed.get_initial_worker_metadata();
+    let id = target(&seed, "grpc-create-conflicts");
+    let request = CreateWorkerRequest {
+        agent_id: Some(id.agent_id.clone().into()),
+        component_owner_account_id: Some(metadata.created_by.into()),
+        environment_id: Some(metadata.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        env: [("OWNER".into(), "winner".into())].into(),
+        ..Default::default()
+    };
+    let first = executor
+        .client
+        .clone()
+        .prepare_worker(request.clone())
+        .await?
+        .into_inner();
+    let fingerprint = match first.result {
+        Some(create_worker_response::Result::Success(success)) => success.instance_id,
+        other => anyhow::bail!("initial create failed: {other:?}"),
+    };
+    for cold in [false, true] {
+        for case in ["same", "unkeyed", "other-key", "changed", "join"] {
+            if cold {
+                seed.active_agents().remove(&id).await;
+            }
+            let mut retry = request.clone();
+            match case {
+                "unkeyed" => retry.idempotency_key = None,
+                "other-key" => retry.idempotency_key = Some(IdempotencyKey::fresh().into()),
+                "changed" | "join" => {
+                    retry.env.insert("OWNER".into(), "loser".into());
+                    retry.ignore_already_existing = case == "join";
+                }
+                _ => {}
+            }
+            let response = executor
+                .client
+                .clone()
+                .prepare_worker(retry)
+                .await?
+                .into_inner();
+            match response.result {
+                Some(create_worker_response::Result::Success(success)) => {
+                    assert!(case == "same" || case == "join", "{case}, cold={cold}");
+                    assert_eq!(success.instance_id, fingerprint);
+                }
+                Some(create_worker_response::Result::Failure(error)) => {
+                    let error = WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?;
+                    assert!(
+                        match error {
+                            WorkerExecutorError::AgentAlreadyExists { .. } =>
+                                case == "unkeyed" || case == "other-key",
+                            WorkerExecutorError::CreateIdempotencyKeyConflict { .. } =>
+                                case == "changed",
+                            _ => false,
+                        },
+                        "{case}, cold={cold}"
+                    );
+                }
+                None => anyhow::bail!("missing create result"),
+            }
+        }
+    }
+    let creates: Vec<_> = executor
+        .stored_oplog(&id.agent_id)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            OplogEntry::Create { parameters, .. } => Some(parameters),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(creates.len(), 1);
+    assert_eq!(
+        creates[0].env,
+        vec![("OWNER".to_string(), "winner".to_string())]
+    );
+    let context = executor.context.clone();
+    drop(seed);
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        overrides(&faults, Duration::from_millis(50)),
+    )
+    .await?;
+    let retry = executor
+        .client
+        .clone()
+        .prepare_worker(request.clone())
+        .await?
+        .into_inner();
+    match retry.result {
+        Some(create_worker_response::Result::Success(success)) => {
+            assert_eq!(success.instance_id, fingerprint)
+        }
+        other => anyhow::bail!("retry after restart failed: {other:?}"),
+    }
+    let mut changed = request;
+    changed
+        .env
+        .insert("OWNER".into(), "after-restart-loser".into());
+    let rejected = executor
+        .client
+        .clone()
+        .prepare_worker(changed)
+        .await?
+        .into_inner();
+    let Some(create_worker_response::Result::Failure(error)) = rejected.result else {
+        anyhow::bail!("changed retry after restart succeeded");
+    };
+    assert!(matches!(
+        WorkerExecutorError::try_from(error),
+        Ok(WorkerExecutorError::CreateIdempotencyKeyConflict { .. })
+    ));
+    let after = executor.stored_oplog(&id.agent_id).await;
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn exclusive_create_admission_checks_warm_and_cold_stored_identity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::worker::CreateIntent;
+
+    let (_executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    for keyed in [false, true] {
+        let id = target(
+            &seed,
+            if keyed {
+                "keyed-admission"
+            } else {
+                "unkeyed-admission"
+            },
+        );
+        let key = keyed.then(IdempotencyKey::fresh);
+        let create = |value: &'static str, exclusive: bool, key: Option<IdempotencyKey>| {
+            let seed = seed.clone();
+            let id = id.clone();
+            async move {
+                Worker::get_or_create_suspended_with_freshness(
+                    seed.all(),
+                    &id,
+                    Some(vec![("OWNER".into(), value.into())]),
+                    vec![],
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                    InvocationFreshnessDisposition::MayExist,
+                    CreateIntent::Create {
+                        exclusive,
+                        idempotency_key: key,
+                    },
+                )
+                .await
+            }
+        };
+        let original = create("original", true, key.clone()).await?;
+        let metadata = original.get_initial_worker_metadata();
+        for cold in [false, true] {
+            if cold {
+                seed.active_agents().remove(&id).await;
+            }
+            let equal = create("original", true, key.clone()).await;
+            if keyed {
+                let equal = equal?;
+                assert_eq!(
+                    equal.get_initial_worker_metadata().fingerprint,
+                    metadata.fingerprint
+                );
+                if !cold {
+                    assert!(Arc::ptr_eq(&equal, &original));
+                }
+            } else {
+                assert!(matches!(
+                    equal,
+                    Err(WorkerExecutorError::AgentAlreadyExists { .. })
+                ));
+            }
+            let changed = create("changed", true, key.clone()).await;
+            assert!(match changed {
+                Err(WorkerExecutorError::CreateIdempotencyKeyConflict { .. }) => keyed,
+                Err(WorkerExecutorError::AgentAlreadyExists { .. }) => !keyed,
+                _ => false,
+            });
+            assert!(matches!(
+                create("original", true, Some(IdempotencyKey::fresh())).await,
+                Err(WorkerExecutorError::AgentAlreadyExists { .. })
+            ));
+            // A rejected caller cannot poison construction or replace the recorded overrides.
+            let joined = create("ignored", false, Some(IdempotencyKey::fresh())).await?;
+            let joined_metadata = joined.get_initial_worker_metadata();
+            assert_eq!(joined_metadata.fingerprint, metadata.fingerprint);
+            assert_eq!(joined_metadata.env, metadata.env);
+            assert_eq!(
+                joined_metadata.create_request.kind,
+                metadata.create_request.kind
+            );
+            assert_eq!(
+                joined_metadata.create_request.idempotency_key,
+                metadata.create_request.idempotency_key
+            );
+            assert_eq!(
+                joined_metadata.create_request.principal,
+                metadata.create_request.principal
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn setup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -339,15 +732,15 @@ fn overrides(faults: &KeyValueStorageFaults, retry_interval: Duration) -> TestEx
     }
 }
 
-/// Starts the seed agent and returns its unloaded worker, whose dependencies give tests direct
-/// access to the executor's acquisition API.
+/// Invokes the seed agent and returns its unloaded worker, whose dependencies give tests direct
+/// access to the executor's acquisition API. Invocation also reacquires it after executor restart.
 async fn seed_worker(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
 ) -> anyhow::Result<Arc<Worker<TestWorkerCtx>>> {
     let context = &executor.context;
     let name = agent_id!("Counter", "initialization-test-seed");
-    let id = executor.start_agent(&component.id, name.clone()).await?;
+    let id = AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
     executor
         .invoke_and_await_agent(component, &name, "increment", data_value!())
         .await?;
@@ -544,6 +937,96 @@ async fn late_initialization_storage_failure_is_shared_then_retried(
         1
     );
     assert_eq!(retry.pending_invocations().await.len(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn exclusive_retry_after_partial_construction_uses_the_persisted_identity(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::worker::CreateIntent;
+
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    for keyed in [false, true] {
+        let id = target(
+            &seed,
+            if keyed {
+                "partial-exclusive-keyed"
+            } else {
+                "partial-exclusive-unkeyed"
+            },
+        );
+        let key = keyed.then(IdempotencyKey::fresh);
+        let create = |env: &'static str| {
+            let seed = seed.clone();
+            let id = id.clone();
+            let key = key.clone();
+            async move {
+                Worker::get_or_create_suspended_with_freshness(
+                    seed.all(),
+                    &id,
+                    Some(vec![("OWNER".into(), env.into())]),
+                    vec![],
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                    InvocationFreshnessDisposition::MayExist,
+                    CreateIntent::Create {
+                        exclusive: true,
+                        idempotency_key: key,
+                    },
+                )
+                .await
+            }
+        };
+        faults.fail(
+            "update_status",
+            1,
+            KeyValueStorageError::Other("post-Create outage".into()),
+        );
+        let error = create("original")
+            .await
+            .err()
+            .expect("construction must fail after Create");
+        assert!(error.to_string().contains("post-Create outage"));
+        let recorded = Worker::get_latest_metadata(seed.all(), &id)
+            .await?
+            .expect("Create persisted");
+        let changed = create("changed").await;
+        assert!(match changed {
+            Err(WorkerExecutorError::CreateIdempotencyKeyConflict { .. }) => keyed,
+            Err(WorkerExecutorError::AgentAlreadyExists { .. }) => !keyed,
+            _ => false,
+        });
+        let retry = create("original").await;
+        if keyed {
+            assert_eq!(
+                retry?.get_initial_worker_metadata().fingerprint,
+                recorded.fingerprint
+            );
+        } else {
+            assert!(matches!(
+                retry,
+                Err(WorkerExecutorError::AgentAlreadyExists { .. })
+            ));
+        }
+        let after = Worker::get_latest_metadata(seed.all(), &id).await?.unwrap();
+        assert_eq!(after.fingerprint, recorded.fingerprint);
+        assert_eq!(after.env, recorded.env);
+        assert_eq!(
+            executor
+                .stored_oplog(&id.agent_id)
+                .await
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+                .count(),
+            1
+        );
+    }
     Ok(())
 }
 

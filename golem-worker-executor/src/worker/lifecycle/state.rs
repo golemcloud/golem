@@ -66,7 +66,7 @@ pub struct UnresolvedPhase<'a> {
 
 pub struct InitializingPhase<'a> {
     lifecycle: &'a mut WorkerLifecycle,
-    completion: Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>,
+    completion: Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>,
 }
 
 pub struct UnloadedPhase<'a> {
@@ -81,7 +81,7 @@ pub struct WaitingPhase<'a> {
 impl<'a> UnresolvedPhase<'a> {
     pub fn begin_initialization(
         self,
-        completion: Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>,
+        completion: Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>,
     ) -> InitializingPhase<'a> {
         self.lifecycle.phase = WorkerInstance::Initializing(completion.clone());
         InitializingPhase {
@@ -92,7 +92,7 @@ impl<'a> UnresolvedPhase<'a> {
 }
 
 impl InitializingPhase<'_> {
-    pub fn completion(&self) -> Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>> {
+    pub fn completion(&self) -> Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>> {
         self.completion.clone()
     }
 

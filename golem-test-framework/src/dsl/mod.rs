@@ -1256,6 +1256,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }
+        WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id } => {
+            format!("Create idempotency key conflict: {agent_id}")
+        }
         WorkerExecutorError::AgentCreationFailed { agent_id, details } => {
             format!("Worker creation failed: {:?}: {}", agent_id, details)
         }

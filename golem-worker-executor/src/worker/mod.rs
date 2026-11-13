@@ -899,7 +899,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },

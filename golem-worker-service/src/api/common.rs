@@ -65,7 +65,7 @@ pub enum ApiEndpointError {
     #[oai(status = 415)]
     UnsupportedMediaType(Json<ErrorBody>),
     #[oai(status = 422)]
-    LimitExceeded(Json<ErrorBody>),
+    UnprocessableEntity(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBodyWithOptionalWorkerError>),
 }
@@ -80,7 +80,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Conflict(_) => "Conflict",
             Self::PayloadTooLarge(_) => "PayloadTooLarge",
             Self::UnsupportedMediaType(_) => "UnsupportedMediaType",
-            Self::LimitExceeded(_) => "LimitExceeded",
+            Self::UnprocessableEntity(_) => "UnprocessableEntity",
             Self::InternalError(_) => "InternalError",
         }
     }
@@ -92,7 +92,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Conflict(_) => true,
             Self::PayloadTooLarge(_) => true,
             Self::UnsupportedMediaType(_) => true,
-            Self::LimitExceeded(_) => true,
+            Self::UnprocessableEntity(_) => true,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
             Self::InternalError(_) => false,
@@ -108,7 +108,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Forbidden(inner) => inner.cause.take(),
             Self::PayloadTooLarge(inner) => inner.cause.take(),
             Self::UnsupportedMediaType(inner) => inner.cause.take(),
-            Self::LimitExceeded(inner) => inner.cause.take(),
+            Self::UnprocessableEntity(inner) => inner.cause.take(),
             Self::Conflict(inner) => inner.cause.take(),
         }
     }
@@ -179,8 +179,8 @@ impl ApiEndpointError {
         }))
     }
 
-    pub fn limit_exceeded<T: SafeDisplay>(code: &str, error: T) -> Self {
-        Self::LimitExceeded(Json(ErrorBody {
+    pub fn unprocessable_entity<T: SafeDisplay>(code: &str, error: T) -> Self {
+        Self::UnprocessableEntity(Json(ErrorBody {
             error: error.to_safe_string(),
             code: code.to_string(),
             cause: None,
@@ -250,7 +250,7 @@ impl From<LimitServiceError> for ApiEndpointError {
     fn from(error: LimitServiceError) -> Self {
         match error {
             LimitServiceError::LimitExceeded(_) => {
-                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
+                Self::unprocessable_entity(api::error_code::LIMIT_EXCEEDED, error)
             }
             LimitServiceError::InternalError(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
@@ -296,6 +296,12 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             }
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
+            }
+            WorkerExecutorError::AgentAlreadyExists { .. } => {
+                Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
+            }
+            WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
+                Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
             }
             WorkerExecutorError::InvocationFailed { error, stderr } => Self::internal_worker(
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
@@ -389,7 +395,7 @@ impl From<RegistryServiceError> for ApiEndpointError {
                 Self::unauthorized(api::error_code::AUTH_UNAUTHORIZED, value)
             }
             RegistryServiceError::LimitExceeded(_) => {
-                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, value)
+                Self::unprocessable_entity(api::error_code::LIMIT_EXCEEDED, value)
             }
             RegistryServiceError::NotFound(_) => {
                 Self::not_found(api::error_code::RESOURCE_NOT_FOUND, value)
@@ -516,6 +522,58 @@ mod tests {
     use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
     use test_r::test;
     use tonic::{Code, Status};
+
+    #[test]
+    async fn create_conflicts_preserve_their_codes_through_grpc_and_http() {
+        use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+        use golem_common::model::AgentId;
+        use golem_common::model::component::ComponentId;
+        use poem::IntoResponse;
+        use poem::http::StatusCode;
+        use prost::Message;
+
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Counter(\"create-conflicts\")".into(),
+        };
+        for (error, status, code) in [
+            (
+                WorkerExecutorError::AgentAlreadyExists {
+                    agent_id: agent_id.clone(),
+                },
+                StatusCode::CONFLICT,
+                api::error_code::AGENT_ALREADY_EXISTS,
+            ),
+            (
+                WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT,
+            ),
+        ] {
+            let encoded = WorkerExecutionError::from(error).encode_to_vec();
+            let transported = WorkerExecutorError::try_from(
+                WorkerExecutionError::decode(encoded.as_slice()).unwrap(),
+            )
+            .expect("the executor error survives the create response");
+            let response = ApiEndpointError::from(transported).into_response();
+            assert_eq!(response.status(), status);
+            let body = response
+                .into_body()
+                .into_json::<serde_json::Value>()
+                .await
+                .unwrap();
+            assert_eq!(body["code"], code);
+        }
+        let limit: ApiEndpointError = LimitServiceError::LimitExceeded("quota".into()).into();
+        let response = limit.into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response
+            .into_body()
+            .into_json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(body["code"], api::error_code::LIMIT_EXCEEDED);
+    }
 
     fn message_too_large_status() -> Status {
         Status::new(

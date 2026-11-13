@@ -55,6 +55,43 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_exclusive_create_rejects_an_existing_agent(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let name = agent_id!("Counter", "rest-exclusive-conflict");
+    user.start_agent(&component.id, name.clone()).await?;
+    for overrides in [
+        HashMap::new(),
+        HashMap::from([("OWNER".into(), "changed".into())]),
+    ] {
+        let error = user
+            .try_start_agent_with(&component.id, name.clone(), overrides, vec![])
+            .await?
+            .expect_err("an unkeyed exclusive create cannot join an existing agent");
+        match error {
+            golem_client::Error::Item(WorkerError::Error409(body)) => {
+                assert_eq!(
+                    body.code,
+                    golem_common::base_model::api::error_code::AGENT_ALREADY_EXISTS
+                );
+            }
+            other => anyhow::bail!("expected HTTP 409, got {other:?}"),
+        }
+    }
+    Ok(())
+}
+
 /// REST/JSON invocation of a method whose only declared input is the
 /// auto-injected `principal` field. The caller supplies no parameters (the
 /// host injects the principal out of band), so the invocation must succeed —

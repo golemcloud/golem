@@ -1672,6 +1672,135 @@ fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
 }
 
 #[test]
+fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
+    use super::acquisition::{CreateDecision, CreateIdentity, decide_create};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::GolemUserPrincipal;
+
+    let request = CreateRequest::new(
+        CreateRequestKind::Exclusive,
+        Some(IdempotencyKey::new("create-1".into())),
+        Principal::anonymous(),
+        &InvocationContextStack::fresh(),
+    );
+    let env = vec![("A".into(), "one".into()), ("B".into(), "two".into())];
+    let config = vec![
+        AgentConfigEntryDto {
+            path: vec!["left".into()],
+            value: serde_json::json!({"count": 3, "name": "first"}).into(),
+        },
+        AgentConfigEntryDto {
+            path: vec!["right".into()],
+            value: serde_json::json!(7).into(),
+        },
+    ];
+    let decide = |incoming_request: &CreateRequest,
+                  key: Option<&str>,
+                  incoming_env: &[(String, String)],
+                  incoming_config: &[AgentConfigEntryDto],
+                  exclusive| {
+        decide_create(
+            Some(CreateIdentity {
+                request: &request,
+                canonical_key: Some("Counter(17)"),
+                env: &env,
+                config: &config,
+            }),
+            CreateIdentity {
+                request: incoming_request,
+                canonical_key: key,
+                env: incoming_env,
+                config: incoming_config,
+            },
+            exclusive,
+        )
+    };
+    assert_eq!(
+        decide_create(
+            None,
+            CreateIdentity {
+                request: &request,
+                canonical_key: Some("Counter(17)"),
+                env: &env,
+                config: &config,
+            },
+            true,
+        ),
+        CreateDecision::Created
+    );
+    let mut retry = CreateRequest::new(
+        request.kind,
+        request.idempotency_key.clone(),
+        request.principal.clone(),
+        &InvocationContextStack::fresh(),
+    );
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotentRetry
+    );
+    let reversed_env: Vec<_> = env.iter().cloned().rev().collect();
+    let reversed_config: Vec<_> = config.iter().cloned().rev().collect();
+    assert_eq!(
+        decide(
+            &retry,
+            Some("Counter(17)"),
+            &reversed_env,
+            &reversed_config,
+            true
+        ),
+        CreateDecision::IdempotentRetry
+    );
+    let mut changed_env = env.clone();
+    changed_env[1].1 = "changed".into();
+    let mut changed_config = config.clone();
+    changed_config[1].value = serde_json::json!(8).into();
+    for decision in [
+        decide(&retry, Some("Counter(18)"), &env, &config, true),
+        decide(&retry, None, &env, &config, true),
+        decide(&retry, Some("Counter(17)"), &changed_env, &config, true),
+        decide(&retry, Some("Counter(17)"), &env, &changed_config, true),
+        decide(&retry, Some("Counter(17)"), &env[..1], &config, true),
+        decide(&retry, Some("Counter(17)"), &env, &config[..1], true),
+    ] {
+        assert_eq!(decision, CreateDecision::IdempotencyKeyConflict);
+    }
+    retry.kind = CreateRequestKind::GetOrCreate;
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotencyKeyConflict
+    );
+    retry.kind = request.kind;
+    retry.principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: AccountId::new(),
+    });
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotencyKeyConflict
+    );
+    retry.idempotency_key = None;
+    retry.principal = request.principal.clone();
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::AlreadyExists
+    );
+    retry.idempotency_key = Some(IdempotencyKey::new("create-2".into()));
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::AlreadyExists
+    );
+    assert_eq!(
+        decide(
+            &retry,
+            Some("Counter(17)"),
+            &changed_env,
+            &changed_config,
+            false
+        ),
+        CreateDecision::Joined
+    );
+}
+
+#[test]
 fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() {
     let key = IdempotencyKey::new("create-key".to_string());
     let principal = Principal::anonymous();
