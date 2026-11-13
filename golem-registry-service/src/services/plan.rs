@@ -150,6 +150,18 @@ fn validate_plan_policy(plan: &PrecreatedPlan) -> Result<(), PlanError> {
         ));
     }
 
+    if plan.max_concurrent_agents_per_executor == 0 {
+        return Err(PlanError::InvalidPolicy(
+            "maximum concurrent agents per executor must be greater than zero".to_string(),
+        ));
+    }
+
+    if plan.oplog_writes_per_second == 0 {
+        return Err(PlanError::InvalidPolicy(
+            "oplog writes per second must be greater than zero".to_string(),
+        ));
+    }
+
     if plan.max_storage_per_agent_enabled {
         if plan.max_storage_per_agent == 0 {
             return Err(PlanError::InvalidPolicy(
@@ -342,6 +354,37 @@ mod tests {
 
         plan.max_memory_per_agent_ceiling = 11;
         assert!(validate_plan_policy(&plan).is_ok());
+    }
+
+    #[test]
+    fn plan_policy_rejects_zero_concurrency_and_oplog_rate() {
+        let default = RegistryServiceConfig::default()
+            .initial_plans
+            .remove("default")
+            .unwrap();
+
+        let mut plan = default.clone();
+        plan.max_concurrent_agents_per_executor = 0;
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message == "maximum concurrent agents per executor must be greater than zero"
+        ));
+
+        let mut plan = default.clone();
+        plan.oplog_writes_per_second = 0;
+        assert!(matches!(
+            validate_plan_policy(&plan),
+            Err(PlanError::InvalidPolicy(message))
+                if message == "oplog writes per second must be greater than zero"
+        ));
+
+        for value in [1, 1_000_000_000_000_000_000] {
+            let mut plan = default.clone();
+            plan.max_concurrent_agents_per_executor = value;
+            plan.oplog_writes_per_second = value;
+            assert!(validate_plan_policy(&plan).is_ok());
+        }
     }
 
     #[test]

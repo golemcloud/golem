@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_path;
 pub mod account_usage;
 pub mod agent;
 pub mod agent_config;
@@ -49,6 +50,7 @@ pub mod optional_field_update;
 pub mod path;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_dimension;
 pub mod plugin_registration;
 pub mod quota;
 pub mod regions;
