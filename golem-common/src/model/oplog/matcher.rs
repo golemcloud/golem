@@ -629,14 +629,9 @@ impl PublicOplogEntry {
                     || Self::string_match("stream-items", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.record, &[], query_path, query)
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                Self::string_match("streamend", &[], query_path, query)
-                    || Self::string_match("stream-end", &[], query_path, query)
-                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                Self::string_match("streamcancel", &[], query_path, query)
-                    || Self::string_match("stream-cancel", &[], query_path, query)
+            PublicOplogEntry::StreamTerminal(params) => {
+                Self::string_match("streamterminal", &[], query_path, query)
+                    || Self::string_match("stream-terminal", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.record, &[], query_path, query)
             }
             PublicOplogEntry::StreamSession(params) => {

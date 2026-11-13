@@ -284,13 +284,69 @@ fn tool_attachment_read_rejects_invalid_observation_schema() {
 }
 
 #[test]
+fn stream_terminal_public_wit_preserves_terminal_payloads() {
+    use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::durable_stream::{
+        LocalStreamId, StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
+    };
+    let declared = (17u32, "declared failure".to_string())
+        .into_typed_schema_value()
+        .unwrap();
+    for (origin, terminal) in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
+        StreamTerminal::Failed(StreamError::Trapped("guest trap".into())),
+        StreamTerminal::Failed(StreamError::Interrupted("session deleted".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("retention limit".into())),
+        StreamTerminal::ConsumerCancelled {
+            details: Some("reader dropped".into()),
+        },
+    ]
+    .into_iter()
+    .flat_map(|terminal| {
+        [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+            .map(|origin| (origin, terminal.clone()))
+    }) {
+        let record = StreamTerminalRecord {
+            format_version: 1,
+            stream_id: LocalStreamId(OplogIndex::from_u64(4)),
+            sequence: 3,
+            offset: StreamOffset::new(OplogIndex::from_u64(8), 0),
+            authored_by: StreamTerminalAuthor::Host,
+            origin,
+            terminal,
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        let public = PublicOplogEntry::StreamTerminal(StreamTerminalParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            record: record.clone(),
+        });
+        let wire: oplog::PublicOplogEntry = public.try_into().unwrap();
+        let oplog::PublicOplogEntry::StreamTerminal(wire) = wire else {
+            panic!("wrong public variant")
+        };
+        assert_eq!(
+            golem_schema::schema::wit::decode_typed(&wire.record).unwrap(),
+            record
+        );
+    }
+}
+
+#[test]
 fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
     use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::durable_stream::StreamTerminalOrigin;
     use golem_common::model::oplog::{
-        DurableStreamEventSummary as Summary, DurableStreamOutcome as Outcome, PayloadId,
+        DurableStreamEventSummary as Summary, DurableStreamOutcome as Outcome,
+        DurableStreamTerminalOutcome as TerminalOutcome, PayloadId,
     };
 
-    for external in [false, true] {
+    for (external, origin) in [false, true].into_iter().flat_map(|external| {
+        [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+            .map(|origin| (external, origin))
+    }) {
         macro_rules! entry {
             ($variant:ident, $summary:expr) => {
                 OplogEntry::$variant {
@@ -316,18 +372,26 @@ fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
             entry!(StreamRegistered, Some(Summary::Registered)),
             entry!(StreamItems, Some(Summary::Items { item_count: 3 })),
             entry!(
-                StreamEnd,
-                Some(Summary::End {
-                    outcome: Outcome::Success
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::Finished,
+                    origin,
                 })
             ),
             entry!(
-                StreamEnd,
-                Some(Summary::End {
-                    outcome: Outcome::Error
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::Failed,
+                    origin,
                 })
             ),
-            entry!(StreamCancel, Some(Summary::Cancelled)),
+            entry!(
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::ConsumerCancelled,
+                    origin,
+                })
+            ),
             entry!(StreamSession, Some(Summary::SessionResult)),
             entry!(
                 StreamSession,

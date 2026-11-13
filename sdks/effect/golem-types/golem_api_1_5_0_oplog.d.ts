@@ -897,6 +897,12 @@ declare module 'golem:api/oplog@1.5.0' {
     transition: TypedSchemaValue;
   };
   export type DurableStreamOutcome = "success" | "error";
+  export type DurableStreamTerminalOutcome = "finished" | "failed" | "consumer-cancelled";
+  export type StreamTerminalOrigin = "source" | "control";
+  export type DurableStreamTerminalSummary = {
+    outcome: DurableStreamTerminalOutcome;
+    origin: StreamTerminalOrigin;
+  };
   export type DurableStreamEventSummary =
   {
     tag: 'registered'
@@ -906,11 +912,8 @@ declare module 'golem:api/oplog@1.5.0' {
     val: bigint
   } |
   {
-    tag: 'end'
-    val: DurableStreamOutcome
-  } |
-  {
-    tag: 'cancelled'
+    tag: 'terminal'
+    val: DurableStreamTerminalSummary
   } |
   {
     tag: 'session-result'
@@ -1293,14 +1296,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'stream-items'
     val: RawDurableStreamRecordParameters
   } |
-  /** Records a durable stream end terminal */
+  /** Records the unique outcome or consumer cancellation of a durable stream */
   {
-    tag: 'stream-end'
-    val: RawDurableStreamRecordParameters
-  } |
-  /** Records a durable stream cancellation terminal */
-  {
-    tag: 'stream-cancel'
+    tag: 'stream-terminal'
     val: RawDurableStreamRecordParameters
   } |
   /** Records durable Stream Session state and consumer-journal facts */
@@ -1573,14 +1571,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'stream-items'
     val: DurableStreamRecordParameters
   } |
-  /** Records a durable stream end terminal */
+  /** Records the unique outcome or consumer cancellation of a durable stream */
   {
-    tag: 'stream-end'
-    val: DurableStreamRecordParameters
-  } |
-  /** Records a durable stream cancellation terminal */
-  {
-    tag: 'stream-cancel'
+    tag: 'stream-terminal'
     val: DurableStreamRecordParameters
   } |
   /** Records durable Stream Session state and consumer-journal facts */

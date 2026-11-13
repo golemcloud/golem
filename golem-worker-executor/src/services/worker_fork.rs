@@ -71,7 +71,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::durable_stream::{
+    StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     CreateRequest, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
@@ -1022,7 +1024,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     &mapping.handle.source_invocation,
                     mapping.handle.stream_id,
                     candidate.initial.clone(),
-                    candidate.export.closed,
+                    candidate
+                        .export
+                        .closed
+                        .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                     None,
                 )
                 .await

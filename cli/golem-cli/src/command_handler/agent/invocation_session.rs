@@ -36,9 +36,9 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientCancelReason, PublicClientMessage,
-    PublicConfigEntry, PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
-    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicConfigEntry,
+    PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation, PublicServerMessage,
+    PublicStreamDirection, PublicStreamError, PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
@@ -214,7 +214,6 @@ struct OutputChannel {
 
 struct InputFailure {
     error: anyhow::Error,
-    reason: PublicClientCancelReason,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -534,6 +533,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     'session: while !finished {
         let next_unsent_input = input_buffer.next_unsent();
+        let next_input_sequence = input_buffer.next_sequence()?;
         let sender = session.sender();
         tokio::select! {
             biased;
@@ -542,12 +542,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 input_rx.close();
                 let requests = cancel_open_streams(
                     if accepted && !input_terminal {
-                        input_binding.as_ref().and_then(|binding| binding.channel)
+                        input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                     } else {
                         None
                     },
                     &output_streams,
-                    PublicClientCancelReason::Cancelled,
+                    "invocation interrupted".to_string(),
                 );
                 cancel_before_close(&mut session, requests).await;
                 bail!(PipedExitCode(130));
@@ -566,12 +566,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 input_rx.close();
                 let requests = cancel_open_streams(
                     if accepted && !input_terminal {
-                        input_binding.as_ref().and_then(|binding| binding.channel)
+                        input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                     } else {
                         None
                     },
                     &output_streams,
-                    PublicClientCancelReason::ConsumerDrop,
+                    "output consumer dropped".to_string(),
                 );
                 cancel_before_close(&mut session, requests).await;
                 bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
@@ -584,12 +584,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         input_rx.close();
                         let requests = cancel_open_streams(
                             if accepted && !input_terminal {
-                                input_binding.as_ref().and_then(|binding| binding.channel)
+                                input_binding.as_ref().and_then(|binding| binding.channel).map(|channel| (channel, next_input_sequence))
                             } else {
                                 None
                             },
                             &output_streams,
-                            PublicClientCancelReason::ConsumerDrop,
+                            "output consumer dropped".to_string(),
                         );
                         cancel_before_close(&mut session, requests).await;
                         return Err(error);
@@ -772,8 +772,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         } else {
             None
         };
-        let cancellation_requests =
-            cancel_open_streams(input_channel, &output_streams, failure.reason);
+        let next_input_sequence = input_buffer.next_sequence()?;
+        let cancellation_requests = cancel_open_streams(
+            input_channel.map(|channel| (channel, next_input_sequence)),
+            &output_streams,
+            failure.error.to_string(),
+        );
         for request in cancellation_requests {
             if send_request(&sender, &request, &interrupt).await.is_err() {
                 break;
@@ -1249,7 +1253,6 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 }
@@ -1270,7 +1273,6 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 };
@@ -1287,7 +1289,6 @@ fn read_stdin(
                 )
                 .map_err(|error| InputFailure {
                     error: error.into(),
-                    reason: PublicClientCancelReason::SourceUnavailable,
                 })?;
                 let request = ReplayableInput::Value {
                     sequence: offset,
@@ -1308,18 +1309,15 @@ fn read_stdin(
                     if discarded.is_cancelled() {
                         offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                             error: anyhow!("stdin stream offset overflow"),
-                            reason: PublicClientCancelReason::SourceUnavailable,
                         })?;
                         continue;
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                     error: anyhow!("stdin stream offset overflow"),
-                    reason: PublicClientCancelReason::SourceUnavailable,
                 })?;
             }
         }
@@ -1353,7 +1351,6 @@ fn read_stdin(
                                     "failed to read raw stdin for parameter '{}': {error}",
                                     binding.parameter_name
                                 ),
-                                reason: PublicClientCancelReason::SourceUnavailable,
                             });
                         }
                     }
@@ -1392,7 +1389,6 @@ fn read_stdin(
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 let logical_item_count = if binding.raw_kind == Some(RawStreamKind::U8) {
@@ -1404,7 +1400,6 @@ fn read_stdin(
                     .checked_add(logical_item_count)
                     .ok_or_else(|| InputFailure {
                         error: anyhow!("stdin stream offset overflow"),
-                        reason: PublicClientCancelReason::SourceUnavailable,
                     })?;
                 if eof {
                     break;
@@ -1429,7 +1424,6 @@ fn read_stdin(
         }
         return Err(InputFailure {
             error: anyhow!("invocation session ended before stdin reached EOF"),
-            reason: PublicClientCancelReason::SourceUnavailable,
         });
     }
     Ok(())
@@ -1457,28 +1451,32 @@ fn queue_input(
     };
     let admitted = admitted.map_err(|error| InputFailure {
         error: error.into(),
-        reason: PublicClientCancelReason::SourceUnavailable,
     })?;
     match tx.blocking_send(admitted) {
         Ok(()) => Ok(true),
         Err(_) if cancelled.is_cancelled() || discarded.is_cancelled() => Ok(false),
         Err(_) => Err(InputFailure {
             error: anyhow!("invocation session ended while reading stdin"),
-            reason: PublicClientCancelReason::SourceUnavailable,
         }),
     }
 }
 
 fn cancel_open_streams(
-    input: Option<u32>,
+    input: Option<(u32, u64)>,
     output_streams: &HashMap<u32, OutputStream>,
-    reason: PublicClientCancelReason,
+    message: String,
 ) -> Vec<PublicClientMessage> {
     let mut requests = Vec::new();
-    if let Some(channel) = input {
-        requests.push(PublicClientMessage::StreamCancel {
+    if let Some((channel, sequence)) = input {
+        requests.push(PublicClientMessage::StreamEnd {
             channel,
-            reason,
+            sequence: DecimalU64(sequence),
+            direction: PublicStreamDirection::Input,
+            outcome: PublicStreamOutcome::Failed {
+                error: PublicStreamError::Interrupted {
+                    message: message.clone(),
+                },
+            },
             version: INVOCATION_SESSION_VERSION,
         });
     }
@@ -1489,9 +1487,13 @@ fn cancel_open_streams(
         .collect::<Vec<_>>();
     open_outputs.sort_unstable();
     for channel in open_outputs {
-        requests.push(PublicClientMessage::StreamCancel {
+        requests.push(PublicClientMessage::StreamEnd {
             channel,
-            reason,
+            sequence: DecimalU64(0),
+            direction: PublicStreamDirection::Output,
+            outcome: PublicStreamOutcome::ConsumerCancelled {
+                details: Some(message.clone()),
+            },
             version: INVOCATION_SESSION_VERSION,
         });
     }
@@ -1558,7 +1560,7 @@ fn response_cancels_input(response: &ServerFrame, input_channel: Option<u32>) ->
     };
     matches!(
         response,
-        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. })
+        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, .. })
             if *channel == input_channel
     )
 }
@@ -1760,7 +1762,8 @@ async fn handle_response(
                 _ => bail!("server sent a client-to-server binary message kind"),
             }
         }
-        ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Output,
             channel,
             sequence,
             outcome,
@@ -1780,21 +1783,21 @@ async fn handle_response(
             }
             stream.terminal = true;
             let (kind, error, reason) = match outcome {
-                PublicOutputStreamOutcome::Ok => (AgentInvocationSessionEventKind::End, None, None),
-                PublicOutputStreamOutcome::Error { code, message } => {
+                PublicStreamOutcome::Finished => (AgentInvocationSessionEventKind::End, None, None),
+                PublicStreamOutcome::Failed { error } => {
                     failed = true;
                     (
                         AgentInvocationSessionEventKind::StreamError,
-                        Some(message),
-                        Some(code.as_str().to_string()),
+                        Some(format!("{error:?}")),
+                        None,
                     )
                 }
-                PublicOutputStreamOutcome::Cancelled { reason } => {
-                    failed |= server_cancellation_is_failure(reason);
+                PublicStreamOutcome::ConsumerCancelled { details } => {
+                    failed = true;
                     (
                         AgentInvocationSessionEventKind::StreamCancel,
-                        None,
-                        Some(format!("{reason:?}")),
+                        Some("output consumer cancelled".to_string()),
+                        details,
                     )
                 }
             };
@@ -1812,30 +1815,31 @@ async fn handle_response(
             }
         }
         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
-        ServerFrame::Message(PublicServerMessage::StreamCancel {
-            channel, reason, ..
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Input,
+            channel,
+            outcome,
+            ..
         }) => {
-            failed |= server_cancellation_is_failure(reason);
-            let output_stream = if let Some(stream) = output_streams.get_mut(&channel) {
-                stream.terminal = true;
-                Some(stream.clone())
-            } else {
-                None
-            };
+            failed |= matches!(outcome, PublicStreamOutcome::Failed { .. });
             if structured {
                 let mut event = event(
-                    AgentInvocationSessionEventKind::StreamCancel,
+                    match outcome {
+                        PublicStreamOutcome::Finished => AgentInvocationSessionEventKind::End,
+                        PublicStreamOutcome::ConsumerCancelled { .. } => {
+                            AgentInvocationSessionEventKind::StreamCancel
+                        }
+                        PublicStreamOutcome::Failed { .. } => {
+                            AgentInvocationSessionEventKind::StreamError
+                        }
+                    },
                     idempotency_key,
                 );
                 event.stream_id = Some(channel as u64);
-                if let Some(stream) = output_stream {
-                    event.parent_stream_id = stream.parent_stream_id.map(u64::from);
-                    event.path = Some(stream.path);
-                }
-                event.reason = Some(format!("{reason:?}"));
+                event.reason = Some(format!("{outcome:?}"));
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprint_line(format!("Stream {channel} was cancelled"));
+                eprint_line(format!("Input stream {channel} ended: {outcome:?}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
@@ -1861,17 +1865,6 @@ async fn handle_response(
         }
     }
     Ok(failed)
-}
-
-fn server_cancellation_is_failure(reason: PublicServerCancelReason) -> bool {
-    matches!(
-        reason,
-        PublicServerCancelReason::TransportDetached
-            | PublicServerCancelReason::SourceUnavailable
-            | PublicServerCancelReason::ProducerDeleted
-            | PublicServerCancelReason::InvocationFailed
-            | PublicServerCancelReason::ProtocolError
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2995,32 +2988,30 @@ mod public_tests {
             },
         )]);
         assert_eq!(
-            cancel_open_streams(None, &streams, PublicClientCancelReason::ConsumerDrop),
-            vec![PublicClientMessage::StreamCancel {
-                channel: 4,
-                reason: PublicClientCancelReason::ConsumerDrop,
-                version: INVOCATION_SESSION_VERSION,
-            }]
+            cancel_open_streams(Some((3, 7)), &streams, "source unavailable".to_string()),
+            vec![
+                PublicClientMessage::StreamEnd {
+                    channel: 3,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(7),
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted {
+                            message: "source unavailable".to_string()
+                        }
+                    },
+                    version: INVOCATION_SESSION_VERSION,
+                },
+                PublicClientMessage::StreamEnd {
+                    channel: 4,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled {
+                        details: Some("source unavailable".to_string())
+                    },
+                    version: INVOCATION_SESSION_VERSION,
+                }
+            ]
         );
-    }
-
-    #[test]
-    fn explicit_and_consumer_drop_cancellation_are_not_cli_failures() {
-        assert!(!server_cancellation_is_failure(
-            PublicServerCancelReason::Cancelled
-        ));
-        assert!(!server_cancellation_is_failure(
-            PublicServerCancelReason::ConsumerDrop
-        ));
-        for reason in [
-            PublicServerCancelReason::TransportDetached,
-            PublicServerCancelReason::SourceUnavailable,
-            PublicServerCancelReason::ProducerDeleted,
-            PublicServerCancelReason::InvocationFailed,
-            PublicServerCancelReason::ProtocolError,
-        ] {
-            assert!(server_cancellation_is_failure(reason));
-        }
     }
 
     #[test]
@@ -3046,31 +3037,39 @@ mod public_tests {
 
     #[test]
     async fn terminal_input_acknowledgement_does_not_consume_item_capacity() {
-        let buffer = InputReplayBuffer::new(2, 2);
-        buffer.push(
-            buffer
-                .admit(
-                    ReplayableInput::Value {
-                        sequence: 0,
-                        value: serde_json::json!(1),
-                    },
-                    1,
-                )
-                .await
-                .unwrap(),
-        );
-        buffer.push(
-            buffer
-                .admit(ReplayableInput::End { sequence: 1 }, 1)
-                .await
-                .unwrap(),
-        );
-        buffer.mark_sent(0).unwrap();
-        buffer.mark_sent(1).unwrap();
-        buffer.acknowledge(1, false).unwrap();
-        assert_eq!(buffer.len(), 1);
-        buffer.acknowledge(1, true).unwrap();
-        assert!(buffer.is_empty());
+        for terminal in [
+            ReplayableInput::End { sequence: 1 },
+            ReplayableInput::Failed {
+                sequence: 1,
+                message: "source unavailable".to_string(),
+            },
+        ] {
+            let buffer = InputReplayBuffer::new(2, 2);
+            buffer.initialize_high_water(9, false).unwrap();
+            buffer.push(
+                buffer
+                    .admit(
+                        ReplayableInput::Value {
+                            sequence: 0,
+                            value: serde_json::json!(1),
+                        },
+                        1,
+                    )
+                    .await
+                    .unwrap(),
+            );
+            buffer.push(buffer.admit(terminal, 1).await.unwrap());
+            assert_eq!(buffer.next_sequence().unwrap(), 9);
+            buffer.mark_sent(0).unwrap();
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+            buffer.mark_sent(1).unwrap();
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+            buffer.acknowledge(10, false).unwrap();
+            assert_eq!(buffer.len(), 1);
+            buffer.acknowledge(10, true).unwrap();
+            assert!(buffer.is_empty());
+            assert_eq!(buffer.next_sequence().unwrap(), 10);
+        }
     }
 
     struct BrokenOnFlush;

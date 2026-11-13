@@ -652,17 +652,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 typed_schema_value_to_string(&params.record)
             );
         }
-        PublicOplogEntry::StreamEnd(params) => {
-            let _ = writeln!(result, "STREAM END");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}record:            {}",
-                typed_schema_value_to_string(&params.record)
-            );
-        }
-        PublicOplogEntry::StreamCancel(params) => {
-            let _ = writeln!(result, "STREAM CANCEL");
+        PublicOplogEntry::StreamTerminal(params) => {
+            let _ = writeln!(result, "STREAM TERMINAL");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(
                 result,

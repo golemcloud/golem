@@ -15,10 +15,29 @@
 use super::*;
 use crate::durable_host::durable_stream::tests::TestOplog;
 use crate::services::oplog::{OplogReadError, UnreadableOplog};
+use golem_common::base_model::durable_stream::StreamError;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::OplogIndex;
 use test_r::test;
+
+struct TestConsumerJournal(Arc<TestOplog>);
+
+#[async_trait::async_trait]
+impl crate::durable_host::durable_session::DurableStreamConsumerJournal for TestConsumerJournal {
+    async fn commit(&self) -> Result<(), SessionError> {
+        use crate::services::oplog::{CommitLevel, Oplog};
+        self.0.commit(CommitLevel::Always).await.unwrap();
+        Ok(())
+    }
+
+    async fn committed_finished_index(
+        &self,
+        _session: &golem_common::model::durable_stream::StreamSessionKey,
+    ) -> Result<Option<OplogIndex>, SessionError> {
+        Ok(None)
+    }
+}
 
 fn unreadable() -> UnreadableOplog {
     UnreadableOplog {
@@ -30,6 +49,443 @@ fn unreadable() -> UnreadableOplog {
             start: OplogIndex::INITIAL,
             end: OplogIndex::from_u64(2),
         },
+    }
+}
+
+async fn routed_stream_session(
+    role: SessionStreamRole,
+) -> (
+    StreamSession,
+    Arc<tokio::sync::Mutex<InvocationSessionState>>,
+    golem_common::model::durable_stream::DurableStreamHandle,
+) {
+    use crate::durable_host::durable_stream::DurableStreamStore;
+    use crate::durable_host::durable_stream::tests::{identity, registration};
+    use crate::services::oplog::Oplog;
+    use golem_common::model::durable_stream::{
+        StreamSessionAttachedRecord, StreamSessionExpiryPolicy, StreamSessionMappingRecord,
+        StreamSessionPreparedRecord, StreamSessionRecord,
+    };
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{OplogEntry, payload::OplogPayload};
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let attachment_id = AttachmentId::primary(
+        identity.environment_id,
+        &identity.agent_id,
+        &identity.invocation.idempotency_key,
+    )
+    .unwrap();
+    let attempt_id = AttemptId::fresh();
+    let mut registration = registration(
+        &identity,
+        StreamRegistrationCoordinate::Root {
+            invocation_id: identity.invocation.clone(),
+            root_kind: if role == SessionStreamRole::Input {
+                StreamRootKind::MethodInput
+            } else {
+                StreamRootKind::MethodResult
+            },
+            recursive_value_path: Vec::new(),
+        },
+        if role == SessionStreamRole::Input {
+            StreamSourceKind::ExternalInlineInput
+        } else {
+            StreamSourceKind::InvocationOutput
+        },
+    );
+    registration.session_mapping = Some(StreamSessionMapping {
+        session_key: identity.invocation.clone(),
+        attachment_id,
+        role,
+    });
+    let handle = producer.register(None, registration).await.unwrap().value;
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 7,
+        handle: handle.clone(),
+        role,
+    };
+    let binding = producer.local_binding(7, &handle, role).await.unwrap();
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: identity.invocation.idempotency_key.value.clone(),
+                session_key: identity.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
+                attempt: StartAttemptDescriptor {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation.clone(),
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        target: PersistedInvocationTarget::AgentMethod {
+                            method_name: "run".into(),
+                        },
+                        invocation_value: vec![1],
+                        stream_handles: if role.direction() == SessionStreamRole::Input {
+                            vec![handle.clone()]
+                        } else {
+                            Vec::new()
+                        },
+                        execution_config: vec![],
+                        effective_identity: vec![],
+                    },
+                    effective_identity: vec![],
+                    live_join_buffer_events: 8,
+                },
+                stream_mappings: vec![binding.clone()],
+            }),
+        )
+        .await
+        .unwrap();
+    let pending_invocation_oplog_index = oplog
+        .add(OplogEntry::pending_agent_invocation(
+            None,
+            identity.invocation.idempotency_key.clone(),
+            OplogPayload::Inline(Box::new(
+                golem_common::model::AgentInvocationPayload::SaveSnapshot,
+            )),
+            TraceId::generate(),
+            vec![],
+            vec![],
+        ))
+        .await
+        .unwrap();
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: identity.invocation.idempotency_key.clone(),
+                attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index,
+            }),
+        )
+        .await
+        .unwrap();
+    let streams = StreamSession::open(
+        producer,
+        oplog.clone(),
+        StreamRegistrationInvocation::Remote(identity.invocation.clone()),
+        [binding],
+    )
+    .await
+    .unwrap()
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
+    .with_attachment(1, attempt_id);
+    let mut state = InvocationSessionState::default();
+    let input = if role == SessionStreamRole::Input {
+        golem_schema::proto::golem::schema::SchemaValue {
+            value: Some(
+                golem_schema::proto::golem::schema::schema_value::Value::StreamReference(
+                    golem_schema::proto::golem::schema::SchemaValueStreamReference { stream_id: 7 },
+                ),
+            ),
+        }
+    } else {
+        golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::Tuple {
+            elements: vec![],
+        })
+        .unwrap()
+    };
+    state
+        .validate_trusted_request(&InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                method_name: Some("run".into()),
+                input: Some(input),
+                idempotency_key: Some(identity.invocation.idempotency_key.clone().into()),
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    state
+        .validate_response(&InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(
+                InvocationAccepted {
+                    agent_id: Some(identity.agent_id.into()),
+                    idempotency_key: Some(identity.invocation.idempotency_key.into()),
+                    component_revision: Some(ComponentRevision::INITIAL.get()),
+                    attachment_id: Some(attachment_id.0.into()),
+                    attempt_id: Some(attempt_id.0.into()),
+                    epoch: 1,
+                    environment_id: Some(identity.environment_id.into()),
+                    callee_fingerprint: Some(identity.fingerprint.0.into()),
+                    stream_mappings: vec![durable_stream_mapping_to_proto(&mapping, None)],
+                    ..Default::default()
+                },
+            )),
+        })
+        .unwrap();
+    (streams, Arc::new(tokio::sync::Mutex::new(state)), handle)
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn explicit_input_failure_records_the_exact_source_terminal_and_ack() {
+    use crate::durable_host::durable_stream::CommittedProducerStreamEventPayload;
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamItem, StreamDirection, StreamEnd, input_stream_item::Payload,
+    };
+    use golem_common::model::durable_stream::StreamTerminalOrigin;
+    use golem_schema::schema::IntoTypedSchemaValue;
+
+    for terminal in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(
+            (73u32, "input rejected".to_string())
+                .into_typed_schema_value()
+                .unwrap()
+                .into(),
+        )),
+        StreamTerminal::Failed(StreamError::Interrupted("writer stopped".into())),
+        StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+        StreamTerminal::Failed(StreamError::Abandoned),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("memory".into())),
+    ] {
+        for author in [
+            StreamTerminalAuthor::Guest,
+            StreamTerminalAuthor::Host,
+            StreamTerminalAuthor::Protocol,
+        ] {
+            let (streams, state, handle) = routed_stream_session(SessionStreamRole::Input).await;
+            let (responses, mut received) = mpsc::channel(2);
+            request::route_durable_request(
+                &streams,
+                &responses,
+                &state,
+                InvocationRequest {
+                    request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                        transport_stream_id: 7,
+                        sequence: 0,
+                        durable_stream_id: Some(handle.stream_id.0.into()),
+                        epoch: 1,
+                        payload: Some(Payload::PackedU8(vec![17, 255])),
+                    })),
+                },
+            )
+            .await
+            .unwrap();
+            state
+                .lock()
+                .await
+                .validate_response(&received.recv().await.unwrap())
+                .unwrap();
+            let request = InvocationRequest {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                    transport_stream_id: 7,
+                    producer_sequence: 2,
+                    durable_stream_id: Some(handle.stream_id.0.into()),
+                    epoch: 1,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::from(
+                        author,
+                    ) as i32,
+                    outcome: Some(terminal.clone().try_into().unwrap()),
+                    ..Default::default()
+                })),
+            };
+            let request = InvocationRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+            request::route_durable_request(&streams, &responses, &state, request)
+                .await
+                .unwrap();
+            let response = received.recv().await.unwrap();
+            state.lock().await.validate_response(&response).unwrap();
+            let Some(invocation_response::Response::InputAck(ack)) = response.response else {
+                panic!("producer terminal must acknowledge its exact sequence");
+            };
+            assert_eq!(ack.transport_stream_id, 7);
+            assert_eq!(ack.highest_contiguous_sequence, 2);
+            assert_eq!(ack.logical_item_count, 1);
+            assert_eq!(ack.durable_stream_id, Some(handle.stream_id.0.into()));
+            let mut reader = streams.producer.catch_up(handle, None).await.unwrap();
+            for byte in [17, 255] {
+                assert_eq!(
+                    reader.next().await.unwrap().unwrap().payload,
+                    CommittedProducerStreamEventPayload::PackedU8(byte)
+                );
+            }
+            let event = reader.next().await.unwrap().unwrap();
+            assert_eq!(ack.resulting_offset, event.offset.as_bytes().to_vec());
+            assert_eq!(event.producer_sequence, 2);
+            assert_eq!(event.terminal_author, Some(author));
+            assert_eq!(event.terminal_origin, Some(StreamTerminalOrigin::Source));
+            assert_eq!(
+                event.payload,
+                CommittedProducerStreamEventPayload::Terminal(terminal.clone())
+            );
+            assert!(reader.next().await.unwrap().is_none());
+            assert!(
+                !matches!(
+                    event.payload,
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                        StreamError::Cancelled
+                    ))
+                ),
+                "a writer ending does not synthesize invocation cancellation"
+            );
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn client_output_consumer_cannot_forge_a_producer_terminal() {
+    use golem_api_grpc::proto::golem::worker::{StreamDirection, StreamEnd};
+    for terminal in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Cancelled),
+    ] {
+        let (streams, state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+        let before = streams.oplog.current_oplog_index().await;
+        let (responses, mut received) = mpsc::channel(1);
+        let result = request::route_durable_request(
+            &streams,
+            &responses,
+            &state,
+            InvocationRequest {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                    transport_stream_id: 7,
+                    durable_stream_id: Some(handle.stream_id.0.into()),
+                    epoch: 1,
+                    direction: StreamDirection::Output as i32,
+                    authored_by: golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::Guest
+                        as i32,
+                    outcome: Some(terminal.try_into().unwrap()),
+                    ..Default::default()
+                })),
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(streams.oplog.current_oplog_index().await, before);
+        assert!(received.try_recv().is_err());
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn client_output_cancellation_preserves_author_and_control_origin() {
+    use crate::durable_host::durable_stream::CommittedProducerStreamEventPayload;
+    use golem_api_grpc::proto::golem::worker::{StreamDirection, StreamEnd};
+    use golem_common::model::durable_stream::StreamTerminalOrigin;
+
+    for author in [
+        StreamTerminalAuthor::Guest,
+        StreamTerminalAuthor::Host,
+        StreamTerminalAuthor::Protocol,
+    ] {
+        let (streams, state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+        let terminal = StreamTerminal::ConsumerCancelled {
+            details: Some("reader stopped".into()),
+        };
+        let (responses, mut received) = mpsc::channel(1);
+        request::route_durable_request(
+            &streams,
+            &responses,
+            &state,
+            InvocationRequest {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                    transport_stream_id: 7,
+                    durable_stream_id: Some(handle.stream_id.0.into()),
+                    epoch: 1,
+                    direction: StreamDirection::Output as i32,
+                    authored_by: golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::from(
+                        author,
+                    ) as i32,
+                    outcome: Some(terminal.clone().try_into().unwrap()),
+                    ..Default::default()
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        let mut reader = streams.producer.catch_up(handle, None).await.unwrap();
+        let event = reader.next().await.unwrap().unwrap();
+        assert_eq!(event.terminal_origin, Some(StreamTerminalOrigin::Control));
+        assert_eq!(event.terminal_author, Some(author));
+        assert_eq!(
+            event.payload,
+            CommittedProducerStreamEventPayload::Terminal(terminal)
+        );
+        assert!(reader.next().await.unwrap().is_none());
+        assert!(
+            received.try_recv().is_err(),
+            "consumer control must not synthesize an input ack"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn malformed_stream_end_is_rejected_before_any_durable_write() {
+    use golem_api_grpc::proto::golem::worker::{StreamDirection, StreamEnd};
+    for invalid in [
+        "missing outcome",
+        "empty outcome",
+        "missing author",
+        "unknown author",
+        "missing direction",
+        "unknown direction",
+    ] {
+        let (streams, state, handle) = routed_stream_session(SessionStreamRole::Input).await;
+        let mut end = StreamEnd {
+            transport_stream_id: 7,
+            durable_stream_id: Some(handle.stream_id.0.into()),
+            epoch: 1,
+            direction: StreamDirection::Input as i32,
+            authored_by: golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::Guest as i32,
+            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+            ..Default::default()
+        };
+        match invalid {
+            "missing outcome" => end.outcome = None,
+            "empty outcome" => end.outcome = Some(Default::default()),
+            "missing author" => end.authored_by = 0,
+            "unknown author" => end.authored_by = i32::MAX,
+            "missing direction" => end.direction = 0,
+            "unknown direction" => end.direction = i32::MAX,
+            _ => unreachable!(),
+        }
+        let before = streams.oplog.current_oplog_index().await;
+        let (responses, mut received) = mpsc::channel(1);
+        assert!(
+            request::route_durable_request(
+                &streams,
+                &responses,
+                &state,
+                InvocationRequest {
+                    request: Some(invocation_request::Request::StreamEnd(end)),
+                }
+            )
+            .await
+            .is_err(),
+            "{invalid}"
+        );
+        assert_eq!(
+            streams.oplog.current_oplog_index().await,
+            before,
+            "{invalid}"
+        );
+        assert!(received.try_recv().is_err());
     }
 }
 

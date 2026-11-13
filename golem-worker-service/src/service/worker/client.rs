@@ -432,10 +432,8 @@ where
             }
             Some(
                 invocation_response::Response::OutputItem(_)
-                | invocation_response::Response::OutputEnd(_)
-                | invocation_response::Response::OutputError(_)
-                | invocation_response::Response::InputAck(_)
-                | invocation_response::Response::StreamCancel(_),
+                | invocation_response::Response::StreamEnd(_)
+                | invocation_response::Response::InputAck(_),
             ) => {
                 return Ok(protocol_failure(
                     "a non-streaming invocation received a stream frame",
@@ -3363,9 +3361,9 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
     use golem_api_grpc::proto::golem::worker::{
-        InputStreamEnd, InvocationAccepted, InvocationFreshnessDisposition as WireFreshness,
-        InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-        InvocationStart, invocation_request, invocation_response,
+        InvocationAccepted, InvocationFreshnessDisposition as WireFreshness, InvocationRejected,
+        InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationStart,
+        StreamEnd, invocation_request, invocation_response,
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::{
         WorkerExecutor, WorkerExecutorServer,
@@ -4154,9 +4152,7 @@ mod rejection_mapping_tests {
         let request = stream::iter([
             session_start(&agent_id),
             InvocationRequest {
-                request: Some(invocation_request::Request::InputEnd(
-                    InputStreamEnd::default(),
-                )),
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd::default())),
             },
         ]);
 

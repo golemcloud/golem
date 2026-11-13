@@ -221,11 +221,19 @@ async fn effect_duplex_websocket_crash_continuation(
         requests.send(input(1, "after")).await?;
         requests
             .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                     transport_stream_id: 1,
-                    sequence: 2,
+                    producer_sequence: 2,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::Finished
+                            .try_into()
+                            .expect("finished terminal"),
+                    ),
                     durable_stream_id: stream_id,
                     epoch: accepted.epoch,
+                    ..Default::default()
                 })),
             })
             .await?;
@@ -256,7 +264,13 @@ async fn effect_duplex_websocket_crash_continuation(
                     Some(invocation_response::Response::OutputItem(item)) => {
                         values.push(item.value.unwrap().value)
                     }
-                    Some(invocation_response::Response::OutputEnd(_)) => closed = true,
+                    Some(invocation_response::Response::StreamEnd(end)) => {
+                        assert!(matches!(
+                            end.outcome.and_then(|outcome| outcome.terminal),
+                            Some(stream_terminal::Terminal::Finished(_))
+                        ));
+                        closed = true;
+                    }
                     Some(invocation_response::Response::Finished(completion)) => {
                         assert!(
                             matches!(

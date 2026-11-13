@@ -15,12 +15,12 @@
 use crate::proto::golem::worker::input_stream_item::Payload;
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
-    InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind,
-    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-    InvocationSessionResult, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
-    StreamCancelRole, StreamMappingRole, ToolByteStreamRole, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
-    public_external_tool_result, public_tool_error, public_tool_rpc_error,
+    InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRejectionReason,
+    InvocationRequest, InvocationResponse, InvocationSessionCompletion, InvocationSessionResult,
+    ResumeAttach, ResumeOperation, StreamDirection, StreamEnd, StreamMappingRole,
+    StreamTerminalAuthor, ToolByteStreamRole, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result, public_external_tool_result,
+    public_tool_error, public_tool_rpc_error,
 };
 use golem_schema::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use prost::Message;
@@ -145,8 +145,7 @@ enum RequestMessage<'a> {
         resume: &'a ResumeAttach,
     },
     InputItem(&'a InputStreamItem),
-    InputEnd(&'a InputStreamEnd),
-    StreamCancel(&'a StreamCancel),
+    StreamEnd(&'a StreamEnd),
 }
 
 impl InvocationSessionState {
@@ -202,10 +201,7 @@ impl InvocationSessionState {
                 }
             }
             Some(invocation_request::Request::InputItem(item)) => RequestMessage::InputItem(item),
-            Some(invocation_request::Request::InputEnd(end)) => RequestMessage::InputEnd(end),
-            Some(invocation_request::Request::StreamCancel(cancel)) => {
-                RequestMessage::StreamCancel(cancel)
-            }
+            Some(invocation_request::Request::StreamEnd(end)) => RequestMessage::StreamEnd(end),
             None => return Err("invocation request has no payload".to_string()),
         };
         self.validate_request(message, accept_terminal_output_cancellation)
@@ -334,68 +330,45 @@ impl InvocationSessionState {
                 state.last_durable_offset = Some(durable_frame.durable_offset);
                 Ok(())
             }
-            (SessionPhase::Active, invocation_response::Response::OutputEnd(end)) => {
-                let durable_frame = self.validate_output_frame(
-                    end.transport_stream_id,
-                    &end.durable_stream_id,
-                    &end.durable_offset,
-                    end.epoch,
-                )?;
-                self.terminate_output(
-                    end.transport_stream_id,
-                    end.producer_sequence,
-                    durable_frame,
-                )
-            }
-            (SessionPhase::Active, invocation_response::Response::OutputError(error)) => {
-                let durable_frame = self.validate_output_frame(
-                    error.transport_stream_id,
-                    &error.durable_stream_id,
-                    &error.durable_offset,
-                    error.epoch,
-                )?;
-                self.terminate_output(
-                    error.transport_stream_id,
-                    error.producer_sequence,
-                    durable_frame,
-                )
-            }
             (SessionPhase::Active, invocation_response::Response::InputAck(ack)) => {
                 self.validate_ack(ack)
             }
-            (SessionPhase::Active, invocation_response::Response::StreamCancel(cancel)) => {
-                validate_cancel(cancel)?;
-                match cancel.role() {
-                    StreamCancelRole::InputConsumer => {
+            (SessionPhase::Active, invocation_response::Response::StreamEnd(cancel)) => {
+                let (direction, consumer_cancelled) = validate_stream_end(cancel)?;
+                match direction {
+                    StreamDirection::Input => {
                         let durable_offset = self.validate_input_cancel_frame(cancel)?;
-                        self.cancel_input(
-                            cancel.transport_stream_id,
-                            cancel.producer_sequence,
-                            true,
-                        )?;
+                        self.cancel_input(cancel.transport_stream_id, cancel.producer_sequence)?;
                         self.inputs
                             .get_mut(&cancel.transport_stream_id)
                             .expect("input stream disappeared while applying cancellation")
                             .last_durable_offset = durable_offset;
                         Ok(())
                     }
-                    StreamCancelRole::OutputProducer => {
+                    StreamDirection::Output => {
                         let durable_frame = self.validate_output_frame(
                             cancel.transport_stream_id,
                             &cancel.durable_stream_id,
                             &cancel.durable_offset,
                             cancel.epoch,
                         )?;
-                        self.confirm_output_cancellation(
-                            cancel.transport_stream_id,
-                            cancel.producer_sequence,
-                            durable_frame,
-                        )
+                        if consumer_cancelled {
+                            self.confirm_output_cancellation(
+                                cancel.transport_stream_id,
+                                cancel.producer_sequence,
+                                durable_frame,
+                            )
+                        } else {
+                            self.terminate_output(
+                                cancel.transport_stream_id,
+                                cancel.producer_sequence,
+                                durable_frame,
+                            )
+                        }
                     }
-                    _ => Err(
-                        "server response may only cancel an input consumer or output producer"
-                            .to_string(),
-                    ),
+                    StreamDirection::Unspecified => {
+                        Err("stream direction is unspecified".to_string())
+                    }
                 }
             }
             (SessionPhase::Active, invocation_response::Response::AttachmentRevoked(_)) => {
@@ -497,21 +470,19 @@ impl InvocationSessionState {
             (SessionPhase::Active, RequestMessage::InputItem(item)) => {
                 self.validate_input_item(item)
             }
-            (SessionPhase::Active, RequestMessage::InputEnd(end)) => {
-                self.validate_input_end(end.transport_stream_id, end.sequence)
-            }
-            (SessionPhase::Active, RequestMessage::StreamCancel(cancel)) => {
-                validate_cancel(cancel)?;
-                match cancel.role() {
-                    StreamCancelRole::InputProducer => {
+            (SessionPhase::Active, RequestMessage::StreamEnd(cancel)) => {
+                let (direction, consumer_cancelled) = validate_stream_end(cancel)?;
+                match direction {
+                    StreamDirection::Input if !consumer_cancelled => {
                         self.validate_cancel_request_authority(cancel, true)?;
-                        self.cancel_input(
+                        self.validate_input_end(
                             cancel.transport_stream_id,
                             cancel.producer_sequence,
-                            false,
+                            cancel.outcome.as_ref().expect("validated terminal"),
+                            cancel.authored_by,
                         )
                     }
-                    StreamCancelRole::OutputConsumer => {
+                    StreamDirection::Output if consumer_cancelled => {
                         self.validate_cancel_request_authority(cancel, false)?;
                         self.request_output_cancellation(
                             cancel.transport_stream_id,
@@ -520,7 +491,7 @@ impl InvocationSessionState {
                         )
                     }
                     _ => Err(
-                        "client request may only cancel an input producer or output consumer"
+                        "client input stream ends must be producer terminals; output stream ends must be consumer cancellations"
                             .to_string(),
                     ),
                 }
@@ -1305,12 +1276,21 @@ impl InvocationSessionState {
         Ok(())
     }
 
-    fn validate_input_end(&mut self, stream_id: u64, offset: u64) -> Result<(), String> {
+    fn validate_input_end(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        outcome: &crate::proto::golem::worker::StreamTerminal,
+        authored_by: i32,
+    ) -> Result<(), String> {
+        let mut fingerprint = blake3::Hasher::new();
+        fingerprint.update(&authored_by.to_le_bytes());
+        fingerprint.update(&outcome.encode_to_vec());
         let identity = InputItemIdentity {
             sequence: offset,
             logical_item_count: 1,
             new_stream_ids: Vec::new(),
-            payload_fingerprint: [0; 32],
+            payload_fingerprint: *fingerprint.finalize().as_bytes(),
             terminal: true,
         };
         let state = self
@@ -1376,28 +1356,19 @@ impl InvocationSessionState {
         Ok(())
     }
 
-    /// Applies an input cancellation. `by_consumer` distinguishes the consumer's cancellation
-    /// (a server response) from the producer's own cancellation request.
+    /// Applies an authoritative input terminal from a server response.
     ///
     /// The consumer decides to stop while producer frames may still be in flight, so its
-    /// cancellation races with the producer's terminal in both directions: producer events that
-    /// arrive after the consumer cancellation are discarded (`discard_next_offset`), and a
-    /// consumer cancellation that arrives after the producer already published its terminal is
+    /// terminal races with the producer's terminal in both directions: producer events that
+    /// arrive after the server terminal are discarded (`discard_next_offset`), and a
+    /// server terminal that arrives after the producer already published its terminal is
     /// accepted once, abandoning every unacknowledged producer event from `offset` onward.
-    fn cancel_input(
-        &mut self,
-        stream_id: u64,
-        offset: u64,
-        by_consumer: bool,
-    ) -> Result<(), String> {
+    fn cancel_input(&mut self, stream_id: u64, offset: u64) -> Result<(), String> {
         let state = self
             .inputs
             .get_mut(&stream_id)
             .ok_or_else(|| format!("input stream {stream_id} is unknown"))?;
-        ensure_open(
-            state.consumer_cancelled || (state.terminal && !by_consumer),
-            stream_id,
-        )?;
+        ensure_open(state.consumer_cancelled, stream_id)?;
         let accepted_offset = state
             .pending_acks
             .front()
@@ -1408,11 +1379,9 @@ impl InvocationSessionState {
                 "input stream {stream_id} expected cancellation offset {accepted_offset}, got {offset}"
             ));
         }
-        if by_consumer {
-            state.consumer_cancelled = true;
-            if !state.terminal {
-                state.discard_next_offset = Some(state.next_offset);
-            }
+        state.consumer_cancelled = true;
+        if !state.terminal {
+            state.discard_next_offset = Some(state.next_offset);
         }
         state.next_offset = offset;
         state.pending_ranges.clear();
@@ -1752,10 +1721,7 @@ impl InvocationSessionState {
         Ok(ValidatedOutputFrame { durable_offset })
     }
 
-    fn validate_input_cancel_frame(
-        &self,
-        cancel: &StreamCancel,
-    ) -> Result<Option<[u8; 24]>, String> {
+    fn validate_input_cancel_frame(&self, cancel: &StreamEnd) -> Result<Option<[u8; 24]>, String> {
         let state = self
             .inputs
             .get(&cancel.transport_stream_id)
@@ -1810,7 +1776,7 @@ impl InvocationSessionState {
 
     fn validate_cancel_request_authority(
         &self,
-        cancel: &StreamCancel,
+        cancel: &StreamEnd,
         input: bool,
     ) -> Result<(), String> {
         let expected_stream_id = if input {
@@ -1823,7 +1789,10 @@ impl InvocationSessionState {
                 .map(|state| state.durable_stream_id)
         };
         let Some(expected_stream_id) = expected_stream_id else {
-            if cancel.durable_stream_id.is_some() || cancel.epoch != 0 {
+            if cancel.durable_stream_id.is_some()
+                || cancel.epoch != 0
+                || !cancel.durable_offset.is_empty()
+            {
                 return Err(
                     "non-durable stream cancellation contains durable attachment metadata"
                         .to_string(),
@@ -2022,18 +1991,42 @@ fn validate_durable_offset(offset: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_cancel(cancel: &StreamCancel) -> Result<(), String> {
-    let role = StreamCancelRole::try_from(cancel.role)
-        .map_err(|_| format!("invalid stream cancellation role {}", cancel.role))?;
-    if role == StreamCancelRole::Unspecified {
-        return Err("stream cancellation role is unspecified".to_string());
+fn validate_stream_end(end: &StreamEnd) -> Result<(StreamDirection, bool), String> {
+    use crate::proto::golem::worker::{stream_error::Error, stream_terminal::Terminal};
+    let direction = StreamDirection::try_from(end.direction)
+        .map_err(|_| format!("invalid stream direction {}", end.direction))?;
+    if direction == StreamDirection::Unspecified {
+        return Err("stream direction is unspecified".into());
     }
-    let reason = StreamCancelReason::try_from(cancel.reason)
-        .map_err(|_| format!("invalid stream cancellation reason {}", cancel.reason))?;
-    if reason == StreamCancelReason::Unspecified {
-        return Err("stream cancellation reason is unspecified".to_string());
+    let author = StreamTerminalAuthor::try_from(end.authored_by)
+        .map_err(|_| format!("invalid stream terminal author {}", end.authored_by))?;
+    if author == StreamTerminalAuthor::Unspecified {
+        return Err("stream terminal author is unspecified".into());
     }
-    Ok(())
+    let terminal = end
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.terminal.as_ref())
+        .ok_or("stream end has no terminal outcome")?;
+    match terminal {
+        Terminal::Finished(_) => Ok((direction, false)),
+        Terminal::ConsumerCancelled(_) => Ok((direction, true)),
+        Terminal::Failed(error) => {
+            let error = error.error.as_ref().ok_or("stream failure has no error")?;
+            if let Error::Failed(value) = error {
+                let value: golem_schema::schema::TypedSchemaValue = value.clone().try_into()?;
+                golem_schema::schema::validation::validate_graph(value.graph())
+                    .map_err(|errors| format!("invalid typed stream failure schema: {errors:?}"))?;
+                golem_schema::schema::validation::validate_value(
+                    value.graph(),
+                    value.root_type(),
+                    value.value(),
+                )
+                .map_err(|errors| format!("invalid typed stream failure value: {errors:?}"))?;
+            }
+            Ok((direction, false))
+        }
+    }
 }
 
 fn ensure_open(terminal: bool, stream_id: u64) -> Result<(), String> {
@@ -2180,8 +2173,8 @@ mod tests {
     use crate::proto::golem::component::ComponentId;
     use crate::proto::golem::worker::{
         AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
-        InvocationStart, OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach,
-        StreamCursor, StreamInvocationIdentity,
+        InvocationStart, OutputStreamItem, ResumeAttach, StreamConsumerCancelled, StreamCursor,
+        StreamError, StreamInvocationIdentity, StreamTerminal, stream_error, stream_terminal,
     };
     use golem_schema::proto::golem::common::{Empty, Uuid};
     use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
@@ -2355,11 +2348,8 @@ mod tests {
         assert!(state.validate_response(&success()).is_err());
         assert!(
             state
-                .validate_trusted_request(&trusted_request(invocation_request::Request::InputEnd(
-                    InputStreamEnd {
-                        transport_stream_id: 7,
-                        ..Default::default()
-                    }
+                .validate_trusted_request(&trusted_request(invocation_request::Request::StreamEnd(
+                    input_end(7, 0)
                 )))
                 .is_err()
         );
@@ -2540,20 +2530,25 @@ mod tests {
         ))
     }
 
-    fn cancel(stream_id: u64, role: StreamCancelRole, offset: u64) -> StreamCancel {
-        let server_terminal = matches!(
-            role,
-            StreamCancelRole::InputConsumer | StreamCancelRole::OutputProducer
-        );
-        StreamCancel {
+    fn consumer_end(
+        stream_id: u64,
+        direction: StreamDirection,
+        offset: u64,
+        server: bool,
+    ) -> StreamEnd {
+        StreamEnd {
             transport_stream_id: stream_id,
             producer_sequence: offset,
-            role: role as i32,
-            reason: StreamCancelReason::Cancelled as i32,
-            details: None,
+            direction: direction as i32,
+            authored_by: StreamTerminalAuthor::Host as i32,
+            outcome: Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::ConsumerCancelled(
+                    StreamConsumerCancelled { details: None },
+                )),
+            }),
             durable_stream_id: Some(uuid(100 + stream_id)),
             epoch: 1,
-            durable_offset: if server_terminal {
+            durable_offset: if server {
                 durable_offset(offset + 10)
             } else {
                 Default::default()
@@ -2601,24 +2596,44 @@ mod tests {
         }
     }
 
-    fn output_end(stream_id: u64, sequence: u64) -> OutputStreamEnd {
-        OutputStreamEnd {
+    fn input_end(stream_id: u64, sequence: u64) -> StreamEnd {
+        StreamEnd {
             transport_stream_id: stream_id,
             producer_sequence: sequence,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Host as i32,
+            outcome: Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Finished(Empty {})),
+            }),
+            durable_stream_id: Some(uuid(100 + stream_id)),
+            epoch: 1,
+            ..Default::default()
+        }
+    }
+
+    fn output_end(stream_id: u64, sequence: u64) -> StreamEnd {
+        StreamEnd {
+            transport_stream_id: stream_id,
+            producer_sequence: sequence,
+            direction: StreamDirection::Output as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Finished(Empty {})),
+            }),
             durable_stream_id: Some(uuid(100 + stream_id)),
             durable_offset: durable_offset(sequence),
             epoch: 1,
         }
     }
 
-    fn output_error(stream_id: u64, sequence: u64, details: &str) -> OutputStreamError {
-        OutputStreamError {
-            transport_stream_id: stream_id,
-            producer_sequence: sequence,
-            details: details.to_string(),
-            durable_stream_id: Some(uuid(100 + stream_id)),
-            durable_offset: durable_offset(sequence),
-            epoch: 1,
+    fn output_error(stream_id: u64, sequence: u64, details: &str) -> StreamEnd {
+        StreamEnd {
+            outcome: Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Failed(StreamError {
+                    error: Some(stream_error::Error::Trapped(details.to_string())),
+                })),
+            }),
+            ..output_end(stream_id, sequence)
         }
     }
 
@@ -2654,11 +2669,7 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 7,
-                    sequence: 2,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(7, 2)),
             ))
             .unwrap();
         state
@@ -2679,7 +2690,7 @@ mod tests {
             .unwrap();
         for (stream_id, offset) in [(9, 1), (10, 0), (11, 0)] {
             state
-                .validate_response(&response(invocation_response::Response::OutputEnd(
+                .validate_response(&response(invocation_response::Response::StreamEnd(
                     output_end(stream_id, offset),
                 )))
                 .unwrap();
@@ -2756,7 +2767,7 @@ mod tests {
             )))
             .unwrap();
         state
-            .validate_response(&response(invocation_response::Response::OutputEnd(
+            .validate_response(&response(invocation_response::Response::StreamEnd(
                 output_end(9, 4),
             )))
             .unwrap();
@@ -2887,7 +2898,7 @@ mod tests {
                 .is_err()
         );
         state
-            .validate_response(&response(invocation_response::Response::OutputEnd(
+            .validate_response(&response(invocation_response::Response::StreamEnd(
                 output_end(9, 2),
             )))
             .unwrap();
@@ -3407,7 +3418,7 @@ mod tests {
         assert!(
             state
                 .validate_public_request(&public_request(
-                    public_invocation_request::Request::InputEnd(InputStreamEnd::default()),
+                    public_invocation_request::Request::StreamEnd(StreamEnd::default()),
                 ))
                 .is_err()
         );
@@ -3425,11 +3436,7 @@ mod tests {
         assert!(
             state
                 .validate_public_request(&public_request(
-                    public_invocation_request::Request::InputEnd(InputStreamEnd {
-                        transport_stream_id: 8,
-                        sequence: 0,
-                        ..Default::default()
-                    }),
+                    public_invocation_request::Request::StreamEnd(input_end(8, 0)),
                 ))
                 .is_err()
         );
@@ -3466,11 +3473,7 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 7,
-                    sequence: 3,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(7, 3)),
             ))
             .unwrap();
         assert!(
@@ -3489,7 +3492,7 @@ mod tests {
         state.validate_response(&accepted()).unwrap();
         state.validate_response(&result(stream(9))).unwrap();
         state
-            .validate_response(&response(invocation_response::Response::OutputEnd(
+            .validate_response(&response(invocation_response::Response::StreamEnd(
                 output_end(9, 0),
             )))
             .unwrap();
@@ -3497,18 +3500,19 @@ mod tests {
         assert!(
             state
                 .validate_public_request(&public_request(
-                    public_invocation_request::Request::StreamCancel(cancel(
+                    public_invocation_request::Request::StreamEnd(consumer_end(
                         9,
-                        StreamCancelRole::OutputConsumer,
+                        StreamDirection::Output,
                         0,
+                        false
                     )),
                 ))
                 .is_err(),
             "an output-consumer cancellation must not be accepted after the stream terminal"
         );
 
-        let cancellation = public_request(public_invocation_request::Request::StreamCancel(
-            cancel(9, StreamCancelRole::OutputConsumer, 0),
+        let cancellation = public_request(public_invocation_request::Request::StreamEnd(
+            consumer_end(9, StreamDirection::Output, 0, false),
         ));
         state
             .validate_received_public_request(&cancellation)
@@ -3547,11 +3551,7 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 7,
-                    sequence: 1,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(7, 1)),
             ))
             .unwrap();
         state
@@ -3559,11 +3559,7 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 8,
-                    sequence: 0,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(8, 0)),
             ))
             .unwrap();
         state
@@ -3575,13 +3571,9 @@ mod tests {
 
     #[test]
     fn input_end_ack_replays_after_loss_and_exact_start_retry() {
-        let end = public_request(public_invocation_request::Request::InputEnd(
-            InputStreamEnd {
-                transport_stream_id: 7,
-                sequence: 0,
-                ..Default::default()
-            },
-        ));
+        let end = public_request(public_invocation_request::Request::StreamEnd(input_end(
+            7, 0,
+        )));
         let ack = input_ack(7, 0, durable_offset(0));
 
         let mut attached = InvocationSessionState::default();
@@ -3641,15 +3633,15 @@ mod tests {
                 .unwrap();
             state.validate_response(&result(stream(9))).unwrap();
             if consumer_requested {
-                let mut request = cancel(9, StreamCancelRole::OutputConsumer, 0);
+                let mut request = consumer_end(9, StreamDirection::Output, 0, false);
                 request.epoch = 2;
                 state
                     .validate_public_request(&public_request(
-                        public_invocation_request::Request::StreamCancel(request),
+                        public_invocation_request::Request::StreamEnd(request),
                     ))
                     .unwrap();
             }
-            let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+            let mut terminal = consumer_end(9, StreamDirection::Output, 7, true);
             terminal.epoch = 2;
             for invalid in ["offset", "epoch", "identity"] {
                 let mut invalid_terminal = terminal.clone();
@@ -3661,14 +3653,14 @@ mod tests {
                 }
                 assert!(
                     state
-                        .validate_response(&response(invocation_response::Response::StreamCancel(
+                        .validate_response(&response(invocation_response::Response::StreamEnd(
                             invalid_terminal,
                         )))
                         .is_err(),
                     "consumer_requested={consumer_requested}, invalid={invalid}"
                 );
             }
-            let terminal = response(invocation_response::Response::StreamCancel(terminal));
+            let terminal = response(invocation_response::Response::StreamEnd(terminal));
             state
                 .validate_response(&terminal)
                 .unwrap_or_else(|error| panic!("consumer_requested={consumer_requested}: {error}"));
@@ -3703,11 +3695,11 @@ mod tests {
         accepted.terminal_cursor_stream_ids = vec![uuid(109)];
         state.validate_response(&acceptance).unwrap();
         state.validate_response(&result(stream(9))).unwrap();
-        let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+        let mut terminal = consumer_end(9, StreamDirection::Output, 7, true);
         terminal.epoch = 2;
         assert!(
             state
-                .validate_response(&response(invocation_response::Response::StreamCancel(
+                .validate_response(&response(invocation_response::Response::StreamEnd(
                     terminal,
                 )))
                 .is_err()
@@ -3715,7 +3707,7 @@ mod tests {
     }
 
     #[test]
-    fn all_role_appropriate_cancellations_are_unique_terminals() {
+    fn direction_appropriate_terminals_preserve_ack_and_uniqueness_rules() {
         let mut input = InvocationSessionState::default();
         input
             .validate_public_request(&public_start(stream(7)))
@@ -3723,11 +3715,25 @@ mod tests {
         input
             .validate_response(&accepted_with_inputs(&[7]))
             .unwrap();
-        let input_cancel = public_request(public_invocation_request::Request::StreamCancel(
-            cancel(7, StreamCancelRole::InputProducer, 0),
-        ));
+        let mut input_failure = input_end(7, 0);
+        input_failure.outcome = output_error(9, 0, "source unavailable").outcome;
+        let input_cancel =
+            public_request(public_invocation_request::Request::StreamEnd(input_failure));
         input.validate_public_request(&input_cancel).unwrap();
-        assert!(input.validate_public_request(&input_cancel).is_err());
+        input.validate_public_request(&input_cancel).unwrap();
+        input
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        input
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        assert!(
+            input
+                .validate_public_request(&public_request(
+                    public_invocation_request::Request::StreamEnd(input_end(7, 0)),
+                ))
+                .is_err()
+        );
 
         let mut input_consumer = InvocationSessionState::default();
         input_consumer
@@ -3737,8 +3743,8 @@ mod tests {
             .validate_response(&accepted_with_inputs(&[7]))
             .unwrap();
         input_consumer
-            .validate_response(&response(invocation_response::Response::StreamCancel(
-                cancel(7, StreamCancelRole::InputConsumer, 0),
+            .validate_response(&response(invocation_response::Response::StreamEnd(
+                consumer_end(7, StreamDirection::Input, 0, true),
             )))
             .unwrap();
 
@@ -3750,20 +3756,22 @@ mod tests {
         output.validate_response(&result(stream(9))).unwrap();
         output
             .validate_public_request(&public_request(
-                public_invocation_request::Request::StreamCancel(cancel(
+                public_invocation_request::Request::StreamEnd(consumer_end(
                     9,
-                    StreamCancelRole::OutputConsumer,
+                    StreamDirection::Output,
                     0,
+                    false,
                 )),
             ))
             .unwrap();
         assert!(
             output
                 .validate_public_request(&public_request(
-                    public_invocation_request::Request::StreamCancel(cancel(
+                    public_invocation_request::Request::StreamEnd(consumer_end(
                         9,
-                        StreamCancelRole::OutputConsumer,
+                        StreamDirection::Output,
                         0,
+                        false
                     )),
                 ))
                 .is_err()
@@ -3774,8 +3782,8 @@ mod tests {
             )))
             .unwrap();
         output
-            .validate_response(&response(invocation_response::Response::StreamCancel(
-                cancel(9, StreamCancelRole::OutputProducer, 1),
+            .validate_response(&response(invocation_response::Response::StreamEnd(
+                consumer_end(9, StreamDirection::Output, 1, true),
             )))
             .unwrap();
         output.validate_response(&success()).unwrap();
@@ -3789,8 +3797,8 @@ mod tests {
             .validate_response(&result(stream(9)))
             .unwrap();
         output_producer
-            .validate_response(&response(invocation_response::Response::StreamCancel(
-                cancel(9, StreamCancelRole::OutputProducer, 0),
+            .validate_response(&response(invocation_response::Response::StreamEnd(
+                consumer_end(9, StreamDirection::Output, 0, true),
             )))
             .unwrap();
     }
@@ -3808,8 +3816,8 @@ mod tests {
             .validate_public_request(&input_item(0, Payload::Value(scalar(1))))
             .unwrap();
         state
-            .validate_response(&response(invocation_response::Response::StreamCancel(
-                cancel(7, StreamCancelRole::InputConsumer, 0),
+            .validate_response(&response(invocation_response::Response::StreamEnd(
+                consumer_end(7, StreamDirection::Input, 0, true),
             )))
             .unwrap();
         state
@@ -3817,11 +3825,7 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 7,
-                    sequence: 2,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(7, 2)),
             ))
             .unwrap();
         state.validate_response(&result(scalar(2))).unwrap();
@@ -3848,18 +3852,15 @@ mod tests {
             .unwrap();
         state
             .validate_public_request(&public_request(
-                public_invocation_request::Request::InputEnd(InputStreamEnd {
-                    transport_stream_id: 7,
-                    sequence: 2,
-                    ..Default::default()
-                }),
+                public_invocation_request::Request::StreamEnd(input_end(7, 2)),
             ))
             .unwrap();
 
-        let cancellation = response(invocation_response::Response::StreamCancel(cancel(
+        let cancellation = response(invocation_response::Response::StreamEnd(consumer_end(
             7,
-            StreamCancelRole::InputConsumer,
+            StreamDirection::Input,
             1,
+            true,
         )));
         state.validate_response(&cancellation).unwrap();
         assert!(
@@ -3878,6 +3879,69 @@ mod tests {
     }
 
     #[test]
+    fn server_input_failures_close_in_flight_inputs_before_completion() {
+        for (author, error) in [
+            (
+                StreamTerminalAuthor::Host,
+                stream_error::Error::Trapped("trap".into()),
+            ),
+            (
+                StreamTerminalAuthor::Protocol,
+                stream_error::Error::Interrupted("protocol failure".into()),
+            ),
+        ] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_public_request(&public_start(stream(7)))
+                .unwrap();
+            state
+                .validate_response(&accepted_with_inputs(&[7]))
+                .unwrap();
+            state
+                .validate_public_request(&input_item(0, Payload::Value(scalar(1))))
+                .unwrap();
+            state
+                .validate_response(&input_ack(7, 0, durable_offset(1)))
+                .unwrap();
+            state
+                .validate_public_request(&input_item(1, Payload::Value(scalar(2))))
+                .unwrap();
+            state
+                .validate_public_request(&public_request(
+                    public_invocation_request::Request::StreamEnd(input_end(7, 2)),
+                ))
+                .unwrap();
+            let terminal = StreamEnd {
+                authored_by: author as i32,
+                outcome: Some(StreamTerminal {
+                    terminal: Some(stream_terminal::Terminal::Failed(StreamError {
+                        error: Some(error),
+                    })),
+                }),
+                ..consumer_end(7, StreamDirection::Input, 1, true)
+            };
+            let mut invalid = terminal.clone();
+            invalid.epoch += 1;
+            assert!(
+                state
+                    .validate_response(&response(invocation_response::Response::StreamEnd(invalid)))
+                    .is_err()
+            );
+            let terminal = response(invocation_response::Response::StreamEnd(terminal));
+            state.validate_response(&terminal).unwrap();
+            assert!(state.validate_response(&terminal).is_err());
+            assert!(
+                state
+                    .validate_response(&input_ack(7, 1, durable_offset(2)))
+                    .is_err()
+            );
+            assert!(state.all_inputs_terminal());
+            state.validate_response(&result(scalar(2))).unwrap();
+            state.validate_response(&success()).unwrap();
+        }
+    }
+
+    #[test]
     fn duplicate_input_end_after_consumer_cancellation_is_rejected() {
         let mut state = InvocationSessionState::default();
         state
@@ -3887,17 +3951,13 @@ mod tests {
             .validate_response(&accepted_with_inputs(&[7]))
             .unwrap();
         state
-            .validate_response(&response(invocation_response::Response::StreamCancel(
-                cancel(7, StreamCancelRole::InputConsumer, 0),
+            .validate_response(&response(invocation_response::Response::StreamEnd(
+                consumer_end(7, StreamDirection::Input, 0, true),
             )))
             .unwrap();
-        let end = public_request(public_invocation_request::Request::InputEnd(
-            InputStreamEnd {
-                transport_stream_id: 7,
-                sequence: 0,
-                ..Default::default()
-            },
-        ));
+        let end = public_request(public_invocation_request::Request::StreamEnd(input_end(
+            7, 0,
+        )));
         state.validate_public_request(&end).unwrap();
 
         assert!(
@@ -4005,6 +4065,162 @@ mod tests {
     }
 
     #[test]
+    fn stream_end_rejects_missing_unknown_and_malformed_terminal_fields() {
+        let valid = input_end(7, 0);
+        assert!(validate_stream_end(&valid).is_ok());
+        for direction in [0, 99] {
+            let mut end = valid.clone();
+            end.direction = direction;
+            assert!(validate_stream_end(&end).is_err());
+        }
+        for author in [0, 99] {
+            let mut end = valid.clone();
+            end.authored_by = author;
+            assert!(validate_stream_end(&end).is_err());
+        }
+        for outcome in [
+            None,
+            Some(StreamTerminal::default()),
+            Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Failed(StreamError::default())),
+            }),
+            Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Failed(StreamError {
+                    error: Some(stream_error::Error::Failed(Default::default())),
+                })),
+            }),
+        ] {
+            let mut end = valid.clone();
+            end.outcome = outcome;
+            assert!(validate_stream_end(&end).is_err());
+        }
+        use golem_schema::schema::{IntoTypedSchemaValue, TypedSchemaValue};
+        let typed = 42u32.into_typed_schema_value().unwrap();
+        let malformed = TypedSchemaValue::new(
+            typed.graph().clone(),
+            golem_schema::schema::SchemaValue::String("wrong type".into()),
+        );
+        let mut end = valid;
+        for (value, expected) in [(typed, true), (malformed, false)] {
+            end.outcome = Some(StreamTerminal {
+                terminal: Some(stream_terminal::Terminal::Failed(StreamError {
+                    error: Some(stream_error::Error::Failed(value.try_into().unwrap())),
+                })),
+            });
+            assert_eq!(validate_stream_end(&end).is_ok(), expected);
+        }
+    }
+
+    #[test]
+    fn input_terminal_retries_compare_the_complete_outcome() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(stream(7)))
+            .unwrap();
+        state
+            .validate_response(&accepted_with_inputs(&[7]))
+            .unwrap();
+        let mut end = input_end(7, 0);
+        end.outcome = output_error(9, 0, "first failure").outcome;
+        let request = public_request(public_invocation_request::Request::StreamEnd(end.clone()));
+        state.validate_public_request(&request).unwrap();
+        state.validate_public_request(&request).unwrap();
+        end.outcome = output_error(9, 0, "different failure").outcome;
+        assert!(
+            state
+                .validate_public_request(&public_request(
+                    public_invocation_request::Request::StreamEnd(end),
+                ))
+                .is_err()
+        );
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        state.validate_response(&result(scalar(1))).unwrap();
+        state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn input_terminal_retries_reject_author_only_conflicts_before_and_after_ack() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(stream(7)))
+            .unwrap();
+        state
+            .validate_response(&accepted_with_inputs(&[7]))
+            .unwrap();
+        let end = input_end(7, 0);
+        let request = public_request(public_invocation_request::Request::StreamEnd(end.clone()));
+        state.validate_public_request(&request).unwrap();
+        let mut changed_author = end;
+        changed_author.authored_by = StreamTerminalAuthor::Guest as i32;
+        let conflicting_request = public_request(public_invocation_request::Request::StreamEnd(
+            changed_author,
+        ));
+        assert!(
+            validate_stream_end(match conflicting_request.request.as_ref().unwrap() {
+                public_invocation_request::Request::StreamEnd(end) => end,
+                _ => unreachable!(),
+            })
+            .is_ok()
+        );
+        assert!(state.validate_public_request(&conflicting_request).is_err());
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        assert!(state.validate_public_request(&conflicting_request).is_err());
+        state.validate_public_request(&request).unwrap();
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(0)))
+            .unwrap();
+        state.validate_response(&result(scalar(1))).unwrap();
+        state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn stream_end_direction_and_outcome_are_not_inferred_from_the_channel() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(stream(7)))
+            .unwrap();
+        state
+            .validate_response(&accepted_with_inputs(&[7]))
+            .unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+        for end in [
+            consumer_end(7, StreamDirection::Input, 0, false),
+            output_end(9, 0),
+        ] {
+            assert!(
+                state
+                    .validate_public_request(&public_request(
+                        public_invocation_request::Request::StreamEnd(end),
+                    ))
+                    .is_err()
+            );
+        }
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::StreamEnd(
+                    input_end(7, 0)
+                )))
+                .is_err()
+        );
+        let mut wrong_direction = consumer_end(7, StreamDirection::Output, 0, false);
+        wrong_direction.durable_stream_id = Some(uuid(107));
+        assert!(
+            state
+                .validate_public_request(&public_request(
+                    public_invocation_request::Request::StreamEnd(wrong_direction),
+                ))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn public_and_internal_envelopes_round_trip_all_durable_session_variants() {
         round_trip(public_start(record(Vec::new())));
         round_trip(trusted_start(record(Vec::new())));
@@ -4016,39 +4232,12 @@ mod tests {
         ));
         round_trip(input_item(4, Payload::PackedU8(vec![1, 2, 3])));
         round_trip(public_request(
-            public_invocation_request::Request::InputEnd(InputStreamEnd {
-                transport_stream_id: 7,
-                sequence: 4,
-                ..Default::default()
-            }),
+            public_invocation_request::Request::StreamEnd(input_end(7, 4)),
         ));
-        for role in [
-            StreamCancelRole::InputProducer,
-            StreamCancelRole::InputConsumer,
-            StreamCancelRole::OutputProducer,
-            StreamCancelRole::OutputConsumer,
-        ] {
-            round_trip(StreamCancel {
-                transport_stream_id: 7,
-                producer_sequence: 8,
-                role: role as i32,
-                reason: StreamCancelReason::Protocol as i32,
-                details: Some("cancelled".to_string()),
-                ..Default::default()
-            });
-        }
-        for reason in [
-            StreamCancelReason::ConsumerDrop,
-            StreamCancelReason::InvocationFailed,
-        ] {
-            round_trip(StreamCancel {
-                transport_stream_id: 7,
-                producer_sequence: 8,
-                role: StreamCancelRole::OutputProducer as i32,
-                reason: reason as i32,
-                details: Some("cancelled".to_string()),
-                ..Default::default()
-            });
+        for direction in [StreamDirection::Input, StreamDirection::Output] {
+            for server in [false, true] {
+                round_trip(consumer_end(7, direction, 8, server));
+            }
         }
         round_trip(accepted());
         round_trip(response(invocation_response::Response::Rejected(
@@ -4065,10 +4254,10 @@ mod tests {
         round_trip(response(invocation_response::Response::OutputItem(
             packed_output_item(9, 0, vec![1, 2, 3]),
         )));
-        round_trip(response(invocation_response::Response::OutputEnd(
+        round_trip(response(invocation_response::Response::StreamEnd(
             output_end(9, 1),
         )));
-        round_trip(response(invocation_response::Response::OutputError(
+        round_trip(response(invocation_response::Response::StreamEnd(
             output_error(9, 1, "failed"),
         )));
         round_trip(response(invocation_response::Response::InputAck(
@@ -4079,8 +4268,8 @@ mod tests {
                 ..Default::default()
             },
         )));
-        round_trip(response(invocation_response::Response::StreamCancel(
-            cancel(9, StreamCancelRole::OutputProducer, 1),
+        round_trip(response(invocation_response::Response::StreamEnd(
+            consumer_end(9, StreamDirection::Output, 1, true),
         )));
         round_trip(response(invocation_response::Response::AttachmentRevoked(
             Default::default(),
@@ -4154,7 +4343,7 @@ mod tests {
             )))
             .unwrap();
         state
-            .validate_response(&response(invocation_response::Response::OutputEnd(
+            .validate_response(&response(invocation_response::Response::StreamEnd(
                 output_end(71, 2),
             )))
             .unwrap();

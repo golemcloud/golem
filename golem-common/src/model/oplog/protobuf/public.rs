@@ -35,8 +35,7 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
 use crate::model::Empty;
 use crate::model::card::CardId;
@@ -57,9 +56,8 @@ use crate::model::oplog::public_oplog_entry::{
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
@@ -750,14 +748,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
             }
-            oplog_entry::Entry::StreamEnd(params) => {
-                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
-                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
-                    record: params.record.ok_or("Missing record field")?.try_into()?,
-                }))
-            }
-            oplog_entry::Entry::StreamCancel(params) => {
-                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+            oplog_entry::Entry::StreamTerminal(params) => {
+                Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
@@ -1481,19 +1473,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
+            PublicOplogEntry::StreamTerminal(params) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamEnd(
-                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
-                            timestamp: Some(params.timestamp.into()),
-                            record: Some(params.record.try_into()?),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamCancel(
+                    entry: Some(oplog_entry::Entry::StreamTerminal(
                         golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
                             timestamp: Some(params.timestamp.into()),
                             record: Some(params.record.try_into()?),
@@ -2307,26 +2289,15 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     record: OplogPayload::Inline(Box::new(record)),
                 })
             }
-            PublicOplogEntry::StreamEnd(p) => {
+            PublicOplogEntry::StreamTerminal(p) => {
                 use crate::schema::FromSchema as _;
-                let record = StreamEndRecord::from_value(p.record.value())
+                let record = StreamTerminalRecord::from_value(p.record.value())
                     .map_err(|error| error.to_string())?;
-                Ok(OplogEntry::StreamEnd {
+                Ok(OplogEntry::StreamTerminal {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::end(&record)),
+                    summary: Some(DurableStreamEventSummary::terminal(&record)),
                     record: OplogPayload::Inline(Box::new(record)),
-                })
-            }
-            PublicOplogEntry::StreamCancel(p) => {
-                use crate::schema::FromSchema as _;
-                Ok(OplogEntry::StreamCancel {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::Cancelled),
-                    record: OplogPayload::Inline(Box::new(StreamCancelRecord::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
                 })
             }
             PublicOplogEntry::StreamSession(p) => {
