@@ -5,9 +5,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::{AgentId, AgentStatus};
 use golem_common::phantom_agent_id;
 use golem_service_base::custom_api::{CompiledRoutes, RouteBehaviour};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDsl;
 use reqwest::{Response, StatusCode};
 use serde_json::{Value, json};
 use test_r::{inherit_test_dep, test, timeout};
@@ -410,14 +412,46 @@ async fn selected_stream_roots_forks_receipts_and_links(
     read(&agent, &selected(&source, Some(q)), json!(["Q"])).await?;
     read(&agent, &p_fork, json!(["P", "fork-P", "P-fork-only"])).await?;
 
-    let generated = agent
+    let selected_worker = AgentId {
+        component_id: agent.component_id,
+        agent_id: root,
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if agent
+                .user
+                .get_worker_metadata(&selected_worker)
+                .await?
+                .status
+                == AgentStatus::Failed
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let failed = agent
         .client
         .put(agent.base_url.join(&selected(&base, Some(p)))?)
         .send()
         .await?;
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(failed.text().await?.contains("stream slot deleted"));
+
+    let generated_root = Uuid::new_v4();
+    let generated = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&selected(&base, Some(generated_root)))?,
+        )
+        .send()
+        .await?;
     assert_eq!(generated.status(), StatusCode::CREATED);
     let location = header(&generated, "location");
-    assert!(location.ends_with(&format!("?instance={p}")));
+    assert!(location.ends_with(&format!("?instance={generated_root}")));
     let manifest = agent
         .client
         .get(agent.base_url.join(&location)?)

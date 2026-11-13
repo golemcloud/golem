@@ -18,10 +18,10 @@ use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
-    PublicClientCancelReason, PublicClientMessage, PublicConfigEntry, PublicErrorCode,
-    PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
-    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamMapping,
-    decode_binary_message, decode_server_text, encode_binary_message, encode_text,
+    PublicClientMessage, PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome,
+    PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
+    PublicStreamError, PublicStreamMapping, PublicStreamOutcome, decode_binary_message,
+    decode_server_text, encode_binary_message, encode_text,
 };
 use golem_common::model::{InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
@@ -95,6 +95,11 @@ pub enum SessionTransportError {
     RequestProvider(String),
     #[error("invalid invocation session message: {0}")]
     Protocol(String),
+    #[error("native {role} terminated: {outcome:?}")]
+    StreamTerminal {
+        role: &'static str,
+        outcome: Box<PublicStreamOutcome>,
+    },
     #[error("failed to persist invocation session state: {0}")]
     StatePersistence(String),
     #[error("invocation session input/output failed: {0}")]
@@ -324,7 +329,7 @@ impl GeneratedDecodeContext {
 enum GeneratedCommand {
     CancelOutput {
         stream_token: String,
-        reason: PublicClientCancelReason,
+        reason: Option<String>,
     },
 }
 
@@ -335,8 +340,22 @@ enum GeneratedInputEvent {
     },
     Failed {
         provisional_ref: uuid::Uuid,
-        message: String,
+        failure: Result<PendingInputFailure, SessionTransportError>,
     },
+}
+
+struct PendingInputFailure {
+    message: String,
+    byte_budget: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl GeneratedInputEvent {
+    fn failed(provisional_ref: uuid::Uuid, buffer: &InputReplayBuffer, message: String) -> Self {
+        Self::Failed {
+            provisional_ref,
+            failure: buffer.admit_failure(message),
+        }
+    }
 }
 
 trait GeneratedInputSource: Send {
@@ -398,7 +417,7 @@ trait GeneratedOutputSink: Send {
     ) -> Result<(), SessionTransportError>;
     async fn finish(
         &mut self,
-        outcome: PublicOutputStreamOutcome,
+        outcome: PublicStreamOutcome,
         frame: Option<ReceivedFrame>,
     ) -> Result<(), SessionTransportError>;
 }
@@ -508,16 +527,13 @@ where
 
     async fn finish(
         &mut self,
-        outcome: PublicOutputStreamOutcome,
+        outcome: PublicStreamOutcome,
         frame: Option<ReceivedFrame>,
     ) -> Result<(), SessionTransportError> {
         let output = match outcome {
-            PublicOutputStreamOutcome::Ok => AgentStreamOutput::End(frame),
-            PublicOutputStreamOutcome::Error { message, .. } => {
-                AgentStreamOutput::Error(AgentStreamError::Producer(message), frame)
-            }
-            PublicOutputStreamOutcome::Cancelled { reason } => {
-                AgentStreamOutput::Error(AgentStreamError::Cancelled(format!("{reason:?}")), frame)
+            PublicStreamOutcome::Finished => AgentStreamOutput::End(frame),
+            outcome => {
+                AgentStreamOutput::Error(AgentStreamError::Terminal(Box::new(outcome)), frame)
             }
         };
         self.sender
@@ -536,6 +552,10 @@ pub enum ReplayableInput {
     Binary(BinaryMessage),
     End {
         sequence: u64,
+    },
+    Failed {
+        sequence: u64,
+        message: String,
     },
 }
 
@@ -576,6 +596,61 @@ impl InputReplayBuffer {
             item_budget: Arc::new(Semaphore::new(max_unacknowledged_items)),
             max_unacknowledged_bytes,
         }
+    }
+
+    fn admit_failure(&self, message: String) -> Result<PendingInputFailure, SessionTransportError> {
+        struct LimitedSize {
+            bytes: usize,
+            limit: usize,
+        }
+        impl std::io::Write for LimitedSize {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if bytes.len() > self.limit.saturating_sub(self.bytes) {
+                    return Err(std::io::Error::other(
+                        "input terminal exceeds replay budget",
+                    ));
+                }
+                self.bytes += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let exhausted =
+            || SessionTransportError::Protocol("unacknowledged input limit exceeded".into());
+        // A pending failure may not have an attachment yet. Reserve maximum-width identifiers.
+        let overhead = encode_text(&PublicClientMessage::StreamEnd {
+            channel: u32::MAX,
+            direction: PublicStreamDirection::Input,
+            sequence: DecimalU64(u64::MAX),
+            outcome: PublicStreamOutcome::Failed {
+                error: PublicStreamError::Interrupted {
+                    message: String::new(),
+                },
+            },
+            version: INVOCATION_SESSION_VERSION,
+        })
+        .map_err(|_| exhausted())?
+        .len()
+            - 2;
+        if overhead > self.max_unacknowledged_bytes {
+            return Err(exhausted());
+        }
+        let mut size = LimitedSize {
+            bytes: 0,
+            limit: self.max_unacknowledged_bytes - overhead,
+        };
+        serde_json::to_writer(&mut size, &message).map_err(|_| exhausted())?;
+        let byte_budget = self
+            .byte_budget
+            .clone()
+            .try_acquire_many_owned(u32::try_from(overhead + size.bytes).map_err(|_| exhausted())?)
+            .map_err(|_| exhausted())?;
+        Ok(PendingInputFailure {
+            message,
+            byte_budget,
+        })
     }
 
     pub async fn admit(
@@ -642,7 +717,10 @@ impl InputReplayBuffer {
             )
         })?;
         input.sent = true;
-        if matches!(input.request, ReplayableInput::End { .. }) {
+        if matches!(
+            input.request,
+            ReplayableInput::End { .. } | ReplayableInput::Failed { .. }
+        ) {
             state.terminal = true;
         }
         Ok(())
@@ -720,6 +798,21 @@ impl InputReplayBuffer {
             .expect("input replay buffer mutex poisoned")
             .terminal
     }
+
+    /// The next sequence after the items actually sent on this attachment.
+    pub fn next_sequence(&self) -> Result<u64, SessionTransportError> {
+        let state = self
+            .state
+            .lock()
+            .expect("input replay buffer mutex poisoned");
+        state
+            .queue
+            .iter()
+            .filter(|input| input.sent)
+            .try_fold(state.acknowledged_sequence, |next, input| {
+                Ok(next.max(input.request.end_sequence(state.sequence_offset)?))
+            })
+    }
 }
 
 fn acknowledge_input_state(
@@ -748,7 +841,10 @@ fn acknowledge_input_state(
     while let Some(input) = state.queue.front() {
         let start = input.request.start_sequence(state.sequence_offset)?;
         let end = input.request.end_sequence(state.sequence_offset)?;
-        if matches!(&input.request, ReplayableInput::End { .. }) {
+        if matches!(
+            &input.request,
+            ReplayableInput::End { .. } | ReplayableInput::Failed { .. }
+        ) {
             if terminal && end == highest_contiguous_sequence {
                 state.queue.pop_front();
             }
@@ -773,7 +869,9 @@ fn acknowledge_input_state(
 impl ReplayableInput {
     fn start_sequence(&self, sequence_offset: u64) -> Result<u64, SessionTransportError> {
         let sequence = match self {
-            Self::Value { sequence, .. } | Self::End { sequence } => *sequence,
+            Self::Value { sequence, .. }
+            | Self::End { sequence }
+            | Self::Failed { sequence, .. } => *sequence,
             Self::Binary(message) => message.metadata.sequence.0,
         };
         sequence
@@ -786,7 +884,7 @@ impl ReplayableInput {
         let count = match self {
             Self::Value { .. } => 1,
             Self::Binary(message) => message.metadata.item_count.0,
-            Self::End { .. } => 0,
+            Self::End { .. } | Self::Failed { .. } => 0,
         };
         start
             .checked_add(count)
@@ -795,6 +893,7 @@ impl ReplayableInput {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ServerFrame {
     Message(PublicServerMessage),
     Binary(BinaryMessage),
@@ -1124,7 +1223,8 @@ impl DeliveryTracker {
                 sequence,
                 ..
             }) => Some((*channel, sequence.0, cursor_token.clone())),
-            ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+            ServerFrame::Message(PublicServerMessage::StreamEnd {
+                direction: PublicStreamDirection::Output,
                 channel,
                 cursor_token: Some(cursor_token),
                 sequence,
@@ -1411,6 +1511,7 @@ impl InvocationSessionSender {
             .map_err(|_| SessionTransportError::Closed)
     }
 
+    /// Detaches the socket. Send an input terminal explicitly before closing to signal EOF.
     pub async fn close(&self) -> Result<(), SessionTransportError> {
         self.outbound
             .send(OutboundFrame::Close)
@@ -1518,6 +1619,7 @@ impl InvocationSessionTransport {
             .ok_or(SessionTransportError::Closed)?
     }
 
+    /// Detaches the socket without terminating any stream.
     pub async fn close(&self) -> Result<(), SessionTransportError> {
         self.sender.close().await
     }
@@ -1815,8 +1917,17 @@ impl InvocationSession {
                     );
                 self.send_binary(&message).await?
             }
-            ReplayableInput::End { sequence } => {
-                self.send_message(&PublicClientMessage::InputStreamEnd {
+            ReplayableInput::End { sequence } | ReplayableInput::Failed { sequence, .. } => {
+                self.send_message(&PublicClientMessage::StreamEnd {
+                    direction: PublicStreamDirection::Input,
+                    outcome: match &request {
+                        ReplayableInput::Failed { message, .. } => PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Interrupted {
+                                message: message.clone(),
+                            },
+                        },
+                        _ => PublicStreamOutcome::Finished,
+                    },
                     channel,
                     sequence: golem_common::model::invocation_session_public::DecimalU64(
                         sequence
@@ -2088,6 +2199,7 @@ impl InvocationSession {
         }
     }
 
+    /// Detaches the socket without terminating any stream.
     pub async fn close(&self) -> Result<(), SessionTransportError> {
         self.transport.close().await
     }
@@ -2404,8 +2516,6 @@ where
         let mut stderr_failure = None;
         let mut stdout_admission = (None, false);
         let mut stderr_admission = (None, false);
-        let mut stdout_cancellation = None;
-        let mut stderr_cancellation = None;
         let mut admitted_frames = 0usize;
         let mut pending_output = None;
         let mut pending_recovery = None;
@@ -2414,7 +2524,7 @@ where
         let mut completion_failure = None;
         // `stop_input` completed; it is never polled again.
         let mut stop_requested = false;
-        // The connection the cancel for stdin was sent on. One sent on a connection that is then
+        // The connection the terminal for stdin was sent on. One sent on a connection that is then
         // lost may not have arrived, so it counts for that connection only.
         let mut input_stopped_on = None;
         let mut input_cancelled_by_server = false;
@@ -2433,10 +2543,10 @@ where
             {
                 if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. })) {
                     if let Some(outcome) = stdout_failure {
-                        return Err(SessionTransportError::Protocol(format!("native stdout failed: {outcome:?}")));
+                        return Err(SessionTransportError::StreamTerminal { role: "stdout", outcome: Box::new(outcome) });
                     }
                     if let Some(outcome) = stderr_failure {
-                        return Err(SessionTransportError::Protocol(format!("native stderr failed: {outcome:?}")));
+                        return Err(SessionTransportError::StreamTerminal { role: "stderr", outcome: Box::new(outcome) });
                     }
                 }
                 return result.ok_or_else(|| SessionTransportError::Protocol("native invocation finished without a tool result".to_string()));
@@ -2459,17 +2569,15 @@ where
             let unsent = buffer.next_unsent();
             let sender = session.sender();
             let binding = session.input_binding(&buffer);
-            // A stop has nothing to do on this connection once its cancel was sent on it, or when
-            // the input is closed: it ended, or the server cancelled it. The service rejects a
-            // cancel for an input that is already cancelled or closed.
+            // A stop has nothing to do once its terminal was sent on this connection, or when
+            // stdin has ended or its consumer has cancelled it.
             let stop_done = input_stopped_on == Some(session.reconnects)
                 || buffer.is_terminal()
                 || input_cancelled_by_server;
-            // Without a stop, giving up cancels stdin as it did before there was one.
             let input_channel_to_cancel = binding
                 .as_ref()
                 .map(|binding| binding.0)
-                .filter(|_| !(stop_requested && stop_done));
+                .filter(|_| !stop_done);
             tokio::select! {
                 result = &mut producer, if !producer_done => {
                     producer_done = true;
@@ -2481,7 +2589,7 @@ where
                                 stdout_channel.filter(|_| !stdout_terminal),
                                 stderr_channel.filter(|_| !stderr_terminal),
                             ],
-                            PublicClientCancelReason::SourceUnavailable,
+                            error.to_string(),
                         ).await;
                         return Err(error);
                     }
@@ -2495,7 +2603,7 @@ where
                             stdout_channel.filter(|_| !stdout_terminal),
                             stderr_channel.filter(|_| !stderr_terminal),
                         ],
-                        PublicClientCancelReason::Cancelled,
+                        "native tool invocation cancelled".to_string(),
                     ).await;
                     return Err(SessionTransportError::Io(std::io::Error::new(
                         std::io::ErrorKind::Interrupted,
@@ -2507,9 +2615,13 @@ where
                 }
                 // A tool that has returned its result has nothing left to stop.
                 stopped = async {
-                    sender.send_message(&PublicClientMessage::StreamCancel {
+                    sender.send_message(&PublicClientMessage::StreamEnd {
                         channel: binding.as_ref().unwrap().0,
-                        reason: PublicClientCancelReason::Cancelled,
+                        direction: PublicStreamDirection::Input,
+                        sequence: DecimalU64(buffer.next_sequence()?),
+                        outcome: PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Interrupted { message: "native tool stdin stopped".to_string() },
+                        },
                         version: INVOCATION_SESSION_VERSION,
                     }).await
                 }, if stop_requested && !stop_done && result.is_none() && !finished && pending_recovery.is_none() && binding.is_some() => {
@@ -2519,7 +2631,7 @@ where
                             input_open = false;
                             input_stopped_on = Some(session.reconnects);
                         }
-                        // As the send arm does: recover, then the cancel is sent again.
+                        // As the send arm does: recover, then the terminal is sent again.
                         Err(error) if is_transport_detach(&error) => {
                             pending_recovery = Some(error);
                         }
@@ -2548,7 +2660,7 @@ where
                 pumped = &mut stdout_pump, if has_stdout && !stdout_terminal => {
                     match pumped {
                         Ok(outcome) => {
-                            if !matches!(outcome, PublicOutputStreamOutcome::Ok) {
+                            if !matches!(outcome, PublicStreamOutcome::Finished) {
                                 stdout_failure = Some(outcome);
                             }
                             stdout_terminal = true;
@@ -2559,7 +2671,7 @@ where
                                 &session,
                                 input_channel_to_cancel,
                                 [stdout_channel, stderr_channel.filter(|_| !stderr_terminal)],
-                                PublicClientCancelReason::ConsumerDrop,
+                                error.to_string(),
                             ).await;
                             return Err(error);
                         }
@@ -2568,7 +2680,7 @@ where
                 pumped = &mut stderr_pump, if has_stderr && !stderr_terminal => {
                     match pumped {
                         Ok(outcome) => {
-                            if !matches!(outcome, PublicOutputStreamOutcome::Ok) {
+                            if !matches!(outcome, PublicStreamOutcome::Finished) {
                                 stderr_failure = Some(outcome);
                             }
                             stderr_terminal = true;
@@ -2579,7 +2691,7 @@ where
                                 &session,
                                 input_channel_to_cancel,
                                 [stdout_channel.filter(|_| !stdout_terminal), stderr_channel],
-                                PublicClientCancelReason::ConsumerDrop,
+                                error.to_string(),
                             ).await;
                             return Err(error);
                         }
@@ -2660,7 +2772,7 @@ where
                             }
                             continue;
                         }
-                        ServerFrame::Message(PublicServerMessage::OutputStreamEnd { channel, sequence, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
+                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Output, channel, sequence, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
                             let (stdout, admission) = if Some(*channel) == stdout_channel {
                                 (true, &mut stdout_admission)
                             } else {
@@ -2677,26 +2789,7 @@ where
                             result = Some((**value).clone());
                         }
                         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
-                        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, reason, .. }) if Some(*channel) == stdout_channel || Some(*channel) == stderr_channel => {
-                            let (stdout, admission, cancellation) = if Some(*channel) == stdout_channel {
-                                (true, &mut stdout_admission, &mut stdout_cancellation)
-                            } else {
-                                (false, &mut stderr_admission, &mut stderr_cancellation)
-                            };
-                            if admission.1 {
-                                if cancellation.as_ref() == Some(reason) {
-                                    continue;
-                                }
-                                return Err(SessionTransportError::Protocol(
-                                    "native output was cancelled after its terminal".to_string(),
-                                ));
-                            }
-                            admission.1 = true;
-                            *cancellation = Some(*reason);
-                            pending_output = Some((received, stdout));
-                            continue;
-                        }
-                        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
+                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
                             input_open = false;
                             let _ = cancel_input.send(true);
                             input_cancelled_by_server = true;
@@ -2777,7 +2870,7 @@ async fn pump_native_output<W>(
     output: &mut W,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
     delivered: mpsc::UnboundedSender<()>,
-) -> Result<PublicOutputStreamOutcome, SessionTransportError>
+) -> Result<PublicStreamOutcome, SessionTransportError>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
@@ -2797,13 +2890,11 @@ where
                     })?;
                 (Some(vec![byte]), None)
             }
-            ServerFrame::Message(PublicServerMessage::OutputStreamEnd { outcome, .. }) => {
-                (None, Some(outcome.clone()))
-            }
-            ServerFrame::Message(PublicServerMessage::StreamCancel { reason, .. }) => (
-                None,
-                Some(PublicOutputStreamOutcome::Cancelled { reason: *reason }),
-            ),
+            ServerFrame::Message(PublicServerMessage::StreamEnd {
+                direction: PublicStreamDirection::Output,
+                outcome,
+                ..
+            }) => (None, Some(outcome.clone())),
             _ => {
                 return Err(SessionTransportError::Protocol(
                     "native output pump received a non-output frame".to_string(),
@@ -2845,18 +2936,40 @@ async fn cancel_native_streams(
     session: &InvocationSession,
     input_channel: Option<u32>,
     output_channels: [Option<u32>; 2],
-    reason: PublicClientCancelReason,
+    message: String,
 ) {
     let sender = session.sender();
     let _ = tokio::time::timeout(Duration::from_secs(3), async {
-        for channel in std::iter::once(input_channel)
-            .chain(output_channels)
-            .flatten()
-        {
+        if let Some(channel) = input_channel {
+            let buffer = &session
+                .inputs
+                .iter()
+                .find(|input| input.channel == Some(channel))
+                .ok_or(SessionTransportError::InvalidMapping)?
+                .buffer;
             sender
-                .send_message(&PublicClientMessage::StreamCancel {
+                .send_message(&PublicClientMessage::StreamEnd {
                     channel,
-                    reason,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(buffer.next_sequence()?),
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted {
+                            message: message.clone(),
+                        },
+                    },
+                    version: INVOCATION_SESSION_VERSION,
+                })
+                .await?;
+        }
+        for channel in output_channels.into_iter().flatten() {
+            sender
+                .send_message(&PublicClientMessage::StreamEnd {
+                    channel,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled {
+                        details: Some(message.clone()),
+                    },
                     version: INVOCATION_SESSION_VERSION,
                 })
                 .await?;
@@ -2900,9 +3013,18 @@ pub async fn send_replayable_input(
             );
             sender.send_binary(&message).await
         }
-        ReplayableInput::End { sequence } => {
+        ReplayableInput::End { sequence } | ReplayableInput::Failed { sequence, .. } => {
             sender
-                .send_message(&PublicClientMessage::InputStreamEnd {
+                .send_message(&PublicClientMessage::StreamEnd {
+                    direction: PublicStreamDirection::Input,
+                    outcome: match request {
+                        ReplayableInput::Failed { message, .. } => PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Interrupted {
+                                message: message.clone(),
+                            },
+                        },
+                        _ => PublicStreamOutcome::Finished,
+                    },
                     channel,
                     sequence: golem_common::model::invocation_session_public::DecimalU64(
                         sequence
@@ -3265,8 +3387,8 @@ async fn run_generated_invocation<T>(
     let mut result_tx = Some(result_tx);
     let mut inputs = HashMap::<uuid::Uuid, InputReplayBuffer>::new();
     let mut input_tasks = HashMap::<uuid::Uuid, GeneratedTaskAbortGuard>::new();
-    let mut failed_inputs = HashMap::<uuid::Uuid, String>::new();
-    let mut pending_output_cancellations = HashMap::<String, PublicClientCancelReason>::new();
+    let mut failed_inputs = HashMap::<uuid::Uuid, PendingInputFailure>::new();
+    let mut pending_output_cancellations = HashMap::<String, Option<String>>::new();
     let mut cancelled_outputs = HashSet::<String>::new();
 
     if let Err(error) = install_generated_inputs(
@@ -3281,7 +3403,7 @@ async fn run_generated_invocation<T>(
     }
 
     loop {
-        drain_generated_events(
+        if let Err(error) = drain_generated_events(
             &mut commands_rx,
             &mut input_rx,
             output_context.as_ref(),
@@ -3289,7 +3411,13 @@ async fn run_generated_invocation<T>(
             &mut pending_output_cancellations,
             &mut cancelled_outputs,
             &mut failed_inputs,
-        );
+        ) {
+            let message = error.to_string();
+            send_generated_result(&mut result_tx, Err(error));
+            fail_generated_outputs(output_context.as_ref(), &message).await;
+            return;
+        }
+        failed_inputs.retain(|reference, _| inputs.contains_key(reference));
         if let Err(error) = install_generated_inputs(
             &mut session,
             &encode_context,
@@ -3325,7 +3453,8 @@ async fn run_generated_invocation<T>(
             output_context.as_ref(),
             &pending_output_cancellations,
             &failed_inputs,
-        ) {
+        ) && inputs.values().all(|buffer| buffer.next_unsent().is_none())
+        {
             return;
         }
 
@@ -3340,7 +3469,12 @@ async fn run_generated_invocation<T>(
                 );
             }
             Some(event) = input_rx.recv() => {
-                admit_generated_input_event(event, &inputs, &mut failed_inputs);
+                if let Err(error) = admit_generated_input_event(event, &inputs, &mut failed_inputs) {
+                    let message = error.to_string();
+                    send_generated_result(&mut result_tx, Err(error));
+                    fail_generated_outputs(output_context.as_ref(), &message).await;
+                    return;
+                }
             }
             frame = session.receive() => {
                 let frame = match frame {
@@ -3385,10 +3519,10 @@ fn drain_generated_events(
     input_events: &mut mpsc::UnboundedReceiver<GeneratedInputEvent>,
     output_context: Option<&GeneratedDecodeContext>,
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
-    pending_output_cancellations: &mut HashMap<String, PublicClientCancelReason>,
+    pending_output_cancellations: &mut HashMap<String, Option<String>>,
     cancelled_outputs: &mut HashSet<String>,
-    failed_inputs: &mut HashMap<uuid::Uuid, String>,
-) {
+    failed_inputs: &mut HashMap<uuid::Uuid, PendingInputFailure>,
+) -> Result<(), SessionTransportError> {
     while let Ok(command) = commands.try_recv() {
         admit_generated_command(
             command,
@@ -3398,14 +3532,15 @@ fn drain_generated_events(
         );
     }
     while let Ok(event) = input_events.try_recv() {
-        admit_generated_input_event(event, inputs, failed_inputs);
+        admit_generated_input_event(event, inputs, failed_inputs)?;
     }
+    Ok(())
 }
 
 fn admit_generated_command(
     command: GeneratedCommand,
     output_context: Option<&GeneratedDecodeContext>,
-    pending_output_cancellations: &mut HashMap<String, PublicClientCancelReason>,
+    pending_output_cancellations: &mut HashMap<String, Option<String>>,
     cancelled_outputs: &mut HashSet<String>,
 ) {
     let GeneratedCommand::CancelOutput {
@@ -3429,8 +3564,8 @@ fn admit_generated_command(
 fn admit_generated_input_event(
     event: GeneratedInputEvent,
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
-    failed_inputs: &mut HashMap<uuid::Uuid, String>,
-) {
+    failed_inputs: &mut HashMap<uuid::Uuid, PendingInputFailure>,
+) -> Result<(), SessionTransportError> {
     match event {
         GeneratedInputEvent::Input {
             provisional_ref,
@@ -3442,20 +3577,21 @@ fn admit_generated_input_event(
         }
         GeneratedInputEvent::Failed {
             provisional_ref,
-            message,
+            failure,
         } => {
             if inputs.contains_key(&provisional_ref) {
-                failed_inputs.insert(provisional_ref, message);
+                failed_inputs.insert(provisional_ref, failure?);
             }
         }
     }
+    Ok(())
 }
 
 fn generated_invocation_is_complete<T>(
     result: &Option<tokio::sync::oneshot::Sender<Result<T, SessionTransportError>>>,
     output: Option<&GeneratedDecodeContext>,
-    pending_output_cancellations: &HashMap<String, PublicClientCancelReason>,
-    failed_inputs: &HashMap<uuid::Uuid, String>,
+    pending_output_cancellations: &HashMap<String, Option<String>>,
+    failed_inputs: &HashMap<uuid::Uuid, PendingInputFailure>,
 ) -> bool {
     result.is_none()
         && pending_output_cancellations.is_empty()
@@ -3471,7 +3607,7 @@ fn generated_invocation_is_complete<T>(
 
 async fn cancel_pending_outputs(
     session: &mut InvocationSession,
-    pending: &mut HashMap<String, PublicClientCancelReason>,
+    pending: &mut HashMap<String, Option<String>>,
 ) -> Result<(), SessionTransportError> {
     let ready = pending
         .iter()
@@ -3479,14 +3615,16 @@ async fn cancel_pending_outputs(
             session
                 .delivery_tracker()
                 .channel_for_stream(stream_token)
-                .map(|channel| (stream_token.clone(), *reason, channel))
+                .map(|channel| (stream_token.clone(), reason.clone(), channel))
         })
         .collect::<Vec<_>>();
     for (stream_token, reason, channel) in ready {
         let outcome = session
-            .send_message(&PublicClientMessage::StreamCancel {
+            .send_message(&PublicClientMessage::StreamEnd {
                 channel,
-                reason,
+                direction: PublicStreamDirection::Output,
+                sequence: DecimalU64(0),
+                outcome: PublicStreamOutcome::ConsumerCancelled { details: reason },
                 version: INVOCATION_SESSION_VERSION,
             })
             .await?;
@@ -3538,30 +3676,47 @@ async fn flush_generated_inputs(
 async fn cancel_failed_inputs(
     session: &mut InvocationSession,
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
-    failed: &mut HashMap<uuid::Uuid, String>,
+    failed: &mut HashMap<uuid::Uuid, PendingInputFailure>,
 ) -> Result<(), SessionTransportError> {
     let ready = failed
         .keys()
         .filter_map(|reference| {
             let buffer = inputs.get(reference)?;
-            session
-                .input_binding(buffer)
-                .map(|(channel, _)| (*reference, channel))
+            session.input_binding(buffer).map(|_| *reference)
         })
         .collect::<Vec<_>>();
-    for (reference, channel) in ready {
-        let outcome = session
-            .send_message(&PublicClientMessage::StreamCancel {
-                channel,
-                reason: PublicClientCancelReason::SourceUnavailable,
-                version: INVOCATION_SESSION_VERSION,
-            })
-            .await?;
-        match outcome {
-            SessionSendOutcome::Sent => {
-                failed.remove(&reference);
+    for reference in ready {
+        let buffer = &inputs[&reference];
+        while let Some(sent) = session.send_next_input(buffer).await? {
+            if sent == SessionSendOutcome::Reconnected {
+                return Ok(());
             }
-            SessionSendOutcome::Reconnected => break,
+        }
+        let sequence = buffer.next_sequence()?;
+        let offset = buffer
+            .state
+            .lock()
+            .expect("input replay buffer mutex poisoned")
+            .sequence_offset;
+        // The pending diagnostic already owns byte credit. Do not wait for item ACKs here.
+        let Ok(item_budget) = buffer.item_budget.clone().try_acquire_owned() else {
+            continue;
+        };
+        let failure = failed.remove(&reference).unwrap();
+        let terminal = AdmittedInput {
+            request: ReplayableInput::Failed {
+                sequence: sequence
+                    .checked_sub(offset)
+                    .ok_or(SessionTransportError::SequenceOverflow)?,
+                message: failure.message,
+            },
+            sent: false,
+            _byte_budget: failure.byte_budget,
+            _item_budget: item_budget,
+        };
+        buffer.push(terminal);
+        if session.send_next_input(buffer).await? == Some(SessionSendOutcome::Reconnected) {
+            break;
         }
     }
     Ok(())
@@ -3606,7 +3761,7 @@ async fn handle_generated_frame<T>(
     result_tx: &mut Option<tokio::sync::oneshot::Sender<Result<T, SessionTransportError>>>,
     inputs: &mut HashMap<uuid::Uuid, InputReplayBuffer>,
     input_tasks: &mut HashMap<uuid::Uuid, GeneratedTaskAbortGuard>,
-    pending_output_cancellations: &mut HashMap<String, PublicClientCancelReason>,
+    pending_output_cancellations: &mut HashMap<String, Option<String>>,
     cancelled_outputs: &mut HashSet<String>,
 ) -> Result<bool, SessionTransportError>
 where
@@ -3699,7 +3854,7 @@ where
                 if matches!(error, SessionTransportError::Closed) {
                     cancelled_outputs.insert(stream_token.clone());
                     pending_output_cancellations
-                        .insert(stream_token, PublicClientCancelReason::ConsumerDrop);
+                        .insert(stream_token, Some("output consumer dropped".to_string()));
                     return Ok(false);
                 }
                 return Err(error);
@@ -3740,7 +3895,7 @@ where
                 if matches!(error, SessionTransportError::Closed) {
                     cancelled_outputs.insert(stream_token.clone());
                     pending_output_cancellations
-                        .insert(stream_token, PublicClientCancelReason::ConsumerDrop);
+                        .insert(stream_token, Some("output consumer dropped".to_string()));
                     return Ok(false);
                 }
                 return Err(error);
@@ -3752,8 +3907,11 @@ where
                 .insert(stream_token, sink);
             Ok(false)
         }
-        ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
-            channel, outcome, ..
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Output,
+            channel,
+            outcome,
+            ..
         }) => {
             let context = output_context.ok_or_else(|| {
                 SessionTransportError::Protocol(
@@ -3784,41 +3942,12 @@ where
             }
             Ok(false)
         }
-        ServerFrame::Message(PublicServerMessage::StreamCancel {
-            channel, reason, ..
+        ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Input,
+            channel,
+            ..
         }) => {
             match session.delivery_tracker().direction_for_channel(*channel) {
-                Some(PublicStreamDirection::Output) => {
-                    let context = output_context.ok_or_else(|| {
-                        SessionTransportError::Protocol(
-                            "server cancelled an output for a unit method".to_string(),
-                        )
-                    })?;
-                    let stream_token = session
-                        .delivery_tracker()
-                        .stream_for_channel(*channel)
-                        .ok_or_else(|| {
-                            SessionTransportError::Protocol("unknown output channel".to_string())
-                        })?;
-                    let sink = context
-                        .outputs
-                        .lock()
-                        .expect("generated output registry mutex poisoned")
-                        .remove(&stream_token);
-                    if let Some(mut sink) = sink {
-                        let result = sink
-                            .finish(
-                                PublicOutputStreamOutcome::Cancelled { reason: *reason },
-                                None,
-                            )
-                            .await;
-                        if let Err(error) = result
-                            && !matches!(error, SessionTransportError::Closed)
-                        {
-                            return Err(error);
-                        }
-                    }
-                }
                 Some(PublicStreamDirection::Input) => {
                     let token = session
                         .delivery_tracker()
@@ -3840,7 +3969,7 @@ where
                         session.unregister_input(reference);
                     }
                 }
-                None => {
+                _ => {
                     return Err(SessionTransportError::Protocol(
                         "unknown cancelled channel".to_string(),
                     ));
@@ -3897,9 +4026,10 @@ async fn fail_generated_outputs(context: Option<&GeneratedDecodeContext>, messag
     for (_, mut output) in outputs {
         let _ = output
             .finish(
-                PublicOutputStreamOutcome::Error {
-                    code: golem_common::model::invocation_session_public::PublicErrorCode::InvocationFailed,
-                    message: message.to_string(),
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: message.to_string(),
+                    },
                 },
                 None,
             )
@@ -3921,10 +4051,11 @@ async fn run_generated_input_source<T>(
         let item = match source.stream.next().await {
             Some(Ok(item)) => item,
             Some(Err(error)) => {
-                let _ = events.send(GeneratedInputEvent::Failed {
+                let _ = events.send(GeneratedInputEvent::failed(
                     provisional_ref,
-                    message: error.to_string(),
-                });
+                    &buffer,
+                    error.to_string(),
+                ));
                 return;
             }
             None => {
@@ -3941,20 +4072,22 @@ async fn run_generated_input_source<T>(
         let value = match (source.encode)(item, &context) {
             Ok(value) => value,
             Err(message) => {
-                let _ = events.send(GeneratedInputEvent::Failed {
+                let _ = events.send(GeneratedInputEvent::failed(
                     provisional_ref,
+                    &buffer,
                     message,
-                });
+                ));
                 return;
             }
         };
         if source.lane != StreamLane::Json
             && let Err(errors) = validate_value(&context.graph, &source.item_type, &value)
         {
-            let _ = events.send(GeneratedInputEvent::Failed {
+            let _ = events.send(GeneratedInputEvent::failed(
                 provisional_ref,
-                message: format!("binary input failed schema validation: {errors:?}"),
-            });
+                &buffer,
+                format!("binary input failed schema validation: {errors:?}"),
+            ));
             return;
         }
         let mut after_batch: Option<Result<(), String>> = None;
@@ -3963,10 +4096,11 @@ async fn run_generated_input_source<T>(
                 let value = match context.encode_value(&source.item_type, &value) {
                     Ok(value) => value,
                     Err(error) => {
-                        let _ = events.send(GeneratedInputEvent::Failed {
+                        let _ = events.send(GeneratedInputEvent::failed(
                             provisional_ref,
-                            message: error.to_string(),
-                        });
+                            &buffer,
+                            error.to_string(),
+                        ));
                         return;
                     }
                 };
@@ -3979,10 +4113,11 @@ async fn run_generated_input_source<T>(
             }
             StreamLane::Binary => {
                 let SchemaValue::Binary(binary) = value else {
-                    let _ = events.send(GeneratedInputEvent::Failed {
+                    let _ = events.send(GeneratedInputEvent::failed(
                         provisional_ref,
-                        message: "binary stream encoder returned a non-binary value".to_string(),
-                    });
+                        &buffer,
+                        "binary stream encoder returned a non-binary value".to_string(),
+                    ));
                     return;
                 };
                 let request = ReplayableInput::Binary(BinaryMessage {
@@ -4005,10 +4140,11 @@ async fn run_generated_input_source<T>(
             }
             StreamLane::U8 => {
                 let SchemaValue::U8(first) = value else {
-                    let _ = events.send(GeneratedInputEvent::Failed {
+                    let _ = events.send(GeneratedInputEvent::failed(
                         provisional_ref,
-                        message: "u8 stream encoder returned a non-u8 value".to_string(),
-                    });
+                        &buffer,
+                        "u8 stream encoder returned a non-u8 value".to_string(),
+                    ));
                     return;
                 };
                 let mut payload = Vec::with_capacity(4096);
@@ -4075,14 +4211,41 @@ async fn run_generated_input_source<T>(
         let byte_charge = match &request {
             ReplayableInput::Value { value, .. } => value.to_string().len(),
             ReplayableInput::Binary(message) => message.payload.len(),
-            ReplayableInput::End { .. } => 1,
+            ReplayableInput::End { .. } | ReplayableInput::Failed { .. } => 1,
         };
+        let after_batch = match after_batch {
+            Some(Err(message)) => match buffer.admit_failure(message) {
+                Ok(failure) => Some(Err(failure)),
+                Err(error) => {
+                    let _ = events.send(GeneratedInputEvent::Failed {
+                        provisional_ref,
+                        failure: Err(error),
+                    });
+                    return;
+                }
+            },
+            Some(Ok(())) => Some(Ok(())),
+            None => None,
+        };
+        // Earlier batches can release credit through ACKs, but this prefix and its
+        // already-retained terminal must fit together or admission can never finish.
+        if let Some(Err(failure)) = &after_batch
+            && byte_charge > buffer.max_unacknowledged_bytes - failure.byte_budget.num_permits()
+        {
+            let _ = events.send(GeneratedInputEvent::Failed {
+                provisional_ref,
+                failure: Err(SessionTransportError::Protocol(
+                    "unacknowledged input limit exceeded".into(),
+                )),
+            });
+            return;
+        }
         let input = match buffer.admit(request, byte_charge).await {
             Ok(input) => input,
             Err(error) => {
                 let _ = events.send(GeneratedInputEvent::Failed {
                     provisional_ref,
-                    message: error.to_string(),
+                    failure: Err(error),
                 });
                 return;
             }
@@ -4107,10 +4270,10 @@ async fn run_generated_input_source<T>(
                         });
                     }
                 }
-                Err(message) => {
+                Err(failure) => {
                     let _ = events.send(GeneratedInputEvent::Failed {
                         provisional_ref,
-                        message,
+                        failure: Ok(failure),
                     });
                 }
             }
@@ -4143,8 +4306,8 @@ fn stream_lane(graph: &SchemaGraph, ty: &SchemaType) -> Result<StreamLane, Strin
 pub enum AgentStreamError {
     #[error("stream producer failed: {0}")]
     Producer(String),
-    #[error("stream was cancelled: {0}")]
-    Cancelled(String),
+    #[error("stream terminated: {0:?}")]
+    Terminal(Box<PublicStreamOutcome>),
     #[error(transparent)]
     Transport(#[from] SessionTransportError),
 }
@@ -4177,7 +4340,7 @@ pub enum AgentStreamOutput<T> {
 /// and output cursor state advances only when `poll_next` yields an item.
 pub struct AgentStream<T> {
     inner: BoxAgentStream<T>,
-    cancel: Option<Box<dyn FnOnce(PublicClientCancelReason) + Send>>,
+    cancel: Option<Box<dyn FnOnce(Option<String>) + Send>>,
     terminal: bool,
 }
 
@@ -4218,7 +4381,7 @@ where
     #[doc(hidden)]
     pub fn output(
         receiver: mpsc::Receiver<AgentStreamOutput<T>>,
-        cancel: impl FnOnce(PublicClientCancelReason) + Send + 'static,
+        cancel: impl FnOnce(Option<String>) + Send + 'static,
     ) -> Self {
         Self {
             inner: Box::pin(futures_util::stream::unfold(
@@ -4252,7 +4415,7 @@ where
         if !self.terminal {
             self.terminal = true;
             if let Some(cancel) = self.cancel.take() {
-                cancel(PublicClientCancelReason::Cancelled);
+                cancel(Some("output consumer cancelled".to_string()));
             }
         }
     }
@@ -4323,7 +4486,7 @@ impl<T> Drop for AgentStream<T> {
         if !self.terminal
             && let Some(cancel) = self.cancel.take()
         {
-            cancel(PublicClientCancelReason::ConsumerDrop);
+            cancel(Some("output consumer dropped".to_string()));
         }
     }
 }
@@ -4332,7 +4495,6 @@ impl<T> Drop for AgentStream<T> {
 mod tests {
     use super::*;
     use base64::Engine;
-    use golem_common::model::invocation_session_public::PublicServerCancelReason;
     use serde::Deserialize;
 
     fn accepted_agent_id() -> golem_common::model::AgentId {
@@ -4374,6 +4536,41 @@ mod tests {
                 vector.name
             );
         }
+        let json: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/stream-session-v1/json-messages.json"
+        ))
+        .unwrap();
+        for vector in json["vectors"].as_array().unwrap() {
+            let canonical = vector["canonical"].as_str().unwrap();
+            let encoded = match vector["direction"].as_str().unwrap() {
+                "client" => {
+                    encode_text(&decode_client_text(canonical.as_bytes()).unwrap()).unwrap()
+                }
+                "server" => {
+                    encode_text(&decode_server_text(canonical.as_bytes()).unwrap()).unwrap()
+                }
+                direction => panic!("unknown fixture direction: {direction}"),
+            };
+            assert_eq!(encoded, canonical, "{}", vector["name"]);
+        }
+        for outcome in [
+            serde_json::json!({"kind":"unknown"}),
+            serde_json::json!({"kind":"failed","error":{"kind":"unknown"}}),
+        ] {
+            for (direction, sender) in [("input", "client"), ("output", "server")] {
+                let message = serde_json::json!({
+                    "type":"stream-end", "channel":1, "direction":direction,
+                    "sequence":"0", "outcome":outcome, "version":1,
+                })
+                .to_string();
+                let rejected = if sender == "client" {
+                    decode_client_text(message.as_bytes()).is_err()
+                } else {
+                    decode_server_text(message.as_bytes()).is_err()
+                };
+                assert!(rejected, "unknown terminal decoded: {message}");
+            }
+        }
     }
 
     #[test]
@@ -4413,7 +4610,7 @@ mod tests {
     use golem_common::model::invocation_session_public::{
         DecimalU64, InvocationSelector, PublicAttachmentRevokedReason, PublicByteStreamRole,
         PublicErrorCode, PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
-        PublicNativeToolTarget, PublicOutputStreamOutcome, PublicTypedValue, decode_client_text,
+        PublicNativeToolTarget, PublicTypedValue, decode_client_text,
     };
     use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -4534,10 +4731,11 @@ mod tests {
     ) {
         socket
             .send(Message::Text(
-                encode_text(&PublicServerMessage::OutputStreamEnd {
+                encode_text(&PublicServerMessage::StreamEnd {
+                    direction: PublicStreamDirection::Output,
                     channel,
                     cursor_token: Some(token.to_string()),
-                    outcome: PublicOutputStreamOutcome::Ok,
+                    outcome: PublicStreamOutcome::Finished,
                     sequence: DecimalU64(sequence),
                     version: 1,
                 })
@@ -4551,13 +4749,18 @@ mod tests {
     async fn send_native_cancel(
         socket: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
         channel: u32,
-        reason: PublicServerCancelReason,
+        direction: PublicStreamDirection,
+        sequence: u64,
+        outcome: PublicStreamOutcome,
     ) {
         socket
             .send(Message::Text(
-                encode_text(&PublicServerMessage::StreamCancel {
+                encode_text(&PublicServerMessage::StreamEnd {
                     channel,
-                    reason,
+                    direction,
+                    sequence: DecimalU64(sequence),
+                    outcome,
+                    cursor_token: None,
                     version: 1,
                 })
                 .unwrap()
@@ -4790,7 +4993,9 @@ mod tests {
             assert_eq!(input.payload, PAYLOAD);
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::InputStreamEnd {
+                PublicClientMessage::StreamEnd {
+                    direction: PublicStreamDirection::Input,
+                    outcome: PublicStreamOutcome::Finished,
                     channel: 11,
                     sequence: DecimalU64(5),
                     ..
@@ -4828,15 +5033,17 @@ mod tests {
                 .unwrap();
             socket
                 .send(Message::Text(
-                    encode_text(&PublicServerMessage::OutputStreamEnd {
+                    encode_text(&PublicServerMessage::StreamEnd {
+                        direction: PublicStreamDirection::Output,
                         channel: 12,
                         cursor_token: Some("stdout-end".to_string()),
                         outcome: if result_before_stdout_end {
-                            PublicOutputStreamOutcome::Ok
+                            PublicStreamOutcome::Finished
                         } else {
-                            PublicOutputStreamOutcome::Error {
-                                code: golem_common::model::invocation_session_public::PublicErrorCode::ProtocolError,
-                                message: "tool invocation rejected".to_string(),
+                            PublicStreamOutcome::Failed {
+                                error: PublicStreamError::Trapped {
+                                    message: "tool invocation rejected".to_string(),
+                                },
                             }
                         },
                         sequence: DecimalU64((MARKER.len() + PAYLOAD.len()) as u64),
@@ -4849,10 +5056,11 @@ mod tests {
                 .unwrap();
             socket
                 .send(Message::Text(
-                    encode_text(&PublicServerMessage::OutputStreamEnd {
+                    encode_text(&PublicServerMessage::StreamEnd {
+                        direction: PublicStreamDirection::Output,
                         channel: 13,
                         cursor_token: Some("stderr-end".to_string()),
-                        outcome: PublicOutputStreamOutcome::Ok,
+                        outcome: PublicStreamOutcome::Finished,
                         sequence: DecimalU64(STDERR_MARKER.len() as u64),
                         version: 1,
                     })
@@ -5177,20 +5385,35 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 cancel_tx.send(()).unwrap();
             }
-            let reason = if output_failure {
-                PublicClientCancelReason::ConsumerDrop
-            } else {
-                PublicClientCancelReason::Cancelled
-            };
             for channel in [11, 12] {
-                assert!(matches!(
-                    receive_client_message(&mut socket).await,
-                    PublicClientMessage::StreamCancel {
+                match receive_client_message(&mut socket).await {
+                    PublicClientMessage::StreamEnd {
                         channel: actual,
-                        reason: actual_reason,
+                        direction,
+                        outcome,
+                        sequence,
                         ..
-                    } if actual == channel && actual_reason == reason
-                ));
+                    } => {
+                        assert_eq!(actual, channel);
+                        assert_eq!(sequence, DecimalU64(0));
+                        if channel == 11 {
+                            assert_eq!(direction, PublicStreamDirection::Input);
+                            assert!(matches!(
+                                outcome,
+                                PublicStreamOutcome::Failed {
+                                    error: PublicStreamError::Interrupted { .. }
+                                }
+                            ));
+                        } else {
+                            assert_eq!(direction, PublicStreamDirection::Output);
+                            assert!(matches!(
+                                outcome,
+                                PublicStreamOutcome::ConsumerCancelled { .. }
+                            ));
+                        }
+                    }
+                    message => panic!("expected stream terminal, got {message:?}"),
+                }
             }
         });
 
@@ -5448,9 +5671,13 @@ mod tests {
     ) {
         assert!(matches!(
             receive_client_message(socket).await,
-            PublicClientMessage::StreamCancel {
+            PublicClientMessage::StreamEnd {
                 channel: 11,
-                reason: PublicClientCancelReason::Cancelled,
+                direction: PublicStreamDirection::Input,
+                outcome: PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted { .. },
+                },
+                sequence: DecimalU64(0),
                 ..
             }
         ));
@@ -5654,18 +5881,25 @@ mod tests {
             stop_tx.send(()).unwrap();
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::StreamCancel {
+                PublicClientMessage::StreamEnd {
                     channel: 11,
-                    reason: PublicClientCancelReason::Cancelled,
+                    direction: PublicStreamDirection::Input,
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted { .. },
+                    },
                     ..
                 }
             ));
             cancel_tx.send(()).unwrap();
             assert_eq!(
                 receive_client_messages_until_close(&mut socket).await,
-                vec![PublicClientMessage::StreamCancel {
+                vec![PublicClientMessage::StreamEnd {
                     channel: 12,
-                    reason: PublicClientCancelReason::Cancelled,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled {
+                        details: Some("native tool invocation cancelled".to_string())
+                    },
                     version: INVOCATION_SESSION_VERSION,
                 }]
             );
@@ -5711,7 +5945,9 @@ mod tests {
             .await;
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::InputStreamEnd {
+                PublicClientMessage::StreamEnd {
+                    direction: PublicStreamDirection::Input,
+                    outcome: PublicStreamOutcome::Finished,
                     channel: 11,
                     sequence: DecimalU64(0),
                     ..
@@ -5763,7 +5999,14 @@ mod tests {
                 Duration::ZERO,
             )
             .await;
-            send_native_cancel(&mut socket, 11, PublicServerCancelReason::ConsumerDrop).await;
+            send_native_cancel(
+                &mut socket,
+                11,
+                PublicStreamDirection::Input,
+                0,
+                PublicStreamOutcome::ConsumerCancelled { details: None },
+            )
+            .await;
             send_native_binary(&mut socket, 12, 0, "stdout-marker", b"A").await;
             // Leaves the client time to act on the stop before the result ends the session.
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -5929,9 +6172,12 @@ mod tests {
             .await;
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::StreamCancel {
+                PublicClientMessage::StreamEnd {
                     channel: 11,
-                    reason: PublicClientCancelReason::Cancelled,
+                    direction: PublicStreamDirection::Input,
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted { .. },
+                    },
                     ..
                 }
             ));
@@ -5944,9 +6190,12 @@ mod tests {
             } else {
                 assert!(matches!(
                     receive_client_message(&mut socket).await,
-                    PublicClientMessage::StreamCancel {
+                    PublicClientMessage::StreamEnd {
                         channel: 21,
-                        reason: PublicClientCancelReason::Cancelled,
+                        direction: PublicStreamDirection::Input,
+                        outcome: PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Interrupted { .. },
+                        },
                         ..
                     }
                 ));
@@ -6142,9 +6391,10 @@ mod tests {
             for channel in [12, 13] {
                 assert!(matches!(
                     receive_client_message(&mut socket).await,
-                    PublicClientMessage::StreamCancel {
+                    PublicClientMessage::StreamEnd {
                         channel: actual,
-                        reason: PublicClientCancelReason::Cancelled,
+                        direction: PublicStreamDirection::Output,
+                        outcome: PublicStreamOutcome::ConsumerCancelled { .. },
                         ..
                     } if actual == channel
                 ));
@@ -6382,7 +6632,18 @@ mod tests {
                 .unwrap();
             send_native_binary(&mut socket, 12, 0, "stdout-a", b"A").await;
             send_native_binary(&mut socket, 13, 0, "stderr-x", b"X").await;
-            send_native_cancel(&mut socket, 13, PublicServerCancelReason::InvocationFailed).await;
+            send_native_cancel(
+                &mut socket,
+                13,
+                PublicStreamDirection::Output,
+                1,
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Trapped {
+                        message: "worker failed".to_string(),
+                    },
+                },
+            )
+            .await;
             tokio::time::sleep(Duration::from_millis(100)).await;
             drop(socket);
 
@@ -6439,7 +6700,18 @@ mod tests {
             // the checkpoint, while fresh frames continue at each role's own offset.
             send_native_binary(&mut socket, 22, 0, "stdout-a", b"A").await;
             send_native_binary(&mut socket, 23, 0, "stderr-x", b"X").await;
-            send_native_cancel(&mut socket, 23, PublicServerCancelReason::InvocationFailed).await;
+            send_native_cancel(
+                &mut socket,
+                23,
+                PublicStreamDirection::Output,
+                1,
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Trapped {
+                        message: "worker failed".to_string(),
+                    },
+                },
+            )
+            .await;
             send_native_binary(&mut socket, 22, 1, "stdout-b", b"B").await;
             send_native_end(&mut socket, 22, 2, "stdout-end").await;
             socket
@@ -6532,10 +6804,11 @@ mod tests {
                 stream_token: "stream-seven".to_string(),
             }])
             .unwrap();
-        let frame = ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+        let frame = ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Output,
             channel: 7,
             cursor_token: Some(token.to_string()),
-            outcome: PublicOutputStreamOutcome::Ok,
+            outcome: PublicStreamOutcome::Finished,
             sequence: DecimalU64(sequence),
             version: 1,
         });
@@ -6802,24 +7075,53 @@ mod tests {
 
     #[test]
     async fn affine_output_marks_failed_terminal_delivery() {
-        let tracker = DeliveryTracker::default();
-        let (tx, rx) = mpsc::channel::<AgentStreamOutput<u32>>(1);
-        tx.send(AgentStreamOutput::Error(
-            AgentStreamError::Producer("failed".to_string()),
-            Some(output_frame(&tracker, 5, "failed-terminal-cursor")),
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/stream-session-v1/json-messages.json"
         ))
-        .await
         .unwrap();
-        let mut stream = AgentStream::output(rx, |_| panic!("failed stream was cancelled"));
-
-        assert!(matches!(
-            stream.next().await,
-            Some(Err(AgentStreamError::Producer(message))) if message == "failed"
-        ));
-        assert_eq!(
-            tracker.delivered_cursor_tokens(),
-            vec!["failed-terminal-cursor"]
-        );
+        for vector in fixture["vectors"].as_array().unwrap() {
+            if vector["direction"] != "server" {
+                continue;
+            }
+            let message =
+                decode_server_text(vector["canonical"].as_str().unwrap().as_bytes()).unwrap();
+            let PublicServerMessage::StreamEnd {
+                direction: PublicStreamDirection::Output,
+                outcome,
+                ..
+            } = message
+            else {
+                continue;
+            };
+            if outcome == PublicStreamOutcome::Finished {
+                continue;
+            }
+            let tracker = DeliveryTracker::default();
+            let (tx, rx) = mpsc::channel::<AgentStreamOutput<u32>>(1);
+            let mut sink = TypedGeneratedOutputSink {
+                sender: tx,
+                item_type: SchemaType::u32(),
+                lane: StreamLane::Json,
+                decode: Arc::new(|_, _| unreachable!()),
+            };
+            sink.finish(
+                outcome.clone(),
+                Some(output_frame(&tracker, 5, "failed-terminal-cursor")),
+            )
+            .await
+            .unwrap();
+            let mut stream = AgentStream::output(rx, |_| panic!("failed stream was cancelled"));
+            assert!(
+                matches!(stream.next().await, Some(Err(AgentStreamError::Terminal(actual))) if *actual == outcome),
+                "{}",
+                vector["name"]
+            );
+            assert!(stream.next().await.is_none());
+            assert_eq!(
+                tracker.delivered_cursor_tokens(),
+                vec!["failed-terminal-cursor"]
+            );
+        }
     }
 
     #[test]
@@ -6827,7 +7129,9 @@ mod tests {
         let tracker = DeliveryTracker::default();
         let (tx, rx) = mpsc::channel::<AgentStreamOutput<u32>>(1);
         tx.send(AgentStreamOutput::Error(
-            AgentStreamError::Cancelled("consumer-drop".to_string()),
+            AgentStreamError::Terminal(Box::new(PublicStreamOutcome::ConsumerCancelled {
+                details: Some("consumer-drop".to_string()),
+            })),
             Some(output_frame(&tracker, 6, "cancelled-terminal-cursor")),
         ))
         .await
@@ -6837,7 +7141,7 @@ mod tests {
 
         assert!(matches!(
             stream.next().await,
-            Some(Err(AgentStreamError::Cancelled(reason))) if reason == "consumer-drop"
+            Some(Err(AgentStreamError::Terminal(outcome))) if matches!(*outcome, PublicStreamOutcome::ConsumerCancelled { details: Some(ref reason) } if reason == "consumer-drop")
         ));
         assert_eq!(
             tracker.delivered_cursor_tokens(),
@@ -6873,10 +7177,11 @@ mod tests {
         let mut first = tracker.delivery(&frame).unwrap().unwrap();
         first.mark().unwrap();
 
-        let older = ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+        let older = ServerFrame::Message(PublicServerMessage::StreamEnd {
+            direction: PublicStreamDirection::Output,
             channel: 3,
             cursor_token: Some("older".to_string()),
-            outcome: PublicOutputStreamOutcome::Ok,
+            outcome: PublicStreamOutcome::Finished,
             sequence: DecimalU64(10),
             version: 1,
         });
@@ -6983,8 +7288,8 @@ mod tests {
             commands_rx.try_recv(),
             Ok(GeneratedCommand::CancelOutput {
                 stream_token,
-                reason: PublicClientCancelReason::ConsumerDrop,
-            }) if stream_token == "same-stream"
+                reason: Some(reason),
+            }) if stream_token == "same-stream" && reason == "output consumer dropped"
         ));
     }
 
@@ -7011,10 +7316,11 @@ mod tests {
         )]);
         let (input_tx, mut input_rx) = mpsc::unbounded_channel();
         input_tx
-            .send(GeneratedInputEvent::Failed {
+            .send(GeneratedInputEvent::failed(
                 provisional_ref,
-                message: "source failed".to_string(),
-            })
+                &inputs[&provisional_ref],
+                "source failed".to_string(),
+            ))
             .unwrap();
         let mut pending_output_cancellations = HashMap::new();
         let mut cancelled_outputs = HashSet::new();
@@ -7028,16 +7334,19 @@ mod tests {
             &mut pending_output_cancellations,
             &mut cancelled_outputs,
             &mut failed_inputs,
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             pending_output_cancellations.get("output-stream"),
-            Some(&PublicClientCancelReason::ConsumerDrop)
+            Some(&Some("output consumer dropped".to_string()))
         );
         assert!(cancelled_outputs.contains("output-stream"));
         assert_eq!(
-            failed_inputs.get(&provisional_ref),
-            Some(&"source failed".to_string())
+            failed_inputs
+                .get(&provisional_ref)
+                .map(|failure| failure.message.as_str()),
+            Some("source failed")
         );
         assert!(!generated_invocation_is_complete::<()>(
             &None,
@@ -7162,7 +7471,7 @@ mod tests {
         );
         assert_eq!(
             pending_output_cancellations.get("output-stream"),
-            Some(&PublicClientCancelReason::ConsumerDrop)
+            Some(&Some("output consumer dropped".to_string()))
         );
         assert!(cancelled_outputs.contains("output-stream"));
 
@@ -7175,11 +7484,197 @@ mod tests {
         );
         assert_eq!(
             pending_output_cancellations.get("output-stream"),
-            Some(&PublicClientCancelReason::ConsumerDrop)
+            Some(&Some("output consumer dropped".to_string()))
         );
 
         session.close().await.unwrap();
         server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn generated_input_failures_share_the_retained_prefix_budget() {
+        for (message, rejected) in [
+            ("source failed".to_string(), false),
+            ("\0".repeat(80), true),
+            ("x".repeat(1025), true),
+        ] {
+            for packed in [false, true] {
+                let item_type = if packed {
+                    SchemaType::u8()
+                } else {
+                    SchemaType::u32()
+                };
+                let graph = SchemaGraph::anonymous(SchemaType::stream(Some(item_type.clone())));
+                let context = GeneratedEncodeContext::new(graph.clone());
+                let stream = AgentStream::input(futures_util::stream::iter([
+                    Ok(7_u8),
+                    Err(message.clone()),
+                ]));
+                let value = context
+                    .register_input(stream, item_type, move |byte, _| {
+                        Ok(if packed {
+                            SchemaValue::U8(byte)
+                        } else {
+                            SchemaValue::U32(byte.into())
+                        })
+                    })
+                    .unwrap();
+                context.encode_value(&graph.root, &value).unwrap();
+                let pending = context.take_pending().pop().unwrap();
+                let buffer = InputReplayBuffer::new(1024, 4);
+                buffer.push(
+                    buffer
+                        .admit(
+                            ReplayableInput::Value {
+                                sequence: 0,
+                                value: serde_json::json!("retained prefix"),
+                            },
+                            600,
+                        )
+                        .await
+                        .unwrap(),
+                );
+                let (events, mut events_rx) = mpsc::unbounded_channel();
+                pending
+                    .source
+                    .spawn(pending.provisional_ref, buffer.clone(), context, events);
+                if !packed || !rejected {
+                    let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap()
+                    else {
+                        panic!("expected the source prefix");
+                    };
+                    buffer.push(input);
+                }
+                let GeneratedInputEvent::Failed { failure, .. } = events_rx.recv().await.unwrap()
+                else {
+                    panic!("expected the source failure");
+                };
+                match failure {
+                    Ok(failure) => {
+                        assert!(!rejected, "oversized diagnostic was retained");
+                        assert_eq!(
+                            failure.message,
+                            format!("stream producer failed: {message}")
+                        );
+                        // The queued diagnostic must own credit even before the driver sees it.
+                        assert!(
+                            tokio::time::timeout(
+                                Duration::from_millis(20),
+                                buffer.admit(ReplayableInput::End { sequence: 1 }, 400,)
+                            )
+                            .await
+                            .is_err()
+                        );
+                        drop(failure);
+                    }
+                    Err(error) => {
+                        assert!(rejected);
+                        assert!(matches!(error, SessionTransportError::Protocol(message)
+                            if message == "unacknowledged input limit exceeded"));
+                    }
+                }
+                // Dropping/rejecting the diagnostic releases its credit; prefix credit remains.
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_secs(1),
+                        buffer.admit(ReplayableInput::End { sequence: 1 }, 400,)
+                    )
+                    .await
+                    .unwrap()
+                    .is_ok()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn packed_failure_preserves_prefix_across_item_backpressure() {
+        let graph = SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8())));
+        let context = GeneratedEncodeContext::new(graph.clone());
+        let source = futures_util::stream::iter(
+            std::iter::repeat_n(Ok(7_u8), MAX_PACKED_U8_SIZE + 1)
+                .chain(std::iter::once(Err("original source failure".to_string()))),
+        );
+        let value = context
+            .register_input(AgentStream::input(source), SchemaType::u8(), |byte, _| {
+                Ok(SchemaValue::U8(byte))
+            })
+            .unwrap();
+        context.encode_value(&graph.root, &value).unwrap();
+        let pending = context.take_pending().pop().unwrap();
+        let buffer = InputReplayBuffer::new(MAX_PACKED_U8_SIZE + 1024, 1);
+        let (events, mut events_rx) = mpsc::unbounded_channel();
+        let task = pending
+            .source
+            .spawn(pending.provisional_ref, buffer.clone(), context, events);
+        let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected first full packed batch");
+        };
+        buffer.push(input);
+        buffer.mark_sent(0).unwrap();
+        let early = tokio::time::timeout(Duration::from_millis(20), events_rx.recv()).await;
+        if let Ok(Some(GeneratedInputEvent::Failed { failure, .. })) = early {
+            panic!(
+                "discarded final packed byte before ACK: {}",
+                match failure {
+                    Ok(failure) => failure.message,
+                    Err(error) => error.to_string(),
+                }
+            );
+        }
+        assert!(early.is_err(), "source must wait for the first batch ACK");
+        buffer
+            .acknowledge(MAX_PACKED_U8_SIZE as u64, false)
+            .unwrap();
+        let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected final packed byte after ACK");
+        };
+        assert!(matches!(&input.request, ReplayableInput::Binary(message)
+            if message.payload == vec![7]));
+        let GeneratedInputEvent::Failed { failure, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected original source failure after final byte");
+        };
+        assert_eq!(
+            failure.unwrap().message,
+            "stream producer failed: original source failure"
+        );
+        task.abort();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn packed_prefix_budget_rejection_is_not_a_stream_failure() {
+        let graph = SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8())));
+        let context = GeneratedEncodeContext::new(graph.clone());
+        let source = futures_util::stream::iter(
+            std::iter::repeat_n(Ok(7_u8), 900)
+                .chain(std::iter::once(Err("original source failure".to_string()))),
+        );
+        let value = context
+            .register_input(AgentStream::input(source), SchemaType::u8(), |byte, _| {
+                Ok(SchemaValue::U8(byte))
+            })
+            .unwrap();
+        context.encode_value(&graph.root, &value).unwrap();
+        let pending = context.take_pending().pop().unwrap();
+        let buffer = InputReplayBuffer::new(1024, 4);
+        let reference = pending.provisional_ref;
+        let (events, mut events_rx) = mpsc::unbounded_channel();
+        let task = pending
+            .source
+            .spawn(reference, buffer.clone(), context, events);
+        let event = events_rx.recv().await.unwrap();
+        let inputs = HashMap::from([(reference, buffer)]);
+        let mut failed = HashMap::new();
+        let result = admit_generated_input_event(event, &inputs, &mut failed);
+        assert!(
+            result.is_err(),
+            "size limit was downgraded to a recoverable stream terminal after discarding 900 bytes: {:?}",
+            failed.get(&reference).map(|failure| &failure.message)
+        );
+        task.abort();
     }
 
     #[test]
@@ -7562,9 +8057,11 @@ mod tests {
         let sender = session.sender();
         let error = loop {
             match sender
-                .send_message(&PublicClientMessage::StreamCancel {
+                .send_message(&PublicClientMessage::StreamEnd {
                     channel: 1,
-                    reason: golem_common::model::invocation_session_public::PublicClientCancelReason::Cancelled,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled { details: None },
                     version: 1,
                 })
                 .await
@@ -7679,9 +8176,10 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::StreamCancel {
+                PublicClientMessage::StreamEnd {
                     channel: 9,
-                    reason: PublicClientCancelReason::ConsumerDrop,
+                    direction: PublicStreamDirection::Output,
+                    outcome: PublicStreamOutcome::ConsumerCancelled { .. },
                     ..
                 }
             ));
@@ -7710,7 +8208,7 @@ mod tests {
 
         let mut pending = HashMap::from([(
             "output-stream".to_string(),
-            PublicClientCancelReason::ConsumerDrop,
+            Some("output consumer dropped".to_string()),
         )]);
         cancel_pending_outputs(&mut session, &mut pending)
             .await
@@ -7724,6 +8222,125 @@ mod tests {
             .await
             .unwrap();
         assert!(pending.is_empty());
+        server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn generated_input_failure_waits_for_item_ack_without_blocking_the_driver() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let provisional_ref = uuid::Uuid::new_v4();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            let start = receive_client_message(&mut socket).await;
+            send_server(
+                &mut socket,
+                accepted(
+                    operation_attempt_id(&start).unwrap(),
+                    vec![PublicStreamMapping {
+                        channel: 4,
+                        direction: PublicStreamDirection::Input,
+                        byte_role: None,
+                        input_high_water: Some(PublicInputHighWater {
+                            sequence: DecimalU64(0),
+                            terminal: false,
+                        }),
+                        provisional_ref: Some(provisional_ref),
+                        stream_token: "input".to_string(),
+                    }],
+                ),
+            )
+            .await;
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::InputStreamItem {
+                    channel: 4,
+                    sequence: DecimalU64(0),
+                    ..
+                }
+            ));
+            for terminal in [false, true] {
+                if terminal {
+                    assert!(matches!(receive_client_message(&mut socket).await,
+                        PublicClientMessage::StreamEnd {
+                            channel: 4, sequence: DecimalU64(1),
+                            outcome: PublicStreamOutcome::Failed {
+                                error: PublicStreamError::Interrupted { message }
+                            }, ..
+                        } if message == "source failed"));
+                }
+                send_server(
+                    &mut socket,
+                    PublicServerMessage::InputStreamAck {
+                        channel: 4,
+                        highest_contiguous_sequence: DecimalU64(1),
+                        mappings: Vec::new(),
+                        terminal,
+                        version: 1,
+                    },
+                )
+                .await;
+            }
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Unlimited,
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let buffer = InputReplayBuffer::new(1024, 1);
+        session
+            .register_input(provisional_ref, None, buffer.clone())
+            .unwrap();
+        session.receive().await.unwrap();
+        buffer.push(
+            buffer
+                .admit(
+                    ReplayableInput::Value {
+                        sequence: 0,
+                        value: serde_json::json!(7),
+                    },
+                    600,
+                )
+                .await
+                .unwrap(),
+        );
+        let mut failed = HashMap::from([(
+            provisional_ref,
+            buffer.admit_failure("source failed".to_string()).unwrap(),
+        )]);
+        let inputs = HashMap::from([(provisional_ref, buffer.clone())]);
+        cancel_failed_inputs(&mut session, &inputs, &mut failed)
+            .await
+            .unwrap();
+        assert!(!failed.is_empty());
+        session.receive().await.unwrap();
+        cancel_failed_inputs(&mut session, &inputs, &mut failed)
+            .await
+            .unwrap();
+        assert!(failed.is_empty());
+        // Byte credit transfers to replay and stays there until the terminal ACK.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                buffer.admit(ReplayableInput::End { sequence: 1 }, 1024)
+            )
+            .await
+            .is_err()
+        );
+        session.receive().await.unwrap();
+        assert!(buffer.is_empty());
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                buffer.admit(ReplayableInput::End { sequence: 1 }, 1024)
+            )
+            .await
+            .unwrap()
+            .is_ok()
+        );
         server.await.unwrap();
     }
 
@@ -7819,9 +8436,13 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 receive_client_message(&mut socket).await,
-                PublicClientMessage::StreamCancel {
+                PublicClientMessage::StreamEnd {
                     channel: 10,
-                    reason: PublicClientCancelReason::SourceUnavailable,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted { .. }
+                    },
                     ..
                 }
             ));
@@ -7853,18 +8474,25 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         let inputs = HashMap::from([(provisional_ref, buffer)]);
-        let mut failed = HashMap::from([(provisional_ref, "source failed".to_string())]);
+        let mut failed = HashMap::from([(
+            provisional_ref,
+            inputs[&provisional_ref]
+                .admit_failure("source failed".to_string())
+                .unwrap(),
+        )]);
         cancel_failed_inputs(&mut session, &inputs, &mut failed)
             .await
             .unwrap();
-        assert!(failed.contains_key(&provisional_ref));
+        assert!(failed.is_empty());
+        assert!(matches!(
+            inputs[&provisional_ref].next_unsent(),
+            Some((_, ReplayableInput::Failed { sequence: 0, .. }, _))
+        ));
         assert!(matches!(
             session.receive().await.unwrap().frame(),
             ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         ));
-        cancel_failed_inputs(&mut session, &inputs, &mut failed)
-            .await
-            .unwrap();
+        flush_generated_inputs(&mut session, &inputs).await.unwrap();
         assert!(failed.is_empty());
         server.await.unwrap();
     }

@@ -3240,6 +3240,9 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
       let message = expect_object(parse_strict_json(canonical))
       let kind = expect_string(get_field(vector, "type"))
       validate_message_fields(message, kind)
+      if kind == "stream-end" {
+        ignore(validate_server_stream_end(message))
+      }
       if kind == "invocationFinished" {
         let outcome = expect_object(get_field(message, "outcome"))
         if expect_string(get_field(outcome, "kind")) == "failure" {
@@ -3358,6 +3361,22 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("resume-routing-miss", "", window, STABLE),
         ("accept-drop", "unreachable", "Within(800)", "400"),
         ("stable-reset", "", "Within(1000)", "300"),
+        ("input-failure-replay", "", window, STABLE),
+        ("input-eof-replay", "", window, STABLE),
+        ("output-failed", "typed-failure", window, STABLE),
+        ("output-cancel-race", "", window, STABLE),
+        ("output-cancel-after-resume-head", "", window, STABLE),
+        ("output-cancel-partial-packed", "", window, STABLE),
+        ("terminal-accounting", "", window, STABLE),
+        ("output-admission-cancel", "", window, STABLE),
+        ("input-prefetch-delayed", "", window, STABLE),
+        ("input-prefetch-before-attachment", "", window, STABLE),
+        (
+            "output-consumer-cancelled",
+            "consumer-cancelled",
+            window,
+            STABLE,
+        ),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3378,6 +3397,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
+                .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
                 .replace("__STABLE__", stable)

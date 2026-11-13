@@ -8,6 +8,7 @@ import {
   agentStream,
   createAgent,
   createStreamingRemoteMethod,
+  decodeStreamSessionEnd,
   Datetime,
   encodeOption,
   encodeStreamSessionBinaryEnvelope,
@@ -423,11 +424,9 @@ test('text codec matches the frozen canonical JSON messages', async () => {
     await readFile('../../../../golem-client/tests/fixtures/stream-session-v1/json-messages.json'),
   );
   for (const vector of fixture.vectors) {
-    assert.equal(
-      encodeStreamSessionTextFrame(parseStreamSessionTextFrame(vector.canonical)),
-      vector.canonical,
-      vector.name,
-    );
+    const parsed = parseStreamSessionTextFrame(vector.canonical);
+    if (parsed.type === 'stream-end') decodeStreamSessionEnd(parsed);
+    assert.equal(encodeStreamSessionTextFrame(parsed), vector.canonical, vector.name);
   }
 });
 
@@ -445,6 +444,769 @@ test('strict text codec directly rejects frozen malformed JSON syntax', async ()
     );
   }
 });
+
+test('terminal decoder rejects every shared malformed terminal vector', async () => {
+  const fixture = JSON.parse(
+    await readFile('../../../../golem-client/tests/fixtures/stream-session-v1/malformed.json'),
+  );
+  for (const vector of fixture.vectors.filter(
+    ({ lane, input, state }) => lane === 'text' && input?.includes('stream-end') && !state,
+  )) {
+    assert.throws(
+      () => decodeStreamSessionEnd(parseStreamSessionTextFrame(vector.input)),
+      { code: vector.expectedCode },
+      vector.name,
+    );
+  }
+  const frame = {
+    version: 1,
+    type: 'stream-end',
+    channel: 2,
+    direction: 'output',
+    sequence: '0',
+    outcome: { kind: 'finished' },
+  };
+  for (const invalid of [
+    { ...frame, direction: undefined },
+    { ...frame, direction: 'sideways' },
+    { ...frame, type: 'outputStreamEnd' },
+    { ...frame, outcome: { kind: 'finished', error: {} } },
+    { ...frame, outcome: { kind: 'consumer-cancelled', details: 42 } },
+    { ...frame, outcome: { kind: 'failed', error: { kind: 'trapped' } } },
+    { ...frame, outcome: { kind: 'failed', error: { kind: 'cancelled', message: 'extra' } } },
+  ])
+    assert.throws(() => decodeStreamSessionEnd(invalid), { code: 'malformed-message' });
+});
+
+const terminalOutcomes = [
+  { kind: 'finished' },
+  {
+    kind: 'failed',
+    error: { kind: 'failed', value: { graph: u32Graph, value: { kind: 'u32', value: 7 } } },
+  },
+  ...['trapped', 'interrupted', 'resource-exhausted'].map((kind) => ({
+    kind: 'failed',
+    error: { kind, message: `${kind} diagnostic` },
+  })),
+  ...['cancelled', 'abandoned'].map((kind) => ({ kind: 'failed', error: { kind } })),
+  { kind: 'consumer-cancelled' },
+  { kind: 'consumer-cancelled', details: null },
+  { kind: 'consumer-cancelled', details: 'consumer diagnostic' },
+];
+
+for (const outcome of terminalOutcomes) {
+  test(`output terminal preserves complete outcome ${JSON.stringify(outcome)}`, async () => {
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(JSON.stringify(accepted(start, [outputMapping])));
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            direction: 'output',
+            channel: 2,
+            sequence: '0',
+            outcome,
+          }),
+        );
+        socket.send(
+          JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+        );
+      });
+    });
+    try {
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        () => ({}),
+        (value, stream) => stream(value.value.value.streamToken, (item) => item, 'terminal-test'),
+      );
+      const output = await method();
+      const iterator = output[Symbol.asyncIterator]();
+      if (outcome.kind === 'finished')
+        assert.deepEqual(await iterator.next(), { done: true, value: undefined });
+      else
+        await assert.rejects(iterator.next(), (error) => {
+          assert.ok(error instanceof StreamingProtocolError);
+          assert.deepEqual(error.outcome, outcome);
+          assert.equal(error.code, outcome.error?.kind ?? outcome.kind);
+          return true;
+        });
+    } finally {
+      await local.close();
+    }
+  });
+}
+
+const MiB = 1024 * 1024;
+
+function typedTerminalFrame(channel, bytes, sequence = '0') {
+  const frame = {
+    version: 1,
+    type: 'stream-end',
+    direction: 'output',
+    channel,
+    sequence,
+    outcome: {
+      kind: 'failed',
+      error: {
+        kind: 'failed',
+        value: {
+          graph: { root: { kind: 'string', value: {} } },
+          value: { kind: 'string', value: '' },
+        },
+      },
+    },
+  };
+  const remaining = bytes - Buffer.byteLength(JSON.stringify(frame));
+  frame.outcome.error.value.value.value =
+    'é'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2);
+  assert.equal(Buffer.byteLength(JSON.stringify(frame)), bytes);
+  return frame;
+}
+
+async function terminalBudgetSession(count) {
+  let socket;
+  const mappings = Array.from({ length: count + 1 }, (_, index) => ({
+    channel: index + 1,
+    direction: 'output',
+    streamToken: `budget-${index}`,
+  }));
+  const local = await server((connected) => {
+    socket = connected;
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(JSON.stringify(accepted(start, mappings)));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: {
+            kind: 'value',
+            graph: { root: { kind: 'list', value: { element: outputStreamGraph.root } } },
+            value: {
+              kind: 'list',
+              value: {
+                elements: mappings.map(({ streamToken }) => ({
+                  kind: 'stream',
+                  value: { streamToken },
+                })),
+              },
+            },
+          },
+        }),
+      );
+    });
+  });
+  const method = createStreamingRemoteMethod(
+    () => ({ server: local.endpoint }),
+    () => descriptor,
+    () => ({}),
+    (value, stream) =>
+      value.value.value.elements.map((item) =>
+        stream(item.value.streamToken, (item) => item)[Symbol.asyncIterator](),
+      ),
+  );
+  const controller = new AbortController();
+  const outputs = await method.abortable(controller.signal);
+  const marker = outputs.pop();
+  let sequence = 0;
+  const markerFrame = () => ({
+    version: 1,
+    type: 'outputStreamItem',
+    channel: count + 1,
+    sequence: String(sequence),
+    cursorToken: `budget-cursor-${sequence}`,
+    mappings: [],
+    value: 'marker',
+  });
+  const markerBytes = Buffer.byteLength(JSON.stringify(markerFrame()));
+  const barrier = () => {
+    const frame = markerFrame();
+    sequence += 1;
+    socket.send(JSON.stringify(frame));
+    return marker.next();
+  };
+  return {
+    outputs,
+    send: (frame) => socket.send(JSON.stringify(frame)),
+    barrier,
+    markerBytes,
+    close: async () => {
+      controller.abort();
+      await local.close();
+    },
+  };
+}
+
+test('terminal budget rejects unread prefix plus large typed terminal', async () => {
+  const session = await terminalBudgetSession(1);
+  try {
+    const prefix = {
+      version: 1,
+      type: 'outputStreamItem',
+      channel: 1,
+      sequence: '0',
+      cursorToken: 'prefix',
+      mappings: [],
+      value: 'p'.repeat(8 * MiB),
+    };
+    session.send(prefix);
+    session.send(
+      typedTerminalFrame(1, 16 * MiB - Buffer.byteLength(JSON.stringify(prefix)) + 1, '1'),
+    );
+    await assert.rejects(session.barrier(), {
+      code: 'resource-exhausted',
+      message: 'output delivery queue limit exceeded',
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+test('terminal budget rejects combined typed terminals above the session limit', async () => {
+  const session = await terminalBudgetSession(3);
+  try {
+    for (let channel = 1; channel <= 3; channel += 1)
+      session.send(typedTerminalFrame(channel, channel === 3 ? 8 * MiB + 1 : 12 * MiB));
+    await assert.rejects(session.barrier(), {
+      code: 'resource-exhausted',
+      message: 'session output delivery queue limit exceeded',
+    });
+  } finally {
+    await session.close();
+  }
+});
+
+test('terminal budget releases full UTF-8 charge on delivery and disposal without changing typed payload', async () => {
+  const session = await terminalBudgetSession(4);
+  try {
+    const frames = [1, 2, 3, 4].map((channel) =>
+      typedTerminalFrame(channel, 16 * MiB - (channel % 2 === 0 ? session.markerBytes : 0)),
+    );
+    session.send(frames[0]);
+    session.send(frames[1]);
+    assert.equal((await session.barrier()).value, 'marker');
+    await assert.rejects(session.outputs[0].next(), (error) => {
+      assert.deepEqual(error.outcome, frames[0].outcome);
+      return error.code === 'failed';
+    });
+    session.send(frames[2]);
+    assert.equal((await session.barrier()).value, 'marker');
+    await session.outputs[1].return();
+    session.send(frames[3]);
+    assert.equal((await session.barrier()).value, 'marker');
+    for (const index of [2, 3])
+      await assert.rejects(session.outputs[index].next(), (error) => {
+        assert.deepEqual(error.outcome, frames[index].outcome);
+        return error.code === 'failed';
+      });
+    assert.deepEqual(await session.outputs[0].next(), { done: true, value: undefined });
+    assert.equal((await session.barrier()).value, 'marker');
+  } finally {
+    await session.close();
+  }
+});
+
+for (const count of [1, 2]) {
+  test(`input diagnostic budget rejects ${count === 1 ? 'oversized diagnostic' : 'combined unacknowledged diagnostics'}`, async () => {
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(
+          JSON.stringify(
+            accepted(
+              start,
+              start.methodParameters.inputs.map((input, index) => ({
+                channel: index + 1,
+                direction: 'input',
+                streamToken: `input-${index}`,
+                provisionalRef: input.value.provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              })),
+            ),
+          ),
+        );
+      });
+    });
+    try {
+      const diagnostic = 'é'.repeat(((count === 1 ? 16 : 9) * MiB) / 2);
+      const inputs = Array.from({ length: count }, () =>
+        agentStream({
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => {
+                throw new Error(diagnostic);
+              },
+            };
+          },
+        }),
+      );
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([inputs], register) => ({
+          inputs: inputs.map((input) => register(input, (value) => value)),
+        }),
+        () => undefined,
+      );
+      await assert.rejects(method(inputs), {
+        code: 'resource-exhausted',
+        message:
+          count === 1
+            ? 'input logical value limit exceeded'
+            : 'unacknowledged input limit exceeded',
+      });
+    } finally {
+      await local.close();
+    }
+  });
+}
+
+for (const mode of ['synchronous', 'delayed', 'combined']) {
+  test(`packed speculative diagnostic budget rejects ${mode} failure before prefix ACK`, async () => {
+    const count = mode === 'combined' ? 2 : 1;
+    const prefixes = [];
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(
+          JSON.stringify(
+            accepted(
+              start,
+              start.methodParameters.inputs.map((input, index) => ({
+                channel: index + 1,
+                direction: 'input',
+                streamToken: `packed-${index}`,
+                provisionalRef: input.value.provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              })),
+            ),
+          ),
+        );
+        socket.on('message', (data, binary) => {
+          assert.equal(binary, true, 'an unadmitted terminal must not be sent');
+          const length = data.readUInt32BE(0);
+          prefixes.push([...data.subarray(4 + length)]);
+        });
+      });
+    });
+    const controller = new AbortController();
+    let timer;
+    try {
+      const inputs = Array.from({ length: count }, () => {
+        let pulls = 0;
+        return agentStream({
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                pulls += 1;
+                if (pulls === 1) return Promise.resolve({ done: false, value: 7 });
+                const error = new Error(
+                  mode === 'combined' ? 'é'.repeat((9 * MiB) / 2) : '\0'.repeat(3 * MiB),
+                );
+                if (mode === 'synchronous') throw error;
+                return waitFor(() => prefixes.length === count).then(() => {
+                  throw error;
+                });
+              },
+            };
+          },
+        });
+      });
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([inputs], register) => ({
+          inputs: inputs.map((input) =>
+            register(input, (value) => ({ kind: 'u8', value }), 'u8', 'u8'),
+          ),
+        }),
+        () => undefined,
+      );
+      const call = method.abortable(controller.signal, inputs);
+      await assert.rejects(
+        Promise.race([
+          call,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('failure remained uncharged while prefix ACK was withheld')),
+              1000,
+            );
+          }),
+        ]),
+        {
+          code: 'resource-exhausted',
+          message:
+            mode === 'combined'
+              ? 'unacknowledged input limit exceeded'
+              : 'input logical value limit exceeded',
+        },
+      );
+      if (mode !== 'synchronous')
+        assert.deepEqual(
+          prefixes,
+          Array.from({ length: count }, () => [7]),
+        );
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      await local.close();
+    }
+  });
+}
+
+function controlledPackedSource() {
+  let pulls = 0;
+  let returned = 0;
+  let rejectPull;
+  return {
+    source: agentStream({
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            pulls += 1;
+            if (pulls === 1) return Promise.resolve({ done: false, value: 7 });
+            return new Promise((_, reject) => {
+              rejectPull = reject;
+            });
+          },
+          return: async () => {
+            returned += 1;
+            return { done: true };
+          },
+        };
+      },
+    }),
+    reject: (message) => rejectPull(new Error(message)),
+    pulls: () => pulls,
+    returned: () => returned,
+  };
+}
+
+async function speculativeInputSession(sources) {
+  let socket;
+  let idempotencyKey;
+  let connections = 0;
+  const frames = [];
+  const local = await server((connected) => {
+    socket = connected;
+    connections += 1;
+    socket.once('message', (data) => {
+      const operation = JSON.parse(data);
+      idempotencyKey ??= operation.idempotencyKey;
+      const mappings = sources.map((_, index) => ({
+        channel: connections === 1 ? index + 1 : index + 101,
+        direction: 'input',
+        streamToken: `packed-${index}`,
+        ...(connections === 1
+          ? { provisionalRef: operation.methodParameters.inputs[index].value.provisionalRef }
+          : {}),
+        inputHighWater: { sequence: '0', terminal: false },
+      }));
+      socket.send(
+        JSON.stringify(
+          accepted(
+            operation,
+            [...mappings, { channel: 200, direction: 'output', streamToken: 'marker' }],
+            idempotencyKey,
+          ),
+        ),
+      );
+      if (connections === 1)
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'marker' } },
+            },
+          }),
+        );
+      socket.on('message', (data, binary) => {
+        if (binary) {
+          const length = data.readUInt32BE(0);
+          frames.push({
+            ...JSON.parse(data.subarray(4, 4 + length)),
+            bytes: [...data.subarray(4 + length)],
+          });
+        } else frames.push(JSON.parse(data));
+      });
+    });
+  });
+  const controller = new AbortController();
+  const method = createStreamingRemoteMethod(
+    () => ({ server: local.endpoint }),
+    () => descriptor,
+    ([inputs], register) => ({
+      inputs: inputs.map((input) =>
+        register(input, (value) => ({ kind: 'u8', value }), 'u8', 'u8'),
+      ),
+    }),
+    (value, stream) =>
+      stream(value.value.value.streamToken, (item) => item)[Symbol.asyncIterator](),
+  );
+  const marker = await method.abortable(
+    controller.signal,
+    sources.map(({ source }) => source),
+  );
+  let sequence = 0;
+  const send = (frame) => socket.send(JSON.stringify(frame));
+  return {
+    frames,
+    send,
+    disconnect: () => socket.terminate(),
+    connections: () => connections,
+    barrier: async () => {
+      send({
+        version: 1,
+        type: 'outputStreamItem',
+        channel: 200,
+        sequence: String(sequence),
+        cursorToken: `input-marker-${sequence}`,
+        mappings: [],
+        value: 'marker',
+      });
+      sequence += 1;
+      assert.equal((await marker.next()).value, 'marker');
+    },
+    close: async () => {
+      controller.abort();
+      await local.close();
+    },
+  };
+}
+
+for (const stage of ['reserved', 'late']) {
+  test(`packed speculative cancellation before ACK releases ${stage} failure ownership`, async () => {
+    const sources = [controlledPackedSource(), controlledPackedSource()];
+    const session = await speculativeInputSession(sources);
+    try {
+      await waitFor(() => session.frames.length === 2);
+      const diagnostic = 'é'.repeat((9 * MiB) / 2);
+      if (stage === 'reserved') {
+        sources[0].reject(diagnostic);
+        await session.barrier();
+      }
+      session.send({
+        version: 1,
+        type: 'stream-end',
+        channel: 1,
+        direction: 'input',
+        sequence: '0',
+        outcome: { kind: 'consumer-cancelled' },
+      });
+      await session.barrier();
+      assert.equal(sources[0].returned(), 1);
+      if (stage === 'late') {
+        sources[0].reject('\0'.repeat(3 * MiB));
+        await session.barrier();
+      }
+      sources[1].reject(diagnostic);
+      await session.barrier();
+      assert.equal(session.frames.length, 2, 'failure must wait behind its unacknowledged prefix');
+      session.send({
+        version: 1,
+        type: 'inputStreamAck',
+        channel: 2,
+        highestContiguousSequence: '1',
+        terminal: false,
+        mappings: [],
+      });
+      await waitFor(() => session.frames.length === 3);
+      assert.deepEqual(session.frames[2], {
+        version: 1,
+        type: 'stream-end',
+        channel: 2,
+        direction: 'input',
+        sequence: '1',
+        outcome: { kind: 'failed', error: { kind: 'interrupted', message: diagnostic } },
+      });
+      await session.barrier();
+      session.send({
+        version: 1,
+        type: 'inputStreamAck',
+        channel: 2,
+        highestContiguousSequence: '1',
+        terminal: true,
+        mappings: [],
+      });
+      await session.barrier();
+      assert.deepEqual(
+        sources.map((source) => source.pulls()),
+        [2, 2],
+      );
+    } finally {
+      await session.close();
+    }
+  });
+}
+
+test('packed speculative failure reservation survives prefix replay on reconnect without a double charge', async () => {
+  const source = controlledPackedSource();
+  const session = await speculativeInputSession([source]);
+  try {
+    await waitFor(() => session.frames.length === 1);
+    const diagnostic = 'é'.repeat((9 * MiB) / 2);
+    source.reject(diagnostic);
+    await session.barrier();
+    session.disconnect();
+    await waitFor(() => session.connections() === 2 && session.frames.length === 2);
+    assert.deepEqual(
+      session.frames.map(({ channel, sequence, bytes }) => ({ channel, sequence, bytes })),
+      [
+        { channel: 1, sequence: '0', bytes: [7] },
+        { channel: 101, sequence: '0', bytes: [7] },
+      ],
+    );
+    session.send({
+      version: 1,
+      type: 'inputStreamAck',
+      channel: 101,
+      highestContiguousSequence: '1',
+      terminal: false,
+      mappings: [],
+    });
+    await waitFor(() => session.frames.length === 3);
+    assert.deepEqual(session.frames[2], {
+      version: 1,
+      type: 'stream-end',
+      channel: 101,
+      direction: 'input',
+      sequence: '1',
+      outcome: { kind: 'failed', error: { kind: 'interrupted', message: diagnostic } },
+    });
+    await session.barrier();
+    session.send({
+      version: 1,
+      type: 'inputStreamAck',
+      channel: 101,
+      highestContiguousSequence: '1',
+      terminal: true,
+      mappings: [],
+    });
+    await session.barrier();
+    assert.equal(source.pulls(), 2);
+  } finally {
+    await session.close();
+  }
+});
+
+test('packed speculative failure keeps ownership when prefix ACK starts awaiting the pull', async () => {
+  const source = controlledPackedSource();
+  const session = await speculativeInputSession([source]);
+  try {
+    await waitFor(() => session.frames.length === 1);
+    session.send({
+      version: 1,
+      type: 'inputStreamAck',
+      channel: 1,
+      highestContiguousSequence: '1',
+      terminal: false,
+      mappings: [],
+    });
+    await session.barrier();
+    const diagnostic = 'é'.repeat((9 * MiB) / 2);
+    source.reject(diagnostic);
+    await waitFor(() => session.frames.length === 2);
+    assert.deepEqual(session.frames[1], {
+      version: 1,
+      type: 'stream-end',
+      channel: 1,
+      direction: 'input',
+      sequence: '1',
+      outcome: { kind: 'failed', error: { kind: 'interrupted', message: diagnostic } },
+    });
+    await session.barrier();
+    assert.equal(source.pulls(), 2);
+  } finally {
+    await session.close();
+  }
+});
+
+test('session cleanup invalidates a speculative pull before its late rejection', async () => {
+  const source = controlledPackedSource();
+  const session = await speculativeInputSession([source]);
+  await waitFor(() => session.frames.length === 1);
+  await session.close();
+  source.reject('\0'.repeat(3 * MiB));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(source.returned(), 1);
+  assert.equal(source.pulls(), 2);
+  assert.equal(session.frames.length, 1);
+});
+
+for (const terminal of [
+  { direction: 'input', outcome: { kind: 'finished' }, code: 'invalid-channel' },
+  { direction: 'input', outcome: { kind: 'consumer-cancelled' }, code: 'invalid-channel' },
+  { direction: 'invalid', outcome: { kind: 'finished' }, code: 'malformed-message' },
+  { direction: 'output', outcome: { kind: 'future-terminal' }, code: 'malformed-message' },
+  {
+    direction: 'output',
+    outcome: { kind: 'failed', error: { kind: 'future-error' } },
+    code: 'malformed-message',
+  },
+]) {
+  test(`invalid output terminal fails rather than EOF: ${JSON.stringify(terminal)}`, async () => {
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(JSON.stringify(accepted(start, [outputMapping])));
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            channel: 2,
+            sequence: '0',
+            direction: terminal.direction,
+            outcome: terminal.outcome,
+          }),
+        );
+      });
+    });
+    try {
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        () => ({}),
+        (value, stream) => stream(value.value.value.streamToken, (item) => item),
+      );
+      const output = await method();
+      await assert.rejects(output[Symbol.asyncIterator]().next(), { code: terminal.code });
+    } finally {
+      await local.close();
+    }
+  });
+}
 
 test('strict WebSocket JSON parsing retains collection and depth budgets', () => {
   assert.throws(() => parseStreamSessionTextFrame(`[${'null,'.repeat(100_000)}null]`), {
@@ -1158,7 +1920,9 @@ test('input ACK high-water replays the unaccepted range without pulling ahead', 
     for (let i = 0; i < 100 && frames.length < 2; i += 1)
       await new Promise((r) => setTimeout(r, 5));
     assert.equal(frames.length, 2);
-    assert.equal(frames[1].type, 'inputStreamEnd');
+    assert.equal(frames[1].type, 'stream-end');
+    assert.equal(frames[1].direction, 'input');
+    assert.deepEqual(frames[1].outcome, { kind: 'finished' });
     assert.equal(frames[1].sequence, '1');
   } finally {
     await local.close();
@@ -1232,7 +1996,9 @@ test('resume remaps and trims a partially accepted packed u8 input batch', async
           };
           socket.once('message', (end) => {
             const terminal = JSON.parse(end);
-            assert.equal(terminal.type, 'inputStreamEnd');
+            assert.equal(terminal.type, 'stream-end');
+            assert.equal(terminal.direction, 'input');
+            assert.deepEqual(terminal.outcome, { kind: 'finished' });
             socket.send(
               JSON.stringify({
                 version: 1,
@@ -1351,11 +2117,12 @@ test('resume checkpoints output only after language-level delivery', async () =>
         socket.send(
           JSON.stringify({
             version: 1,
-            type: 'outputStreamEnd',
+            type: 'stream-end',
+            direction: 'output',
             channel: 2,
             sequence: '1',
             cursorToken: 'cursor-end',
-            outcome: { kind: 'ok' },
+            outcome: { kind: 'finished' },
           }),
         );
         socket.send(
@@ -1430,11 +2197,12 @@ test('packed u8 cursor advances only after the final byte is delivered', async (
         socket.send(
           JSON.stringify({
             version: 1,
-            type: 'outputStreamEnd',
+            type: 'stream-end',
+            direction: 'output',
             channel: 2,
             sequence: '3',
             cursorToken: 'packed-end',
-            outcome: { kind: 'ok' },
+            outcome: { kind: 'finished' },
           }),
         );
         socket.send(
@@ -1960,11 +2728,12 @@ for (const secondRejection of [undefined, false, true]) {
           socket.send(
             JSON.stringify({
               version: 1,
-              type: 'outputStreamEnd',
+              type: 'stream-end',
+              direction: 'output',
               channel: 9,
               sequence: '2',
               cursorToken: 'delivered-end',
-              outcome: { kind: 'ok' },
+              outcome: { kind: 'finished' },
             }),
           );
           socket.send(
@@ -2092,9 +2861,10 @@ test('mapping installation rejects duplicate channels without accepting the sess
   }
 });
 
-test('input cancellation is replayed on the remapped channel after reconnect', async () => {
+test('input source failure terminal is replayed on the remapped channel after reconnect', async () => {
   const cancellations = [];
   let connection = 0;
+  let pulls = 0;
   let idempotencyKey;
   const local = await server((socket) => {
     connection += 1;
@@ -2138,7 +2908,7 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
                   channel: 9,
                   direction: 'input',
                   streamToken: 'input',
-                  inputHighWater: { sequence: '0', terminal: false },
+                  inputHighWater: { sequence: '1', terminal: false },
                 },
               ],
               idempotencyKey,
@@ -2148,7 +2918,21 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
       }
       socket.on('message', (message) => {
         const parsed = JSON.parse(message);
-        if (parsed.type !== 'streamCancel') return;
+        if (parsed.type === 'inputStreamItem') {
+          assert.equal(parsed.sequence, '0');
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'inputStreamAck',
+              channel: 1,
+              highestContiguousSequence: '1',
+              mappings: [],
+              terminal: false,
+            }),
+          );
+          return;
+        }
+        if (parsed.type !== 'stream-end') return;
         cancellations.push(parsed);
         if (connection === 1) socket.terminate();
         else {
@@ -2157,7 +2941,7 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
               version: 1,
               type: 'inputStreamAck',
               channel: 9,
-              highestContiguousSequence: '0',
+              highestContiguousSequence: '1',
               mappings: [],
               terminal: true,
             }),
@@ -2178,6 +2962,8 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
       [Symbol.asyncIterator]() {
         return {
           next: async () => {
+            pulls += 1;
+            if (pulls === 1) return { done: false, value: { kind: 'u32', value: 7 } };
             throw new Error('source failed');
           },
         };
@@ -2192,16 +2978,215 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
     await method(source);
     await waitFor(() => cancellations.length === 2);
     assert.deepEqual(
-      cancellations.map(({ channel, reason }) => ({ channel, reason })),
+      cancellations.map(({ channel, direction, sequence, outcome }) => ({
+        channel,
+        direction,
+        sequence,
+        outcome,
+      })),
       [
-        { channel: 1, reason: 'source-unavailable' },
-        { channel: 9, reason: 'source-unavailable' },
+        {
+          channel: 1,
+          direction: 'input',
+          sequence: '1',
+          outcome: { kind: 'failed', error: { kind: 'interrupted', message: 'source failed' } },
+        },
+        {
+          channel: 9,
+          direction: 'input',
+          sequence: '1',
+          outcome: { kind: 'failed', error: { kind: 'interrupted', message: 'source failed' } },
+        },
       ],
     );
+    assert.equal(pulls, 2);
   } finally {
     await local.close();
   }
 });
+
+test('packed u8 source failure follows already-read bytes with a sequenced interrupted terminal', async () => {
+  const frames = [];
+  let pulls = 0;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(
+        JSON.stringify(
+          accepted(start, [
+            {
+              channel: 1,
+              direction: 'input',
+              streamToken: 'input',
+              provisionalRef: start.methodParameters.input.value.provisionalRef,
+              inputHighWater: { sequence: '0', terminal: false },
+            },
+          ]),
+        ),
+      );
+      socket.on('message', (data, binary) => {
+        if (binary) {
+          const length = data.readUInt32BE(0);
+          const metadata = JSON.parse(data.subarray(4, 4 + length));
+          frames.push({ metadata, bytes: [...data.subarray(4 + length)] });
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'inputStreamAck',
+              channel: 1,
+              highestContiguousSequence: '2',
+              terminal: false,
+              mappings: [],
+            }),
+          );
+        } else {
+          frames.push(JSON.parse(data));
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'inputStreamAck',
+              channel: 1,
+              highestContiguousSequence: '2',
+              terminal: true,
+              mappings: [],
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationResult',
+              mappings: [],
+              result: { kind: 'none' },
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationFinished',
+              outcome: { kind: 'success' },
+            }),
+          );
+        }
+      });
+    });
+  });
+  try {
+    const source = agentStream({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            pulls += 1;
+            if (pulls <= 2) return { done: false, value: pulls };
+            throw new StreamingProtocolError('local-code', 'packed source failed');
+          },
+        };
+      },
+    });
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      ([input], register) => ({
+        input: register(input, (value) => ({ kind: 'u8', value }), 'u8', 'u8'),
+      }),
+      () => undefined,
+    );
+    await method(source);
+    assert.equal(pulls, 3);
+    assert.deepEqual(frames[0].bytes, [1, 2]);
+    assert.equal(frames[0].metadata.sequence, '0');
+    assert.deepEqual(frames[1], {
+      version: 1,
+      type: 'stream-end',
+      direction: 'input',
+      channel: 1,
+      sequence: '2',
+      outcome: { kind: 'failed', error: { kind: 'interrupted', message: 'packed source failed' } },
+    });
+  } finally {
+    await local.close();
+  }
+});
+
+for (const outcome of [
+  { kind: 'consumer-cancelled', details: null },
+  { kind: 'failed', error: { kind: 'trapped', message: 'callee trapped' } },
+  { kind: 'failed', error: { kind: 'interrupted', message: 'protocol failure' } },
+]) {
+  test(`server input terminal stops an in-flight source pull without a client terminal: ${JSON.stringify(outcome)}`, async () => {
+    let returned = 0;
+    const frames = [];
+    let resolvePull;
+    const local = await server((socket) => {
+      socket.once('message', (data) => {
+        const start = JSON.parse(data);
+        socket.send(
+          JSON.stringify(
+            accepted(start, [
+              {
+                channel: 1,
+                direction: 'input',
+                streamToken: 'input',
+                provisionalRef: start.methodParameters.input.value.provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              },
+            ]),
+          ),
+        );
+        socket.on('message', (data) => frames.push(JSON.parse(data)));
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            direction: 'input',
+            channel: 1,
+            sequence: '0',
+            outcome,
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: { kind: 'none' },
+          }),
+        );
+        socket.send(
+          JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+        );
+      });
+    });
+    try {
+      const source = agentStream({
+        [Symbol.asyncIterator]() {
+          return {
+            next: () =>
+              new Promise((resolve) => {
+                resolvePull = resolve;
+              }),
+            return: async () => {
+              returned += 1;
+              resolvePull({ done: true });
+              return { done: true };
+            },
+          };
+        },
+      });
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([input], register) => ({ input: register(input, (value) => value) }),
+        () => undefined,
+      );
+      await method(source);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(returned, 1);
+      assert.deepEqual(frames, []);
+    } finally {
+      await local.close();
+    }
+  });
+}
 
 test('consumer drop sends cancellation and remains distinct from protocol terminal', async () => {
   let cancellation;
@@ -2234,16 +3219,17 @@ test('consumer drop sends cancellation and remains distinct from protocol termin
       );
       socket.on('message', (message) => {
         const parsed = JSON.parse(message);
-        if (parsed.type !== 'streamCancel') return;
+        if (parsed.type !== 'stream-end') return;
         cancellation = parsed;
         socket.send(
           JSON.stringify({
             version: 1,
-            type: 'outputStreamEnd',
+            type: 'stream-end',
+            direction: 'output',
             channel: 2,
             sequence: '1',
             cursorToken: 'cancelled',
-            outcome: { kind: 'cancelled', reason: 'consumer-drop' },
+            outcome: { kind: 'consumer-cancelled', details: 'consumer-drop' },
           }),
         );
         socket.send(
@@ -2268,10 +3254,14 @@ test('consumer drop sends cancellation and remains distinct from protocol termin
     assert.equal((await iterator.next()).value, 'first');
     assert.deepEqual(await iterator.return(), { done: true, value: undefined });
     await waitFor(() => cancellation !== undefined);
-    assert.deepEqual(
-      { channel: cancellation.channel, reason: cancellation.reason },
-      { channel: 2, reason: 'consumer-drop' },
-    );
+    assert.deepEqual(cancellation, {
+      version: 1,
+      type: 'stream-end',
+      direction: 'output',
+      sequence: '0',
+      channel: 2,
+      outcome: { kind: 'consumer-cancelled', details: 'consumer-drop' },
+    });
   } finally {
     await local.close();
   }
@@ -2362,11 +3352,12 @@ test('packed u8 output larger than the queue item limit is delivered lazily', as
       socket.send(
         JSON.stringify({
           version: 1,
-          type: 'outputStreamEnd',
+          type: 'stream-end',
+          direction: 'output',
           channel: 2,
           sequence: payload.length.toString(),
           cursorToken: 'large-end',
-          outcome: { kind: 'ok' },
+          outcome: { kind: 'finished' },
         }),
       );
       socket.send(
@@ -2428,11 +3419,12 @@ test('binary output passes a native binary node to the generated decoder', async
       socket.send(
         JSON.stringify({
           version: 1,
-          type: 'outputStreamEnd',
+          type: 'stream-end',
+          direction: 'output',
           channel: 2,
           sequence: '1',
           cursorToken: 'binary-end',
-          outcome: { kind: 'ok' },
+          outcome: { kind: 'finished' },
         }),
       );
       socket.send(
@@ -2473,6 +3465,78 @@ test('binary output passes a native binary node to the generated decoder', async
   }
 });
 
+test('backend attachment failure resumes open output before authoritative completion', async () => {
+  const operations = [];
+  let idempotencyKey;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const operation = JSON.parse(data);
+      operations.push(operation);
+      if (operations.length === 1) idempotencyKey = operation.idempotencyKey;
+      socket.send(JSON.stringify(accepted(operation, [outputMapping], idempotencyKey)));
+      if (operations.length === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
+          }),
+          () => socket.close(1011, 'session attachment failed'),
+        );
+      } else {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            direction: 'output',
+            channel: 2,
+            sequence: '0',
+            cursorToken: 'recorded-terminal',
+            outcome: {
+              kind: 'failed',
+              error: { kind: 'trapped', message: 'recorded stream failure' },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationFinished',
+            outcome: {
+              kind: 'failure',
+              code: 'invocation-failed',
+              message: 'recorded invocation failure',
+            },
+          }),
+        );
+      }
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      () => ({}),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
+    );
+    const output = await method();
+    const iterator = output[Symbol.asyncIterator]();
+    await assert.rejects(iterator.next(), /recorded stream failure/);
+    assert.deepEqual(await iterator.next(), { done: true, value: undefined });
+    assert.equal(operations.length, 2);
+    assert.equal(operations[1].type, 'resumeAttach');
+    assert.equal(operations[1].sessionToken, 'session');
+    assert.notEqual(operations[1].attemptId, operations[0].attemptId);
+  } finally {
+    await local.close();
+  }
+});
+
 test('invocation failure preserves an already-received output terminal', async () => {
   const local = await server((socket) => {
     socket.once('message', (data) => {
@@ -2493,11 +3557,12 @@ test('invocation failure preserves an already-received output terminal', async (
       socket.send(
         JSON.stringify({
           version: 1,
-          type: 'outputStreamEnd',
+          type: 'stream-end',
+          direction: 'output',
           channel: 2,
           sequence: '0',
           cursorToken: 'output-error-cursor',
-          outcome: { kind: 'error', code: 'stream-broke', message: 'stream failed first' },
+          outcome: { kind: 'failed', error: { kind: 'trapped', message: 'stream failed first' } },
         }),
       );
       socket.send(
@@ -2564,11 +3629,12 @@ test('concurrent output pulls each settle in stream order', async () => {
         socket.send(
           JSON.stringify({
             version: 1,
-            type: 'outputStreamEnd',
+            type: 'stream-end',
+            direction: 'output',
             channel: 2,
             sequence: '2',
             cursorToken: 'cursor-end',
-            outcome: { kind: 'ok' },
+            outcome: { kind: 'finished' },
           }),
         );
         socket.send(
@@ -2807,7 +3873,7 @@ test('a retryable rejection before acceptance starts a new attempt', async () =>
       );
       socket.on('message', (frame) => {
         const message = JSON.parse(frame);
-        const end = message.type === 'inputStreamEnd';
+        const end = message.type === 'stream-end';
         socket.send(
           JSON.stringify({
             version: 1,
@@ -3125,6 +4191,33 @@ test('stable connections keep a call alive past the reconnect window', async () 
       assert.ok(wait < 40, `a reconnect after a stable connection waited ${wait} ms`);
   } finally {
     await local.close();
+  }
+});
+
+test('aborting a pending connection preserves the abort reason', async () => {
+  const controller = new AbortController();
+  const reason = new Error('stop the pending connection');
+  const held = new Set();
+  const tcp = createTcpServer((socket) => {
+    held.add(socket);
+    controller.abort(reason);
+  });
+  tcp.listen(0, '127.0.0.1');
+  await once(tcp, 'listening');
+  try {
+    const error = await plainMethod({
+      server: { type: 'custom', url: `http://127.0.0.1:${tcp.address().port}`, token: 'test' },
+      reconnectWindowMs: 'unlimited',
+    })
+      .abortable(controller.signal)
+      .then(
+        () => assert.fail('an aborted connection succeeded'),
+        (error) => error,
+      );
+    assert.equal(error, reason);
+  } finally {
+    for (const socket of held) socket.destroy();
+    await new Promise((resolve) => tcp.close(resolve));
   }
 });
 

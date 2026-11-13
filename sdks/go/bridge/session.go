@@ -408,7 +408,10 @@ func (s *session) send(kind string, members map[string]any) {
 }
 
 func (s *session) sendCancel(channel uint32, reason string) {
-	s.send("streamCancel", map[string]any{"channel": channel, "reason": reason})
+	s.send("stream-end", map[string]any{
+		"channel": channel, "direction": "output", "sequence": "0",
+		"outcome": map[string]any{"kind": "consumer-cancelled", "details": reason},
+	})
 }
 
 func (s *session) url() string {
@@ -719,24 +722,9 @@ func (s *session) fail(err error) {
 	}
 }
 
-// abort ends a call its caller gave up on: open streams are cancelled first.
+// abort detaches a call its caller gave up on. Detaching does not terminate
+// the invocation or author stream outcomes on the caller's behalf.
 func (s *session) abort(err error) {
-	s.mu.Lock()
-	if !s.over {
-		for token, ch := range s.tokenChannels {
-			switch s.directions[token] {
-			case "input":
-				if in := s.byToken[token]; in != nil && !in.ended {
-					s.sendCancel(ch, "cancelled")
-				}
-			case "output":
-				if out := s.outputs[token]; out != nil && !out.terminal {
-					s.sendCancel(ch, "cancelled")
-				}
-			}
-		}
-	}
-	s.mu.Unlock()
 	s.fail(err)
 }
 
@@ -852,21 +840,13 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 			return err
 		}
 		return s.receiveItem(c, m)
-	case "outputStreamEnd":
-		if err := m.members(kind, []string{"channel", "outcome", "sequence"}, "cursorToken"); err != nil {
-			return err
-		}
+	case "stream-end":
 		return s.receiveEnd(c, m)
 	case "inputStreamAck":
 		if err := m.members(kind, []string{"channel", "highestContiguousSequence", "mappings", "terminal"}); err != nil {
 			return err
 		}
 		return s.receiveAck(c, m)
-	case "streamCancel":
-		if err := m.members(kind, []string{"channel", "reason"}); err != nil {
-			return err
-		}
-		return s.receiveCancel(c, m)
 	case "attachmentRevoked":
 		if err := m.members(kind, []string{"reason"}); err != nil {
 			return err
@@ -1406,6 +1386,13 @@ func (s *session) handleBinary(c *sessionConn, data []byte) error {
 }
 
 func (s *session) receiveEnd(c *sessionConn, m message) error {
+	direction, end, err := m.streamEnd(true)
+	if err != nil {
+		return err
+	}
+	if direction == "input" {
+		return s.receiveCancel(c, m)
+	}
 	channel, err := m.channel()
 	if err != nil {
 		return err
@@ -1415,44 +1402,10 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 		return err
 	}
 	var cursor string
-	if m.has("cursorToken") {
+	if m.has("cursorToken") && string(m["cursorToken"]) != "null" {
 		if cursor, err = m.token("cursorToken"); err != nil {
 			return err
 		}
-	}
-	outcome, err := m.object("outcome")
-	if err != nil {
-		return err
-	}
-	kind, err := outcome.str("kind")
-	if err != nil {
-		return err
-	}
-	var end error
-	switch kind {
-	case "ok":
-		err = outcome.membersOnly("stream outcome", []string{"kind"})
-	case "error":
-		if err = outcome.membersOnly("stream outcome", []string{"code", "kind", "message"}); err == nil {
-			failure := &StreamError{}
-			if failure.Code, err = outcome.str("code"); err == nil {
-				failure.Message, err = outcome.str("message")
-			}
-			end = failure
-		}
-	case "cancelled":
-		if err = outcome.membersOnly("stream outcome", []string{"kind", "reason"}); err == nil {
-			var reason string
-			if reason, err = outcome.str("reason"); err == nil && !slices.Contains(cancelReasons, reason) {
-				err = protocolErrorf("invalid cancellation reason %q", reason)
-			}
-			end = &StreamCancelled{Reason: reason}
-		}
-	default:
-		err = protocolErrorf("invalid stream outcome %q", kind)
-	}
-	if err != nil {
-		return err
 	}
 	s.mu.Lock()
 	if s.conn != c {
@@ -1461,7 +1414,7 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 	}
 	out, err := s.outputOn(channel)
 	if err == nil && !out.takesFrames() {
-		err = out.hold(heldFrame{end: m, bytes: heldFrameOverhead})
+		err = out.hold(heldFrame{end: m, bytes: heldFrameOverhead + len(m["outcome"])})
 		s.mu.Unlock()
 		return err
 	}
@@ -1469,7 +1422,7 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 	if err != nil {
 		return err
 	}
-	return out.offer(c, outEntry{first: sequence, cursor: cursor, terminal: true, end: end})
+	return out.offer(c, outEntry{first: sequence, cursor: cursor, terminal: true, end: end, bytes: len(m["outcome"])})
 }
 
 func (s *session) receiveAck(c *sessionConn, m message) error {
@@ -1503,12 +1456,10 @@ func (s *session) receiveCancel(c *sessionConn, m message) error {
 	if err != nil {
 		return err
 	}
-	reason, err := m.str("reason")
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(cancelReasons, reason) {
-		return protocolErrorf("invalid cancellation reason %q", reason)
+	outcome, _ := m.object("outcome")
+	reason := "consumer cancelled"
+	if outcome.has("details") && string(outcome["details"]) != "null" {
+		reason, _ = outcome.str("details")
 	}
 	s.mu.Lock()
 	token, ok := s.channels[channel]

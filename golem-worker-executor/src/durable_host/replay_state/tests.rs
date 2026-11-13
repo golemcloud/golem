@@ -4619,8 +4619,8 @@ fn consumer_observation_with_parent(
 ) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-        StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamConsumerObservation, StreamConsumerTerminalRecord, StreamOffset,
+        StreamRegistrationInvocation, StreamSessionRecord, StreamTerminal,
     };
     let observation = if guest {
         StreamConsumerObservation::Guest { parent_start_index }
@@ -4642,7 +4642,8 @@ fn consumer_observation_with_parent(
             reader_id,
             source_offset,
             consumer_read_ordinal: 1,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         })
     } else {
         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
@@ -13517,7 +13518,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
 #[test_r::timeout("30s")]
 async fn disposal_refusal_without_collection_preserves_recorded_calls() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamCancelRole,
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamEndpointSide,
         StreamRecordReference, StreamRegistrationInvocation,
     };
     use golem_common::model::oplog::attachment::{
@@ -13575,7 +13576,8 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                     role: SessionStreamRole::Input,
                 }),
-                role: StreamCancelRole::InputConsumer,
+                direction: SessionStreamRole::Input,
+                side: StreamEndpointSide::Consumer,
             }
         } else {
             SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {

@@ -150,8 +150,8 @@ Job inheritance follows bash for asynchronous commands without job control:
 - A background job reads `/dev/null`, unless the subshell or compound command it runs in reads a
   pipe or redirects standard input (bash's `stdin_redir`): `echo hi | { cat & wait; }` prints `hi`.
 
-A caller's stop request (the cancel of `run`'s `stdin` stream) sends INT to the main script and
-every process it started, as Ctrl+C at a terminal sends it to the foreground process group. A
+A caller's stop request (failure or cancellation of `run`'s `stdin` stream) sends INT to the main
+script and every process it started, as Ctrl+C at a terminal sends it to the foreground process group. A
 command in front, such as a `sleep`, ends at once. A script that catches INT then runs its
 handler, and one that ignores it runs on until the KILL that follows a second later. Background
 jobs ignore INT as before, so the stop leaves them to the end of the run.

@@ -221,8 +221,10 @@ fn fold_regions(
 #[test]
 fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord, StreamRecordReference, StreamRegistrationInvocation,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamRegistrationInvocation, StreamTerminal,
+        StreamTerminalAuthor,
     };
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
@@ -238,9 +240,12 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
         consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("cancel requested".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
     };
     let entry = |record| OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
@@ -265,7 +270,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     assert!(pending.durable_stream_sessions.iter().next().is_none());
     assert_eq!(
         pending.pending_durable_stream_cancellations,
-        HashSet::from([intent.clone()])
+        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent.clone()])])
     );
     let bytes = golem_common::serialization::serialize(&pending).unwrap();
     let pending: AgentStatusRecord = golem_common::serialization::deserialize(&bytes).unwrap();
@@ -281,7 +286,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     );
     assert_eq!(
         pending.pending_durable_stream_cancellations,
-        HashSet::from([intent.clone()])
+        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent.clone()])])
     );
     let applied = fold(
         pending,
@@ -299,8 +304,9 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
 fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_jumps() {
     use crate::services::worker_fork::lineage::tests::prepared;
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord, StreamRecordReference,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamTerminal, StreamTerminalAuthor,
     };
     let first = crate::durable_host::durable_stream::tests::identity().invocation;
     let mut second = first.clone();
@@ -313,9 +319,12 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
         consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: None,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
     };
     let mut removed_intent = intent.clone();
     removed_intent.session_key =
@@ -374,13 +383,14 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
                 .is_none(),
             revert
         );
+        let expected = if revert {
+            intent.clone()
+        } else {
+            removed_intent.clone()
+        };
         assert_eq!(
             status.pending_durable_stream_cancellations,
-            HashSet::from([if revert {
-                intent.clone()
-            } else {
-                removed_intent.clone()
-            }]),
+            HashMap::from([((expected.source.clone(), expected.epoch), vec![expected])]),
         );
     }
 }

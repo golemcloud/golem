@@ -73,8 +73,7 @@ message OplogEntry {
     CardTransferConfirmedParameters CardTransferConfirmed = 59;
     DurableStreamRecordParameters StreamRegistered = 60;
     DurableStreamRecordParameters StreamItems = 61;
-    DurableStreamRecordParameters StreamEnd = 62;
-    DurableStreamRecordParameters StreamCancel = 63;
+    DurableStreamRecordParameters StreamTerminal = 62;
     DurableStreamRecordParameters StreamSession = 64;
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;

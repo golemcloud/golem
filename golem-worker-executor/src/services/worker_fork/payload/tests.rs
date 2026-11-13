@@ -187,8 +187,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
         },
         OplogEntry::stream_registered(None, external(), None),
         OplogEntry::stream_items(None, external(), None),
-        OplogEntry::stream_end(None, external(), None),
-        OplogEntry::stream_cancel(None, external(), None),
+        OplogEntry::stream_terminal(None, external(), None),
         OplogEntry::stream_session(None, external(), None),
         OplogEntry::pending_update(
             UpdateDescription::SnapshotBased {

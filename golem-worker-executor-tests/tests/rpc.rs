@@ -18,19 +18,20 @@ use axum::Router;
 use axum::routing::post;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
-    InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRequest,
-    InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamInvocationIdentity,
+    InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRequest,
+    InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamConsumerCancelled,
+    StreamCursor, StreamDirection, StreamEnd, StreamInvocationIdentity, StreamTerminalAuthor,
     input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result,
+    invocation_session_result, stream_terminal,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentPrincipal, ParsedAgentKey, Principal};
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::{
-    StreamAttachmentFinalizationReason, StreamCancelRole as DurableStreamCancelRole,
-    StreamItemsRecord, StreamSessionRecord,
+    SessionStreamRole, StreamAttachmentFinalizationReason, StreamEndpointSide, StreamError,
+    StreamItemsRecord, StreamSessionRecord, StreamTerminal, StreamTerminalOrigin,
+    StreamTerminalRecord,
 };
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
@@ -41,7 +42,7 @@ use golem_common::model::{
     PromiseId,
 };
 use golem_common::schema::schema_value::ResultValuePayload;
-use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
+use golem_common::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_service_base::model::auth::AuthCtx;
@@ -1784,12 +1785,18 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
                     .find(|mapping| mapping.transport_stream_id == stream_id)
                     .ok_or_else(|| anyhow::anyhow!("result omitted the durable output mapping"))?;
                 let cancel = InvocationRequest {
-                    request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                         transport_stream_id: stream_id,
                         producer_sequence: 0,
-                        role: StreamCancelRole::OutputConsumer as i32,
-                        reason: StreamCancelReason::Cancelled as i32,
-                        details: Some("consumer stopped reading".to_string()),
+                        direction: StreamDirection::Output as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(golem_api_grpc::proto::golem::worker::StreamTerminal {
+                            terminal: Some(stream_terminal::Terminal::ConsumerCancelled(
+                                StreamConsumerCancelled {
+                                    details: Some("consumer stopped reading".to_string()),
+                                },
+                            )),
+                        }),
                         durable_stream_id: mapping
                             .handle
                             .as_ref()
@@ -1806,16 +1813,13 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
             }
             Some(invocation_response::Response::Finished(finished)) => {
                 assert!(cancellation_sent, "session finished before cancellation");
-                if let Some(invocation_session_completion::Outcome::Failure(failure)) =
-                    finished.outcome
-                {
-                    assert_ne!(
-                        failure.kind,
-                        InvocationFailureKind::Protocol as i32,
-                        "a validator-approved output-consumer cancellation is not a protocol error: {}",
-                        failure.message
-                    );
-                }
+                assert!(
+                    matches!(
+                        finished.outcome,
+                        Some(invocation_session_completion::Outcome::Success(_))
+                    ),
+                    "output consumer cancellation must not fail the invocation: {finished:?}"
+                );
                 assert!(state.is_complete());
                 assert!(responses.message().await?.is_none());
                 return Ok(());
@@ -1828,6 +1832,473 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
     }
 
     anyhow::bail!("invocation response closed without InvocationFinished")
+}
+
+fn selected_stream_terminals(oplog: &[PublicOplogEntryWithIndex]) -> Vec<StreamTerminalRecord> {
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamTerminal(params) => {
+                Some(StreamTerminalRecord::from_value(params.record.value()).unwrap())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[timeout("4 minutes")]
+async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let terminals = [
+        StreamTerminal::Failed(StreamError::Cancelled),
+        StreamTerminal::Failed(StreamError::Interrupted("input transport lost".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("input limit".into())),
+        StreamTerminal::Failed(StreamError::Trapped("input producer trapped".into())),
+        StreamTerminal::Failed(StreamError::Failed(Box::new(data_value!(
+            73u32,
+            "declared failure"
+        )))),
+        StreamTerminal::Failed(StreamError::Abandoned),
+        StreamTerminal::Finished,
+    ];
+    for (index, terminal, restart) in
+        terminals
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, terminal)| {
+                [false, true].map(move |restart| (index, terminal.clone(), restart))
+            })
+    {
+        let agent = agent_id!(
+            "StreamingRpcTarget",
+            format!("input-terminal-{index}-{restart}")
+        );
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        let metadata = executor.get_worker_metadata(&worker).await?;
+        let gate = executor
+            .invoke_and_await_agent(&component, &agent, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let key = IdempotencyKey::fresh();
+        let input = golem_schema::proto::golem::schema::SchemaValue {
+            value: Some(schema_value::Value::RecordValue(RecordValue {
+                fields: vec![
+                    golem_schema::proto::golem::schema::SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id: 1 },
+                        )),
+                    },
+                    gate.to_value().try_into().map_err(anyhow::Error::msg)?,
+                ],
+            })),
+        };
+        let (mut frames, mut responses, accepted) = open_raw_session(
+            &executor,
+            InvocationStart {
+                agent_id: Some(worker.clone().into()),
+                method_name: Some("observe_input_terminal".into()),
+                input: Some(input),
+                request_key: Some(
+                    InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .into(),
+                ),
+                idempotency_key: Some(key.clone().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                environment_id: Some(component.environment_id.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let stream_id = accepted.stream_mappings[0]
+            .handle
+            .as_ref()
+            .unwrap()
+            .stream_id;
+        frames
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                    transport_stream_id: 1,
+                    sequence: 0,
+                    durable_stream_id: stream_id,
+                    epoch: accepted.epoch,
+                    payload: Some(input_stream_item::Payload::Value(
+                        SchemaValue::U32(17)
+                            .try_into()
+                            .map_err(anyhow::Error::msg)?,
+                    )),
+                })),
+            })
+            .await?;
+        let acknowledgment = responses
+            .message()
+            .await?
+            .expect("input item acknowledgment");
+        assert!(
+            matches!(&acknowledgment.response,
+                Some(invocation_response::Response::InputAck(ack))
+                    if ack.transport_stream_id == 1 && ack.highest_contiguous_sequence == 0
+            ),
+            "{acknowledgment:?}"
+        );
+        frames
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                    transport_stream_id: 1,
+                    producer_sequence: 1,
+                    durable_stream_id: stream_id,
+                    epoch: accepted.epoch,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(terminal.clone().try_into().map_err(anyhow::Error::msg)?),
+                    ..Default::default()
+                })),
+            })
+            .await?;
+        loop {
+            let response = responses
+                .message()
+                .await?
+                .expect("input terminal acknowledgment");
+            match response.response {
+                Some(invocation_response::Response::InputAck(ack))
+                    if ack.highest_contiguous_sequence == 1 =>
+                {
+                    break;
+                }
+                Some(invocation_response::Response::InputAck(_)) => {}
+                other => anyhow::bail!("terminal read escaped the promise gate: {other:?}"),
+            }
+        }
+        let before =
+            selected_stream_terminals(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].terminal, terminal);
+        assert_eq!(
+            before[0].authored_by,
+            golem_common::model::durable_stream::StreamTerminalAuthor::Guest
+        );
+        assert_eq!(before[0].origin, StreamTerminalOrigin::Source);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if history.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::StreamSession(session)
+                        if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                            StreamSessionRecord::ConsumerItemValue(_)))) {
+                    assert!(!history.iter().any(|entry| matches!(&entry.entry,
+                        PublicOplogEntry::StreamSession(session)
+                            if matches!(StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                                StreamSessionRecord::ConsumerTerminal(_)))));
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await??;
+        if restart {
+            // The selected terminal is durable, but the guest cannot read it before this crash.
+            // Resume restarts the pending invocation, rather than looking up a failed result.
+            drop(frames);
+            drop(responses);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                    if history.iter().any(|entry| {
+                        matches!(&entry.entry,
+                        PublicOplogEntry::StreamSession(session)
+                            if matches!(StreamSessionRecord::from_value(session.record.value()),
+                                Ok(StreamSessionRecord::Detached(record))
+                                    if record.epoch == accepted.epoch))
+                    }) {
+                        break anyhow::Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await??;
+            drop(executor);
+            executor = start(deps, &context).await?;
+            let (sender, receiver) = mpsc::channel(8);
+            sender
+                .send(InvocationRequest {
+                    request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                        agent_id: Some(worker.clone().into()),
+                        environment_id: Some(component.environment_id.into()),
+                        idempotency_key: accepted.idempotency_key,
+                        attachment_id: accepted.attachment_id,
+                        attempt_id: Some(uuid::Uuid::new_v4().into()),
+                        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                        expected_epoch: accepted.epoch,
+                        operation: ResumeOperation::Resume as i32,
+                        auth_ctx: Some(executor.auth_ctx().into()),
+                        ..Default::default()
+                    })),
+                })
+                .await?;
+            responses = executor
+                .client
+                .clone()
+                .invoke_agent_session(ReceiverStream::new(receiver))
+                .await?
+                .into_inner();
+            let response = responses
+                .message()
+                .await?
+                .expect("recovered input acceptance");
+            assert!(
+                matches!(
+                    response.response,
+                    Some(invocation_response::Response::Accepted(_))
+                ),
+                "{response:?}"
+            );
+            frames = sender;
+        }
+        executor.complete_promise(&gate, Vec::new()).await?;
+        let mut observed = None;
+        let mut finished = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::InputAck(_)) => {}
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::MethodResult(value)) =
+                        result.result
+                    else {
+                        anyhow::bail!("missing terminal observation result")
+                    };
+                    observed = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    match completion.outcome {
+                        Some(invocation_session_completion::Outcome::Success(_)) => {
+                            assert_eq!(terminal, StreamTerminal::Finished);
+                            assert_eq!(observed, Some(SchemaValue::U64(1)));
+                        }
+                        Some(invocation_session_completion::Outcome::Failure(failure)) => {
+                            assert_ne!(terminal, StreamTerminal::Finished);
+                            assert!(observed.is_none(), "failed native read must not return EOF");
+                            assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+                            assert!(
+                                failure.message.contains("stream terminated: Failed("),
+                                "wrong failure for {terminal:?}, restart={restart}: {failure:?}"
+                            );
+                        }
+                        None => anyhow::bail!("terminal observation has no completion outcome"),
+                    }
+                    finished = true;
+                    break;
+                }
+                other => anyhow::bail!("unexpected terminal observation frame: {other:?}"),
+            }
+        }
+        assert!(finished);
+        drop(frames);
+        drop(responses);
+        let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert_eq!(selected_stream_terminals(&history), before);
+        let observed_terminals = history
+            .iter()
+            .filter_map(|entry| {
+                let PublicOplogEntry::StreamSession(session) = &entry.entry else {
+                    return None;
+                };
+                match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                    StreamSessionRecord::ConsumerTerminal(record) => Some(record),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed_terminals.len(), 1);
+        assert_eq!(observed_terminals[0].terminal, terminal);
+        assert_eq!(observed_terminals[0].authored_by, before[0].authored_by);
+        let invocation_id = executor
+            .finalized_invocation_key(
+                &worker,
+                &InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&key),
+                ),
+                "observe_input_terminal",
+            )
+            .await?;
+        assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.invocation_id == invocation_id))).count(), 1);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let target = agent_id!("StreamingRpcTarget", "guest-drop-probe");
+    let caller = agent_id!("StreamingRpcCaller", "guest-drop-probe");
+    let worker = executor.start_agent(&component.id, target.clone()).await?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let gate = executor
+        .invoke_and_await_agent(&component, &target, "create_output_gate", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_key = IdempotencyKey::fresh();
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &caller,
+                &caller_key,
+                "drop_gated_output",
+                data_value!(gate.clone())
+            )
+            .await?
+            .into_typed::<u64>()?,
+        42
+    );
+    let before = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let terminals = selected_stream_terminals(&history);
+            if !terminals.is_empty() {
+                break Ok::<_, anyhow::Error>(terminals);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    assert_eq!(before.len(), 1);
+    assert!(matches!(
+        before[0].terminal,
+        StreamTerminal::ConsumerCancelled { .. }
+    ));
+    assert_eq!(
+        before[0].authored_by,
+        golem_common::model::durable_stream::StreamTerminalAuthor::Guest
+    );
+    assert_eq!(before[0].origin, StreamTerminalOrigin::Control);
+    // Only release the next guest write once the real reader drop has committed.
+    executor.complete_promise(&gate, Vec::new()).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        2
+    );
+    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(selected_stream_terminals(&history), before);
+    let rpc_request = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+            {
+                Some(
+                    HostRequestGolemRpcInvoke::from_value(start.request.as_ref().unwrap().value())
+                        .unwrap(),
+                )
+            }
+            _ => None,
+        })
+        .expect("drop probe RPC Start");
+    let rpc_key = executor
+        .finalized_invocation_key(&worker, &rpc_request.request_key, &rpc_request.method_name)
+        .await?;
+    let caller_invocation_id = executor
+        .finalized_invocation_key(
+            &caller_worker,
+            &InvocationRequestKey::external(
+                executor.auth_ctx().idempotency_scope(),
+                Some(&caller_key),
+            ),
+            "drop_gated_output",
+        )
+        .await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target, "increment_scalar", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        3
+    );
+    // Reconstruct the consumer too; returning its cached drop result would not replay the drop.
+    executor
+        .invoke_and_await_agent(&component, &caller, "create_input_gate", data_value!())
+        .await?;
+    let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(selected_stream_terminals(&history), before);
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationStarted(started)
+            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.invocation_id == rpc_key)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationFinished(finished)
+            if finished.method_name.as_deref() == Some("produce_drop_probe")))
+            .count(),
+        1
+    );
+    let caller_history = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        caller_history
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationStarted(started)
+            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.invocation_id == caller_invocation_id)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        caller_history
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::AgentInvocationFinished(finished)
+            if finished.method_name.as_deref() == Some("drop_gated_output")))
+            .count(),
+        1
+    );
+    Ok(())
 }
 
 #[test]
@@ -1981,7 +2452,13 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
                     };
                     values.push(value);
                 }
-                Some(invocation_response::Response::OutputEnd(end)) => {
+                Some(invocation_response::Response::StreamEnd(end)) => {
+                    assert!(matches!(
+                        end.outcome
+                            .as_ref()
+                            .and_then(|outcome| outcome.terminal.as_ref()),
+                        Some(stream_terminal::Terminal::Finished(_))
+                    ));
                     assert_eq!(end.transport_stream_id, stream_id);
                     assert_eq!(end.producer_sequence, 3);
                     assert!(offsets.insert(end.durable_offset));
@@ -2020,16 +2497,15 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
                     assert!(recorded_offsets.insert(offset.as_bytes().to_vec()));
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
+            PublicOplogEntry::StreamTerminal(params) => {
                 recorded_ends += 1;
-                let record = golem_common::model::durable_stream::StreamEndRecord::from_value(
-                    params.record.value(),
-                )
-                .map_err(anyhow::Error::msg)?;
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 assert_eq!(record.sequence, 3);
                 assert!(recorded_offsets.insert(record.offset.as_bytes().to_vec()));
             }
-            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_) => {
+            PublicOplogEntry::Error(_) => {
                 anyhow::bail!("producer failed or cancelled: {:?}", entry.entry);
             }
             _ => {}
@@ -2085,7 +2561,7 @@ async fn output_prefix_survives_autonomous_suspension(
     nested: bool,
 ) -> anyhow::Result<()> {
     use golem_common::model::durable_stream::{
-        StreamEndResult, StreamId, StreamItemsPayload, StreamRecordReference,
+        StreamId, StreamItemsPayload, StreamRecordReference,
     };
     use prost::Message;
 
@@ -2250,7 +2726,13 @@ async fn output_prefix_survives_autonomous_suspension(
                         other => anyhow::bail!("unexpected prefix output: {other:?}"),
                     }
                 }
-                Some(invocation_response::Response::OutputEnd(end)) => {
+                Some(invocation_response::Response::StreamEnd(end)) => {
+                    assert!(matches!(
+                        end.outcome
+                            .as_ref()
+                            .and_then(|outcome| outcome.terminal.as_ref()),
+                        Some(stream_terminal::Terminal::Finished(_))
+                    ));
                     assert!(unloaded, "terminal before suspension");
                     wire_ends.push(end.clone());
                     assert!(handles.contains_key(&end.transport_stream_id));
@@ -2320,9 +2802,7 @@ async fn output_prefix_survives_autonomous_suspension(
                             )?;
                             prefix.entry(id.0).or_insert_with(Vec::new).push(record);
                         }
-                        PublicOplogEntry::StreamEnd(_)
-                        | PublicOplogEntry::StreamCancel(_)
-                        | PublicOplogEntry::Error(_) => {
+                        PublicOplogEntry::StreamTerminal(_) | PublicOplogEntry::Error(_) => {
                             anyhow::bail!("terminal or failure while unloaded")
                         }
                         _ => {}
@@ -2491,11 +2971,9 @@ async fn output_prefix_survives_autonomous_suspension(
                     assert!(recorded_offsets.insert(offset.as_bytes().to_vec()));
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                let record = golem_common::model::durable_stream::StreamEndRecord::from_value(
-                    params.record.value(),
-                )
-                .map_err(anyhow::Error::msg)?;
+            PublicOplogEntry::StreamTerminal(params) => {
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
                 let id = StreamId::derive(
                     context.default_environment_id,
                     &agent_id,
@@ -2503,7 +2981,7 @@ async fn output_prefix_survives_autonomous_suspension(
                     record.stream_id.0,
                 )?
                 .0;
-                assert_eq!(record.result, StreamEndResult::Ok);
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 assert!(
                     journal_ends
                         .insert((id, record.sequence), record.offset.as_bytes().to_vec())
@@ -2512,7 +2990,7 @@ async fn output_prefix_survives_autonomous_suspension(
                 assert!(recorded_offsets.insert(record.offset.as_bytes().to_vec()));
                 recorded_ends += 1;
             }
-            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_) => {
+            PublicOplogEntry::Error(_) => {
                 anyhow::bail!("producer failed or cancelled")
             }
             _ => {}
@@ -2983,8 +3461,13 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
                 mapped_outputs = result.new_stream_mappings.len();
             }
             Some(invocation_response::Response::OutputItem(_)) => output_items += 1,
-            Some(invocation_response::Response::OutputError(_)) => output_errors += 1,
-            Some(invocation_response::Response::OutputEnd(_)) => output_ends += 1,
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                match end.outcome.and_then(|outcome| outcome.terminal) {
+                    Some(stream_terminal::Terminal::Failed(_)) => output_errors += 1,
+                    Some(stream_terminal::Terminal::Finished(_)) => output_ends += 1,
+                    other => anyhow::bail!("unexpected output terminal: {other:?}"),
+                }
+            }
             Some(invocation_response::Response::Finished(finished)) => {
                 finished_successfully = matches!(
                     finished.outcome,
@@ -3820,7 +4303,13 @@ async fn streaming_output_resume_restores_exact_cursors(
                     .push(value);
                 output_items += 1;
             }
-            Some(invocation_response::Response::OutputEnd(_)) => output_ends += 1,
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert!(matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Finished(_))
+                ));
+                output_ends += 1;
+            }
             Some(invocation_response::Response::Finished(finished)) => {
                 finished_successfully = matches!(
                     finished.outcome,
@@ -4518,7 +5007,13 @@ async fn read_nested_sibling_output(
                     }
                 }
             }
-            Some(invocation_response::Response::OutputEnd(_)) => terminal_count += 1,
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert!(matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Finished(_))
+                ));
+                terminal_count += 1;
+            }
             Some(invocation_response::Response::Finished(finished)) => {
                 finished_successfully = matches!(
                     finished.outcome,
@@ -4690,7 +5185,7 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
         .invoke_agent_session(ReceiverStream::new(receiver))
         .await?
         .into_inner();
-    let mut expected_stream_ids = Vec::new();
+    let mut expected_stream_ids = vec![1];
     let mut terminal_stream_ids = Vec::new();
     let mut accepted = false;
     let mut result_received = false;
@@ -4711,19 +5206,20 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                     Some(invocation_session_result::Result::MethodResult(value)) => value,
                     other => anyhow::bail!("expected a method result, got {other:?}"),
                 };
-                expected_stream_ids = match value.value {
+                expected_stream_ids.extend(match value.value {
                     Some(schema_value::Value::StreamReference(reference)) => {
                         vec![reference.stream_id]
                     }
                     other => anyhow::bail!("expected transform stream, got {other:?}"),
-                };
+                });
                 requests.send(start.clone()).await?;
             }
-            Some(invocation_response::Response::OutputEnd(end)) => {
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert!(matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Failed(_))
+                ));
                 terminal_stream_ids.push(end.transport_stream_id);
-            }
-            Some(invocation_response::Response::OutputError(error)) => {
-                terminal_stream_ids.push(error.transport_stream_id);
             }
             Some(invocation_response::Response::Finished(finished)) => {
                 assert!(accepted, "post-enqueue failure preceded acceptance");
@@ -4935,6 +5431,8 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     .await??;
     // Both records must already exist when the observer joins: scheduling must not
     // let the failed terminal hide the result's durable stream handles.
+    let mut fresh = observer.clone();
+    fresh.idempotency_key = Some(IdempotencyKey::fresh().into());
     let (_observer_tx, mut observer_rx, observer_accepted) =
         open_raw_session(&executor, observer).await?;
     assert!(observer_accepted.joined_origin_observer);
@@ -4971,6 +5469,10 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         original_result.response,
         Some(invocation_response::Response::Result(_))
     ));
+    let error = open_raw_session(&executor, fresh)
+        .await
+        .expect_err("a fresh invocation must not start on a failed worker");
+    assert!(error.to_string().contains("Previous invocation failed"));
     Ok(())
 }
 
@@ -5074,11 +5576,19 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
         if forbidden_control {
             observer_tx
                 .send(InvocationRequest {
-                    request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                    request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                         transport_stream_id: 1,
-                        sequence: 0,
+                        producer_sequence: 0,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            StreamTerminal::Finished
+                                .try_into()
+                                .expect("finished terminal"),
+                        ),
                         durable_stream_id: Some(stream_id),
                         epoch: accepted.epoch,
+                        ..Default::default()
                     })),
                 })
                 .await?;
@@ -5107,11 +5617,19 @@ async fn joined_origin_observer_disconnect_and_control_do_not_detach_original(
             .await?;
         original_tx
             .send(InvocationRequest {
-                request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                     transport_stream_id: 1,
-                    sequence: 1,
+                    producer_sequence: 1,
+                    direction: StreamDirection::Input as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::Finished
+                            .try_into()
+                            .expect("finished terminal"),
+                    ),
                     durable_stream_id: Some(stream_id),
                     epoch: accepted.epoch,
+                    ..Default::default()
                 })),
             })
             .await?;
@@ -5427,11 +5945,19 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
         .map_err(anyhow::Error::msg)?;
     requests.send(final_item).await?;
     let end = InvocationRequest {
-        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: 1,
-            sequence: 3,
+            producer_sequence: 3,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::Finished
+                    .try_into()
+                    .expect("finished terminal"),
+            ),
             durable_stream_id: Some(durable_stream_id),
             epoch: resumed.epoch,
+            ..Default::default()
         })),
     };
     resumed_state
@@ -5463,9 +5989,12 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
             Some(
                 invocation_response::Response::Accepted(_)
                 | invocation_response::Response::InputAck(_)
-                | invocation_response::Response::Result(_)
-                | invocation_response::Response::OutputEnd(_),
+                | invocation_response::Response::Result(_),
             ) => {}
+            Some(invocation_response::Response::StreamEnd(end)) => assert!(matches!(
+                end.outcome.and_then(|outcome| outcome.terminal),
+                Some(stream_terminal::Terminal::Finished(_))
+            )),
             Some(invocation_response::Response::Finished(finished)) => assert!(matches!(
                 finished.outcome,
                 Some(invocation_session_completion::Outcome::Success(_))
@@ -5662,9 +6191,7 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
     );
     let mut produced = BTreeMap::new();
     for entry in executor.get_oplog(&caller, OplogIndex::INITIAL).await? {
-        use golem_common::model::durable_stream::{
-            StreamEndRecord, StreamEndResult, StreamId, StreamItemsPayload,
-        };
+        use golem_common::model::durable_stream::{StreamId, StreamItemsPayload};
         match entry.entry {
             PublicOplogEntry::StreamItems(params) => {
                 let record = StreamItemsRecord::from_value(params.record.value())
@@ -5697,10 +6224,10 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
                     );
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                let record = StreamEndRecord::from_value(params.record.value())
+            PublicOplogEntry::StreamTerminal(params) => {
+                let record = StreamTerminalRecord::from_value(params.record.value())
                     .map_err(anyhow::Error::msg)?;
-                assert_eq!(record.result, StreamEndResult::Ok);
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 let stream = StreamId::derive(
                     context.default_environment_id,
                     &caller,
@@ -5733,10 +6260,7 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
                 items += record.logical_item_count();
             }
             StreamSessionRecord::ConsumerTerminal(record) => {
-                assert!(matches!(
-                    record.terminal,
-                    golem_common::model::durable_stream::StreamConsumerTerminal::End(_)
-                ));
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 assert!(source_offsets.insert(record.source_offset));
                 ends += 1;
             }
@@ -5768,10 +6292,18 @@ async fn generated_input_source_timer_suspends_in_flight_transfer(
                 .count(),
             1
         );
-        assert!(!oplog.iter().any(|entry| matches!(
-            entry.entry,
-            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_)
-        )));
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        );
+        for entry in &oplog {
+            if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(record.terminal, StreamTerminal::Finished);
+            }
+        }
     }
     assert_eq!(
         executor
@@ -6011,11 +6543,19 @@ async fn consumed_input_boundary(
             }
         }
         let end = InvocationRequest {
-            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id,
-                sequence: values.len() as u64,
+                producer_sequence: values.len() as u64,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(
+                    StreamTerminal::Finished
+                        .try_into()
+                        .expect("finished terminal"),
+                ),
                 durable_stream_id,
                 epoch: accepted.epoch,
+                ..Default::default()
             })),
         };
         state
@@ -6070,10 +6610,7 @@ async fn consumed_input_boundary(
                 item_count += record.logical_item_count();
             }
             StreamSessionRecord::ConsumerTerminal(record) => {
-                assert!(matches!(
-                    record.terminal,
-                    golem_common::model::durable_stream::StreamConsumerTerminal::End(_)
-                ));
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 assert!(journal_offsets.insert(record.source_offset.as_bytes().to_vec()));
                 terminals += 1;
             }
@@ -6163,10 +6700,18 @@ async fn consumed_input_boundary(
             );
         }
     }
-    assert!(!oplog.iter().any(|entry| matches!(
-        entry.entry,
-        PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_)
-    )));
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    for entry in &oplog {
+        if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+            let record = StreamTerminalRecord::from_value(params.record.value())
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(record.terminal, StreamTerminal::Finished);
+        }
+    }
     Ok(())
 }
 
@@ -6186,9 +6731,7 @@ fn input_observations(
     agent: &AgentId,
     fingerprint: golem_common::model::AgentFingerprint,
 ) -> anyhow::Result<InputObservations> {
-    use golem_common::model::durable_stream::{
-        StreamConsumerTerminal, StreamEndResult, StreamId, StreamRecordReference,
-    };
+    use golem_common::model::durable_stream::{StreamId, StreamRecordReference};
     let mut result = BTreeMap::new();
     let mut next_ordinals = BTreeMap::new();
     for observation in input_consumer_history(oplog)? {
@@ -6212,10 +6755,7 @@ fn input_observations(
                 (record.reader_id, record.consumer_read_ordinal, values)
             }
             StreamSessionRecord::ConsumerTerminal(record) => {
-                assert_eq!(
-                    record.terminal,
-                    StreamConsumerTerminal::End(StreamEndResult::Ok)
-                );
+                assert_eq!(record.terminal, StreamTerminal::Finished);
                 (
                     record.reader_id,
                     record.consumer_read_ordinal,
@@ -6433,11 +6973,19 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         ));
     }
     let end = InvocationRequest {
-        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: 1,
-            sequence: 3,
+            producer_sequence: 3,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::Finished
+                    .try_into()
+                    .expect("finished terminal"),
+            ),
             durable_stream_id: Some(first_durable_stream_id),
             epoch: first_accepted.epoch,
+            ..Default::default()
         })),
     };
     state
@@ -6451,12 +6999,15 @@ async fn durable_streaming_input_recovers_after_executor_restart(
             let oplog = executor
                 .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
                 .await?;
-            let terminal_committed = oplog
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamEnd(_)));
-            let invocation_finished = oplog
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)));
+            let terminal_committed = oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::StreamTerminal(params)
+                    if StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal
+                        == StreamTerminal::Finished)
+            });
+            let invocation_finished = oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("consume"))
+            });
             if terminal_committed && invocation_finished {
                 return Ok::<(), anyhow::Error>(());
             }
@@ -6465,6 +7016,22 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     })
     .await
     .map_err(|_| anyhow::anyhow!("invocation did not finish with its terminal ACK unread"))??;
+    let before_restart = executor
+        .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+        .await?;
+    let committed_terminals = before_restart
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamTerminal(params) => Some((
+                entry.oplog_index,
+                StreamTerminalRecord::from_value(params.record.value()).unwrap(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(committed_terminals.len(), 1);
+    assert_eq!(committed_terminals[0].1.terminal, StreamTerminal::Finished);
+    let consumed_before_restart = input_consumer_history(&before_restart)?;
     drop(responses);
     drop(executor);
 
@@ -6575,20 +7142,51 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         })
     );
 
+    // A new guest invocation forces reconstruction even if the completed session was served
+    // from its persisted result without loading the guest.
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "ping", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        42
+    );
+    assert!(executor.instance_load_count(&worker_agent_id) > 0);
     let oplog = executor
         .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
         .await?;
-    assert!(
-        oplog.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::AgentInvocationStarted(started)
-                if matches!(
-                    &started.invocation,
-                    PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.method_name == "consume"
-                )
-        )),
-        "recovered durable invocation was not journaled"
+    let recovered_terminals = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamTerminal(params) => Some((
+                entry.oplog_index,
+                StreamTerminalRecord::from_value(params.record.value()).unwrap(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recovered_terminals, committed_terminals);
+    assert_eq!(input_consumer_history(&oplog)?, consumed_before_restart);
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "consume")))
+            .count(),
+        1,
+        "reconstruction must not queue another consume invocation"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(
+                |entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(finished)
+                if finished.method_name.as_deref() == Some("consume"))
+            )
+            .count(),
+        1,
+        "reconstruction must preserve the completed consume invocation"
     );
     Ok(())
 }
@@ -6689,9 +7287,13 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::StreamCancel(cancel)) => {
+            Some(invocation_response::Response::StreamEnd(cancel)) => {
                 assert_eq!(cancel.transport_stream_id, 1);
-                assert_eq!(cancel.role, StreamCancelRole::InputConsumer as i32);
+                assert_eq!(cancel.direction, StreamDirection::Input as i32);
+                assert!(matches!(
+                    cancel.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::ConsumerCancelled(_))
+                ));
                 first_input_cancelled = true;
             }
             Some(invocation_response::Response::Result(invocation_result)) => {
@@ -7370,7 +7972,9 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             history
                 .iter()
                 .filter(|entry| entry.oplog_index > fork_cut
-                    && matches!(entry.entry, PublicOplogEntry::StreamEnd(_)))
+                    && matches!(&entry.entry, PublicOplogEntry::StreamTerminal(params)
+                        if StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal
+                            == StreamTerminal::Finished))
                 .count(),
             1
         );
@@ -7556,7 +8160,10 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                             if matches!(
                                 StreamSessionRecord::from_value(session.record.value()).unwrap(),
                                 StreamSessionRecord::ConsumerCancelIntent(record)
-                                    if record.role == DurableStreamCancelRole::InputConsumer
+                                    if record.cancellation.direction == SessionStreamRole::Input
+                                        && record.cancellation.side == StreamEndpointSide::Consumer
+                                        && matches!(record.cancellation.terminal,
+                                            StreamTerminal::ConsumerCancelled { .. })
                             ))
                         });
                 if finalized_stream.is_some() && downstream_input_cancelled {
@@ -7573,7 +8180,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                 .get_oplog(&provider_id, OplogIndex::INITIAL)
                 .await?
                 .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_))),
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::StreamTerminal(params)
+                    if matches!(StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal,
+                        StreamTerminal::ConsumerCancelled { .. }))),
             "dropping an inherited output must not cancel the shared source"
         );
 
@@ -7601,7 +8210,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
             .get_oplog(&provider_id, OplogIndex::INITIAL)
             .await?
             .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_)))
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::StreamTerminal(params)
+                if matches!(StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal,
+                    StreamTerminal::ConsumerCancelled { .. })))
             .count();
         executor
             .invoke_and_await_agent(
@@ -7617,7 +8228,9 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
         assert_eq!(
             provider_history
                 .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_)))
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::StreamTerminal(params)
+                    if matches!(StreamTerminalRecord::from_value(params.record.value()).unwrap().terminal,
+                        StreamTerminal::ConsumerCancelled { .. })))
                 .count(),
             cancel_count_before_new_rpc + 1,
             "a new RPC made by the fork must retain source cancellation"
@@ -7725,7 +8338,13 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
                         .map_err(anyhow::Error::msg)?,
                 );
             }
-            Some(invocation_response::Response::OutputEnd(_)) => ends += 1,
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert!(matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Finished(_))
+                ));
+                ends += 1;
+            }
             Some(invocation_response::Response::Finished(completion)) => {
                 assert!(matches!(
                     completion.outcome,
@@ -8038,11 +8657,19 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
             })),
         },
         InvocationRequest {
-            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id: 1,
-                sequence: 1,
+                producer_sequence: 1,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(
+                    StreamTerminal::Finished
+                        .try_into()
+                        .expect("finished terminal"),
+                ),
                 durable_stream_id: stream,
                 epoch: accepted.epoch,
+                ..Default::default()
             })),
         },
     ] {
@@ -8263,11 +8890,19 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
         .map_err(anyhow::Error::msg)?;
     frames.send(item).await?;
     let end = InvocationRequest {
-        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: 1,
-            sequence: 1,
+            producer_sequence: 1,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::Finished
+                    .try_into()
+                    .expect("finished terminal"),
+            ),
             durable_stream_id: stream,
             epoch: accepted.epoch,
+            ..Default::default()
         })),
     };
     state
@@ -8586,11 +9221,19 @@ async fn typescript_streaming_guest_abi_e2e(
         requests.send(item).await?;
     }
     let end = InvocationRequest {
-        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: 1,
-            sequence: 2,
+            producer_sequence: 2,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::Finished
+                    .try_into()
+                    .expect("finished terminal"),
+            ),
             durable_stream_id: Some(durable_stream_id),
             epoch: accepted.epoch,
+            ..Default::default()
         })),
     };
     state
@@ -8635,7 +9278,11 @@ async fn typescript_streaming_guest_abi_e2e(
                 };
                 output_values.push(value);
             }
-            Some(invocation_response::Response::OutputEnd(end)) => {
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert!(matches!(
+                    end.outcome.and_then(|outcome| outcome.terminal),
+                    Some(stream_terminal::Terminal::Finished(_))
+                ));
                 assert_eq!(Some(end.transport_stream_id), output_stream_id);
                 output_ends += 1;
             }
@@ -8808,11 +9455,19 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                         durable_stream_id: stream_id,
                         epoch: accepted.epoch,
                     }),
-                    invocation_request::Request::InputEnd(InputStreamEnd {
+                    invocation_request::Request::StreamEnd(StreamEnd {
                         transport_stream_id: 1,
-                        sequence: 1,
+                        producer_sequence: 1,
+                        direction: StreamDirection::Input as i32,
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(
+                            StreamTerminal::Finished
+                                .try_into()
+                                .expect("finished terminal"),
+                        ),
                         durable_stream_id: stream_id,
                         epoch: accepted.epoch,
+                        ..Default::default()
                     }),
                 ] {
                     let request = InvocationRequest {
@@ -8855,7 +9510,11 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                             };
                             values.push(value);
                         }
-                        Some(invocation_response::Response::OutputEnd(end)) => {
+                        Some(invocation_response::Response::StreamEnd(end)) => {
+                            assert!(matches!(
+                                end.outcome.and_then(|outcome| outcome.terminal),
+                                Some(stream_terminal::Terminal::Finished(_))
+                            ));
                             assert_eq!(Some(end.transport_stream_id), output_stream_id);
                             ends += 1;
                         }
@@ -9935,12 +10594,7 @@ async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
                 StreamSessionRecord::ConsumerTerminal(terminal) => {
                     assert_eq!(terminal.consumer_read_ordinal, expected_items as u64);
                     assert_eq!(ordinal, expected_items);
-                    assert_eq!(
-                        terminal.terminal,
-                        golem_common::model::durable_stream::StreamConsumerTerminal::End(
-                            golem_common::model::durable_stream::StreamEndResult::Ok,
-                        ),
-                    );
+                    assert_eq!(terminal.terminal, StreamTerminal::Finished);
                 }
                 _ => unreachable!(),
             }

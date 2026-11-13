@@ -474,13 +474,7 @@ before (value) {}
         record: oplog_payload_from_wit(params.record),
         summary: params.summary.map(durable_stream_summary_from_wit),
     } }
-    StreamEnd { record (params) {
-        timestamp: timestamp_from_datetime(params.timestamp),
-        entity_parent_start_index: None,
-        record: oplog_payload_from_wit(params.record),
-        summary: params.summary.map(durable_stream_summary_from_wit),
-    } }
-    StreamCancel { record (params) {
+    StreamTerminal { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         entity_parent_start_index: None,
         record: oplog_payload_from_wit(params.record),
@@ -894,12 +888,7 @@ before (value) {}
         record: oplog_payload_to_wit(record)?,
         summary: summary.map(durable_stream_summary_to_wit),
     } }
-    StreamEnd { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
-        timestamp: timestamp.into(),
-        record: oplog_payload_to_wit(record)?,
-        summary: summary.map(durable_stream_summary_to_wit),
-    } }
-    StreamCancel { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
+    StreamTerminal { record (entity_parent_start_index) => RawDurableStreamRecordParameters {
         timestamp: timestamp.into(),
         record: oplog_payload_to_wit(record)?,
         summary: summary.map(durable_stream_summary_to_wit),

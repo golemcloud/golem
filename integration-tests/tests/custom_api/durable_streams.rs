@@ -9,7 +9,10 @@ use base64::Engine;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::durable_stream::StreamTerminalRecord;
+use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, OplogIndex};
+use golem_common::schema::FromSchema;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
@@ -116,6 +119,22 @@ fn header(response: &reqwest::Response, name: &str) -> String {
 
 async fn create(agent: &HttpTestContext, path: &str) -> anyhow::Result<reqwest::Response> {
     Ok(agent.client.put(agent.base_url.join(path)?).send().await?)
+}
+
+fn stream_terminals(
+    history: Vec<PublicOplogEntryWithIndex>,
+) -> anyhow::Result<Vec<(OplogIndex, StreamTerminalRecord)>> {
+    history
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::StreamTerminal(params) => Some(
+                StreamTerminalRecord::from_value(params.record.value())
+                    .map(|record| (entry.oplog_index, record))
+                    .map_err(anyhow::Error::msg),
+            ),
+            _ => None,
+        })
+        .collect()
 }
 
 async fn wait_for_closed(agent: &HttpTestContext, path: &str) -> anyhow::Result<()> {
@@ -2121,7 +2140,7 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     };
     use golem_common::model::invocation_session_public::{
         DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
-        PublicInvocationOutcome, PublicServerMessage,
+        PublicInvocationOutcome, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
     };
 
     let session = Uuid::new_v4().to_string();
@@ -2204,8 +2223,10 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     .await?;
     send_public_request(
         &mut socket,
-        &PublicClientMessage::InputStreamEnd {
+        &PublicClientMessage::StreamEnd {
             channel: input_channel,
+            direction: PublicStreamDirection::Input,
+            outcome: PublicStreamOutcome::Finished,
             sequence: DecimalU64(2),
             version: INVOCATION_SESSION_VERSION,
         },
@@ -2250,6 +2271,10 @@ async fn websocket_and_http_sessions_have_isolated_identities(
 async fn session_delete_is_cooperative_and_survives_reconstruction(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::{
+        StreamError, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+    };
+
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
     let path = stream_path("cancellation-output/5", &session, "$result", 5000);
@@ -2281,7 +2306,7 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
             StatusCode::NO_CONTENT
         );
     }
-    wait_for_observations(agent, &id, &[0, 0, 2, 1, 1, 0, 0]).await?;
+    wait_for_observations(agent, &id, &[0, 0, 1, 1, 1, 0, 0]).await?;
     let history = agent.client.get(agent.base_url.join(&path)?).send().await?;
     assert_eq!(history.status(), StatusCode::OK);
     assert_eq!(header(&history, "stream-closed"), "true");
@@ -2302,7 +2327,7 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
         .await?;
     assert_eq!(marked.status(), StatusCode::OK);
     assert_eq!(marked.json::<Value>().await?, serde_json::json!("37"));
-    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 1, 1, 1, 37, 0]);
 
     let component_id = agent
         .client
@@ -2319,11 +2344,17 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
         component_id: ComponentId(Uuid::parse_str(&component_id)?),
         agent_id: format!("DurableStreamAgent(\"{id}\")"),
     };
-    let before = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    assert!(!before.is_empty());
+    let before = stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1.authored_by, StreamTerminalAuthor::Host);
+    assert_eq!(before[0].1.origin, StreamTerminalOrigin::Control);
+    assert_eq!(
+        before[0].1.terminal,
+        StreamTerminal::Failed(StreamError::Interrupted("session deleted".into()))
+    );
     agent.user.simulated_crash(&worker).await?;
     agent.user.resume(&worker, false).await?;
-    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 1, 1, 1, 37, 0]);
     let history = agent.client.get(agent.base_url.join(&path)?).send().await?;
     assert_eq!(history.status(), StatusCode::OK);
     assert_eq!(header(&history, "stream-cancelled"), "true");
@@ -2331,13 +2362,10 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
         history.json::<Value>().await?,
         serde_json::json!(["cancel-0"])
     );
-    assert!(
-        agent
-            .user
-            .get_oplog(&worker, OplogIndex::INITIAL)
-            .await?
-            .len()
-            >= before.len()
+    assert_eq!(
+        stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?,
+        before,
+        "administrative deletion must preserve Interrupted, not invent invocation cancellation"
     );
     Ok(())
 }
@@ -2406,7 +2434,38 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             expected
         );
     }
-    wait_for_observations(agent, &id, &[1, 1, 1, 0, 1, 0, 0]).await?;
+    use golem_common::model::durable_stream::{StreamError, StreamSessionRecord, StreamTerminal};
+
+    let worker = AgentId {
+        component_id: agent.component_id,
+        agent_id: format!("DurableStreamAgent(\"{id}\")"),
+    };
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let mut observed = Vec::new();
+            for entry in history {
+                if let PublicOplogEntry::StreamSession(params) = entry.entry {
+                    let record = StreamSessionRecord::from_value(params.record.value())
+                        .map_err(anyhow::Error::msg)?;
+                    if let StreamSessionRecord::ConsumerTerminal(record) = record {
+                        observed.push(record.terminal);
+                    }
+                }
+            }
+            if !observed.is_empty() {
+                assert_eq!(
+                    observed,
+                    vec![StreamTerminal::Failed(StreamError::Interrupted(
+                        "stream slot deleted".to_string(),
+                    ))]
+                );
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
     Ok(())
 }
 
@@ -2465,7 +2524,7 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
             expected
         );
     }
-    wait_for_observations(agent, &id, &[0, 0, 2, 1, 1, 0, 0]).await?;
+    wait_for_observations(agent, &id, &[0, 0, 1, 1, 1, 0, 0]).await?;
 
     let component_id = agent
         .client
@@ -2495,7 +2554,7 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
             StatusCode::GONE
         );
     }
-    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 0, 0]);
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 1, 1, 1, 0, 0]);
     Ok(())
 }
 
@@ -2669,6 +2728,104 @@ async fn output_stream_survives_guest_sleep_suspension(
     assert_eq!(
         result.json::<Value>().await?,
         serde_json::json!(["message-0000"])
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn trapped_output_closes_without_the_cancelled_header(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamError, StreamRegisteredRecord, StreamTerminal,
+        StreamTerminalAuthor, StreamTerminalOrigin,
+    };
+
+    let session = Uuid::new_v4().to_string();
+    let path = stream_path("trapped-output", &session, "$result", 0);
+    assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
+    let prefix = agent
+        .client
+        .get(agent.base_url.join(&format!("{path}&live=long-poll"))?)
+        .send()
+        .await?;
+    assert_eq!(prefix.status(), StatusCode::OK);
+    assert_eq!(
+        prefix.json::<Value>().await?,
+        serde_json::json!(["before-trap"])
+    );
+    let input = stream_path("trapped-output", &session, "input", 0);
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!("trap"), true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    wait_for_closed(agent, &path).await?;
+    let worker = AgentId {
+        component_id: agent.component_id,
+        agent_id: format!("DurableStreamAgent(\"ds3-{session}\")"),
+    };
+    let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let output = history
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamRegistered(params) => {
+                let record = StreamRegisteredRecord::from_value(params.record.value()).unwrap();
+                (record.session_role == Some(SessionStreamRole::Output))
+                    .then_some(LocalStreamId(entry.oplog_index))
+            }
+            _ => None,
+        })
+        .expect("registered output");
+    let before = stream_terminals(history)?;
+    let selected = before
+        .iter()
+        .filter(|(_, terminal)| terminal.stream_id == output)
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].1.authored_by, StreamTerminalAuthor::Host);
+    assert_eq!(selected[0].1.origin, StreamTerminalOrigin::Control);
+    assert!(
+        matches!(
+            &selected[0].1.terminal,
+            StreamTerminal::Failed(StreamError::Trapped(message))
+                if message.contains("::trapped_output")
+                    && message.contains("wasm `unreachable` instruction executed")
+        ),
+        "the selected output terminal: {:?}",
+        selected[0].1
+    );
+
+    for recovered in [false, true] {
+        if recovered {
+            agent.user.simulated_crash(&worker).await?;
+        }
+        for method in [Method::GET, Method::HEAD] {
+            let response = agent
+                .client
+                .request(method.clone(), agent.base_url.join(&path)?)
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(header(&response, "stream-closed"), "true");
+            assert!(
+                !response.headers().contains_key("stream-cancelled"),
+                "a producer trap is not consumer cancellation (recovered={recovered})"
+            );
+            if method == Method::GET {
+                assert_eq!(
+                    response.json::<Value>().await?,
+                    serde_json::json!(["before-trap"])
+                );
+            }
+        }
+    }
+    assert_eq!(
+        stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?,
+        before,
+        "reading the failed output after crash must not replace or repeat its terminal"
     );
     Ok(())
 }

@@ -835,11 +835,26 @@ interface oplog {
         error,
     }
 
+    enum durable-stream-terminal-outcome {
+        finished,
+        failed,
+        consumer-cancelled,
+    }
+
+    enum stream-terminal-origin {
+        source,
+        control,
+    }
+
+    record durable-stream-terminal-summary {
+        outcome: durable-stream-terminal-outcome,
+        origin: stream-terminal-origin,
+    }
+
     variant durable-stream-event-summary {
         registered,
         items(u64),
-        end(durable-stream-outcome),
-        cancelled,
+        terminal(durable-stream-terminal-summary),
         session-result,
         session-finished(durable-stream-outcome),
         session-cancellation,
@@ -1075,10 +1090,8 @@ interface oplog {
         stream-registered(raw-durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
         stream-items(raw-durable-stream-record-parameters),
-        /// Records a durable stream end terminal
-        stream-end(raw-durable-stream-record-parameters),
-        /// Records a durable stream cancellation terminal
-        stream-cancel(raw-durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(raw-durable-stream-record-parameters),
         /// Records durable Stream Session state and consumer-journal facts
         stream-session(raw-durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`
@@ -1189,10 +1202,8 @@ interface oplog {
         stream-registered(durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
         stream-items(durable-stream-record-parameters),
-        /// Records a durable stream end terminal
-        stream-end(durable-stream-record-parameters),
-        /// Records a durable stream cancellation terminal
-        stream-cancel(durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(durable-stream-record-parameters),
         /// Records durable Stream Session state and consumer-journal facts
         stream-session(durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`

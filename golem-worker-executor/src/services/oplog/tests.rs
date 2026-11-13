@@ -3814,11 +3814,10 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
 #[test]
 async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamEndRecord,
-        StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+        LocalStreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
         StreamRegisteredRecord, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
         StreamRootKind, StreamSessionFinishedRecord, StreamSessionRecord, StreamSourceKind,
-        StreamTerminalAuthor,
+        StreamTerminal, StreamTerminalAuthor, StreamTerminalRecord,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -3901,28 +3900,28 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         offsets: vec![StreamOffset::new(item_index, 0)],
                     },
                 ),
-                DurableStreamOplogRecord::End(
+                DurableStreamOplogRecord::Terminal(
                     None,
-                    StreamEndRecord {
+                    StreamTerminalRecord {
                         format_version: 1,
                         stream_id,
                         sequence: 1,
                         offset: StreamOffset::new(end_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
-                        result: StreamEndResult::Ok,
+                        origin: golem_common::model::durable_stream::StreamTerminalOrigin::Source,
+                        terminal: StreamTerminal::Finished,
                     },
                 ),
-                DurableStreamOplogRecord::Cancel(
+                DurableStreamOplogRecord::Terminal(
                     None,
-                    StreamCancelRecord {
+                    StreamTerminalRecord {
                         format_version: 1,
                         stream_id,
                         sequence: 1,
                         offset: StreamOffset::new(cancel_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
-                        role: StreamCancelRole::OutputConsumer,
-                        reason: StreamCancelReason::Protocol,
-                        details: Some("test cancellation".to_string()),
+                        origin: golem_common::model::durable_stream::StreamTerminalOrigin::Control,
+                        terminal: StreamTerminal::ConsumerCancelled { details: Some("test cancellation".to_string()) },
                     },
                 ),
                 DurableStreamOplogRecord::Session(
@@ -3962,11 +3961,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamItemsPayload::Values(vec![vec![42; 1024]])
                 );
             }
-            OplogEntry::StreamEnd { record, .. } => {
-                assert!(matches!(&record, OplogPayload::SerializedInline { .. }));
-                oplog.download_payload(record).await.unwrap();
-            }
-            OplogEntry::StreamCancel { record, .. } => {
+            OplogEntry::StreamTerminal { record, .. } => {
                 assert!(matches!(&record, OplogPayload::SerializedInline { .. }));
                 oplog.download_payload(record).await.unwrap();
             }
@@ -3994,8 +3989,8 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
 #[test_r::timeout("30s")]
 async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
-        StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
+        LocalStreamId, StreamInvocationId, StreamOffset, StreamSessionFinishedRecord,
+        StreamSessionRecord, StreamTerminal, StreamTerminalAuthor, StreamTerminalRecord,
     };
     use golem_common::model::component::ComponentRevision;
 
@@ -4059,15 +4054,16 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     let added = oplog
         .add_durable_stream_batch(Box::new(move |first_index| {
             vec![
-                DurableStreamOplogRecord::End(
+                DurableStreamOplogRecord::Terminal(
                     None,
-                    StreamEndRecord {
+                    StreamTerminalRecord {
                         format_version: 1,
                         stream_id: LocalStreamId(first_index),
                         sequence: 0,
                         offset: StreamOffset::new(first_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
-                        result: StreamEndResult::Ok,
+                        origin: golem_common::model::durable_stream::StreamTerminalOrigin::Source,
+                        terminal: StreamTerminal::Finished,
                     },
                 ),
                 DurableStreamOplogRecord::Session(
@@ -4106,7 +4102,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     ));
     assert!(matches!(
         persisted[&added[0].0],
-        OplogEntry::StreamEnd { .. }
+        OplogEntry::StreamTerminal { .. }
     ));
     let OplogEntry::StreamSession { record, .. } = &persisted[&added[1].0] else {
         panic!("persisted terminal batch must end with a session record");
@@ -4119,7 +4115,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     assert_eq!(finished.result, Err(vec![91; 1024]));
     assert!(matches!(
         &added[0].1,
-        OplogEntry::StreamEnd {
+        OplogEntry::StreamTerminal {
             record: OplogPayload::Inline(_),
             ..
         }
@@ -4146,9 +4142,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
     use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
     use golem_common::base_model::durable_stream::{
         LocalStreamId, LocalStreamReaderId, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamEndRecord, StreamEndResult, StreamInvocationId,
-        StreamOffset, StreamRegistrationInvocation, StreamSessionFinishedRecord,
-        StreamSessionRecord, StreamTerminalAuthor,
+        StreamConsumerObservation, StreamInvocationId, StreamOffset, StreamRegistrationInvocation,
+        StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalRecord,
     };
 
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
@@ -4222,9 +4218,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                 let finished_produced = produced.clone();
                 let terminals = (0..2).map(move |position| {
                     produced.fetch_add(1, Ordering::SeqCst);
-                    DurableStreamOplogRecord::End(
+                    DurableStreamOplogRecord::Terminal(
                         None,
-                        StreamEndRecord {
+                        StreamTerminalRecord {
                             format_version: 1,
                             stream_id: LocalStreamId(OplogIndex::from_u64(
                                 first_index.as_u64() + position,
@@ -4235,7 +4231,8 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                                 0,
                             ),
                             authored_by: StreamTerminalAuthor::Guest,
-                            result: StreamEndResult::Ok,
+                            origin: golem_common::model::durable_stream::StreamTerminalOrigin::Source,
+                            terminal: StreamTerminal::Finished,
                         },
                     )
                 });
@@ -4362,8 +4359,9 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         CommittedProducerStreamEventPayload, DurableStreamStore, ProducerRegistrationRequest,
     };
     use golem_common::base_model::durable_stream::{
-        StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
-        StreamRegistrationInvocation, StreamRootKind, StreamSourceKind,
+        StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
+        StreamRegistrationInvocation, StreamRootKind, StreamSourceKind, StreamTerminal,
+        StreamTerminalAuthor,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -4456,7 +4454,13 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         .await
         .unwrap();
     producer
-        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            1,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
     drop(producer);
@@ -4519,7 +4523,13 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     );
     assert!(
         restarted
-            .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+            .end(
+                None,
+                handle.stream_id,
+                1,
+                StreamTerminalAuthor::Guest,
+                StreamTerminal::Finished
+            )
             .await
             .unwrap()
             .replayed
@@ -4536,7 +4546,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     );
     assert_eq!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     );
     assert!(reader.next().await.unwrap().is_none());
 }

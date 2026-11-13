@@ -41,8 +41,9 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
-    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamRegistrationInvocation,
-    StreamResumeCursor, StreamResumeOperation,
+    StreamCancellationRequest, StreamEndpointSide, StreamItemsPayload,
+    StreamRegistrationInvocation, StreamResumeCursor, StreamResumeOperation, StreamTerminal,
+    StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{

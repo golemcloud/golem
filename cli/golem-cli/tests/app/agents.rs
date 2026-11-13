@@ -12,8 +12,15 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
+use golem_cli::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
 use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
+use golem_common::model::durable_stream::{
+    SessionStreamRole, StreamRegisteredRecord, StreamTerminal, StreamTerminalAuthor,
+    StreamTerminalOrigin, StreamTerminalRecord,
+};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::schema::FromSchema;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
@@ -377,28 +384,6 @@ async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_w
     assert!(!oplog.stderr_text().contains("Broken pipe"));
 }
 
-/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
-/// a schema value, so the names of the enum cases come from its graph.
-fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
-    let record = &entry["entry"]["record"];
-    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
-        let def = record["graph"]["defs"]
-            .as_array()?
-            .iter()
-            .find(|def| def["name"] == type_name)?;
-        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
-            .as_str()
-            .map(str::to_string)
-    };
-    let fields = &record["value"]["value"]["fields"];
-    let is_cancel = record["graph"]["root"]["value"]["id"]
-        .as_str()
-        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
-    is_cancel
-        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
-        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
-}
-
 /// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
 /// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
 /// of the output stream from a consumer that dropped it.
@@ -431,7 +416,7 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
             "oplog",
             &invoke_agent,
             "--query",
-            "stream-cancel",
+            "stream-terminal OR stream-registered",
             flag::FORMAT,
             "json",
         ])
@@ -439,13 +424,30 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
     assert!(cancels.success_or_dump());
     let entries = cancels
         .stdout()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| serde_json::from_str::<AgentOplogEntryView>(line).unwrap())
+        .collect::<Vec<_>>();
+    let output_streams = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamRegistered(params)) => {
+                let record = StreamRegisteredRecord::from_value(params.record.value()).unwrap();
+                (record.session_role == Some(SessionStreamRole::Output)).then_some(entry.index)
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
     assert!(
-        entries
-            .iter()
-            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
-        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+        entries.iter().any(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamTerminal(params)) => {
+                let record = StreamTerminalRecord::from_value(params.record.value()).unwrap();
+                output_streams.contains(&record.stream_id.0.as_u64())
+                    && record.authored_by == StreamTerminalAuthor::Guest
+                    && record.origin == StreamTerminalOrigin::Control
+                    && matches!(record.terminal, StreamTerminal::ConsumerCancelled { .. })
+            }
+            _ => false,
+        }),
+        "the server received no guest-authored ConsumerCancelled control terminal for the dropped output stream: {entries:#?}"
     );
 }
 
@@ -1421,8 +1423,9 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "increment_scalar",
         ])
         .await;
-    assert!(after_interrupt.success_or_dump());
-    assert!(after_interrupt.stdout_contains("1"));
+    assert!(!after_interrupt.success());
+    assert!(after_interrupt.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+    assert!(after_interrupt.stderr_contains("invocation interrupted"));
 }
 
 /// The Go external bridge against the same streaming agent: inputs, outputs,
