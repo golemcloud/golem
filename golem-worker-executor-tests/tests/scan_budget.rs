@@ -511,7 +511,7 @@ fn stale_reason(
             agent_id: Some(agent_id),
             next_oplog_index,
             reason,
-        })) if *agent_id == worker_id.clone().into() && *next_oplog_index == next => reason.clone(),
+        })) if *agent_id == worker_id.clone().into() && *next_oplog_index == next => *reason,
         _ => None,
     }
 }
@@ -673,6 +673,46 @@ async fn a_cursor_of_another_query_is_refused_as_stale(
     assert!(
         matches!(&search_of_get, search_oplog_response::Result::Failure(failure) if is_query_mismatch(failure, &get_cursor)),
         "a search must refuse the cursor of a read without a query, got {search_of_get:?}"
+    );
+
+    // The query check comes before the executor resolves the agent, so it reads no storage. For an
+    // agent that was never created, the resolution fails: a cursor of the same query fails with
+    // it, and a cursor of another query is refused as stale first.
+    let missing_id = AgentId {
+        component_id: worker_id.component_id,
+        agent_id: r#"GolemHostApi("never-created")"#.to_string(),
+    };
+    let missing_same_query = search_oplog(
+        &executor,
+        &missing_id,
+        Some(search_cursor.clone()),
+        RARE_QUERY,
+        100,
+    )
+    .await?;
+    assert!(
+        matches!(&missing_same_query, search_oplog_response::Result::Failure(failure)
+            if stale_reason(failure, &missing_id, search_cursor.next_oplog_index).is_none()),
+        "a search of a missing agent must fail to resolve it, got {missing_same_query:?}"
+    );
+    let missing_other_query = search_oplog(
+        &executor,
+        &missing_id,
+        Some(search_cursor.clone()),
+        "generate_idempotency_keys",
+        100,
+    )
+    .await?;
+    assert!(
+        matches!(&missing_other_query, search_oplog_response::Result::Failure(failure)
+            if matches!(stale_reason(failure, &missing_id, search_cursor.next_oplog_index), Some(stale_cursor::Reason::QueryMismatch(_)))),
+        "a search must refuse the cursor of another query before it resolves the agent, got {missing_other_query:?}"
+    );
+    let missing_get = get_oplog(&executor, &missing_id, Some(search_cursor.clone()), 100).await?;
+    assert!(
+        matches!(&missing_get, get_oplog_response::Result::Failure(failure)
+            if matches!(stale_reason(failure, &missing_id, search_cursor.next_oplog_index), Some(stale_cursor::Reason::QueryMismatch(_)))),
+        "a read must refuse the cursor of a search before it resolves the agent, got {missing_get:?}"
     );
     Ok(())
 }
