@@ -214,7 +214,7 @@ mod observational_start_proto_tests {
 
     #[test]
     fn span_lifecycle_raw_protobuf_roundtrips() {
-        use std::collections::HashMap;
+        use std::collections::BTreeMap;
 
         use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
         use crate::model::oplog::raw_types::{
@@ -235,7 +235,7 @@ mod observational_start_proto_tests {
                 trace_states: vec!["link=other-trace".into()],
             }],
             started_at: Timestamp::now_utc(),
-            attributes: AttributeMap(HashMap::from([(
+            attributes: AttributeMap(BTreeMap::from([(
                 "name".into(),
                 AttributeValue::String("rpc".into()),
             )])),
@@ -265,7 +265,7 @@ mod observational_start_proto_tests {
             }),
             span_attributes: Some(SpanAttributes {
                 span_id: span_id.clone(),
-                attributes: AttributeMap(HashMap::from([(
+                attributes: AttributeMap(BTreeMap::from([(
                     "result".into(),
                     AttributeValue::String("error".into()),
                 )])),
@@ -343,6 +343,47 @@ mod observational_start_proto_tests {
                 .unwrap(),
             attributes
         );
+    }
+
+    #[test]
+    fn invocation_context_attributes_are_sorted_by_key_in_the_public_oplog_entry() {
+        use nonempty_collections::NEVec;
+
+        use super::super::spans::{decode_public_span_data, encode_public_span_data};
+        use crate::model::invocation_context::{AttributeValue, InvocationContextSpan};
+        use crate::model::oplog::payload::types::encode_span_data;
+        use crate::model::oplog::{PublicSpanData, SpanData};
+
+        fn keys(spans: &[Vec<PublicSpanData>]) -> Vec<String> {
+            match &spans[0][0] {
+                PublicSpanData::LocalSpan(span) => {
+                    span.attributes.iter().map(|a| a.key.clone()).collect()
+                }
+                PublicSpanData::ExternalSpan(_) => panic!("expected a local span"),
+            }
+        }
+
+        let span = InvocationContextSpan::local()
+            .with_attributes(
+                [
+                    "kiwi", "apple", "plum", "fig", "banana", "mango", "date", "cherry",
+                ]
+                .into_iter()
+                .map(|key| (key.to_string(), AttributeValue::String(key.to_string())))
+                .collect(),
+            )
+            .build();
+        let expected = [
+            "apple", "banana", "cherry", "date", "fig", "kiwi", "mango", "plum",
+        ];
+
+        // The executor converts the stored span to the public oplog entry.
+        let public = encode_span_data(&SpanData::from_chain(&NEVec::new(span)));
+        assert_eq!(keys(&public), expected);
+
+        // The worker service receives the public oplog entry from the executor over gRPC.
+        let public = encode_public_span_data(decode_public_span_data(&public, 0)).unwrap();
+        assert_eq!(keys(&public), expected);
     }
 }
 
