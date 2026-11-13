@@ -22,8 +22,8 @@ pub(crate) use invocation_session::{build_durable_streaming_request, decode_invo
 use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
-    PublicOplogPageLimits, find_component_revision_at, get_public_oplog_entry,
-    get_public_oplog_page, search_public_oplog_page,
+    PublicOplogPageLimits, check_oplog_cursor_query, get_public_oplog_entry, get_public_oplog_page,
+    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;

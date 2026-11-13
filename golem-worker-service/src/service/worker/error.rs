@@ -141,6 +141,12 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 })
             }
 
+            WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor { .. }) => {
+                Self::BadRequest(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                    code: api::error_code::STALE_CURSOR.to_string(),
+                })
+            }
             WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],
                 code: api::error_code::BAD_FILE_TYPE.to_string(),

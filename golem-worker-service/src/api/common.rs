@@ -294,6 +294,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::InvalidRequest { .. } => {
                 Self::bad_request(api::error_code::VALIDATION_ERROR, error)
             }
+            WorkerExecutorError::StaleCursor { .. } => {
+                Self::bad_request(api::error_code::STALE_CURSOR, error)
+            }
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
@@ -566,6 +569,38 @@ mod tests {
                 assert_eq!(body.errors, vec!["Invalid request: invalid scan cursor"]);
             }
             other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_oplog_cursor_maps_to_its_own_code() {
+        use golem_service_base::error::worker_executor::StaleCursorReason;
+
+        for reason in [
+            StaleCursorReason::PastEnd {
+                last_oplog_index: golem_common::model::OplogIndex::from_u64(17),
+            },
+            StaleCursorReason::QueryMismatch,
+        ] {
+            let api_error: ApiEndpointError =
+                WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
+                    agent_id: golem_common::model::AgentId {
+                        component_id: golem_common::model::component::ComponentId(
+                            uuid::Uuid::nil(),
+                        ),
+                        agent_id: "Counter(\"a\")".to_string(),
+                    },
+                    next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
+                    reason,
+                })
+                .into();
+
+            match api_error {
+                ApiEndpointError::BadRequest(Json(body)) => {
+                    assert_eq!(body.code, "STALE_CURSOR");
+                }
+                other => panic!("expected BadRequest, got: {other:?}"),
+            }
         }
     }
 

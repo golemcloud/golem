@@ -17926,9 +17926,15 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+        queryHash:
+          description: |-
+            The hash of the search query of the pages that gave the cursor, or empty for the pages of
+            an oplog read without a query. A read refuses a cursor of another query.
+          type: string
       required:
       - nextOplogIndex
       - currentComponentRevision
+      - queryHash
     OplogErrorKind:
       type: string
       enum:

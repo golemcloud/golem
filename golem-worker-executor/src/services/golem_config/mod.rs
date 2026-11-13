@@ -58,8 +58,8 @@ pub use resources::{
 mod runtime;
 pub use runtime::{
     ActiveAgentsConfig, AgentStatusCheckpointConfig, AgentStatusFlushConfig, DurableStreamConfig,
-    EngineConfig, InvocationResultsConfig, Limits, ReadOnlyCacheConfig, SchedulerConfig,
-    SuspendConfig,
+    EngineConfig, InvocationResultsConfig, Limits, ReadOnlyCacheConfig, ScanBudget,
+    SchedulerConfig, SuspendConfig,
 };
 mod services;
 pub use services::{

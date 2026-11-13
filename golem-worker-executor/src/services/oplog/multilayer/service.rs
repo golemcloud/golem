@@ -641,7 +641,7 @@ impl OplogService for MultiLayerOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         let state = decode_scan_cursor(&cursor, modes)?;
         let layer = state.layer;
         if layer > self.lower.len().get() {
@@ -652,8 +652,10 @@ impl OplogService for MultiLayerOplogService {
         let active_mode = state.mode;
 
         match layer {
+            // The examined count is taken before the agents that a lower layer lists are left
+            // out: those keys were scanned too.
             0 => {
-                let (new_cursor, unfiltered_ids) = self
+                let (new_cursor, unfiltered_ids, examined) = self
                     .primary
                     .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
@@ -662,25 +664,26 @@ impl OplogService for MultiLayerOplogService {
                     .await?;
 
                 if new_cursor.is_finished() {
-                    Ok((first_scan_cursor(1, modes)?, ids))
+                    Ok((first_scan_cursor(1, modes)?, ids, examined))
                 } else {
-                    Ok((new_cursor, ids))
+                    Ok((new_cursor, ids, examined))
                 }
             }
             layer if layer <= self.lower.len().get() => {
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
                     .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
+                let examined = unfiltered_ids.len() as u64;
 
                 let ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
                 if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
-                    Ok((first_scan_cursor(layer + 1, modes)?, ids))
+                    Ok((first_scan_cursor(layer + 1, modes)?, ids, examined))
                 } else if new_cursor.is_finished() {
-                    Ok((ScanCursor::default(), ids))
+                    Ok((ScanCursor::default(), ids, examined))
                 } else {
-                    Ok((new_cursor, ids))
+                    Ok((new_cursor, ids, examined))
                 }
             }
             _ => unreachable!(),

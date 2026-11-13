@@ -11045,14 +11045,17 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
 
     let mut cursor = ScanCursor::default();
     let mut result = Vec::new();
+    let mut examined = 0;
     let page_size = 10;
     loop {
-        let (new_cursor, ids) = oplog_service
+        let (new_cursor, ids, page_examined) = oplog_service
             .scan_for_component(&environment_id, &component_id, None, cursor, page_size)
             .await
             .unwrap();
         debug!("Got {} elements, new cursor is {}", ids.len(), new_cursor);
+        assert!(page_examined >= ids.len() as u64);
         result.extend(ids);
+        examined += page_examined;
         if new_cursor.is_finished() {
             break;
         } else {
@@ -11061,6 +11064,13 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     }
 
     assert_eq!(result.len(), 100);
+    // The archived agents with an odd index also have a primary tail. The primary scan examines
+    // their keys and leaves them to the archive scan, and both scans count them.
+    let with_primary_tail = (0..100).filter(|i| i % 3 != 0 && i % 2 == 1).count() as u64;
+    assert!(
+        examined >= 100 + with_primary_tail,
+        "the scan examined {examined} keys for 100 agents, {with_primary_tail} of them in two layers"
+    );
 }
 
 #[test]
@@ -11228,7 +11238,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
         // Use a small page size so pagination crosses layers and mode boundaries.
         let page_size = 7;
         loop {
-            let (next_cursor, ids) = oplog_service
+            let (next_cursor, ids, _) = oplog_service
                 .scan_for_component(&environment_id, &component_id, modes, cursor, page_size)
                 .await
                 .unwrap();
@@ -11847,7 +11857,7 @@ async fn scan_for_component_only_returns_matching_mode_when_specified(_tracing: 
         let mut cursor = ScanCursor::default();
         let mut acc: Vec<OwnedAgentId> = Vec::new();
         loop {
-            let (next_cursor, ids) = oplog_service
+            let (next_cursor, ids, _) = oplog_service
                 .scan_for_component(&environment_id, &component_id, modes, cursor, 100)
                 .await
                 .unwrap();
@@ -11929,7 +11939,7 @@ async fn scan_for_component_paginates_across_mode_boundary(_tracing: &Tracing) {
             AgentMode::Ephemeral => saw_ephemeral_phase = true,
         }
 
-        let (next_cursor, ids) = oplog_service
+        let (next_cursor, ids, _) = oplog_service
             .scan_for_component(&environment_id, &component_id, None, cursor, page_size)
             .await
             .unwrap();
@@ -11999,7 +12009,7 @@ async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tr
     let mut iterations = 0;
     loop {
         iterations += 1;
-        let (next_cursor, ids) = oplog_service
+        let (next_cursor, ids, _) = oplog_service
             .scan_for_component(&environment_id, &component_id, None, cursor, 10)
             .await
             .unwrap();

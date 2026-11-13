@@ -198,6 +198,10 @@ max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
 
+[limits.scan_budget]
+entries = 100000
+time = "5s"
+
 [mcp_transport]
 concurrency = 16
 json_depth = 512
@@ -656,6 +660,10 @@ without_time = false
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
+#
 # [mcp_transport]
 # concurrency = 16
 # json_depth = 512
@@ -1113,6 +1121,10 @@ without_time = false
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
+#
 # [mcp_transport]
 # concurrency = 16
 # json_depth = 512
@@ -1539,6 +1551,10 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [mcp_transport]
 # concurrency = 16
