@@ -608,7 +608,7 @@ async fn start_scope_card_executor(
 fn configure_scope_card_root(
     authority: &ScopeCardAuthority,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<CardId> {
     let card = component
         .metadata
@@ -626,7 +626,7 @@ fn configure_scope_card_root(
 async fn assert_scope_absent(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    target: &golem_common::model::agent::ParsedAgentId,
+    target: &golem_common::model::agent::ParsedAgentKey,
     scope_card_id: SchemaCardId,
 ) -> anyhow::Result<()> {
     let present = executor
@@ -8078,7 +8078,7 @@ async fn start_card_handle_agent(
     agent_name: &str,
 ) -> anyhow::Result<(
     golem_common::model::component::ComponentDto,
-    golem_common::model::agent::ParsedAgentId,
+    golem_common::model::agent::ParsedAgentKey,
     AgentId,
 )> {
     let component = executor
@@ -8100,7 +8100,7 @@ async fn start_card_handle_agent(
 async fn use_kept_child(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<Vec<String>> {
     executor
         .invoke_and_await_agent(component, agent, "use_kept_child", data_value!())

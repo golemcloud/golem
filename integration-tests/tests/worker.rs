@@ -416,7 +416,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let workers_count = 150;
     let mut agent_ids = HashSet::new();
-    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for i in 0..workers_count {
         let aid = agent_id!("Repository", format!("gw{i}"));
@@ -652,7 +652,7 @@ async fn get_running_workers(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let workers_count = 15;
-    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());

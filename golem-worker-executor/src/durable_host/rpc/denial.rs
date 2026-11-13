@@ -35,7 +35,7 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
@@ -257,7 +257,7 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     method_name: &str,
     error: InternalRpcError,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {

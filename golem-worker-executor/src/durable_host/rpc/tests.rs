@@ -26,7 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1011,7 +1011,7 @@ fn rejected_rpc_creation_drains_every_config_handle() {
 fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId(Uuid::from_u128(1));
-    let logical_agent_id = ParsedAgentId::try_new(
+    let logical_agent_id = ParsedAgentKey::try_new(
         golem_common::model::agent::AgentTypeName("ephemeral-target".to_string()),
         data_value!("constructor"),
         None,

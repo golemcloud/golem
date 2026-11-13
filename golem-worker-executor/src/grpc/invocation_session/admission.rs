@@ -16,7 +16,7 @@ use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
     HasComponentService, IdempotencyKey, InvocationFreshnessDisposition, InvocationStart,
-    InvocationStatus, ParsedAgentId, Pin, Principal, SchemaValue, ScopeCard, UsesAllDeps, Utc,
+    InvocationStatus, ParsedAgentKey, Pin, Principal, SchemaValue, ScopeCard, UsesAllDeps, Utc,
     Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
     extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
 };
@@ -344,9 +344,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                 let parsed_agent_id = match &existing_metadata {
                     Some(metadata) => metadata.parse_agent_id(&component.metadata),
-                    None => {
-                        ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                    }
+                    None => ParsedAgentKey::parse(
+                        &owned_agent_id.agent_id.agent_id,
+                        &component.metadata,
+                    ),
                 }
                 .map_err(WorkerExecutorError::invalid_request)?;
                 let streaming = validate_agent_method_invocation(

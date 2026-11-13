@@ -128,7 +128,7 @@ fn schema_u64_list(result: SchemaValue) -> Vec<u64> {
 async fn assert_reconstructed_writable_file(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<()> {
     let result = executor
         .invoke_and_await_agent(
@@ -1654,7 +1654,7 @@ async fn initial_file_p3_parity_impl(
 async fn filesystem_tree_apply(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
     operation: &str,
     path: &str,
     argument: &str,
@@ -1680,7 +1680,7 @@ async fn filesystem_tree_apply(
 async fn filesystem_tree_describe(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<Vec<String>> {
     use golem_common::data_value;
 
@@ -3959,7 +3959,7 @@ async fn wait_for_timer_owner_unload(
 async fn assert_short_p3_timer_wins_without_suspension(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &golem_common::model::AgentId,
     timers: Vec<u64>,
 ) -> anyhow::Result<()> {

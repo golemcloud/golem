@@ -31,7 +31,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deleting.handle.result().is_none()
                     || deleting.completed_stage >= WorkerDeletionStage::DurableStateRemoved
             }
-            WorkerInstance::StoppedForDeletion => true,
             _ => false,
         }
     }

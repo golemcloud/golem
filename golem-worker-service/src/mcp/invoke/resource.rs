@@ -20,7 +20,7 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::{AgentTarget, ParsedAgentId};
+use golem_common::model::agent::{AgentTarget, ParsedAgentKey};
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
@@ -74,7 +74,7 @@ pub async fn invoke_resource(
     );
 
     let parsed_agent_id =
-        ParsedAgentId::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
+        ParsedAgentKey::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
             |e| {
                 tracing::error!("Failed to parse agent id: {}", e);
                 ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
