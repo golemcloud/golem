@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -1164,7 +1164,7 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
 async fn initialize_entity(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
@@ -1199,7 +1199,7 @@ async fn initialize_entity(
 async fn invoke_sleep_p3(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     seconds: u64,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
@@ -1230,7 +1230,7 @@ async fn invoke_sleep_p3(
 async fn invoke_entity_method(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     method_name: &str,
     input: golem_common::schema::SchemaValue,

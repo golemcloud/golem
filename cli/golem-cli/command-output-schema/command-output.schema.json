@@ -5457,6 +5457,17 @@
             "reason": { "type": "string" }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "agentType", "path", "reason"],
+          "properties": {
+            "type": { "const": "IncompatibleConstructorChange" },
+            "agentType": { "type": "string" },
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -6623,6 +6634,10 @@
       "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "agentTypeChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
+        },
         "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
@@ -6634,6 +6649,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentType" }
+      ]
     },
     "AgentTypeProvisionConfigDiffMapValue": {
       "oneOf": [

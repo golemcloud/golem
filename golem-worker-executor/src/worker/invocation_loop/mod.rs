@@ -56,7 +56,7 @@ use async_lock::Mutex;
 use futures::FutureExt;
 use futures::channel::oneshot::{self, Sender};
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentKey};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::filesystem::{FileByteSelection, FileReadError};
 use golem_common::model::oplog::{

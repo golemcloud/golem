@@ -17,7 +17,7 @@ use super::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
     HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
     InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentId,
+    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
     PersistedInvocationTarget, PersistedStreamInvocationDescriptor, Principal,
     ProducerRegistrationRequest, ResumeAttach, ResumeAttemptDescriptor, ResumeOperation,
     SchemaGraph, SchemaType, SchemaValue, SchemaValueStream, SessionError, SessionStreamRole,
@@ -99,7 +99,7 @@ pub(crate) fn build_durable_streaming_request(
         AgentInvocation::AgentMethod {
             method_name, input, ..
         } => {
-            let parsed = ParsedAgentId::parse(&callee.agent_id, component_metadata)
+            let parsed = ParsedAgentKey::parse(&callee.agent_id, component_metadata)
                 .map_err(WorkerExecutorError::invalid_request)?;
             let agent_type = component_metadata
                 .find_agent_type_by_name_ref(&parsed.agent_type)

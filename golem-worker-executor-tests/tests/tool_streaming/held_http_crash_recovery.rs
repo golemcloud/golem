@@ -28,7 +28,7 @@
 use super::*;
 use anyhow::Context;
 use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_worker_executor_test_utils::{ReplayAdmissionGateHandle, ReplayAdmissionStage};
 use std::time::Instant;
@@ -316,7 +316,7 @@ fn external_tool_string(output: AgentInvocationResult) -> anyhow::Result<String>
 }
 
 impl Fixture {
-    async fn start_owner(&self, name: &str) -> anyhow::Result<(ParsedAgentId, AgentId)> {
+    async fn start_owner(&self, name: &str) -> anyhow::Result<(ParsedAgentKey, AgentId)> {
         let agent = agent_id!(self.owner_type, name.to_string());
         let worker_id = self
             .executor
@@ -375,7 +375,7 @@ impl Fixture {
     async fn trigger(
         &self,
         form: Form,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         worker_id: &AgentId,
         key: &IdempotencyKey,
         nap_ms: u32,
@@ -426,7 +426,7 @@ impl Fixture {
     async fn await_original(
         &self,
         form: Form,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         worker_id: &AgentId,
         key: &IdempotencyKey,
         nap_ms: u32,
@@ -456,7 +456,7 @@ impl Fixture {
     async fn follow_up(
         &self,
         form: Form,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         worker_id: &AgentId,
     ) -> anyhow::Result<String> {
         match form {

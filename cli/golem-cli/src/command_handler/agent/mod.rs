@@ -83,7 +83,7 @@ use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentKey};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -812,7 +812,7 @@ impl AgentCommandHandler {
         })?;
         let typed_parameters =
             typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             agent_type.agent_type.type_name.clone(),
             typed_parameters,
             phantom_id,
@@ -2746,10 +2746,10 @@ impl AgentCommandHandler {
 pub(crate) fn try_recanonicalize_agent_id_with_parsed(
     agent_id: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<ParsedAgentId>) {
+) -> (RawAgentId, Option<ParsedAgentKey>) {
     let raw = &agent_id.0;
 
-    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // Extract type name and params using ParsedAgentKey::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_id.clone(), None);
@@ -2825,7 +2825,7 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
+    let parsed = ParsedAgentKey::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2890,7 +2890,7 @@ impl AgentCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_id: String,
     ) -> anyhow::Result<AgentIdMatch> {
-        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+        let parsed_agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -3082,13 +3082,13 @@ impl AgentCommandHandler {
         component: &ComponentDto,
         agent_id: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentKey, AgentTypeSchema)>> {
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         if !component_metadata.is_agent() {
             return Ok(None);
         }
 
-        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component_metadata) {
+        match ParsedAgentKey::parse_and_resolve_type(&agent_id.0, &component_metadata) {
             Ok((agent_id, agent_type)) => {
                 validate_ordinary_agent_type(&agent_type)?;
                 match function_name {
@@ -3146,7 +3146,8 @@ impl AgentCommandHandler {
                 }
             }
             Err(err) => {
-                let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
+                let parsed_agent_type_name =
+                    ParsedAgentKey::parse_agent_type_name(&agent_id.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -3598,12 +3599,12 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
 /// derives an ephemeral agent's phantom ID from the owner key of the caller-scoped request key,
 /// so the CLI derives it the same way to stream that agent's output.
 fn invocation_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
     account_id: AccountId,
     idempotency_key: &IdempotencyKey,
     method_name: &str,
-) -> anyhow::Result<ParsedAgentId> {
+) -> anyhow::Result<ParsedAgentKey> {
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
         let owner_key = InvocationRequestKey::external(
             Some(IdempotencyScope::User(account_id)),
@@ -3619,10 +3620,10 @@ fn invocation_agent_id(
 }
 
 fn normalize_public_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
-) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<ParsedAgentKey> {
+    ParsedAgentKey::new_auto_phantom(
         agent_type.type_name.clone(),
         agent_id.parameters.clone(),
         agent_id.phantom_id,
@@ -3632,7 +3633,7 @@ fn normalize_public_agent_id(
 }
 
 fn validate_public_invocation_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
 ) -> anyhow::Result<()> {
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
@@ -3654,7 +3655,7 @@ mod tests {
     use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
@@ -3945,9 +3946,9 @@ mod tests {
     fn logical_agent_id(
         mode: AgentMode,
         phantom_id: Option<Uuid>,
-    ) -> (ParsedAgentId, AgentTypeSchema) {
+    ) -> (ParsedAgentKey, AgentTypeSchema) {
         let agent_type = test_agent_type_schema(mode);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             agent_type.type_name.clone(),
             empty_typed_parameters(),
             phantom_id,
@@ -4009,7 +4010,7 @@ mod tests {
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             None,
@@ -4023,7 +4024,7 @@ mod tests {
     #[test]
     fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             Some(Uuid::new_v4()),

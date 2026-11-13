@@ -21,7 +21,7 @@ use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::{
-    AgentTarget, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult};
@@ -242,7 +242,7 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
         unreachable!()
     };
     let key = golem_common::model::InvocationRequestKey::external(None, None);
-    let logical = ParsedAgentId::try_new(
+    let logical = ParsedAgentKey::try_new(
         router.agent_type.clone(),
         TypedSchemaValue::new(
             router.constructor_input.graph.clone(),

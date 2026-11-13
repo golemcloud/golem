@@ -39,7 +39,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
@@ -1006,7 +1006,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let retry_properties = RetryContext::golem_api("fork");
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                match ParsedAgentId::try_new(
+                match ParsedAgentKey::try_new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),

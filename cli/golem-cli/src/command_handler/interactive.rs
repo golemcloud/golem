@@ -341,7 +341,7 @@ impl InteractiveHandler {
         &self,
         component_name: &ComponentName,
         agent_id: &RawAgentId,
-        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
+        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentKey>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {

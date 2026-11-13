@@ -488,7 +488,7 @@ fn exhaustion_error(exhaustion: IntegrationExhaustion) -> &'static str {
     }
 }
 
-fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentId {
+fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentKey {
     let name = format!("policy-probe-{exhaustion:?}-{}", uuid::Uuid::new_v4());
     match exhaustion {
         IntegrationExhaustion::DurableStorage => agent_id!("Counter", name),
@@ -3928,7 +3928,7 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentKey,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
@@ -4290,7 +4290,7 @@ async fn get_metadata_from_worker(
 
     fn get_agent_id_schema_value(
         component_id: &ComponentId,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
     ) -> SchemaValue {
         SchemaValue::Record {
             fields: vec![
@@ -4304,8 +4304,8 @@ async fn get_metadata_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
-        other_agent_id: &golem_common::model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentKey,
+        other_agent_id: &golem_common::model::agent::ParsedAgentKey,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let agent_id_val1 = get_agent_id_schema_value(&component.id, caller_agent_id);
@@ -11568,7 +11568,7 @@ struct ParkedCaller {
     caller: JoinHandle<anyhow::Result<AgentResult>>,
     /// What it takes to reissue the parked call under its own idempotency key.
     component: ComponentDto,
-    parsed_agent_id: golem_common::model::agent::ParsedAgentId,
+    parsed_agent_id: golem_common::model::agent::ParsedAgentKey,
     idempotency_key: IdempotencyKey,
     promise_data: golem_common::schema::TypedSchemaValue,
 }
@@ -11957,7 +11957,7 @@ async fn measured_duplicate_reads(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     (agent_id, worker_id): (
-        &golem_common::model::agent::ParsedAgentId,
+        &golem_common::model::agent::ParsedAgentKey,
         &golem_common::model::AgentId,
     ),
     key: &IdempotencyKey,

@@ -18,7 +18,7 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
     ServerFrame, SessionTransportError, encode_generated_streamless_value,
 };
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicInvocationOutcome,
@@ -267,7 +267,7 @@ impl PublicInvocationSession {
         token: &TokenSecret,
         application: &str,
         environment: &str,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         method: &str,
         method_parameters: serde_json::Value,
         timeout: Duration,

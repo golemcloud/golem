@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -324,7 +324,7 @@ pub trait WorkerCtx:
     fn owned_agent_id(&self) -> &OwnedAgentId;
 
     /// Get the agent-id resolved from the worker name
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey>;
 
     /// Authoritative persisted execution-owner identity. Authorization and component-scoped
     /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.

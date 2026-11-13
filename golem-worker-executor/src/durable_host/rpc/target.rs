@@ -49,7 +49,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
@@ -88,7 +88,7 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentId,
+    logical_agent_id: ParsedAgentKey,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
@@ -113,7 +113,7 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     idempotency_key: &IdempotencyKey,
     method_name: &str,
 ) -> anyhow::Result<OwnedAgentId> {
@@ -142,7 +142,7 @@ pub(super) fn invocation_target_agent_id(
 pub(super) struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     method_name: String,
 }
 
@@ -150,7 +150,7 @@ impl RpcCallTarget {
     pub(super) fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
-        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
         method_name: &str,
     ) -> Self {
         Self {

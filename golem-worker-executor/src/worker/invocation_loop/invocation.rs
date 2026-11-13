@@ -624,7 +624,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &InvocationId,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<ParsedAgentId>,
+        parsed_agent_id: &Option<ParsedAgentKey>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
