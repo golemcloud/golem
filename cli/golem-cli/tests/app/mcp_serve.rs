@@ -19,6 +19,8 @@ use crate::{Tracing, workspace_path};
 use golem_cli::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
 use golem_cli::config::{AuthenticationConfig, Config, ProfileName};
 use golem_cli::{fs, versions};
+use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
+use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
 use indoc::formatdoc;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::RunningService;
@@ -695,4 +697,53 @@ async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
     assert!(!outputs.success());
     assert!(outputs.stderr_contains("The previous invocation failed"));
     assert!(outputs.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_keeps_its_environment_when_it_is_renamed() {
+    let ctx = counters_context(&["local"]).await;
+    let agent = r#"Counter("mcp-rename")"#;
+    invoke(&ctx, "local", agent).await;
+    let client = mcp_client(&ctx, &["-E", &format!("{APP}/local")]).await;
+    let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
+    let environment_id = structured(&get)["metadata"]["environmentId"]
+        .as_str()
+        .unwrap()
+        .parse::<uuid::Uuid>()
+        .unwrap();
+
+    let registry = RegistryServiceClientLive {
+        context: golem_client::Context {
+            client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
+            base_url: url::Url::parse(&format!("http://localhost:{}", ctx.router_port())).unwrap(),
+            security_token: golem_client::Security::Bearer(
+                golem_client::LOCAL_WELL_KNOWN_TOKEN.to_string(),
+            ),
+        },
+    };
+    let environment = registry.get_environment(&environment_id).await.unwrap();
+    registry
+        .update_environment(
+            &environment_id,
+            &EnvironmentUpdate {
+                current_revision: environment.revision,
+                name: Some(EnvironmentName("renamed".to_string())),
+                compatibility_check: None,
+                tool_compatibility_mode: None,
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // The server works in the environment with the pinned ID, under its new name.
+    structured(&call(&client, "agent_get", json!({"agent_id": agent})).await);
+    let renamed = format!("{APP}/renamed/{agent}");
+    structured(&call(&client, "agent_get", json!({"agent_id": renamed})).await);
+    let old_name = format!("{APP}/local/{agent}");
+    let refused = call(&client, "agent_get", json!({"agent_id": old_name})).await;
+    assert_eq!(error_code(&refused), "outside-environment", "{refused:?}");
+    client.cancel().await.unwrap();
 }
