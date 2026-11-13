@@ -6,19 +6,17 @@ use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_test_framework::components::worker_service::spawned::SpawnedWorkerService;
+use golem_test_framework::components::worker_service::restartable::RestartableWorkerService;
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, WorkerExecutorClusterControl,
     WorkerExecutorClusterControlStub,
 };
 use golem_test_framework::dsl::TestDsl;
 use reqwest::{Body, Method, Response, StatusCode};
-use std::path::PathBuf;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::Level;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(WorkerExecutorClusterControlStub);
@@ -134,74 +132,22 @@ async fn lifecycle_executor_loss_after_head(
     Ok(())
 }
 
-async fn free_ports() -> anyhow::Result<[u16; 4]> {
-    loop {
-        let http = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let grpc = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let custom = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let custom_port = custom.local_addr()?.port();
-        let Some(mcp_port) = custom_port.checked_add(2) else {
-            continue;
-        };
-        let Ok(mcp) = tokio::net::TcpListener::bind(("127.0.0.1", mcp_port)).await else {
-            continue;
-        };
-        let ports = [
-            http.local_addr()?.port(),
-            grpc.local_addr()?.port(),
-            custom_port,
-            mcp.local_addr()?.port(),
-        ];
-        drop((http, grpc, custom, mcp));
-        return Ok(ports);
-    }
-}
-
-fn worker_service_binary() -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"))
-        .join("debug/golem-worker-service")
-}
-
-async fn spawn_worker_service(
-    deps: &EnvBasedTestDependencies,
-    ports: [u16; 4],
-) -> SpawnedWorkerService {
-    SpawnedWorkerService::new(
-        &worker_service_binary(),
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../golem-worker-service"),
-        ports[0],
-        ports[1],
-        ports[2],
-        ports[3],
-        &deps.shard_manager(),
-        &deps.rdb(),
-        &deps.redis(),
-        Level::DEBUG,
-        Level::INFO,
-        Level::ERROR,
-        &deps.registry_service(),
-        true,
-        false,
-    )
-    .await
-}
-
 #[test]
 #[timeout("3m")]
 async fn lifecycle_serving_process_loss(context: &RawHttpProcessLossContext) -> anyhow::Result<()> {
     let deps = &context.http.user.deps;
-    let ports = free_ports().await?;
-    let service = spawn_worker_service(deps, ports).await;
-    let base_url = reqwest::Url::parse(&format!("http://127.0.0.1:{}", ports[2]))?;
+    let service = RestartableWorkerService::start(deps).await?;
+    let base_url = reqwest::Url::parse(&format!(
+        "http://127.0.0.1:{}",
+        service.custom_request_port()
+    ))?;
     let (_request_body, mut response) = open_streaming_echo(context, base_url).await?;
     let before = agent_count(context).await?;
     anyhow::ensure!(before > 0, "active ephemeral was absent from enumeration");
 
     service.kill().await;
     let terminal = tokio::time::timeout(Duration::from_secs(10), response.chunk()).await;
-    let replacement = spawn_worker_service(deps, ports).await;
+    service.restart().await;
 
     let terminal = terminal
         .map_err(|_| anyhow::anyhow!("response did not abort after serving process loss"))?;
@@ -213,6 +159,5 @@ async fn lifecycle_serving_process_loss(context: &RawHttpProcessLossContext) -> 
         agent_count(context).await? == before,
         "request was dispatched to a replacement agent"
     );
-    drop(replacement);
     Ok(())
 }

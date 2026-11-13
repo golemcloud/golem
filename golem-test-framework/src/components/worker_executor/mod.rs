@@ -49,6 +49,12 @@ pub trait WorkerExecutor: Send + Sync {
         anyhow::bail!("storage mutation requires a reaped spawned executor")
     }
 
+    /// The process ID of the running executor process, or `None` when it is not running or the
+    /// executor is not a spawned process.
+    fn pid(&self) -> Option<u32> {
+        None
+    }
+
     /// URL and generation of the spawned process, for reset-aware metrics.
     fn metrics_endpoint(&self) -> Option<(String, u64)> {
         None
