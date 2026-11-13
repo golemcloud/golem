@@ -157,8 +157,8 @@ impl Display for LoginRequired {
             f,
             "The {} has no valid login token, and this process cannot log in with a browser. \
              Log in with a `golem` command that contacts the server, such as \
-             `golem environment list`, in a terminal with the same profile or environment, \
-             then start this process again",
+             `golem environment list`, in a terminal with the same profile or environment; \
+             the next call uses the new token",
             self.login
         )
     }
