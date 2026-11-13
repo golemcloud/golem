@@ -43,12 +43,12 @@ The current pipeline uses:
 
 - Rust stable with `wasm32-wasip2`
 - Preview 3 (`wasm-rquickjs --target wasi-p3`)
-- `wasm-rquickjs-cli` at revision `2435322cf3039eb5e86a80720d32ce8a4f5e26dc`, matching `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`
+- `wasm-rquickjs-cli` **0.5.2**, matching `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`
 - ordinary `cargo build --target wasm32-wasip2 --release` on generated wrapper crates; it does not use `cargo-component`
 
 ```bash
 rustup target add wasm32-wasip2
-cargo install --locked --git https://github.com/golemcloud/wasm-rquickjs --rev 2435322cf3039eb5e86a80720d32ce8a4f5e26dc wasm-rquickjs-cli
+cargo install --locked wasm-rquickjs-cli@0.5.2
 
 # Repository root
 cargo make wit
