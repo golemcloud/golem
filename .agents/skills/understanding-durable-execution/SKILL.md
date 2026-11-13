@@ -2849,7 +2849,15 @@ update then fails as a failed update, and the agent stays on its revision: chang
 `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
 agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
 the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+(`invocation_loop/snapshots.rs::snapshot_baseline_timestamp`). A periodic snapshot is needed only
+when an invocation that can change the state, not a `read_only` method, finished after the
+automatic record that a start would select (`invocation_loop/snapshots.rs::state_changed_since_snapshot`,
+`snapshot_selection::periodic_snapshot_holding_state`), so an idle agent writes no record. A record
+whose upload failed or that a start rejected does not count, so the next period takes the snapshot
+again. The
+Store records the index of that `AgentInvocationFinished` entry for replayed and live invocations
+alike (`DurableWorkerCtx::last_state_change`), so a change replayed after a restart still takes its
+pending snapshot. A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
