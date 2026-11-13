@@ -61,9 +61,6 @@ use tokio::sync::{mpsc, oneshot};
 /// The tool argument that confirms a destructive command, as `--yes` does on the CLI.
 pub const CONFIRM_ARGUMENT: &str = "confirm";
 
-/// Arguments whose value `-` binds the server's stdin, which carries JSON-RPC.
-const STDIN_MARKER_ARGUMENTS: &[(&[&str], &str)] = &[(&["agent", "invoke"], "arguments")];
-
 /// What the tool returns as `structuredContent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultShape {
@@ -454,10 +451,8 @@ fn argument_values(
             (ValueType::String | ValueType::OneOf(_), Value::String(text)) => text.clone(),
             _ => return Err(wrong_type()),
         };
-        let binds_stdin = STDIN_MARKER_ARGUMENTS
-            .iter()
-            .any(|(path, id)| *path == tool.row.path && *id == argument.id);
-        if binds_stdin && text == "-" {
+        // The value `-` of these arguments reads the process's stdin, which carries JSON-RPC.
+        if text == "-" && tool.row.stdin_marker_args.contains(&argument.id.as_str()) {
             return Err(format!(
                 "`{}` does not take `-`, which binds stdin on the CLI",
                 argument.id
@@ -743,7 +738,7 @@ fn failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{CONFIRM_ARGUMENT, ManagementTool, management_tools, tool_call_argv};
+    use super::{ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, management_tools, tool_call_argv};
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::model::format::Format;
     use serde_json::{Value, json};
@@ -850,6 +845,29 @@ mod tests {
                 "{arguments}"
             );
         }
+    }
+
+    #[test]
+    fn the_stdin_marker_value_is_refused_for_every_listed_argument() {
+        let mut checked = 0;
+        for tool in management_tools().unwrap() {
+            for argument in tool
+                .arguments
+                .iter()
+                .filter(|argument| tool.row.stdin_marker_args.contains(&argument.id.as_str()))
+            {
+                let value = match argument.kind {
+                    ArgumentKind::Values => json!(["x", "-"]),
+                    _ => json!("-"),
+                };
+                let arguments = json!({ argument.id.clone(): value });
+                let refused = tool_call_argv(&tool, arguments.as_object().unwrap())
+                    .expect_err(&format!("{} {}", tool.name(), argument.id));
+                assert!(refused.contains("binds stdin"), "{refused}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
     }
 
     #[test]
