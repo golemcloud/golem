@@ -771,9 +771,61 @@ fn create_serialization_poem_serde_equivalence() {
 
 #[test]
 fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
-    use super::{CreateParameters, OplogEnrichmentEntry};
-    use crate::model::agent::{AgentMode, AgentTypeName, OwnerKind};
+    use super::{CreateParameters, CreateRequest, CreateRequestKind, OplogEnrichmentEntry};
+    use crate::model::agent::{AgentMode, AgentPrincipal, AgentTypeName, OwnerKind};
     use crate::model::environment::EnvironmentId;
+    use crate::model::invocation_context::{
+        AttributeValue, InvocationContextSpan, InvocationContextStack,
+    };
+
+    let mut creator_context = InvocationContextStack::new(
+        TraceId::generate(),
+        InvocationContextSpan::external_parent(SpanId::generate()),
+        vec!["vendor=creator".to_string()],
+    );
+    creator_context.push(
+        InvocationContextSpan::local()
+            .rounded()
+            .parent(Some(creator_context.spans.first().clone()))
+            .with_attributes(HashMap::from([(
+                "request".to_string(),
+                AttributeValue::String("create".to_string()),
+            )]))
+            .build(),
+    );
+    let creator = Principal::Agent(AgentPrincipal {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Creator(1)".to_string(),
+        },
+    });
+    let mut requests = [
+        CreateRequestKind::GetOrCreate,
+        CreateRequestKind::Exclusive,
+        CreateRequestKind::Phantom,
+        CreateRequestKind::Fork,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, kind)| {
+        CreateRequest::new(
+            kind,
+            (index % 2 == 0).then(|| IdempotencyKey::new(format!("create-{index}"))),
+            creator.clone(),
+            &creator_context,
+        )
+    })
+    .cycle();
+    let recorded = requests.next().unwrap();
+    assert_eq!(recorded.invocation_context().to_oplog_data().len(), 2);
+    assert_eq!(
+        recorded.invocation_context().to_oplog_data(),
+        creator_context.to_oplog_data()
+    );
+    assert_eq!(
+        recorded.invocation_context().trace_id,
+        creator_context.trace_id
+    );
 
     for agent_type_name in [None, Some(AgentTypeName("StoredType".to_string()))] {
         for canonical_key in [None, Some("StructuralType(\"parameter\")".to_string())] {
@@ -801,6 +853,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     local_agent_config: vec![],
                     original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
+                    create_request: requests.next().unwrap(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -1467,6 +1520,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
 fn pending_agent_invocation_with_initialization_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: None,
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             constructor_parameters: typed(
@@ -1496,6 +1550,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: Some(Timestamp::from(123_456)),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
@@ -1707,6 +1762,47 @@ fn resumed_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pending_invocation_deadline_raw_and_public_roundtrips() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            payload: OplogPayload::SerializedInline {
+                bytes: crate::serialization::serialize(
+                    &crate::model::AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        assert!(raw.is_hint());
+        let bytes = crate::serialization::serialize(&raw).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(raw, decoded);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        let decoded: OplogEntry = proto.try_into().unwrap();
+        assert_eq!(raw, decoded);
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            not_before,
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        });
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        let decoded: PublicOplogEntry = proto.try_into().unwrap();
+        assert_eq!(public, decoded);
+        let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
+        assert_eq!(public, decoded);
+    }
 }
 
 #[test]

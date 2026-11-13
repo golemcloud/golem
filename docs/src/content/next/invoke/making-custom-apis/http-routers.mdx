@@ -694,13 +694,16 @@ Add `FileOwner: {}` beside the routers in the deployment's `agents` map, then:
 ```shell
 golem deploy -L -Y
 curl http://localhost:9006/files/alice/value
+golem agent new -L 'FileOwner("alice")'
+curl http://localhost:9006/files/alice/value
 golem agent invoke -L 'FileOwner("alice")' update
 curl http://localhost:9006/files/alice/value
 ```
 
-The first read returns `initial:alice`; the second returns `updated`. Reads use
-`Cache-Control: no-store` with no ETag. No exported method is called to serve the
-file, but the first read can initialize the agent. A slow download can delay other
+The first read returns 404, because a file read never creates the agent. After
+`golem agent new`, the read returns `initial:alice`; after `update`, it returns
+`updated`. Reads use `Cache-Control: no-store` with no ETag. No exported method is
+called to serve the file. A slow download can delay other
 work on that agent; see [live-file lifecycle](/next/invoke/making-custom-apis/http-routers/semantics#live-durable-agent-files).
 
 ### Calling an agent from a router

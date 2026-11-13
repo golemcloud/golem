@@ -1711,6 +1711,114 @@ async fn dropping_an_unstarted_call_cancels_it_without_sandbox_work() {
 }
 
 #[test]
+fn a_transition_token_only_reopens_its_own_registry() {
+    let first = Arc::new(GenerationRegistry::new());
+    let second = Arc::new(GenerationRegistry::new());
+    let first_transition = first.begin_transition().unwrap();
+    let second_transition = second.begin_transition().unwrap();
+
+    first_transition.finish();
+    drop(first.lease_call(CallEffect::Read).unwrap());
+    assert!(matches!(
+        second.lease_call(CallEffect::Read),
+        Err(AccessError::Transitioning)
+    ));
+    second.seal();
+    second_transition.finish();
+    assert!(matches!(
+        second.lease_call(CallEffect::Read),
+        Err(AccessError::Revoked)
+    ));
+}
+
+#[test]
+fn dropping_a_transition_token_does_not_reopen_admission() {
+    let registry = Arc::new(GenerationRegistry::new());
+    let transition = registry.begin_transition().unwrap();
+    drop(transition);
+
+    assert!(matches!(
+        registry.lease_call(CallEffect::Read),
+        Err(AccessError::Transitioning)
+    ));
+    assert!(matches!(
+        registry.begin_transition(),
+        Err(AccessError::Transitioning)
+    ));
+    registry.seal();
+    assert!(matches!(
+        registry.lease_call(CallEffect::Read),
+        Err(AccessError::Revoked)
+    ));
+}
+
+#[test]
+#[timeout("5s")]
+async fn replay_drain_revokes_new_calls_and_waits_for_admitted_calls() {
+    let registry = Arc::new(GenerationRegistry::new());
+    registry.enable_replay_access();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
+    assert!(registry.replay_access_allowed());
+    let transition = registry.begin_replay_drain().unwrap();
+    assert!(!registry.replay_access_allowed());
+    assert!(matches!(
+        registry.lease_call(CallEffect::Changes),
+        Err(AccessError::Transitioning)
+    ));
+    assert_eq!(registry.counters().1.changes, 0);
+
+    let drain = registry.wait_for_calls();
+    tokio::pin!(drain);
+    assert!(drain.as_mut().now_or_never().is_none());
+    drop(lease);
+    drain.await;
+    transition.finish();
+    assert!(!registry.replay_access_allowed());
+    drop(registry.lease_call(CallEffect::Read).unwrap());
+}
+
+#[test]
+#[timeout("5s")]
+async fn invalidated_admission_retains_call_and_node_leases_until_cleanup_finishes() {
+    let registry = Arc::new(GenerationRegistry::new());
+    registry.enable_replay_access();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
+    let (node, return_to_caller) = registry.register_node();
+    assert!(return_to_caller);
+    let transition = registry.begin_transition().unwrap();
+    let invalidated = registry.wait_for_invalidation();
+    tokio::pin!(invalidated);
+    assert!(invalidated.as_mut().now_or_never().is_none());
+    registry.invalidate();
+    invalidated.await;
+    registry.seal();
+    transition.finish();
+    registry.enable_replay_access();
+    assert!(registry.is_invalidated());
+    assert!(!registry.replay_access_allowed());
+    assert!(matches!(
+        registry.lease_call(CallEffect::Changes),
+        Err(AccessError::Revoked)
+    ));
+    assert_eq!(registry.counters().1.changes, 0);
+
+    let drain = registry.wait_for_drain();
+    tokio::pin!(drain);
+    assert!(drain.as_mut().now_or_never().is_none());
+    drop(lease);
+    assert!(drain.as_mut().now_or_never().is_none());
+    let close = registry.lease_internal_call();
+    drop(node);
+    assert!(drain.as_mut().now_or_never().is_none());
+    let (late_node, return_to_caller) = registry.register_node();
+    assert!(!return_to_caller);
+    drop(late_node);
+    drop(close);
+    drain.await;
+    assert!(registry.is_invalidated());
+}
+
+#[test]
 async fn first_call_poll_runs_the_exact_operation_in_the_caller_task() {
     let registry = Arc::new(GenerationRegistry::new());
     let lease = registry.lease_call(CallEffect::Read).unwrap();

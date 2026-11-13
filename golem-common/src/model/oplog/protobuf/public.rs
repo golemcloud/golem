@@ -269,6 +269,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                    not_before: pending_worker_invocation.not_before.map(Into::into),
                     timestamp: pending_worker_invocation
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -960,6 +961,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
                         golem_api_grpc::proto::golem::worker::PendingAgentInvocationParameters {
+                            not_before: pending_worker_invocation.not_before.map(Into::into),
                             timestamp: Some(pending_worker_invocation.timestamp.into()),
                             invocation: Some(pending_worker_invocation.invocation.try_into()?),
                         },

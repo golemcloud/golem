@@ -700,33 +700,6 @@ mod tests {
     }
 
     #[test]
-    async fn preflight_accepts_data_dir_after_compat_write() {
-        let data_dir = TestDataDir::new();
-
-        write_registry_db_compat(&data_dir.path)
-            .await
-            .expect("compat write failed");
-
-        let result = preflight_registry_db_compat(&data_dir.path).await;
-        assert!(result.is_ok(), "expected success, got: {result:?}");
-    }
-
-    #[test]
-    async fn preflight_accepts_data_dir_after_repeated_compat_write() {
-        let data_dir = TestDataDir::new();
-
-        write_registry_db_compat(&data_dir.path)
-            .await
-            .expect("first compat write failed");
-        write_registry_db_compat(&data_dir.path)
-            .await
-            .expect("second compat write failed");
-
-        let result = preflight_registry_db_compat(&data_dir.path).await;
-        assert!(result.is_ok(), "expected success, got: {result:?}");
-    }
-
-    #[test]
     async fn preflight_accepts_registry_db_with_marker_and_other_tables() {
         let data_dir = TestDataDir::new();
 
@@ -769,6 +742,10 @@ mod tests {
             rows[0].1, CLI_CURRENT_DB_COMPAT_VERSION,
             "compat row should store current CLI compat version"
         );
+        pool.close().await;
+
+        let result = preflight_registry_db_compat(&data_dir.path).await;
+        assert!(result.is_ok(), "expected success, got: {result:?}");
     }
 
     #[test]

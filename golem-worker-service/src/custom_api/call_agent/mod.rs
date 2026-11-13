@@ -31,7 +31,7 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
-    AgentMode, AgentTarget, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig,
+    AgentMode, AgentTarget, OidcPrincipal, ParsedAgentKey, Principal, ReadOnlyConfig,
 };
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
@@ -301,7 +301,7 @@ impl CallAgentHandler {
             SchemaValue::Record { fields },
         );
 
-        let agent_id = ParsedAgentId::try_new(agent_type.clone(), parameters, phantom_id)
+        let agent_id = ParsedAgentKey::try_new(agent_type.clone(), parameters, phantom_id)
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {

@@ -5453,6 +5453,17 @@
             "reason": { "type": "string" }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "agentType", "path", "reason"],
+          "properties": {
+            "type": { "const": "IncompatibleConstructorChange" },
+            "agentType": { "type": "string" },
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -5934,7 +5945,7 @@
     "PublicOplogEntryPendingAgentInvocation": {
       "type": "object",
       "required": ["type", "timestamp", "invocation"],
-      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" } },
+      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" }, "notBefore": { "type": ["string", "null"] } },
       "additionalProperties": false
     },
     "PublicOplogEntryPendingUpdate": {
@@ -6624,6 +6635,10 @@
       "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "agentTypeChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
+        },
         "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
@@ -6635,6 +6650,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentType" }
+      ]
     },
     "AgentTypeProvisionConfigDiffMapValue": {
       "oneOf": [
@@ -7172,9 +7194,13 @@
         }
       ]
     },
+    "HttpRouteMode": {
+      "type": "string",
+      "enum": ["durableStreams", "plain", "sse", "webSocket"]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "mode", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
@@ -7182,18 +7208,16 @@
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "mode": { "oneOf": [{ "$ref": "#/definitions/HttpRouteMode" }, { "type": "null" }] },
         "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "DurableStreamRouteOptions": {
       "type": "object",
-      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "required": ["slots", "load"],
       "properties": {
         "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
-        "allowExternalWrites": { "type": ["boolean", "null"] },
-        "allowStreamDelete": { "type": ["boolean", "null"] },
-        "allowInvocationDelete": { "type": ["boolean", "null"] },
         "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false

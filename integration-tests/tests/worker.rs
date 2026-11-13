@@ -416,7 +416,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let workers_count = 150;
     let mut agent_ids = HashSet::new();
-    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for i in 0..workers_count {
         let aid = agent_id!("Repository", format!("gw{i}"));
@@ -652,7 +652,7 @@ async fn get_running_workers(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let workers_count = 15;
-    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
@@ -1256,6 +1256,113 @@ async fn stale_scheduled_invocation_dropped_after_worker_recreation(
         "Stale scheduled invocation was unexpectedly delivered to the recreated worker"
     );
 
+    Ok(())
+}
+
+/// A schedule on an agent owned by another executor is committed in the target's own oplog
+/// before the scheduling call returns, and runs once at its deadline.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn cross_executor_schedule_commits_in_the_target_oplog(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let (client_parsed, server_name) = (0..10_000)
+        .find_map(|index| {
+            let client = agent_id!("ScheduledInvocationClient", format!("cross-client-{index}"));
+            let server_name = format!("cross-server-{index}");
+            let server = agent_id!("ScheduledInvocationServer", server_name.clone());
+            let client_pod =
+                routing_table.lookup(&AgentId::from_agent_id(component.id, &client).ok()?)?;
+            let server_pod =
+                routing_table.lookup(&AgentId::from_agent_id(component.id, &server).ok()?)?;
+            (client_pod != server_pod).then_some((client, server_name))
+        })
+        .ok_or_else(|| anyhow!("no client and server agent IDs on different executors"))?;
+    let server_parsed = agent_id!("ScheduledInvocationServer", server_name.clone());
+    let server = user
+        .start_agent(&component.id, server_parsed.clone())
+        .await?;
+    user.start_agent(&component.id, client_parsed.clone())
+        .await?;
+
+    let due = chrono::Utc::now() + chrono::Duration::seconds(5);
+    user.invoke_and_await_agent(
+        &component,
+        &client_parsed,
+        "schedule_at",
+        data_value!(
+            server_name.clone(),
+            due.timestamp() as u64,
+            due.timestamp_subsec_nanos()
+        ),
+    )
+    .await?;
+    let scheduled_key = |oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
+                match &pending.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method) => {
+                        Some(method.idempotency_key.clone())
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    };
+    let key = scheduled_key(&user.get_oplog(&server, OplogIndex::INITIAL).await?)
+        .ok_or_else(|| anyhow!("the schedule must be committed in the target oplog"))?;
+    assert!(
+        chrono::Utc::now() < due,
+        "the commit must be observed before the deadline"
+    );
+
+    let counter = || async {
+        user.invoke_and_await_agent(
+            &component,
+            &server_parsed,
+            "get_global_value",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()
+    };
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while counter().await? < 17 {
+            sleep(Duration::from_millis(200)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("the scheduled invocation never ran"))??;
+    sleep(Duration::from_secs(2)).await;
+    assert_eq!(counter().await?, 17);
+    let starts = user
+        .get_oplog(&server, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                    invocation: PublicAgentInvocation::AgentMethodInvocation(method),
+                    ..
+                }) if method.idempotency_key == key)
+        })
+        .count();
+    assert_eq!(starts, 1);
     Ok(())
 }
 

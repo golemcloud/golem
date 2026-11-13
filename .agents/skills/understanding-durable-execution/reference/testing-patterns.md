@@ -667,7 +667,7 @@ Neither silence nor a later result proves a particular proposal's acceptance boo
 or private window identity. Colocated tests exercise exact acceptance results and
 literal target identity through the existing production guard.
 `matches_running_owner` matches the outer `WorkerInstance::Running` before loading generation or held-permit
-atomics or locking the current target. It never unwraps `deletion_runtime`. The actual path keeps
+atomics or locking the current target. It never reads the runtime that a deletion retains. The actual path keeps
 cached-owner lookup before the instance mutex, then retains that guard through the predicate, active
 recheck, interrupt try-lock, capacity sample, queue and dispatch. Existing short-circuiting stays lazy.
 

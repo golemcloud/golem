@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_client::model::ComponentDto;
 use golem_common::base_model::durable_stream::AttachmentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -256,7 +256,7 @@ fn cross_executor_caller(
     caller_type: &str,
     target_type: &str,
     name_prefix: &str,
-) -> anyhow::Result<(String, ParsedAgentId)> {
+) -> anyhow::Result<(String, ParsedAgentKey)> {
     for index in 0..10_000 {
         let name = format!("{name_prefix}-{index}");
         let mut caller_id = agent_id!(caller_type, name.clone());
@@ -335,7 +335,7 @@ fn cross_executor_caller_separates_colliding_type_prefixes() {
 async fn invoke_agent_session(
     deps: &EnvBasedTestDependencies,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<Result<SchemaValue, InvocationFailure>> {
@@ -447,7 +447,7 @@ impl TrustedInvocationSession {
     async fn start(
         deps: &EnvBasedTestDependencies,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         method_name: &str,
         input: ProtoSchemaValue,
     ) -> anyhow::Result<Self> {
@@ -457,7 +457,7 @@ impl TrustedInvocationSession {
     async fn start_with(
         deps: &EnvBasedTestDependencies,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         method_name: &str,
         input: ProtoSchemaValue,
         ephemeral: bool,
@@ -2074,7 +2074,7 @@ async fn binary_transform_large_chunks(deps: &EnvBasedTestDependencies) -> anyho
 async fn assert_moonbit_target_ping(
     deps: &EnvBasedTestDependencies,
     component: &ComponentDto,
-    target_agent_id: &ParsedAgentId,
+    target_agent_id: &ParsedAgentKey,
     name: &str,
 ) -> anyhow::Result<()> {
     let ping = TrustedInvocationSession::start(

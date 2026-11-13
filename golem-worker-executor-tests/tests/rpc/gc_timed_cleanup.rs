@@ -94,9 +94,9 @@ fn triangular(n: u64) -> u64 {
 struct Caller {
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    id: ParsedAgentId,
+    id: ParsedAgentKey,
     agent: AgentId,
-    target: ParsedAgentId,
+    target: ParsedAgentKey,
 }
 
 impl Caller {
@@ -199,7 +199,7 @@ impl Caller {
         self.invoke("inspect", data_value!()).await?.into_typed()
     }
 
-    async fn target_count(&self, target: &ParsedAgentId) -> anyhow::Result<u64> {
+    async fn target_count(&self, target: &ParsedAgentKey) -> anyhow::Result<u64> {
         self.executor
             .invoke_and_await_agent(&self.component, target, "get", data_value!())
             .await?

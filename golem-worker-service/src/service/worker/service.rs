@@ -48,11 +48,11 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
-    InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
     ephemeral_invocation_phantom_id,
 };
 use golem_common::model::agent::{
-    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -77,7 +77,9 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
-use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, ScanCursor,
+};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::public_json::{
@@ -104,7 +106,7 @@ fn build_public_agent_id(
     phantom_id: Option<uuid::Uuid>,
     agent_mode: AgentMode,
 ) -> WorkerResult<AgentId> {
-    let agent_id = ParsedAgentId::new_auto_phantom(
+    let agent_id = ParsedAgentKey::new_auto_phantom(
         agent_type_name,
         constructor_parameters,
         phantom_id,
@@ -124,7 +126,7 @@ fn build_public_invocation_agent_id(
     constructor_parameters: TypedSchemaValue,
     phantom_id: Option<uuid::Uuid>,
 ) -> WorkerResult<AgentId> {
-    let agent_id = ParsedAgentId::try_new(agent_type_name, constructor_parameters, phantom_id)
+    let agent_id = ParsedAgentKey::try_new(agent_type_name, constructor_parameters, phantom_id)
         .map_err(|err| {
             WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
         })?;
@@ -244,7 +246,7 @@ fn validate_one_shot_invocation_is_stream_free(
     method_name: &str,
     input: &SchemaValue,
 ) -> WorkerResult<()> {
-    let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+    let parsed_agent_id = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
     let agent_type = component
         .metadata
@@ -295,7 +297,7 @@ fn invocation_method_uses_streams(
     agent_id: &AgentId,
     method_name: &str,
 ) -> WorkerResult<bool> {
-    let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+    let parsed_agent_id = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
     let agent_type = component
         .metadata
@@ -467,7 +469,7 @@ fn normalize_agent_invocation_identity(
     let key_was_supplied = idempotency_key.is_some();
     let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
 
-    let Ok(parsed_agent_id) = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata) else {
+    let Ok(parsed_agent_id) = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata) else {
         return Ok((agent_id.clone(), idempotency_key, freshness_disposition));
     };
     let Some(agent_type) = component
@@ -510,7 +512,7 @@ fn normalize_agent_invocation_identity(
     }
 
     let parsed_agent_id =
-        ParsedAgentId::try_new(parsed_agent_id.agent_type, parsed_agent_id.parameters, None)
+        ParsedAgentKey::try_new(parsed_agent_id.agent_type, parsed_agent_id.parameters, None)
             .and_then(|logical_agent_id| {
                 logical_agent_id.with_ephemeral_invocation_phantom(&idempotency_key)
             })
@@ -1440,7 +1442,7 @@ impl WorkerService {
             .component_service
             .get_revision(agent_id.component_id, metadata.component_revision)
             .await?;
-        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id)
+        let agent_type = ParsedAgentKey::parse_agent_type_name(&agent_id.agent_id)
             .map_err(|err| WorkerServiceError::TypeChecker(err.to_string()))?;
 
         component_revision
@@ -1530,11 +1532,14 @@ impl WorkerService {
         Ok(())
     }
 
+    /// `principal` is the forking caller the target records; `None` records the account of
+    /// `auth_ctx`.
     pub async fn fork_worker(
         &self,
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
+        principal: Option<Principal>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let component = self
@@ -1550,6 +1555,11 @@ impl WorkerService {
             AgentResourcePattern::Empty,
         )?;
 
+        let principal = principal.unwrap_or_else(|| {
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth_ctx.account_id(),
+            })
+        });
         self.worker_client
             .fork_worker(
                 source_agent_id,
@@ -1558,6 +1568,7 @@ impl WorkerService {
                 component.environment_id,
                 component.account_id,
                 component.account_email,
+                principal,
                 auth_ctx,
             )
             .await?;
@@ -1672,10 +1683,43 @@ impl WorkerService {
                 idempotency_key,
                 component.environment_id,
                 auth_ctx,
+                None,
             )
             .await?;
 
         Ok(canceled)
+    }
+
+    /// Internal token control uses the recorded scheduling principal, not operator permission.
+    pub async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: &IdempotencyKey,
+        receipt: ScheduleId,
+        owner: &AgentId,
+        auth: AuthCtx,
+    ) -> WorkerResult<bool> {
+        if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(WorkerExecutorError::invalid_request(
+                "schedule cancellation requires an authenticated internal caller",
+            )
+            .into());
+        }
+        self.worker_client
+            .cancel_invocation(
+                &target.agent_id(),
+                key,
+                target.environment_id,
+                auth,
+                Some(
+                    golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
+                        owner_agent_id: Some(owner.clone().into()),
+                        schedule_id: Some(receipt.id.into()),
+                        target_environment_id: Some(target.environment_id.into()),
+                    },
+                ),
+            )
+            .await
     }
 
     pub async fn process_oplog_entries(
@@ -3309,7 +3353,7 @@ impl WorkerService {
                 .component_service
                 .get_revision(component_id, metadata.component_revision)
                 .await?;
-            let parsed = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+            let parsed = ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata)
                 .map_err(WorkerServiceError::TypeChecker)?;
             (
                 component,
@@ -3666,7 +3710,7 @@ mod tests {
     };
     use golem_common::model::agent::{
         AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
-        InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal, RegisteredAgentType,
+        InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
         ephemeral_invocation_phantom_id,
     };
@@ -3815,7 +3859,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
                 .unwrap()
                 .phantom_id
                 .is_some()
@@ -3834,7 +3878,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
                 .unwrap()
                 .phantom_id
                 .is_none()
@@ -3854,7 +3898,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Ephemeral))
                 .unwrap()
                 .phantom_id,
             Some(phantom)
@@ -3874,7 +3918,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            ParsedAgentId::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
+            ParsedAgentKey::parse(&id.agent_id, TestAgentTypeResolver(AgentMode::Durable))
                 .unwrap()
                 .phantom_id,
             Some(phantom)
@@ -4712,6 +4756,7 @@ mod tests {
             _: EnvironmentId,
             _: AccountId,
             _: AccountEmail,
+            _: Principal,
             _: AuthCtx,
         ) -> WorkerResult<()> {
             self.effects.lock().unwrap().push("fork");
@@ -4749,6 +4794,7 @@ mod tests {
             _: &IdempotencyKey,
             _: EnvironmentId,
             _: AuthCtx,
+            _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
         ) -> WorkerResult<bool> {
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
@@ -5180,6 +5226,7 @@ mod tests {
                     cors_options: golem_common::model::agent::CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    mode: None,
                     durable_streams: None,
                 }],
                 read_only: None,
@@ -5532,6 +5579,7 @@ mod tests {
                 &agent_id,
                 &fork_target,
                 OplogIndex::from_u64(4),
+                None,
                 auth_ctx.clone(),
             )
             .await
@@ -6493,7 +6541,7 @@ mod tests {
                 fields: vec![SchemaValue::String("new schema".into())],
             };
             let behaviour = CallAgentBehaviour {
-                route_mode: AgentRouteMode::Rest,
+                route_mode: AgentRouteMode::Plain,
                 base_path_variables: 0,
                 durable_streams: None,
                 component_id: a.id,

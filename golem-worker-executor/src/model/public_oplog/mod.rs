@@ -40,7 +40,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{

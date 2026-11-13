@@ -366,6 +366,7 @@ impl ForwardingOplogState {
             original_phantom_id: self.initial_worker_metadata.original_phantom_id,
             fingerprint: self.initial_worker_metadata.fingerprint,
             agent_mode: self.initial_worker_metadata.agent_mode,
+            create_request: self.initial_worker_metadata.create_request.clone(),
         };
 
         let Some(result) = self

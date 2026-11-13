@@ -259,7 +259,7 @@ impl AgentFiles {
         &self,
         executor: &TestWorkerExecutor,
         component: &ComponentDto,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
         path: &str,
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
@@ -281,7 +281,7 @@ impl AgentFiles {
         &self,
         executor: &TestWorkerExecutor,
         component: &ComponentDto,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
         paths: &[&str],
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
@@ -2580,6 +2580,7 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_with_fi
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     with_snapshot_store(|store| async move {
+        store.set_save_delay(Duration::from_secs(2));
         restart_before_attempt_and_later_update_modes_succeed(
             last_unique_id,
             deps,
@@ -2618,6 +2619,10 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     files
         .write(&executor, &component, &agent_id, "/before.txt")
         .await?;
+    if files.snapshotted() {
+        // An upload still in flight would skip the next periodic snapshot boundary.
+        crate::filesystem_snapshots::newest_snapshot_confirmed(&executor, &worker_id).await?;
+    }
     files
         .write(&executor, &component, &agent_id, "/before-2.txt")
         .await?;
@@ -2627,6 +2632,9 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let snapshot_index = files
         .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
         .await?;
+    if files.snapshotted() {
+        crate::filesystem_snapshots::newest_snapshot_confirmed(&executor, &worker_id).await?;
+    }
     files
         .write(&executor, &component, &agent_id, "/tail.txt")
         .await?;
@@ -4799,7 +4807,7 @@ async fn manual_update_agent_with_load(
     load: &str,
 ) -> anyhow::Result<(
     ComponentDto,
-    golem_common::model::agent::ParsedAgentId,
+    golem_common::model::agent::ParsedAgentKey,
     AgentId,
     ComponentDto,
 )> {
@@ -7775,7 +7783,7 @@ async fn agent_with_a_written_file(
     http_server: &TestHttpServer,
 ) -> anyhow::Result<(
     ComponentDto,
-    golem_common::model::agent::ParsedAgentId,
+    golem_common::model::agent::ParsedAgentKey,
     AgentId,
 )> {
     let component = executor
@@ -7806,7 +7814,7 @@ async fn agent_with_a_written_file(
 async fn written_file(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<Option<String>> {
     executor
         .invoke_and_await_agent(

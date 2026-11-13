@@ -25,6 +25,7 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
+use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
@@ -48,22 +49,32 @@ use golem_common::model::oplog::{
     PublicQueuedCardEvent,
 };
 use golem_common::model::tool::ToolName;
-use golem_common::model::{AgentInvocationResult, IdempotencyKey, PromiseId};
+use golem_common::model::{
+    AgentInvocationResult, AgentStatus, IdempotencyKey, PromiseId, ScheduleId, ScheduledAction,
+    ShardAssignment, ShardId,
+};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::serialization::deserialize;
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
+use golem_worker_executor::storage::scheduler::{
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::Notify;
+use uuid::Uuid;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -193,6 +204,25 @@ async fn permission_fixture(
     provider: &PrecompiledComponent,
     tool_grants: Vec<PolymorphicPermissionPattern>,
 ) -> anyhow::Result<PermissionFixture> {
+    permission_fixture_with_overrides(
+        last_unique_id,
+        deps,
+        owner,
+        provider,
+        tool_grants,
+        TestExecutorOverrides::default(),
+    )
+    .await
+}
+
+async fn permission_fixture_with_overrides(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    owner: &PrecompiledComponent,
+    provider: &PrecompiledComponent,
+    tool_grants: Vec<PolymorphicPermissionPattern>,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<PermissionFixture> {
     let context = TestContext::new(last_unique_id);
     let publisher_environment_id = EnvironmentId::new();
     let environment = Arc::new(TestEnvironmentStateService::default());
@@ -221,7 +251,7 @@ async fn permission_fixture(
                     })
                 }
             })),
-            ..Default::default()
+            ..overrides
         },
     )
     .await?;
@@ -1216,6 +1246,292 @@ async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
     );
     assert_eq!(unterminated_entity_starts(&oplog), Vec::new());
     assert_no_positional_records_after_last_finished(&oplog);
+    Ok(())
+}
+
+type WakeInsert = (ScheduleId, DateTime<Utc>, ShardId, ScheduledAction);
+
+/// Pauses the first invocation wake after the pending invocation commit, then loses that put.
+/// Subsequent puts use the real storage so a retry must repair the missing registration.
+#[derive(Debug)]
+struct LostInvocationWake {
+    inner: Arc<dyn SchedulerStorage + Send + Sync>,
+    lose_next: AtomicBool,
+    entered: Notify,
+    release: Notify,
+    attempts: Mutex<Vec<WakeInsert>>,
+}
+
+#[async_trait]
+impl SchedulerStorage for LostInvocationWake {
+    async fn insert(
+        &self,
+        id: ScheduleId,
+        due: DateTime<Utc>,
+        shard: ShardId,
+        action: &[u8],
+    ) -> Result<(), SchedulerStorageError> {
+        let decoded = deserialize::<ScheduledAction>(action).unwrap();
+        if matches!(decoded, ScheduledAction::WakeInvocation { .. }) {
+            self.attempts
+                .lock()
+                .unwrap()
+                .push((id, due, shard, decoded));
+            if self.lose_next.swap(false, Ordering::AcqRel) {
+                self.entered.notify_one();
+                self.release.notified().await;
+                return Ok(());
+            }
+        }
+        self.inner.insert(id, due, shard, action).await
+    }
+
+    async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+        self.inner.cancel(id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+        limit: u32,
+        ttl: Duration,
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+        self.inner.claim_due(now, assignment, limit, ttl).await
+    }
+
+    async fn count_due(
+        &self,
+        now: DateTime<Utc>,
+        assignment: &ShardAssignment,
+    ) -> Result<u64, SchedulerStorageError> {
+        self.inner.count_due(now, assignment).await
+    }
+
+    async fn extend_lease(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        until: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.extend_lease(id, owner, until).await
+    }
+
+    async fn ack(&self, id: &ScheduleId, owner: Uuid) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner).await
+    }
+}
+
+#[test]
+#[timeout("3m")]
+async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
+    #[tagged_as("tool_runtime_bypass_provider")] provider: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, ExternalToolInvocation, InvocationStart,
+    };
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let storage = Arc::new(Mutex::new(None));
+    let fixture = Arc::new(
+        permission_fixture_with_overrides(
+            last_unique_id,
+            deps,
+            owner,
+            provider,
+            vec![
+                owner_grant("read", "/public"),
+                owner_grant("delete", "/other"),
+            ],
+            TestExecutorOverrides {
+                wrap_scheduler_storage: Some(Arc::new({
+                    let storage = storage.clone();
+                    move |inner| {
+                        let wrapped = Arc::new(LostInvocationWake {
+                            inner,
+                            lose_next: AtomicBool::new(true),
+                            entered: Notify::new(),
+                            release: Notify::new(),
+                            attempts: Mutex::new(Vec::new()),
+                        });
+                        *storage.lock().unwrap() = Some(wrapped.clone());
+                        wrapped
+                    }
+                })),
+                ..Default::default()
+            },
+        )
+        .await?,
+    );
+    let storage = storage.lock().unwrap().clone().unwrap();
+    fixture
+        .executor
+        .interrupt_loaded_worker(
+            &fixture.owner_id,
+            InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
+        )
+        .await?;
+    let owned = golem_common::model::OwnedAgentId::new(fixture.environment_id, &fixture.owner_id);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while fixture.executor.worker_is_loaded(&owned).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("the target must unload before scheduling")?;
+    assert_eq!(
+        fixture
+            .executor
+            .get_worker_metadata(&fixture.owner_id)
+            .await?
+            .status,
+        AgentStatus::Suspended
+    );
+
+    let key = IdempotencyKey::fresh();
+    let due = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap()
+        + chrono::Duration::hours(24);
+    let request =
+        |command: &str, path: &str, at: DateTime<Utc>| -> anyhow::Result<InvocationStart> {
+            let command_path = vec![command.to_string()];
+            let index = fixture.probe.command_index_by_path(&command_path).unwrap();
+            let input = TypedSchemaValue::new(
+                fixture.probe.canonical_input_record_schema(index)?,
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(path.to_string())],
+                },
+            );
+            Ok(InvocationStart {
+                agent_id: Some(fixture.owner_id.clone().into()),
+                idempotency_key: Some(key.clone().into()),
+                mode: AgentInvocationMode::Schedule as i32,
+                schedule_at: Some(prost_types::Timestamp {
+                    seconds: at.timestamp(),
+                    nanos: at.timestamp_subsec_nanos() as i32,
+                }),
+                auth_ctx: Some(fixture.executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: fixture.account_id,
+                    })
+                    .into(),
+                ),
+                environment_id: Some(fixture.environment_id.into()),
+                component_owner_account_id: Some(fixture.account_id.into()),
+                expected_callee_fingerprint: Some(fixture.fingerprint.0.into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: PERMISSION_PROBE.to_string(),
+                    command_path,
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    fresh_owner: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+    let first_request = request("read", "/public", due)?;
+    let retry_request = request("delete", "/other", due + chrono::Duration::hours(1))?;
+    let first = tokio::spawn({
+        let fixture = fixture.clone();
+        async move { fixture.executor.invoke_agent_session(first_request).await }
+    });
+    storage.entered.notified().await;
+    let before = owner_oplog(&fixture).await?;
+    let pending = before.iter().filter_map(|entry| match &entry.entry {
+        PublicOplogEntry::PendingAgentInvocation(params)
+            if matches!(&params.invocation, PublicAgentInvocation::ExternalTool(tool) if tool.idempotency_key == key) => Some(params),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        pending.len(),
+        1,
+        "the pending invocation must commit before the wake put"
+    );
+    assert_eq!(
+        pending[0].not_before.unwrap().to_millis(),
+        due.timestamp_millis() as u64
+    );
+    let PublicAgentInvocation::ExternalTool(original) = &pending[0].invocation else {
+        unreachable!()
+    };
+    assert_eq!(original.command_path, vec!["read"]);
+    assert_eq!(
+        original.input.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::String("/public".to_string())],
+        }
+    );
+    let (id, original_due, shard, original_action) = storage.attempts.lock().unwrap()[0].clone();
+    let assignment = ShardAssignment::unexpiring(1, [shard]);
+    storage.release.notify_one();
+    first.await??;
+    let missing = storage
+        .inner
+        .claim_due(due, &assignment, 100, Duration::from_secs(60))
+        .await?;
+    assert!(
+        missing.iter().all(|wake| wake.schedule_id != id),
+        "the first wake registration was lost"
+    );
+
+    fixture.executor.invoke_agent_session(retry_request).await?;
+    assert_eq!(
+        storage.attempts.lock().unwrap().len(),
+        2,
+        "a pending Schedule retry must repair the wake registration"
+    );
+    let wakes = storage
+        .inner
+        .claim_due(due, &assignment, 100, Duration::from_secs(60))
+        .await?;
+    let wakes = wakes
+        .iter()
+        .filter(|wake| wake.schedule_id == id)
+        .collect::<Vec<_>>();
+    assert_eq!(wakes.len(), 1, "the retry must persist exactly one wake");
+    assert_eq!(wakes[0].due_at, original_due);
+    assert_eq!(
+        wakes[0].due_at, due,
+        "the retry must not postpone the original deadline"
+    );
+    assert_eq!(
+        wakes[0].action, original_action,
+        "the retry must retain the original wake identity"
+    );
+    let ScheduledAction::WakeInvocation {
+        target_worker_fingerprint,
+        owned_agent_id,
+        idempotency_key,
+    } = &wakes[0].action
+    else {
+        panic!("the repaired wake must wake the original owner's pending invocation");
+    };
+    assert_eq!(*target_worker_fingerprint, fixture.fingerprint);
+    assert_eq!(owned_agent_id.agent_id, fixture.owner_id);
+    assert_eq!(idempotency_key, &key);
+    assert_eq!(id, ScheduleId::for_invocation(fixture.fingerprint, &key));
+    let after = owner_oplog(&fixture).await?;
+    assert_eq!(
+        after.iter().map(comparable).collect::<Vec<_>>(),
+        before.iter().map(comparable).collect::<Vec<_>>(),
+        "repair must not append or replace pending work"
+    );
+    assert_eq!(
+        fixture
+            .executor
+            .get_worker_metadata(&fixture.owner_id)
+            .await?
+            .status,
+        AgentStatus::Suspended
+    );
+    assert!(
+        permission_effects(&fixture).is_empty(),
+        "a future invocation must not execute during acceptance or retry"
+    );
     Ok(())
 }
 

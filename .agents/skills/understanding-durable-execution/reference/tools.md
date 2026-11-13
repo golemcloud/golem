@@ -367,6 +367,18 @@ a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `E
 completion, not full descendant settlement. A forward-only parent may record its `End` first to
 release nested filesystem work; its resources and admitted children remain retained.
 
+### Owned operation state and settlement
+
+The owner state is `Open`, `Unloading`, or `Failed { winner, cleanup }`. `Unloading` fences physical admission without selecting a logical failure. An independent failure can still win during unload, but a tool's `select_trap` refuses closed admission. The first selected owner failure remains authoritative. These transitions use the existing owner state lock and notifications; there is no new coordinator or lock.
+
+Per-operation body progress, terminal winner and `LaneOwnership` remain distinct. Private state transitions own paired mutations and watch publication, so callers cannot update one half and publish the other later. Explicit `SettledWithoutBody` is legal from either `Staging` or `Ready`, with deferred-cohort coordination; it is not evidence that a body started.
+
+Checked matches produce borrowed `ReadyBody`, `StartingAcquisition`, `AcquiringBody` and `OpenTerminal` capabilities. Their queue, install, grant-install and ordinary-reservation methods consume those capabilities. Each capability borrows the operation state under the owner mutex and cannot outlive that access. There is no automatic `Drop` rollback. These type-level rules replace transition assertions, not the existing lock-poisoning convention or unrelated error handling; they do not make the whole executor panic-free.
+
+Ordinary or cancelled terminal selection is reserved before terminal persistence. After commit, the winner publishes before parent preparation, while the lane stays held. Successful preparation detaches and drains the lane; failed preparation leaves it for owner cleanup. Cancellation rollback retains any lane grant already held by the acquisition task. The acquisition drain guard releases its permit before notifying waiters that it drained. Registry removal ends operation ownership: a surviving cloned handle observes the result but does not keep the operation registered.
+
+Shared terminal resolution returns an error for invalid state or inactive registration instead of panicking. A mismatched resolution never replaces the selected winner. Settling an active nonterminal operation returns an error without unregistering it. Settling an already-removed operation is an idempotent `Ok(())`, including through a surviving clone: removal is authoritative. Valid settlement of an active terminal operation removes the registration and notifies waiters before draining the detached lane; preparation failure still leaves the lane for owner cleanup.
+
 At the finished-body handoff, a separate executor-tracked retained task owns the Store/context
 and slot registration. Completion resources carry commands and a destruction join, never the
 Store. Normal preparation runs before terminal resolution; permit release precedes descendant
@@ -404,14 +416,23 @@ Once a body result is observed, `EntityBodyFinalization` prevents local reconstr
 discarding pending settlement, cleanup or failure election. Owner lifecycle cancellation remains
 separate and is not shielded by that handoff.
 
-The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
-Destroying a healthy ancestor Store may drop its result observer but cannot drop the global
-settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained
-result. Ordinary cleanup errors still wait for the other operations before waking the primary;
-they prevent generation reuse without replacing the selected trap. A cleanup panic retains a
-failed join but does not authorize primary completion. Wakeups use the original execution's
-channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
-cannot miss completion. None of this invents entity terminals or changes oplog recovery.
+The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task. Its explicit states are:
+
+- `Unassigned`: no cleanup owner has been assigned.
+- `AwaitingClaim(owner)`: cleanup is assigned and awaits that owner's claim.
+- `Claimed(owner)`: the owner has claimed cleanup but has not started it.
+- `Running(owner, retained join)`: cleanup has started. This includes waiting for other operations after the cleanup callback returns.
+- `SettledSuccessfully(retained join)`: cleanup and the required operation settlement succeeded.
+- `SettledWithError(retained join)`: the failed join remains available to repeat observers.
+- `Aborted(owner, retained join)`: panic or abort retains both the owner and failed join.
+
+The consuming `OwnerFailureCleanupToken` binds the issuing `Arc<OwnerToolOperations>` to a private per-claim identity and carries that claim's exact failure winner. `token.start(cleanup, wake)` consumes the token and creates the only `RunningCleanup` capability; completion consumes that capability. Shared joins only observe the retained result: they cannot start or complete cleanup. Every completion follows the spawned cleanup path, including tests; there is no direct-completion receipt. `CleanupOutcome::Settled(Result)` distinguishes an ordinary success or error after operation settlement from `CleanupOutcome::Aborted(error)`. It replaces the result/settled-boolean pair, so invalid combinations cannot be passed to completion.
+
+The token's `#[must_use]` warns about an ignored token; it does not guarantee that cleanup runs or prevent explicit discard. Dropping an unstarted token leaves cleanup `Claimed`, with no task or failed join. If no operations or tracked failure continuations remain, the owner can still begin a new generation. Discard does not run cleanup, roll back the claim, or add a reset fence.
+
+Once `PRIMARY` cleanup starts, it remains interruptible, including after panic or abort. Tool-origin `Running` and `Aborted` cleanup is not interruptible. Error and abort joins remain repeatable and prevent generation reuse; neither replaces the selected failure nor authorizes successful primary completion. Ordinary cleanup errors still wait for other operations before waking the primary.
+
+Destroying a healthy ancestor Store may drop its result observer but cannot drop the global settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained result. Wakeups use the original execution's channel, and host waits subscribe before checking the settled-failure latch so a late subscriber cannot miss completion. Store-liveness rules, entity terminals and oplog recovery stay unchanged.
 
 Trap selection retains a host-classified `TrapType::Interrupt` with its exact interruption kind.
 The native host adapter still reports that trap to the operation owner. A previously selected
@@ -506,12 +527,9 @@ Input tasks capture the session binding, read ordinal and observation class befo
 recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
 on the operation's existing watch channel without retaining the Store or cursor.
 
-Historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later
-cancellation from replacing the refusal but still lets a reconstructing child elect an independent
-owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught
-admission error from an unrelated body or cleanup failure; a caught error cannot turn refused
-admission into success. Refusal does not wait for the complete output subtree before returning:
-the body may need to catch the error and continue to regenerate that subtree.
+Live admission refusal preselects the ordinary terminal before persistence. Recorded refusal does not: historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later cancellation from replacing the refusal but still lets a reconstructing child elect an independent owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught admission error from an unrelated body or cleanup failure; a caught error cannot turn refused admission into success. Refusal does not wait for the complete output subtree before returning: the body may need to catch the error and continue to regenerate that subtree.
+
+Empty attachment admission does not latch live; it leaves the later attachment admission decision open.
 
 Explicit attachment constructors register owner-relative identities in the shared replay state.
 Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,

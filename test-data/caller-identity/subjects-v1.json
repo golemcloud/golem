@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "roundTrip": [
+    {
+      "kind": "agent",
+      "agentId": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10",
+      "fingerprint": "9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "kind": "agent",
+      "agentId": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10",
+      "fingerprint": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f"
+    },
+    {
+      "kind": "account",
+      "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "subject": "account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+    },
+    {
+      "kind": "tool",
+      "environmentId": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+      "toolName": "report",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report"
+    },
+    {
+      "kind": "tool",
+      "environmentId": "5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+      "toolName": "send-invoice-2",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/send-invoice-2"
+    }
+  ],
+  "reject": [
+    {
+      "name": "empty",
+      "subject": ""
+    },
+    {
+      "name": "no kind prefix",
+      "subject": "0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10"
+    },
+    {
+      "name": "unknown kind",
+      "subject": "user:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+    },
+    {
+      "name": "uppercase kind",
+      "subject": "Agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "agent without fingerprint",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10"
+    },
+    {
+      "name": "agent with empty fingerprint",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/"
+    },
+    {
+      "name": "agent with a third part",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f/x"
+    },
+    {
+      "name": "agent ID in uppercase",
+      "subject": "agent:0F3A5C21-8D4E-8B6F-9A1C-2E7D4B6A9C10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "fingerprint in uppercase",
+      "subject": "agent:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9B2D4E6F-1A3C-4D5E-8F70-6A8B9C0D1E2F"
+    },
+    {
+      "name": "agent ID without hyphens",
+      "subject": "agent:0f3a5c218d4e8b6f9a1c2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "agent ID in braces",
+      "subject": "agent:{0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10}/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "agent ID as a urn",
+      "subject": "agent:urn:uuid:0f3a5c21-8d4e-8b6f-9a1c-2e7d4b6a9c10/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "agent key instead of an agent ID",
+      "subject": "agent:Counter(\"x\")/9b2d4e6f-1a3c-4d5e-8f70-6a8b9c0d1e2f"
+    },
+    {
+      "name": "account with a path",
+      "subject": "account:/acme"
+    },
+    {
+      "name": "account with a trailing slash",
+      "subject": "account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f/"
+    },
+    {
+      "name": "account ID in uppercase",
+      "subject": "account:3C4D5E6F-7A8B-4C9D-8E0F-1A2B3C4D5E6F"
+    },
+    {
+      "name": "tool without name",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b"
+    },
+    {
+      "name": "tool with empty name",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/"
+    },
+    {
+      "name": "tool with a revision",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report/3"
+    },
+    {
+      "name": "tool with a version suffix",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/report@3"
+    },
+    {
+      "name": "tool name in uppercase",
+      "subject": "tool:5e7f9a1b-2c3d-4e5f-8a6b-7c8d9e0f1a2b/Report"
+    },
+    {
+      "name": "tool with an environment path",
+      "subject": "tool:/acme/-/shop/production/report"
+    },
+    {
+      "name": "space after the prefix",
+      "subject": "account: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f"
+    }
+  ]
+}

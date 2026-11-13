@@ -18,30 +18,35 @@ pub(in crate::durable_host::replay_state) fn historical_reconstruction_owner_fai
 
 impl ReplayCursor {
     fn begin_settling(&self) {
-        let _ = self.transition_phase.compare_exchange(
-            ReplayTransitionPhase::Replaying as u8,
-            ReplayTransitionPhase::Settling as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        self.transition_phase.begin_settling();
     }
 
     pub(super) fn publish_live(&self) {
-        self.transition_phase
-            .store(ReplayTransitionPhase::Live as u8, Ordering::Release);
+        self.transition_phase.publish_live();
         self.progress.notify_waiters();
     }
 
     pub(super) fn is_live_published(&self) -> bool {
-        self.transition_phase.load(Ordering::Acquire) == ReplayTransitionPhase::Live as u8
+        self.transition_phase.load() == ReplayTransitionPhase::Live
     }
 }
 
 impl CursorTx<'_> {
-    /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
+    async fn validate_consumed_replay_prefix(&mut self) -> Result<(), WorkerExecutorError> {
+        self.try_get_oplog_entry(|_| false).await?;
+        if self.cursor.has_replay_remaining() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "consumed replay prefix before live authority publication",
+                "unconsumed positional entry or delivery boundary",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Exhausts the replay prefix: records `ReplayFinished` if replay was still in progress,
     /// clamps the cursor head to the replay target, and wakes every still-suspended awaiter with
     /// `Incomplete` (any durable call whose `Start` was committed but whose terminal never was).
-    pub(in crate::durable_host::replay_state) fn switch_to_live(&mut self) -> OplogIndex {
+    pub(in crate::durable_host::replay_state) fn exhaust_replay_prefix(&mut self) -> OplogIndex {
         let replay_target = self.cursor.replay_target();
         if self.cursor.last_replayed_index() != replay_target {
             self.record_replay_event(ReplayEvent::ReplayFinished);
@@ -51,14 +56,13 @@ impl CursorTx<'_> {
         // Replay is over: any durable call whose `Start` was committed but whose terminal never was
         // is incomplete. Wake every still-suspended awaiter so it returns `Incomplete` instead of
         // sleeping forever waiting for a cursor that will not advance again.
-        self.st.concurrent_resolver.fail_all_pending_incomplete();
+        self.st.starts.fail_all_pending_incomplete();
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
         // just failed with `Incomplete`, and the cursor will not read again. Retained `Start`s are
         // deliberately kept: a still-unadmitted owner claims them after this switch (its terminal,
         // if retained, resolves it; otherwise it observes `Incomplete` exactly like a claim whose
         // terminal the cursor never reached), and durable-call admission keeps replaying such
         // calls while any retained `Start` exists (see `WorkerState::durable_call_is_live`).
-        self.st.claimed_starts.clear();
         self.st.custom_subtrees.clear();
         self.st.replay_buffer.clear();
         self.notify_progress = true;
@@ -70,25 +74,24 @@ impl CursorTx<'_> {
         expected_target: OplogIndex,
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
     ) -> Result<LivePublicationOutcome, UnreadableOplog> {
-        let phase = self.cursor.transition_phase.load(Ordering::Acquire);
+        let phase = self.cursor.transition_phase.load();
         let replay_target = self.cursor.replay_target();
         let last_replayed_index = self.cursor.last_replayed_index();
         if replay_target != expected_target {
             return Ok(LivePublicationOutcome::ReplayResumed);
         }
-        if phase == ReplayTransitionPhase::Live as u8 {
+        if phase == ReplayTransitionPhase::Live {
             return Ok(if last_replayed_index == expected_target {
                 LivePublicationOutcome::AlreadyLiveAtSameTarget
             } else {
                 LivePublicationOutcome::ReplayResumed
             });
         }
-        if phase != ReplayTransitionPhase::Settling as u8 {
+        if phase != ReplayTransitionPhase::Settling {
             return Ok(LivePublicationOutcome::ReplayResumed);
         }
 
-        let mut incomplete_reconstructions =
-            self.st.concurrent_resolver.pending_reconstruction_starts();
+        let mut incomplete_reconstructions = self.st.starts.pending_reconstruction_starts();
         if let Some(first_start) = incomplete_reconstructions.iter().min().copied() {
             let mut next = first_start.next();
             while next <= replay_target && !incomplete_reconstructions.is_empty() {
@@ -121,7 +124,7 @@ impl CursorTx<'_> {
         // body has validated and dropped the reconstruction guard.
         if !self
             .st
-            .concurrent_resolver
+            .starts
             .only_pending_reconstruction_fences_remain(&incomplete_reconstructions)
         {
             return Ok(LivePublicationOutcome::ReconstructionClaimsActive);
@@ -138,7 +141,7 @@ impl CursorTx<'_> {
 
         let owner_tool_operations = self.cursor.owner_tool_operations.clone();
         if owner_tool_operations.commit_if_owner_open(|| {
-            self.switch_to_live();
+            self.exhaust_replay_prefix();
             linear_memory.switch_to_live();
             self.cursor.publish_live();
         }) {
@@ -146,27 +149,6 @@ impl CursorTx<'_> {
         } else {
             Ok(LivePublicationOutcome::OwnerFailed)
         }
-    }
-
-    pub(in crate::durable_host::replay_state) fn finish_non_primary_settling(
-        &mut self,
-        expected_target: OplogIndex,
-    ) -> LivePublicationOutcome {
-        let phase = self.cursor.transition_phase.load(Ordering::Acquire);
-        let replay_target = self.cursor.replay_target();
-        let last_replayed_index = self.cursor.last_replayed_index();
-        if replay_target != expected_target {
-            return LivePublicationOutcome::ReplayResumed;
-        }
-        if phase == ReplayTransitionPhase::Live as u8 && last_replayed_index == expected_target {
-            return LivePublicationOutcome::AlreadyLiveAtSameTarget;
-        }
-        if phase != ReplayTransitionPhase::Settling as u8 {
-            return LivePublicationOutcome::ReplayResumed;
-        }
-
-        self.switch_to_live();
-        LivePublicationOutcome::Published
     }
 }
 
@@ -221,7 +203,7 @@ impl ReplayState {
                     if let Some(wallet) = &tx.cursor.wallet {
                         wallet.retire();
                     }
-                    tx.switch_to_live();
+                    tx.exhaust_replay_prefix();
                     Ok(())
                 })
                 .await
@@ -229,13 +211,13 @@ impl ReplayState {
         .await
     }
 
-    pub(in crate::durable_host::replay_state) async fn switch_cursor_to_live(
+    pub(in crate::durable_host::replay_state) async fn exhaust_cursor_replay_prefix(
         &self,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             let replay_target = state
                 .with_tx(async |tx| {
-                    let replay_target = tx.switch_to_live();
+                    let replay_target = tx.exhaust_replay_prefix();
                     Ok(replay_target)
                 })
                 .await?;
@@ -287,127 +269,90 @@ impl ReplayState {
 
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_is_settling(&self) -> bool {
-        self.cursor.transition_phase.load(Ordering::Acquire)
-            == ReplayTransitionPhase::Settling as u8
+        self.cursor.transition_phase.load() == ReplayTransitionPhase::Settling
     }
 
-    pub(crate) async fn switch_to_live(
-        &self,
-        linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
-        role: ReplayToLiveRole,
-    ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+    async fn validate_consumed_replay_prefix(&self) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             state
-                .with_tx(async |tx| {
-                    tx.try_get_oplog_entry(|_| false).await?;
-                    if tx.cursor.is_replay() {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "consumed replay prefix before live authority publication",
-                            "unconsumed positional entry or delivery boundary",
-                        ));
-                    }
-                    Ok(())
-                })
+                .with_tx(async |tx| tx.validate_consumed_replay_prefix().await)
                 .await
         })
-        .await?;
-        if role == ReplayToLiveRole::PrimaryAgent {
-            let replay_target = self.begin_primary_settling().await?;
-            self.finish_settling_to_live(linear_memory, role, replay_target)
-                .await
-        } else {
-            let replay_target = self.switch_cursor_to_live().await?;
-            linear_memory.switch_to_live();
-            Ok(ReplayToLiveOutcome::Live { replay_target })
-        }
+        .await
     }
 
-    pub(crate) async fn finish_settling_to_live(
+    pub(crate) async fn exhaust_replay_prefix(&self) -> Result<OplogIndex, WorkerExecutorError> {
+        self.validate_consumed_replay_prefix().await?;
+        self.exhaust_cursor_replay_prefix().await
+    }
+
+    pub(crate) async fn publish_primary_live(
         &self,
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
-        role: ReplayToLiveRole,
+    ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        self.validate_consumed_replay_prefix().await?;
+        let replay_target = self.begin_primary_settling().await?;
+        self.finish_settling_to_live(linear_memory, replay_target)
+            .await
+    }
+
+    pub(in crate::durable_host::replay_state) async fn finish_settling_to_live(
+        &self,
+        linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
         replay_target: OplogIndex,
     ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
-        if role == ReplayToLiveRole::PrimaryAgent {
-            loop {
-                if let Some(failure) = self.cursor.owner_tool_operations.selected_owner_failure() {
-                    return Err(historical_reconstruction_owner_failure(failure));
-                }
-                let mut reconstruction_fences =
-                    self.cursor.reconstruction_claims.subscribe_fences();
-                let progress = self.cursor.progress.notified();
-                tokio::pin!(progress);
-                progress.as_mut().enable();
-                let publication_linear_memory = linear_memory.clone();
-                let publication = self
-                    .run_owned_cursor_op(move |state| async move {
-                        state
-                            .with_tx(async |tx| {
-                                Ok(tx
-                                    .finish_primary_settling(
-                                        replay_target,
-                                        &publication_linear_memory,
-                                    )
-                                    .await?)
-                            })
-                            .await
-                    })
-                    .await?;
-                match publication {
-                    LivePublicationOutcome::Published => break,
-                    LivePublicationOutcome::AlreadyLiveAtSameTarget => {
-                        linear_memory.switch_to_live();
-                        break;
-                    }
-                    LivePublicationOutcome::ReconstructionClaimsActive => {
-                        tokio::select! {
-                            biased;
-                            failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
-                                return Err(historical_reconstruction_owner_failure(failure));
-                            }
-                            changed = reconstruction_fences.changed() => {
-                                changed.expect("replay cursor retains the reconstruction claim state");
-                            }
-                            _ = progress.as_mut() => {}
-                        }
-                    }
-                    LivePublicationOutcome::OwnerFailed => {
-                        let failure = self
-                            .cursor
-                            .owner_tool_operations
-                            .selected_owner_failure()
-                            .expect("failed live publication must retain the owner winner");
-                        return Err(historical_reconstruction_owner_failure(failure));
-                    }
-                    LivePublicationOutcome::ReplayResumed => {
-                        return Ok(ReplayToLiveOutcome::ReplayResumed);
-                    }
-                }
+        loop {
+            if let Some(failure) = self.cursor.owner_tool_operations.selected_owner_failure() {
+                return Err(historical_reconstruction_owner_failure(failure));
             }
-            Ok(ReplayToLiveOutcome::Live { replay_target })
-        } else {
+            let mut reconstruction_fences = self.cursor.reconstruction_claims.subscribe_fences();
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let publication_linear_memory = linear_memory.clone();
             let publication = self
                 .run_owned_cursor_op(move |state| async move {
                     state
-                        .with_tx(async |tx| Ok(tx.finish_non_primary_settling(replay_target)))
+                        .with_tx(async |tx| {
+                            Ok(tx
+                                .finish_primary_settling(replay_target, &publication_linear_memory)
+                                .await?)
+                        })
                         .await
                 })
                 .await?;
             match publication {
-                LivePublicationOutcome::Published
-                | LivePublicationOutcome::AlreadyLiveAtSameTarget => {
+                LivePublicationOutcome::Published => break,
+                LivePublicationOutcome::AlreadyLiveAtSameTarget => {
                     linear_memory.switch_to_live();
-                    Ok(ReplayToLiveOutcome::Live { replay_target })
+                    break;
                 }
                 LivePublicationOutcome::ReconstructionClaimsActive => {
-                    unreachable!("non-primary settlement does not inspect reconstruction claims")
+                    tokio::select! {
+                        biased;
+                        failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                            return Err(historical_reconstruction_owner_failure(failure));
+                        }
+                        changed = reconstruction_fences.changed() => {
+                            changed.expect("replay cursor retains the reconstruction claim state");
+                        }
+                        _ = progress.as_mut() => {}
+                    }
                 }
                 LivePublicationOutcome::OwnerFailed => {
-                    unreachable!("non-primary settlement does not arbitrate owner publication")
+                    let failure = self
+                        .cursor
+                        .owner_tool_operations
+                        .selected_owner_failure()
+                        .expect("failed live publication must retain the owner winner");
+                    return Err(historical_reconstruction_owner_failure(failure));
                 }
-                LivePublicationOutcome::ReplayResumed => Ok(ReplayToLiveOutcome::ReplayResumed),
+                LivePublicationOutcome::ReplayResumed => {
+                    return Ok(ReplayToLiveOutcome::ReplayResumed);
+                }
             }
         }
+        Ok(ReplayToLiveOutcome::Live { replay_target })
     }
 
     pub(crate) fn historical_reconstruction_bodies(
@@ -420,9 +365,9 @@ impl ReplayState {
         self.cursor.reconstruction_claims.ensure_empty()
     }
 
-    /// Returns whether we are in live mode where we are executing new calls.
-    pub fn is_live(&self) -> bool {
-        self.cursor.is_live()
+    /// Returns whether the cursor has consumed the replay prefix, not whether live effects are allowed.
+    pub fn at_replay_tail(&self) -> bool {
+        self.cursor.at_replay_tail()
     }
 
     /// Returns whether the primary owner has published live admission after reconstruction
@@ -431,8 +376,8 @@ impl ReplayState {
         self.cursor.is_live_published()
     }
 
-    /// Returns whether we are in replay mode where we are replaying old calls.
-    pub fn is_replay(&self) -> bool {
-        self.cursor.is_replay()
+    /// Returns whether the cursor still has recorded entries to replay.
+    pub fn has_replay_remaining(&self) -> bool {
+        self.cursor.has_replay_remaining()
     }
 }

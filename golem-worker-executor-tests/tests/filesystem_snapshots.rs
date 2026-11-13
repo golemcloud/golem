@@ -20,7 +20,7 @@ use crate::durability::assert_snapshot_recovery_loaded;
 use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
@@ -212,7 +212,7 @@ impl Operation {
 /// The agent under test, with its component.
 struct Agent {
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     worker_id: AgentId,
 }
 
@@ -3406,7 +3406,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
 /// snapshot record with a name, and a confirmation of that name. The caller calls it after an
 /// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
 /// and no snapshot record is waiting for its upload when the wait ends.
-async fn newest_snapshot_confirmed(
+pub(crate) async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
@@ -3441,7 +3441,7 @@ async fn newest_snapshot_confirmed(
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentId,
+    agent: &ParsedAgentKey,
 ) -> anyhow::Result<serde_json::Value> {
     let state = executor
         .invoke_and_await_agent(component, agent, "getState", data_value!())

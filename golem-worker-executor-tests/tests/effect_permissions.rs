@@ -354,6 +354,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -361,6 +362,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -397,6 +399,19 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     ) -> Result<bool, WorkerProxyError> {
         self.inner
             .cancel_invocation(agent_id, idempotency_key, auth_ctx)
+            .await
+    }
+
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &golem_common::model::OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::agent::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
             .await
     }
 

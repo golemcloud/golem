@@ -180,6 +180,23 @@ message RawCreateParameters {
   golem.component.ComponentId component_id = 15;
   optional string agent_type_name = 16;
   optional string canonical_key = 17;
+  RawCreateRequest create_request = 18;
+}
+
+enum RawCreateRequestKind {
+  RAW_CREATE_REQUEST_KIND_GET_OR_CREATE = 0;
+  RAW_CREATE_REQUEST_KIND_EXCLUSIVE = 1;
+  RAW_CREATE_REQUEST_KIND_PHANTOM = 2;
+  RAW_CREATE_REQUEST_KIND_FORK = 3;
+}
+
+message RawCreateRequest {
+  RawCreateRequestKind kind = 1;
+  optional IdempotencyKey idempotency_key = 2;
+  golem.component.Principal principal = 3;
+  string trace_id = 4;
+  repeated string trace_states = 5;
+  repeated RawSpanData invocation_context = 6;
 }
 
 message RawStartParameters {
@@ -304,6 +321,7 @@ message RawPendingAgentInvocationParameters {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
+  google.protobuf.Timestamp not_before = 6;
 }
 
 message RawPendingUpdateParameters {

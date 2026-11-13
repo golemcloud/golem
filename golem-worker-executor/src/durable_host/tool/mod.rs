@@ -143,6 +143,7 @@ use crate::durable_host::tool::attachment::{
 };
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
+    StoreReplayState,
 };
 use crate::native_tool::{NativeToolInvocation, NativeToolKey, NativeToolOutput, NativeToolStdin};
 use crate::preview2::golem::tool::host::{
@@ -447,8 +448,7 @@ struct ToolCaller<Ctx: WorkerCtx> {
     publication_failure: durability::PublicationFailureContext<Ctx>,
     tracker: crate::durable_host::tail_work::TailWorkTracker,
     counter: Arc<std::sync::atomic::AtomicUsize>,
-    mode: Option<InvocationExecutionMode>,
-    local_live: Arc<AtomicBool>,
+    store_replay_state: StoreReplayState,
     suppressed: bool,
 }
 
@@ -468,19 +468,15 @@ impl<Ctx: WorkerCtx> ToolCaller<Ctx> {
                 publication_failure: durability::PublicationFailureContext::new(ctx),
                 tracker: ctx.tail_work_tracker(),
                 counter: ctx.state.live_host_call_counter(),
-                mode: ctx.entity_invocation_scope().map(|scope| scope.mode()),
-                local_live: ctx.state.local_live_tail(),
+                store_replay_state: ctx.state.store_replay_state.clone(),
                 suppressed: ctx.state.durability_is_suppressed(),
             }
         }))
     }
 
     fn is_live(&self) -> bool {
-        crate::durable_host::store_is_live(
-            self.mode,
-            self.local_live.load(Ordering::Acquire),
-            self.settlement.replay.is_live_published(),
-        )
+        self.store_replay_state
+            .is_live(self.settlement.replay.is_live_published())
     }
 }
 
