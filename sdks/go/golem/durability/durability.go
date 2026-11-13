@@ -21,6 +21,7 @@ import (
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/cdctx"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 
@@ -95,16 +96,23 @@ type Spec struct {
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.
 //
-// Sequential and properly nested execution only. A blocking body can yield to
-// other goroutines; the plain func signature does not isolate its custom scope.
-// Do not let unrelated goroutines run while the operation is open, including
-// ordinary host calls: sibling effects can acquire the wrong scope and cause
-// incorrect replay or invocation failure. Misuse is not reliably detected.
-// Complete each nested Run before continuing its parent. Do not detach goroutines
-// or let work outlive the body, including on failure or cancellation. Stop and join
-// outstanding work before the operation closes. Sequential blocking host calls
-// remain supported when no unrelated goroutine runs during the wait.
+// The operation's custom scope belongs to the goroutine that calls Run. Other
+// goroutines keep their own scope while the body blocks, so concurrent Run
+// calls and unrelated host calls do not interfere. Goroutines started inside
+// the body, directly or transitively, and the callbacks of time.AfterFunc
+// timers that the body sets, inherit the operation's scope, and Run returns
+// only after all of them have exited. If one of them never exits, Run does not
+// return and the invocation fails without a result. Timers that the body set
+// and that are still pending when it returns are stopped.
+//
+// A completed operation replays its result without running the body, so the
+// rest of the program must observe the body only through its return value. The
+// runtime keeps the operation's clock, timers and random state (map seeds and
+// iteration order, select, math/rand) separate from the rest of the program.
+// Heap addresses are not separated: code after the operation must not depend
+// on pointer values, such as the iteration order of a map keyed by pointers.
 func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
+	scope := cdctx.Begin()
 	witDurability.ObserveFunctionCall(spec.Interface, spec.Function)
 
 	name := spec.Function
@@ -113,22 +121,30 @@ func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
 	}
 
 	req := encodeDurableValue(reflect.ValueOf(&request).Elem())
-	invocation := witDurability.BeginCustomDurableInvocation(name, req, spec.Type.raw)
+	invocation := witDurability.BeginCustomDurableInvocationAsync(name, req, spec.Type.raw)
 
 	if invocation.Tag() == witDurability.CustomDurableInvocationReplayed {
-		return decodeDurableValue[Out](name, invocation.Replayed().Response)
+		out := decodeDurableValue[Out](name, invocation.Replayed().Response)
+		cdctx.End(scope)
+		return out
 	}
 
-	// Live: run the body, persist its result, and finish. A panic traps the
-	// component at once, even where a caller above would recover it, so no
-	// code runs on past an unfinished durable operation.
+	// Live: run the body, wait for the goroutines it started, persist its
+	// result, and finish. A panic traps the component at once, even where a
+	// caller above would recover it, so no code runs on past an unfinished
+	// durable operation.
 	live := invocation.Live()
 	var out Out
 	link.TrapOnPanic("durable operation "+name, func() {
+		live.Enter()
+		cdctx.Entered(scope)
 		out = body()
+		cdctx.Join(scope)
 		resp := encodeDurableValue(reflect.ValueOf(&out).Elem())
-		witDurability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
+		witDurability.LiveCustomDurableInvocationFinishAsync(live, resp, spec.ForcedCommit)
+		live.Drop()
 	})
+	cdctx.End(scope)
 	return out
 }
 

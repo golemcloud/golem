@@ -1766,7 +1766,7 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+**Non-Rust SDK limitation:** TypeScript, Effect, Scala, and MoonBit custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1775,7 +1775,21 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations or to the Rust poll/drop scope integration.
+durability outside custom operations, to the Rust poll/drop scope integration, or to Go.
+
+**Go custom operations** (`sdks/go/golem/durability.Run`, `internal/cdctx`) use async admission
+like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
+another host context, and `cdctx` exchanges the task's context slot there; each scoped goroutine
+owns one snapshot handle while parked. Goroutines started in a body, and `time.AfterFunc`
+callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`.
+Because a completed body is skipped on replay, runtime state shared by every goroutine would carry
+the body's effects out of it. The runtime therefore makes no host call for itself on wasip1 (the
+scheduler, GC and scavenger read the latest clock reading the program made), and each operation
+runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
+domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on
+both the live and the replay path. go-pkg arms one clock wait per domain, in the domain's host
+context. Heap addresses are not isolated. Tests:
+`golem-worker-executor-tests/tests/agent_sdk_go/custom_durability_concurrency.rs`.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
@@ -1951,7 +1965,8 @@ finish; cancellation destroys descendants before the enclosing live resource and
 Closing a resource absent from the current stack is normal and leaves that stack unchanged.
 Finish validates active children and response decoding before removing the resource or scope.
 Nested work must complete or be dropped before its parent finishes. Detached work does not
-automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+automatically acquire the scope. Go propagates scopes per goroutine through a runtime hook (see
+Go custom operations above). The other SDKs have synchronized bindings but do not yet propagate
 custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
 The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
 would capture host-task context too early for the per-poll switch.

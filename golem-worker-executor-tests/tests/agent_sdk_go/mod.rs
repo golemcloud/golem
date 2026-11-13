@@ -18,6 +18,7 @@
 
 pub mod blobstore;
 pub mod config;
+pub mod custom_durability_concurrency;
 pub mod durability;
 pub mod http;
 pub mod invocation;

@@ -164,11 +164,11 @@ func catalogRevision(
 }
 ```
 
-Use `durability.Run` sequentially; do not overlap it with other goroutines. Its blocking body can yield to other goroutines, so a synchronous-looking call is not a concurrency safeguard. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+`durability.Run` can run on several goroutines at once. Each goroutine keeps its own custom scope while a body waits, so host calls of goroutines outside the body stay outside the operation, and sibling and nested operations replay in their recorded order.
 
-Sequential and properly nested custom operations are supported. Complete one custom operation before starting the next; complete each nested operation before continuing its parent. No unrelated guest work may run while the body waits for host operations.
+Goroutines that the body starts, directly or transitively, belong to the operation, and so do the callbacks of `time.AfterFunc` timers that the body sets. `Run` returns only after all of them have exited. A goroutine that never exits keeps the operation open, and the invocation fails without a result. Timers that the body set and that are still pending when the body returns are stopped.
 
-Do not leave goroutines running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Joining at the end does not make concurrent custom scopes supported.
+A completed operation replays its result without running the body, so the rest of the program must observe the body only through its return value. Do not share variables or channels between the body and goroutines outside the operation. The runtime keeps the clock, the timers and the random state (map seeds and iteration order, `select`, `math/rand`) of each operation separate, so these do not leak out of a skipped body. Heap addresses are not separated: code after the operation must not depend on pointer values, such as the iteration order of a map keyed by pointers or `%p` output.
 </Tabs.Tab>
 </Tabs>
 
