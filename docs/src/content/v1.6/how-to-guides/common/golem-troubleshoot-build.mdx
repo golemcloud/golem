@@ -28,9 +28,11 @@ The **check** step verifies that required system tools are installed and meet mi
 | Tool | Check | Install Hint |
 |------|-------|--------------|
 | `rustup` | `rustup --version` (minimum version enforced) | https://www.rust-lang.org/tools/install |
-| `rustc` | `rustc --version` (minimum version enforced) | `rustup install stable && rustup default stable` |
+| `rustc` | `rustc --version` (minimum version enforced) | `rustup toolchain install 1.99.1 --target wasm32-wasip2`, pinned with `rust-toolchain.toml` |
 | `cargo` | `cargo version` (minimum version enforced) | Installed with Rust toolchain |
 | `wasm32-wasip2` target | `rustup target list --installed` | `rustup target add wasm32-wasip2` |
+
+Golem 1.6 does not support agents built with Rust 1.100 or newer yet. Build with Rust 1.99.1 and pin it in the application, as [Setting up the development environment](/v1.6/develop/setup) describes. The install hint that `golem build` prints names stable Rust; use Rust 1.99.1 instead.
 
 ### TypeScript and Effect Projects
 | Tool | Check | Install Hint |
