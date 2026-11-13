@@ -668,6 +668,7 @@ interface oplog {
     record oplog-processor-checkpoint-parameters {
         timestamp: datetime,
         plugin: plugin-installation-description,
+        source-component-revision: component-revision,
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
@@ -971,10 +972,12 @@ interface oplog {
     record raw-oplog-processor-checkpoint-parameters {
         timestamp: datetime,
         plugin-grant-id: environment-plugin-grant-id,
+        source-component-revision: component-revision,
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
         last-batch-start: oplog-index,
+        delivery: option<list<u8>>,
     }
 
     variant oplog-entry {

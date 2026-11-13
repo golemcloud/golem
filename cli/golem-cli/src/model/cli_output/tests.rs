@@ -2744,6 +2744,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
             plugin: plugin(4),
+            source_component_revision: ComponentRevision::INITIAL,
             target_agent_id: agent_id("target-agent"),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),

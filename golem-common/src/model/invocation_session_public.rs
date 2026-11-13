@@ -467,6 +467,8 @@ pub enum PublicServerMessage {
     InvocationAccepted {
         #[serde(rename = "attemptId")]
         attempt_id: Uuid,
+        #[serde(rename = "agentId")]
+        agent_id: crate::model::AgentId,
         #[serde(rename = "idempotencyKey")]
         idempotency_key: InvocationId,
         mappings: Vec<PublicStreamMapping>,
@@ -978,11 +980,18 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
     match message {
         PublicServerMessage::InvocationAccepted {
             attempt_id,
+            agent_id,
             mappings,
             session_token,
             ..
         } => {
             validate_uuid_v4(*attempt_id, "attempt ID")?;
+            if agent_id.agent_id.is_empty() {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::MalformedMessage,
+                    "accepted agent ID must not be empty",
+                ));
+            }
             validate_token_text(session_token)?;
             validate_mappings(mappings)?;
         }

@@ -734,17 +734,21 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             ),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
+                source_component_revision,
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                delivery,
                 ..
             } => Entry::OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters {
                 plugin_grant_id: Some(plugin_grant_id.into()),
+                source_component_revision: source_component_revision.into(),
                 target_agent_id: Some(target_agent_id.into()),
                 confirmed_up_to: confirmed_up_to.into(),
                 sending_up_to: sending_up_to.into(),
                 last_batch_start: last_batch_start.into(),
+                delivery,
             }),
             OplogEntry::SetRetryPolicy { policy, .. } => {
                 Entry::SetRetryPolicy(RawSetRetryPolicyParameters {
@@ -1438,10 +1442,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp,
                     plugin_grant_id,
+                    source_component_revision: p.source_component_revision.try_into()?,
                     target_agent_id,
                     confirmed_up_to: OplogIndex::from_u64(p.confirmed_up_to),
                     sending_up_to: OplogIndex::from_u64(p.sending_up_to),
                     last_batch_start: OplogIndex::from_u64(p.last_batch_start),
+                    delivery: p.delivery,
                 })
             }
             Entry::SetRetryPolicy(p) => {

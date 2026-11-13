@@ -306,6 +306,7 @@ impl PublicInvocationSession {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
+                accepted_invocation: None,
             },
             SessionCheckpoint::default(),
             timeout,
@@ -462,6 +463,10 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
+                agent_id: "counter()".to_string(),
+            },
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),

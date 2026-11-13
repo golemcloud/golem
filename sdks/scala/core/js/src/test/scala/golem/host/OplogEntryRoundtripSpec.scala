@@ -991,6 +991,31 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.timestamp.seconds == BigInt(1700000000)
       )
     },
+    test("OplogProcessorCheckpoint preserves the source component revision") {
+      val raw = wrapEntry(
+        "oplog-processor-checkpoint",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          plugin = js.Dynamic.literal(
+            pluginName = "processor",
+            pluginVersion = "1.0",
+            parameters = js.Array[js.Tuple2[String, String]]()
+          ),
+          sourceComponentRevision = js.BigInt("9007199254740993"),
+          targetAgentId = js.Dynamic.literal(agentId = "processor-agent"),
+          confirmedUpTo = js.BigInt("11"),
+          sendingUpTo = js.BigInt("15"),
+          lastBatchStart = js.BigInt("12")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.OplogProcessorCheckpoint].params
+      assertTrue(
+        parsed.sourceComponentRevision == BigInt("9007199254740993"),
+        parsed.confirmedUpTo == BigInt(11),
+        parsed.sendingUpTo == BigInt(15),
+        parsed.lastBatchStart == BigInt(12)
+      )
+    },
     // --- Edge cases ---
 
     test("unknown oplog entry tag throws") {

@@ -813,11 +813,44 @@ function accepted(start, mappings = [], idempotencyKey = start.idempotencyKey) {
     version: 1,
     type: 'invocationAccepted',
     attemptId: start.attemptId,
+    agentId: { componentId: '00000000-0000-0000-0000-000000000004', agentId: 'counter()' },
     idempotencyKey,
     sessionToken: 'session',
     mappings,
   };
 }
+
+test('acceptance keeps the final identity separate from a non-UUID request seed', async () => {
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      assert.equal(start.idempotencyKey, 'non-uuid-request-seed');
+      socket.send(JSON.stringify(accepted(start, [], '00000000-0000-0000-0000-000000000009')));
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          type: 'invocationResult',
+          mappings: [],
+          result: { kind: 'value', graph: u32Graph, value: { kind: 'u32', value: 42 } },
+        }),
+      );
+      socket.send(
+        JSON.stringify({ version: 1, type: 'invocationFinished', outcome: { kind: 'success' } }),
+      );
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => ({ ...descriptor, idempotencyKey: 'non-uuid-request-seed' }),
+      () => ({}),
+      (value) => value.value.value,
+    );
+    assert.equal(await method(), 42);
+  } finally {
+    await local.close();
+  }
+});
 
 test('uncertain pre-acceptance close exact-retries the frozen start', async () => {
   const starts = [];

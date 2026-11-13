@@ -590,13 +590,16 @@ oplog_entry! {
         wit_public_type: "oplog-processor-checkpoint-parameters"
         raw {
             plugin_grant_id: EnvironmentPluginGrantId,
+            source_component_revision: ComponentRevision,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
             last_batch_start: OplogIndex,
+            delivery: Option<Vec<u8>>,
         }
         public {
             plugin: PluginInstallationDescription,
+            source_component_revision: ComponentRevision,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,

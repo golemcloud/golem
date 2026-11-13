@@ -621,6 +621,7 @@ sealed trait JsSpanClosedParameters extends js.Object {
 sealed trait JsOplogProcessorCheckpointParameters extends js.Object {
   def timestamp: JsDatetime                   = js.native
   def plugin: JsPluginInstallationDescription = js.native
+  def sourceComponentRevision: js.BigInt      = js.native
   def targetAgentId: JsAgentId                = js.native
   def confirmedUpTo: js.BigInt                = js.native
   def sendingUpTo: js.BigInt                  = js.native

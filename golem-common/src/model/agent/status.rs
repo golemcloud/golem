@@ -40,7 +40,7 @@ use crate::model::{
     RetryConfig, RetryPolicyState, Timestamp,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
@@ -1359,6 +1359,7 @@ pub struct OplogProcessorCheckpointState {
     pub confirmed_up_to: OplogIndex,
     pub sending_up_to: OplogIndex,
     pub last_batch_start: OplogIndex,
+    pub delivery: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

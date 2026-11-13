@@ -704,6 +704,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     plugin: PluginInstallationDescription;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
@@ -1056,10 +1057,12 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     pluginGrantId: EnvironmentPluginGrantId;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
     lastBatchStart: OplogIndex;
+    delivery?: Uint8Array;
   };
   export type OplogEntry =
   /** The initial agent oplog entry */

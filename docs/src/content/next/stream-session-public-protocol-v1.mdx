@@ -350,13 +350,23 @@ Transport disconnection is not represented by this message and only detaches.
 ```json
 {
   "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
-  "idempotencyKey":"upload-42",
+  "agentId": {
+    "componentId":"00000000-0000-0000-0000-000000000004",
+    "agentId":"media/encoder"
+  },
+  "idempotencyKey":"01234567-89ab-cdef-fedc-ba9876543210",
   "mappings":[],
   "sessionToken":"<opaque-session-token>",
   "type":"invocationAccepted",
   "version":1
 }
 ```
+
+`agentId` and `idempotencyKey` identify the accepted invocation. The UUID can
+differ from the request seed. Clients persist both identifiers with the session
+token. An acceptance after resume must preserve both identifiers. A tool start
+that targets a component returns the actual accepted agent owner here; clients
+must not derive that owner from the component or decode the opaque session token.
 
 `mappings` installs the complete initial or resumed channel table before
 execution or output exposure. An exact-attempt replay returns the committed

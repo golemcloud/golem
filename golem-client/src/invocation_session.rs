@@ -14,7 +14,6 @@
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, Stream, StreamExt};
-use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
@@ -24,6 +23,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamMapping,
     decode_binary_message, decode_server_text, encode_binary_message, encode_text,
 };
+use golem_common::model::{InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
     decode_public_schema_value, encode_public_schema_value,
@@ -806,6 +806,7 @@ pub struct InvocationSessionStateSnapshot {
     pub stable_stream_bindings: BTreeMap<String, StableStreamIdentity>,
     pub pending_operation: Option<PublicClientMessage>,
     pub session_token: Option<String>,
+    pub accepted_invocation: Option<OwnedInvocationId>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -840,6 +841,7 @@ struct SessionState {
     stable_streams: BTreeMap<String, StableStreamBinding>,
     pending_operation: Option<PublicClientMessage>,
     session_token: Option<String>,
+    accepted_invocation: Option<OwnedInvocationId>,
 }
 
 #[derive(Clone)]
@@ -874,6 +876,7 @@ impl Default for DeliveryTracker {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
+                accepted_invocation: None,
             },
             Arc::new(()),
         )
@@ -926,6 +929,7 @@ impl DeliveryTracker {
                     stable_streams,
                     pending_operation: initial.pending_operation,
                     session_token: initial.session_token,
+                    accepted_invocation: initial.accepted_invocation,
                 }),
                 observer,
             }),
@@ -1041,6 +1045,7 @@ impl DeliveryTracker {
             &stable_streams,
             &state.pending_operation,
             &state.session_token,
+            &state.accepted_invocation,
         );
         self.shared
             .observer
@@ -1176,6 +1181,7 @@ impl DeliveryTracker {
         &self,
         pending_operation: Option<PublicClientMessage>,
         session_token: Option<String>,
+        accepted_invocation: Option<OwnedInvocationId>,
     ) -> Result<(), SessionTransportError> {
         let mut state = self
             .shared
@@ -1187,6 +1193,18 @@ impl DeliveryTracker {
         if session_token.is_some() {
             changed.session_token.clone_from(&session_token);
         }
+        if let Some(accepted) = &accepted_invocation {
+            if state
+                .accepted_invocation
+                .as_ref()
+                .is_some_and(|previous| previous != accepted)
+            {
+                return Err(SessionTransportError::Protocol(
+                    "accepted invocation identity changed during resume".to_string(),
+                ));
+            }
+            changed.accepted_invocation = Some(accepted.clone());
+        }
         self.shared
             .observer
             .state_changed(&changed)
@@ -1194,6 +1212,9 @@ impl DeliveryTracker {
         state.pending_operation = pending_operation;
         if session_token.is_some() {
             state.session_token = session_token;
+        }
+        if accepted_invocation.is_some() {
+            state.accepted_invocation = accepted_invocation;
         }
         Ok(())
     }
@@ -1204,6 +1225,7 @@ fn snapshot(state: &SessionState) -> InvocationSessionStateSnapshot {
         &state.stable_streams,
         &state.pending_operation,
         &state.session_token,
+        &state.accepted_invocation,
     )
 }
 
@@ -1211,6 +1233,7 @@ fn snapshot_from_parts(
     stable_streams: &BTreeMap<String, StableStreamBinding>,
     pending_operation: &Option<PublicClientMessage>,
     session_token: &Option<String>,
+    accepted_invocation: &Option<OwnedInvocationId>,
 ) -> InvocationSessionStateSnapshot {
     InvocationSessionStateSnapshot {
         delivered_output_cursors: stable_streams
@@ -1236,6 +1259,7 @@ fn snapshot_from_parts(
             .collect(),
         pending_operation: pending_operation.clone(),
         session_token: session_token.clone(),
+        accepted_invocation: accepted_invocation.clone(),
     }
 }
 
@@ -1916,6 +1940,8 @@ impl InvocationSession {
             match message {
                 PublicServerMessage::InvocationAccepted {
                     attempt_id,
+                    agent_id,
+                    idempotency_key,
                     mappings,
                     session_token,
                     ..
@@ -1933,8 +1959,11 @@ impl InvocationSession {
                     }
                     self.deliveries.begin_connection(mappings)?;
                     self.install_input_mappings(mappings, true)?;
-                    self.deliveries
-                        .set_attachment_state(None, Some(session_token.clone()))?;
+                    self.deliveries.set_attachment_state(
+                        None,
+                        Some(session_token.clone()),
+                        Some(OwnedInvocationId::new(agent_id.clone(), *idempotency_key)),
+                    )?;
                     self.reconnect.accepted();
                     self.attachment_state = AttachmentState::Accepted {
                         attempt_id: *attempt_id,
@@ -1970,7 +1999,8 @@ impl InvocationSession {
                             {
                                 *attempt_id = uuid::Uuid::new_v4();
                                 *operation = PublicResumeOperation::Takeover;
-                                self.deliveries.set_attachment_state(Some(pending), None)?;
+                                self.deliveries
+                                    .set_attachment_state(Some(pending), None, None)?;
                                 self.reconnect.failed(SessionTransportError::Rejected {
                                     code: *code,
                                     message: message.clone(),
@@ -2007,7 +2037,7 @@ impl InvocationSession {
                         }
                         _ => return Err(SessionTransportError::UnexpectedAttempt),
                     }
-                    self.deliveries.set_attachment_state(None, None)?;
+                    self.deliveries.set_attachment_state(None, None, None)?;
                     self.attachment_state = AttachmentState::Terminal;
                 }
                 PublicServerMessage::AttachmentRevoked { .. }
@@ -2078,7 +2108,8 @@ impl InvocationSession {
             session_token,
             version: 1,
         };
-        self.deliveries.set_attachment_state(Some(request), None)
+        self.deliveries
+            .set_attachment_state(Some(request), None, None)
     }
 
     /// Replaces a rejected pending operation with a new attempt of it: a new attempt ID, and
@@ -2108,7 +2139,8 @@ impl InvocationSession {
             }
             _ => return Err(SessionTransportError::UnexpectedAttempt),
         }
-        self.deliveries.set_attachment_state(Some(pending), None)
+        self.deliveries
+            .set_attachment_state(Some(pending), None, None)
     }
 
     /// Reconnects after the transport detached with `cause`. Losing a stable connection restarts
@@ -3170,6 +3202,7 @@ where
         stable_stream_bindings: BTreeMap::new(),
         pending_operation: Some(start),
         session_token: None,
+        accepted_invocation: None,
     };
     let session =
         InvocationSession::open(provider, None, reconnect, initial, false, Arc::new(())).await?;
@@ -4302,6 +4335,13 @@ mod tests {
     use golem_common::model::invocation_session_public::PublicServerCancelReason;
     use serde::Deserialize;
 
+    fn accepted_agent_id() -> golem_common::model::AgentId {
+        golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
+            agent_id: "__external_tool:test".to_string(),
+        }
+    }
+
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct BinaryFixture {
@@ -4663,6 +4703,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -4848,6 +4889,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -4872,6 +4914,7 @@ mod tests {
             output
         });
 
+        let bindings = session.delivery_tracker();
         let actual_result = tokio::time::timeout(
             Duration::from_secs(5),
             drive_native_tool_session(
@@ -4891,6 +4934,13 @@ mod tests {
         assert_eq!(output, [MARKER, PAYLOAD].concat());
         assert_eq!(stderr, STDERR_MARKER);
         assert_eq!(actual_result, structured_result);
+        assert_eq!(
+            bindings.snapshot().accepted_invocation,
+            Some(OwnedInvocationId::new(
+                accepted_agent_id(),
+                InvocationId(uuid::Uuid::from_u128(2)),
+            ))
+        );
         server.await.unwrap();
     }
 
@@ -4937,6 +4987,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![native_output_mapping(12, role, "native-output")],
                         session_token: "native-session".to_string(),
@@ -4989,6 +5040,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -5070,6 +5122,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -5150,6 +5203,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -5248,6 +5302,7 @@ mod tests {
             .send(Message::Text(
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
+                    agent_id: accepted_agent_id(),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(3)),
                     mappings: vec![
                         PublicStreamMapping {
@@ -5431,6 +5486,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -6034,6 +6090,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -6103,6 +6160,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -6170,6 +6228,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6228,6 +6287,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -6298,6 +6358,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6352,6 +6413,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resumed_attempt,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6418,6 +6480,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -6517,6 +6580,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
+                accepted_invocation: None,
             },
             Arc::new(FailOnceObserver {
                 calls: AtomicUsize::new(0),
@@ -6565,6 +6629,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: None,
                 session_token: None,
+                accepted_invocation: None,
             },
             Arc::new(FailOnceObserver {
                 calls: AtomicUsize::new(0),
@@ -6575,14 +6640,70 @@ mod tests {
         let pending = start_request(uuid::Uuid::new_v4());
 
         assert!(matches!(
-            tracker.set_attachment_state(Some(pending.clone()), None),
+            tracker.set_attachment_state(Some(pending.clone()), None, None),
             Err(SessionTransportError::StatePersistence(_))
         ));
         assert_eq!(tracker.snapshot().pending_operation, None);
         tracker
-            .set_attachment_state(Some(pending.clone()), None)
+            .set_attachment_state(Some(pending.clone()), None, None)
             .unwrap();
         assert_eq!(tracker.snapshot().pending_operation, Some(pending));
+    }
+
+    #[test]
+    fn accepted_owner_and_uuid_persist_atomically_and_survive_resume() {
+        let tracker = DeliveryTracker::new(
+            empty_snapshot(start_request(uuid::Uuid::new_v4())),
+            Arc::new(FailOnceObserver {
+                calls: AtomicUsize::new(0),
+                fail_at: 0,
+            }),
+        )
+        .unwrap();
+        let accepted =
+            OwnedInvocationId::new(accepted_agent_id(), InvocationId(uuid::Uuid::from_u128(9)));
+        assert!(matches!(
+            tracker.set_attachment_state(None, Some("token".to_string()), Some(accepted.clone())),
+            Err(SessionTransportError::StatePersistence(_))
+        ));
+        assert!(tracker.snapshot().accepted_invocation.is_none());
+        assert!(tracker.snapshot().session_token.is_none());
+        assert!(tracker.snapshot().pending_operation.is_some());
+        tracker
+            .set_attachment_state(None, Some("token".to_string()), Some(accepted.clone()))
+            .unwrap();
+        let restored = DeliveryTracker::new(tracker.snapshot(), Arc::new(())).unwrap();
+        restored
+            .set_attachment_state(Some(start_request(uuid::Uuid::new_v4())), None, None)
+            .unwrap();
+        assert_eq!(
+            restored.snapshot().accepted_invocation,
+            Some(accepted.clone())
+        );
+        restored
+            .set_attachment_state(
+                None,
+                Some("rotated-token".to_string()),
+                Some(accepted.clone()),
+            )
+            .unwrap();
+        let before = restored.snapshot();
+        let different_owner = OwnedInvocationId::new(
+            golem_common::model::AgentId {
+                agent_id: "__external_tool:other".to_string(),
+                ..accepted_agent_id()
+            },
+            accepted.id(),
+        );
+        assert!(matches!(
+            restored.set_attachment_state(
+                None,
+                Some("wrong-token".to_string()),
+                Some(different_owner)
+            ),
+            Err(SessionTransportError::Protocol(_))
+        ));
+        assert_eq!(restored.snapshot(), before);
     }
 
     #[test]
@@ -6945,6 +7066,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -6978,6 +7100,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7129,6 +7252,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -7150,6 +7274,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(expected),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7251,6 +7376,7 @@ mod tests {
                             .send(Message::Text(
                                 encode_text(&PublicServerMessage::InvocationAccepted {
                                     attempt_id,
+                                    agent_id: accepted_agent_id(),
                                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                                     mappings: vec![PublicStreamMapping {
                                         channel,
@@ -7307,6 +7433,7 @@ mod tests {
                     stable_stream_bindings: BTreeMap::new(),
                     pending_operation: Some(initial),
                     session_token: None,
+                    accepted_invocation: None,
                 },
                 false,
                 Arc::new(()),
@@ -7364,6 +7491,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -7400,6 +7528,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -7421,6 +7550,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7484,6 +7614,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -7528,6 +7659,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -7564,6 +7696,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7615,6 +7748,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
@@ -7662,6 +7796,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
@@ -7701,6 +7836,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7775,6 +7911,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7811,6 +7948,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -7848,6 +7986,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -7886,6 +8025,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -7931,6 +8071,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resume_attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -7952,6 +8093,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             true,
             Arc::new(()),
@@ -8002,6 +8144,7 @@ mod tests {
             for message in [
                 PublicServerMessage::InvocationAccepted {
                     attempt_id,
+                    agent_id: accepted_agent_id(),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                     mappings: Vec::new(),
                     session_token: "session-token".to_string(),
@@ -8033,6 +8176,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             true,
             Arc::new(()),
@@ -8078,6 +8222,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -8109,6 +8254,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -8148,6 +8294,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
+                        agent_id: accepted_agent_id(),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -8180,6 +8327,7 @@ mod tests {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(initial),
                 session_token: None,
+                accepted_invocation: None,
             },
             false,
             Arc::new(()),
@@ -8269,6 +8417,7 @@ mod tests {
             stable_stream_bindings: BTreeMap::new(),
             pending_operation: Some(pending),
             session_token: None,
+            accepted_invocation: None,
         }
     }
 
@@ -8333,6 +8482,7 @@ mod tests {
     fn accepted(attempt_id: uuid::Uuid, mappings: Vec<PublicStreamMapping>) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id,
+            agent_id: accepted_agent_id(),
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings,
             session_token: "session-token".to_string(),

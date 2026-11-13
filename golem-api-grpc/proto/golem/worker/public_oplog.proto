@@ -775,6 +775,7 @@ message OplogProcessorCheckpointParameters {
   uint64 confirmed_up_to = 4;
   uint64 sending_up_to = 5;
   uint64 last_batch_start = 6;
+  uint64 source_component_revision = 7;
 }
 
 message OplogEntryWithIndex {

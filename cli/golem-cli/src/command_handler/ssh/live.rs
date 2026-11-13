@@ -118,6 +118,7 @@ pub(super) async fn run_live(
             version: INVOCATION_SESSION_VERSION,
         }),
         session_token: None,
+        accepted_invocation: None,
     };
     let requests = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
     open_and_drive(
@@ -250,6 +251,7 @@ mod tests {
                 version: INVOCATION_SESSION_VERSION,
             }),
             session_token: None,
+            accepted_invocation: None,
         };
         let call = open_and_drive(
             Arc::new(Unreachable(address)),

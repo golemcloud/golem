@@ -443,6 +443,8 @@ message RawOplogProcessorCheckpointParameters {
   uint64 confirmed_up_to = 3;
   uint64 sending_up_to = 4;
   uint64 last_batch_start = 5;
+  optional bytes delivery = 6;
+  uint64 source_component_revision = 7;
 }
 
 message RawSetRetryPolicyParameters {

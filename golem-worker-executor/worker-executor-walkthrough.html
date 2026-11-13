@@ -2398,14 +2398,14 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <text x="830" y="114" text-anchor="middle" class="lbl">by idempotency key</text>
 
   <path class="arrow strong" style="marker-end:url(#arr-proc)" d="M650 70 H718"/>
-  <text x="684" y="60" text-anchor="middle" class="lbl">2. invoke(key)</text>
+  <text x="684" y="60" text-anchor="middle" class="lbl">2. send</text>
   <path class="arrow dashed" style="marker-end:url(#arr-proc)" d="M718 105 H652"/>
   <text x="684" y="122" text-anchor="middle" class="lbl">ack</text>
 
   <rect class="box sunken" x="290" y="260" width="360" height="80"/>
   <text x="470" y="285" text-anchor="middle" class="title" style="font-size:12px">AgentStatusRecord.oplog_processor_checkpoints</text>
-  <text x="305" y="310" class="lbl">sending_up_to   = #131   persisted before the invoke</text>
-  <text x="305" y="328" class="lbl">confirmed_up_to = #131   persisted after the ack</text>
+  <text x="305" y="310" class="lbl">before send: sending_up_to = #131 + delivery snapshot</text>
+  <text x="305" y="328" class="lbl">after ack: confirmed_up_to = #131; clear snapshot</text>
   <path class="arrow" style="marker-end:url(#arr-proc)" d="M380 190 V258"/>
   <text x="372" y="228" text-anchor="end" class="lbl">1. write sending_up_to</text>
   <path class="arrow" style="marker-end:url(#arr-proc)" d="M560 190 V258"/>
@@ -2420,9 +2420,9 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 </figure>
 <ul>
   <li><strong>Key.</strong> <code>oplog_processor_idempotency_key</code> hashes source agent, plugin grant id and the batch's first/last index into a UUIDv5. Two forwarders that both see the same batch derive the same key.</li>
-  <li><strong>Checkpoints.</strong> Per plugin, <code>confirmed_up_to</code> and <code>sending_up_to</code> live in <code>AgentStatusRecord.oplog_processor_checkpoints</code>, so a reconstructed forwarder knows exactly which entries still need delivery. The <code>OplogProcessorCheckpoint</code> hint (<code>plugin_grant_id, target_agent_id, confirmed_up_to, sending_up_to, last_batch_start</code>) records checkpoint advances in the source oplog.</li>
+  <li><strong>Checkpoints.</strong> Per plugin, <code>confirmed_up_to</code> and <code>sending_up_to</code> live in <code>AgentStatusRecord.oplog_processor_checkpoints</code>, so a reconstructed forwarder knows exactly which entries still need delivery. Before sending, the <code>OplogProcessorCheckpoint</code> hint commits the target, range and <code>delivery</code> snapshot in the source oplog. The snapshot pins the installed plugin and source metadata, including status, revision, environment and configuration; it excludes historical host indexes and processor checkpoints so the snapshot does not grow with source history. Confirmation clears the snapshot but retains <code>source_component_revision</code>, so public oplog rendering can still resolve the installation after an update removes it.</li>
   <li><strong>Retry never widens the batch.</strong> If <code>sending_up_to &gt; confirmed_up_to</code> when the forwarder wakes up, it re-sends exactly <code>confirmed_up_to+1 ..= sending_up_to</code> — the same range, hence the same key. Only when the previous batch is confirmed does a new batch extend to the committed tail. A range consisting only of checkpoint entries is skipped by advancing both cursors.</li>
-  <li><strong>Target.</strong> The explicit durable processor owner uses the same acceptance, deduplication and reconstruction machinery as <a href="#s-rpc">durable RPC (§12)</a>. A retry retains the recorded target as well as its batch range and key, even when the per-executor processor cache has been rebuilt.</li>
+  <li><strong>Target and request.</strong> The explicit durable processor owner uses the same acceptance, deduplication and reconstruction machinery as <a href="#s-rpc">durable RPC (§12)</a>. A retry retains the recorded target, batch range, key and delivery snapshot, even when the source status changes, the plugin is detached or the per-executor cache is rebuilt. Both local and remote ambiguous failures retain that target: a missing response does not prove admission failed. Full request equality remains enforced.</li>
 </ul>
 
 <!-- ===================== 17. SNAPSHOTS & UPDATES ===================== -->

@@ -2412,6 +2412,7 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
+        agent_id,
         idempotency_key,
         mappings,
         session_token,
@@ -3983,6 +3984,7 @@ mod tests {
             .unwrap();
             let PublicServerMessage::InvocationAccepted {
                 idempotency_key,
+                agent_id: accepted_agent_id,
                 mappings,
                 session_token,
                 ..
@@ -4004,6 +4006,7 @@ mod tests {
             assert_eq!(idempotency_key, InvocationId(Uuid::from_u128(5)));
             assert_eq!(session.idempotency_key, idempotency_key.to_string());
             let agent_id: golem_common::model::AgentId = proto_agent_id().try_into().unwrap();
+            assert_eq!(accepted_agent_id, agent_id);
             assert_eq!(
                 session.logical_invocation_id,
                 Uuid::new_v5(

@@ -545,6 +545,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     plugin: value.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    source_component_revision: value.source_component_revision.try_into()?,
                     target_agent_id: value
                         .target_agent_id
                         .ok_or("Missing target_agent_id field")?
@@ -1277,6 +1278,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::OplogProcessorCheckpointParameters {
                             timestamp: Some(params.timestamp.into()),
                             plugin: Some(params.plugin.into()),
+                            source_component_revision: params.source_component_revision.into(),
                             target_agent_id: Some(params.target_agent_id.into()),
                             confirmed_up_to: params.confirmed_up_to.into(),
                             sending_up_to: params.sending_up_to.into(),
@@ -2206,10 +2208,12 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
                     plugin_grant_id: p.plugin.environment_plugin_grant_id,
+                    source_component_revision: p.source_component_revision,
                     target_agent_id: p.target_agent_id,
                     confirmed_up_to: p.confirmed_up_to,
                     sending_up_to: p.sending_up_to,
                     last_batch_start: p.last_batch_start,
+                    delivery: None,
                 })
             }
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {

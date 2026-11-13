@@ -104,6 +104,7 @@ struct InvocationSessionCheckpoint {
     idempotency_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_token: Option<String>,
+    accepted_invocation: Option<golem_common::model::OwnedInvocationId>,
     delivered_output_cursors: BTreeMap<String, String>,
     stable_stream_bindings: BTreeMap<String, StableStreamIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +158,7 @@ impl InvocationSessionStateObserver for CliCheckpointObserver {
             return Ok(());
         };
         checkpoint.session_token = state.session_token.clone();
+        checkpoint.accepted_invocation = state.accepted_invocation.clone();
         checkpoint.delivered_output_cursors = state.delivered_output_cursors.clone();
         checkpoint.stable_stream_bindings = state.stable_stream_bindings.clone();
         checkpoint.pending_operation = state
@@ -333,6 +335,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 selector: selector.clone(),
                 idempotency_key: idempotency_key_value.clone(),
                 session_token: None,
+                accepted_invocation: None,
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(PendingOperation {
@@ -428,6 +431,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         session_token: checkpoint
             .as_ref()
             .and_then(|checkpoint| checkpoint.session_token.clone()),
+        accepted_invocation: checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.accepted_invocation.clone()),
     };
     let checkpoint_observer = Arc::new(CliCheckpointObserver {
         checkpoint: Mutex::new(checkpoint),
@@ -962,6 +968,7 @@ pub(super) async fn invoke_scalar(
             stable_stream_bindings: BTreeMap::new(),
             pending_operation: Some(initial),
             session_token: None,
+            accepted_invocation: None,
         },
         false,
         Arc::new(CliCheckpointObserver {
@@ -2952,6 +2959,15 @@ mod public_tests {
             },
             idempotency_key: "invocation-key".to_string(),
             session_token: Some("opaque-session-token".to_string()),
+            accepted_invocation: Some(golem_common::model::OwnedInvocationId::new(
+                golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(
+                        uuid::Uuid::from_u128(4),
+                    ),
+                    agent_id: "counter()".to_string(),
+                },
+                golem_common::model::InvocationId(uuid::Uuid::from_u128(5)),
+            )),
             delivered_output_cursors: BTreeMap::from([(
                 "opaque-stream-token".to_string(),
                 "opaque-cursor".to_string(),
@@ -2974,6 +2990,10 @@ mod public_tests {
         let mut expected = checkpoint();
         write_checkpoint(&path, &expected).unwrap();
         assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
+        assert_eq!(
+            load_checkpoint(&path).unwrap().accepted_invocation,
+            expected.accepted_invocation
+        );
 
         expected
             .delivered_output_cursors

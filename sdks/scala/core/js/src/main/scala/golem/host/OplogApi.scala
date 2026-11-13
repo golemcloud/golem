@@ -370,6 +370,7 @@ object OplogApi {
   final case class OplogProcessorCheckpointParameters(
     timestamp: ContextApi.DateTime,
     plugin: PluginInstallationDescription,
+    sourceComponentRevision: BigInt,
     targetAgentId: AgentHostApi.AgentIdLiteral,
     confirmedUpTo: OplogIndex,
     sendingUpTo: OplogIndex,
@@ -623,6 +624,7 @@ object OplogApi {
             OplogProcessorCheckpointParameters(
               timestamp = parseDateTime(cp.timestamp),
               plugin = parsePluginInstallationDescription(cp.plugin),
+              sourceComponentRevision = BigInt(cp.sourceComponentRevision.toString),
               targetAgentId = parseAgentId(cp.targetAgentId),
               confirmedUpTo = BigInt(cp.confirmedUpTo.toString),
               sendingUpTo = BigInt(cp.sendingUpTo.toString),

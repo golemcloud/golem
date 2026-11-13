@@ -22988,6 +22988,9 @@ components:
           format: date-time
         plugin:
           $ref: '#/components/schemas/PluginInstallationDescription'
+        sourceComponentRevision:
+          type: integer
+          format: uint64
         targetAgentId:
           $ref: '#/components/schemas/AgentId'
         confirmedUpTo:
@@ -23002,6 +23005,7 @@ components:
       required:
       - timestamp
       - plugin
+      - sourceComponentRevision
       - targetAgentId
       - confirmedUpTo
       - sendingUpTo

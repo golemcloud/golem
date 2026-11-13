@@ -118,11 +118,13 @@ type session struct {
 	tokenChannels map[string]uint32
 	cursors       map[string]string
 
-	attempt      string
-	descriptor   []byte
-	accepted     bool
-	everAccepted bool
-	sessionToken string
+	attempt       string
+	descriptor    []byte
+	accepted      bool
+	everAccepted  bool
+	sessionToken  string
+	acceptedOwner AgentID
+	acceptedKey   string
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
@@ -817,7 +819,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	}
 	switch kind {
 	case "invocationAccepted":
-		if err := m.members(kind, []string{"attemptId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
+		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
 			return err
 		}
 		return s.accept(c, m)
@@ -888,6 +890,25 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if err != nil {
 		return err
 	}
+	owner, err := m.object("agentId")
+	if err != nil {
+		return err
+	}
+	if err := owner.membersOnly("agentId", []string{"componentId", "agentId"}); err != nil {
+		return err
+	}
+	componentID, err := owner.str("componentId")
+	if err != nil {
+		return err
+	}
+	agentID, err := owner.str("agentId")
+	if err != nil {
+		return err
+	}
+	if componentID == "" || agentID == "" {
+		return protocolErrorf("invalid accepted agent identity")
+	}
+	acceptedOwner := AgentID{ComponentID: componentID, AgentID: agentID}
 	key, err := m.str("idempotencyKey")
 	if err != nil {
 		return err
@@ -908,13 +929,18 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.accepted {
 		return protocolErrorf("duplicate invocation acceptance")
 	}
-	if attempt != s.attempt || key != s.idem {
+	if attempt != s.attempt {
 		return protocolErrorf("the acceptance does not match the pending operation")
+	}
+	if s.everAccepted && (s.acceptedOwner != acceptedOwner || s.acceptedKey != key) {
+		return protocolErrorf("accepted invocation identity changed")
 	}
 	if err := s.install(mappings, true); err != nil {
 		return err
 	}
 	s.sessionToken = token
+	s.acceptedOwner = acceptedOwner
+	s.acceptedKey = key
 	s.accepted = true
 	c.acceptedAt = time.Now()
 	s.everAccepted = true

@@ -297,6 +297,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     OplogProcessorCheckpoint { record OplogProcessorCheckpointParams => OplogProcessorCheckpointParameters {
         timestamp: timestamp.into(),
         plugin: plugin.into(),
+        source_component_revision: source_component_revision.into(),
         target_agent_id: target_agent_id.into(),
         confirmed_up_to: confirmed_up_to.into(),
         sending_up_to: sending_up_to.into(),

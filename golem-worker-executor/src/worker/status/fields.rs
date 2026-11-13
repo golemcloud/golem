@@ -889,6 +889,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                delivery,
                 ..
             } => {
                 result.insert(
@@ -898,6 +899,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *confirmed_up_to,
                         sending_up_to: *sending_up_to,
                         last_batch_start: *last_batch_start,
+                        delivery: delivery.clone(),
                     },
                 );
             }
@@ -911,6 +913,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *idx,
                         sending_up_to: *idx,
                         last_batch_start: *idx,
+                        delivery: None,
                     });
             }
             OplogEntry::DeactivatePlugin {
@@ -940,6 +943,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                             confirmed_up_to: *idx,
                             sending_up_to: *idx,
                             last_batch_start: *idx,
+                            delivery: None,
                         });
                 }
             }

@@ -1413,7 +1413,7 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent that owns the invocation
+        /// Existing agent; for --lookup use the receipt's <component-id>:<agent-id>
         #[arg(long)]
         pub agent: Option<RawAgentId>,
         /// Component used to create a fresh ephemeral invocation owner without constructing an agent
@@ -1442,13 +1442,13 @@ pub mod tool {
         /// Enqueue without waiting
         #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
-        /// Look up an existing invocation without starting execution or input
+        /// Look up the receipt's final invocation UUID and owner without starting execution or input
         #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
         #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
-        /// Idempotency key; `-` generates a fresh key
+        /// Request seed; `-` generates a fresh seed. With --lookup, the receipt's final invocation UUID
         #[arg(long, short)]
         pub idempotency_key: Option<IdempotencyKey>,
     }

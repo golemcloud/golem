@@ -3420,8 +3420,16 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
-range and key across retries, independently of a rebuilt per-executor processor cache.
+otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
+installed plugin and source metadata, including the guest-visible status, revision, environment
+and configuration. Its status contains only the guest-visible status, revision and latest retry
+state. Historical host indexes and processor checkpoints are excluded so snapshot size does not
+grow with source history. Reconstruction reuses this snapshot rather than current source metadata, even
+when the plugin is no longer attached. Both local and remote ambiguous failures retain the recorded
+target: a missing response does not prove that admission failed. Confirmation clears the snapshot
+but retains `source_component_revision`; public rendering resolves the installation at that revision,
+even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
 
 ## Permission-card handles
 

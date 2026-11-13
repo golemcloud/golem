@@ -359,6 +359,7 @@ before (value) {}
         plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
             uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
         ),
+        source_component_revision: params.source_component_revision.try_into()?,
         target_agent_id: golem_common::model::AgentId::from(params.target_agent_id),
         confirmed_up_to: golem_common::model::OplogIndex::from_u64(
             params.confirmed_up_to,
@@ -369,6 +370,7 @@ before (value) {}
         last_batch_start: golem_common::model::OplogIndex::from_u64(
             params.last_batch_start,
         ),
+        delivery: params.delivery,
     } }
     SetRetryPolicy { override (oplog::OplogEntry::SetRetryPolicy(params)) => {
                     let named: golem_common::model::retry_policy::NamedRetryPolicy =
@@ -770,10 +772,12 @@ before (value) {}
     OplogProcessorCheckpoint { record () => RawOplogProcessorCheckpointParameters {
         timestamp: timestamp.into(),
         plugin_grant_id: plugin_grant_id.into(),
+        source_component_revision: source_component_revision.into(),
         target_agent_id: target_agent_id.into(),
         confirmed_up_to: confirmed_up_to.into(),
         sending_up_to: sending_up_to.into(),
         last_batch_start: last_batch_start.into(),
+        delivery: delivery,
     } }
     SetRetryPolicy { record (entity_parent_start_index) => SetRetryPolicyParameters {
         timestamp: timestamp.into(),

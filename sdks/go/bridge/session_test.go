@@ -227,6 +227,7 @@ func acceptAs(c *fakeConn, op received, key any, session string, mappings ...map
 	}
 	c.send("invocationAccepted", map[string]any{
 		"attemptId": op.m["attemptId"], "idempotencyKey": key,
+		"agentId":  map[string]any{"componentId": "00000000-0000-0000-0000-000000000004", "agentId": "counter()"},
 		"mappings": mappings, "sessionToken": session,
 	})
 }
@@ -322,6 +323,23 @@ func ctxT(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func TestAcceptedIdentityCanDifferFromTheRequestSeed(t *testing.T) {
+	final := "00000000-0000-0000-0000-000000000009"
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		if start.m["idempotencyKey"] == final {
+			t.Fatal("the test must distinguish the request seed from the final UUID")
+		}
+		acceptAs(c, start, final, "session")
+		c.send("invocationResult", map[string]any{"mappings": []any{}, "result": map[string]any{"kind": "none"}})
+		finished(c)
+		c.waitClose()
+	})
+	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", schema.RecordValue{}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStreamsFlowBothWays(t *testing.T) {

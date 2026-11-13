@@ -684,13 +684,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp,
                 plugin_grant_id,
+                source_component_revision,
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                ..
             } => {
                 let metadata = components
-                    .get_metadata(owner_component_id, Some(component_revision))
+                    .get_metadata(owner_component_id, Some(source_component_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
@@ -710,6 +712,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     OplogProcessorCheckpointParams {
                         timestamp,
                         plugin: desc,
+                        source_component_revision,
                         target_agent_id,
                         confirmed_up_to,
                         sending_up_to,

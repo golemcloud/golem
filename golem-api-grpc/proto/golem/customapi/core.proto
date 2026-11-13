@@ -265,6 +265,7 @@ message RouteBehaviour {
     bool allow_stream_delete = 3;
     bool allow_invocation_delete = 4;
     optional DurableStreamRouteLoadPolicy load = 5;
+    int32 family_id = 6;
   }
 
   message DurableStreamSlot {

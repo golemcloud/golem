@@ -6104,8 +6104,8 @@
     },
     "PublicOplogEntryOplogProcessorCheckpoint": {
       "type": "object",
-      "required": ["type", "timestamp", "plugin", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
-      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
+      "required": ["type", "timestamp", "plugin", "sourceComponentRevision", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
+      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySetRetryPolicy": {

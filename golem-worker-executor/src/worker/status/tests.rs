@@ -426,6 +426,7 @@ fn empty_fold_is_not_the_identity() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(5),
                 last_batch_start: OplogIndex::from_u64(5),
+                delivery: None,
             },
         )]),
         ..AgentStatusRecord::default()
@@ -5718,6 +5719,8 @@ fn checkpoint_latest_per_grant_id_wins() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -5729,6 +5732,8 @@ fn checkpoint_latest_per_grant_id_wins() {
                 confirmed_up_to: OplogIndex::from_u64(10),
                 sending_up_to: OplogIndex::from_u64(20),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
     ]);
@@ -5773,6 +5778,8 @@ fn checkpoint_different_plugins_tracked_independently() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -5784,6 +5791,8 @@ fn checkpoint_different_plugins_tracked_independently() {
                 confirmed_up_to: OplogIndex::from_u64(3),
                 sending_up_to: OplogIndex::from_u64(7),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
     ]);
@@ -5826,6 +5835,8 @@ fn checkpoint_target_agent_id_preserved() {
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(5),
             last_batch_start: OplogIndex::NONE,
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: None,
         },
     )]);
 
@@ -5863,6 +5874,7 @@ fn deactivated_plugin_evicted_from_checkpoints() {
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5899,6 +5911,7 @@ fn deactivated_plugin_retained_when_in_flight() {
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(15),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5939,6 +5952,7 @@ fn successful_update_drops_old_grant_retains_new() {
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5966,6 +5980,8 @@ fn successful_update_drops_old_grant_retains_new() {
                 confirmed_up_to: OplogIndex::from_u64(12),
                 sending_up_to: OplogIndex::from_u64(12),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::new(2).unwrap(),
+                delivery: None,
             },
         ),
     ]);
@@ -6049,6 +6065,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
             confirmed_up_to: OplogIndex::from_u64(3),
             sending_up_to: OplogIndex::from_u64(8),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -6127,6 +6144,8 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
                 confirmed_up_to: OplogIndex::INITIAL,
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -6145,6 +6164,8 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
                 confirmed_up_to: OplogIndex::from_u64(4),
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
