@@ -32,6 +32,9 @@ pub mod sdk {
 pub mod build_tool {
     pub const RUSTUP_MIN: &str = "1.27.1";
     pub const RUSTC_MIN: &str = "1.94.0";
+    /// Rust 1.100 links `crt1-reactor.o`, whose `_initialize` runs the constructors during core
+    /// instantiation; the worker executor of Golem 1.6 does not replay those agents correctly.
+    pub const RUSTC_MAX_EXCLUSIVE: &str = "1.100.0";
     pub const CARGO_MIN: &str = "1.94.0";
     pub const NODE_MIN: &str = "24.11.0";
     pub const NPM_MIN: &str = "11.6.2";
