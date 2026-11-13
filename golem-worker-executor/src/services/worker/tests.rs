@@ -17,6 +17,7 @@ use golem_common::model::InvocationId;
 use super::*;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::Oplog;
+use crate::services::oplog::ScanPage;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::shard::ShardServiceDefault;
 use crate::storage::keyvalue::KeyValueStorageError;
@@ -230,7 +231,7 @@ impl OplogService for IndexTestOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -2329,7 +2330,7 @@ impl OplogService for FakeOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 

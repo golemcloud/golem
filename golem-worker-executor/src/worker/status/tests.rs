@@ -18,7 +18,7 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::UnreadableOplog;
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{Oplog, OplogService, ScanPage};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
 use crate::worker::status::{
@@ -5660,7 +5660,7 @@ impl OplogService for TestCase {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 

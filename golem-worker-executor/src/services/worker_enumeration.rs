@@ -217,14 +217,13 @@ impl DefaultWorkerEnumerationService {
         let mut workers: Vec<AgentMetadata> = vec![];
 
         let modes = modes_from_filter(&filter);
-        let (new_cursor, keys) = self
+        let page = self
             .oplog_service
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
-        let scanned = keys.len() as u64;
 
-        for owned_agent_id in keys {
+        for owned_agent_id in page.agent_ids {
             // An agent whose oplog failed for good has no metadata to list: it is left out, and
             // every other agent is listed. A storage that did not answer fails the listing, which
             // the caller can retry.
@@ -288,7 +287,7 @@ impl DefaultWorkerEnumerationService {
             }
         }
 
-        Ok((new_cursor.into_option(), workers, scanned))
+        Ok((page.cursor.into_option(), workers, page.examined_keys))
     }
 }
 

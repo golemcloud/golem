@@ -48,9 +48,10 @@ pub struct Limits {
     pub max_concurrent_oplog_entry_reads: usize,
     /// Bounds the work of one oplog search or agent listing call. An advanced setting.
     pub scan_budget: ScanBudget,
-    /// The number of agents that one storage scan of an agent listing reads at most. The listing
-    /// checks its scan budget between scans, so this also bounds how far a listing runs past the
-    /// time of its budget. An advanced setting.
+    /// The number of keys that an agent listing asks one storage scan for. The storage takes it as
+    /// a hint and can return more or fewer keys (Redis `SCAN COUNT`), so a batch is not truncated:
+    /// the listing charges the keys the scan examined and checks its scan budget between scans.
+    /// The budget can therefore overshoot by one batch, in keys and in time. An advanced setting.
     pub agent_scan_batch_size: NonZeroU64,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
@@ -167,9 +168,14 @@ impl SafeDisplay for Limits {
 /// entries or agents for few matches returns a partial page with a cursor when the budget is
 /// spent, and the caller continues with the cursor. A call always scans at least one chunk, so
 /// every call makes progress.
+///
+/// The bound is soft: a call checks the budget between chunks and does not cut a chunk, so it can
+/// scan one chunk more than the budget. An agent listing asks the storage for at most the
+/// remaining budget, but the storage can return more keys (Redis `SCAN COUNT` is a hint).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ScanBudget {
-    /// The number of oplog entries, or of agents, that one call scans at most.
+    /// The number of oplog entries, or of agent keys, after which a call stops scanning. A call
+    /// can overshoot it by one storage batch.
     pub entries: NonZeroU64,
     /// The time after which a call stops scanning at the end of its current chunk.
     #[serde(with = "humantime_serde")]
