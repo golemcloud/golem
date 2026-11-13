@@ -503,11 +503,25 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
+        let filter = match params.filter {
+            Some(filter) => {
+                // `serde_json` refuses JSON nested deeper than 128, which bounds the recursion
+                // of `validated` before the depth check.
+                Some(filter.validated().map_err(|e| {
+                    ApiEndpointError::bad_request(
+                        api::error_code::INVALID_AGENT_FILTER,
+                        golem_common::safe(e),
+                    )
+                })?)
+            }
+            None => None,
+        };
+
         let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
-                params.filter.clone(),
+                filter,
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),

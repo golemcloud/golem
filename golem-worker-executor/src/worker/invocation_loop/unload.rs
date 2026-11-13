@@ -142,7 +142,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 crate::worker::StopOrigin::InvocationLoop,
                 failure_for_waiters,
                 UnloadRequest::ordinary(UnloadReason::ExplicitStop),
-                FinalWorkerState::Unloaded { startup_failure },
+                startup_failure.map_or(
+                    FinalWorkerState::Unloaded {
+                        startup_failure: None,
+                    },
+                    |error| StartupFailure::new(self.parent.agent_mode(), error).into(),
+                ),
                 pending_live_invocations,
             )
             .await;
