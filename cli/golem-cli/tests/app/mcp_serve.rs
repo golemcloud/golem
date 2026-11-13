@@ -17,7 +17,7 @@
 use super::{TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
 use golem_cli::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
-use golem_cli::config::{AuthenticationConfig, Config, ProfileName};
+use golem_cli::config::{AuthenticationConfig, Config, Profile, ProfileDeletion, ProfileName};
 use golem_cli::{fs, versions};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
@@ -645,6 +645,62 @@ async fn mcp_serve_reads_the_profile_token_again_on_each_call() {
     assert_eq!(error_code(&refused), "auth-unauthorized", "{refused:?}");
 
     set_token(AuthenticationConfig::static_builtin_local());
+    structured(&call(&client, "agent_list", list).await);
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_refuses_calls_when_its_profile_is_gone() {
+    let ctx = counters_context(&["local"]).await;
+    let config_dir = ctx.config_dir.path();
+    let pinned = ProfileName("mcp-custom".to_string());
+    let router = url::Url::parse(&format!("http://localhost:{}", ctx.router_port())).unwrap();
+    let custom = |auth: AuthenticationConfig| Profile {
+        custom_url: Some(router.clone()),
+        custom_worker_url: None,
+        allow_insecure: false,
+        config: Default::default(),
+        auth,
+    };
+    let valid = AuthenticationConfig::static_builtin_local;
+    assert!(Config::add_profile(pinned.clone(), custom(valid()), false, config_dir).unwrap());
+    let client = mcp_client(
+        &ctx,
+        &["--profile", &pinned.0, "-E", &format!("{APP}/local")],
+    )
+    .await;
+    let list = json!({"component_name": "it:agent-counters"});
+    structured(&call(&client, "agent_list", list.clone()).await);
+
+    // The rotated token is used, and then the deleted profile is not replaced by its start token.
+    assert!(
+        Config::update_profile(&pinned, config_dir, |profile| {
+            profile.auth = AuthenticationConfig::static_token("rotated-not-valid-token".to_string())
+        })
+        .unwrap()
+    );
+    let rotated = call(&client, "agent_list", list.clone()).await;
+    assert_eq!(error_code(&rotated), "auth-unauthorized", "{rotated:?}");
+    assert!(matches!(
+        Config::delete_inactive_profile(&pinned, config_dir).unwrap(),
+        ProfileDeletion::Deleted
+    ));
+    let deleted = call(&client, "agent_list", list.clone()).await;
+    assert_eq!(error_code(&deleted), "profile-not-found", "{deleted:?}");
+
+    // A renamed profile is another profile.
+    let renamed = ProfileName("mcp-custom-renamed".to_string());
+    assert!(Config::add_profile(renamed, custom(valid()), false, config_dir).unwrap());
+    let after_rename = call(&client, "agent_list", list.clone()).await;
+    assert_eq!(
+        error_code(&after_rename),
+        "profile-not-found",
+        "{after_rename:?}"
+    );
+
+    // The profile created again under the pinned name works with its own token.
+    assert!(Config::add_profile(pinned, custom(valid()), false, config_dir).unwrap());
     structured(&call(&client, "agent_list", list).await);
     client.cancel().await.unwrap();
 }
