@@ -60,7 +60,9 @@ use recovery::{
     prepare_failure, recovered_restart, recovered_status, should_replay_invocation,
     should_restart_after_shard_assignment_change,
 };
-use replay_to_live::{begin_local_live_continuation, begin_replay_to_live, store_is_live};
+use replay_to_live::{
+    LiveFinalization, StoreReplayState, begin_local_live_continuation, begin_replay_to_live,
+};
 pub(crate) use replay_to_live::{
     is_tool_attachment_live_admission_rejection, tool_attachment_live_admission_cancelled_error,
     tool_attachment_live_admission_rejected_error,
@@ -243,7 +245,7 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
@@ -804,7 +806,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by_email
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.state.owner_context.agent().cloned()
     }
 
@@ -1036,11 +1038,7 @@ pub(crate) enum FinishReplayToLive {
 pub(crate) struct PendingReplayToLive {
     #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     replay_target: OplogIndex,
-    role: ReplayToLiveRole,
-    replaying_incomplete_entity: bool,
-    tool_entity: bool,
-    tool_operation: Option<tool::operation::OwnerToolOperation>,
-    local_live_tail: Arc<AtomicBool>,
+    finalization: LiveFinalization,
     linear_memory: LinearMemoryTracker,
 }
 
@@ -1140,12 +1138,7 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
-    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
-    /// published replay state instead.
-    entity_execution_mode: Option<InvocationExecutionMode>,
-    /// Per-Store live continuation after this entity's matching historical call was removed by a
-    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
-    local_live_tail: Arc<AtomicBool>,
+    store_replay_state: StoreReplayState,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
@@ -1558,15 +1551,8 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        store_is_live(
-            self.entity_execution_mode,
-            self.local_live_tail.load(Ordering::Acquire),
-            self.replay_state.is_live_published(),
-        )
-    }
-
-    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
-        self.local_live_tail.clone()
+        self.store_replay_state
+            .is_live(self.replay_state.is_live_published())
     }
 
     /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
@@ -1585,7 +1571,8 @@ impl PrivateDurableWorkerState {
     /// call's own quota class.
     pub fn durable_call_is_live(&self) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.has_unclaimed_retained_starts())
     }
 
@@ -1600,7 +1587,8 @@ impl PrivateDurableWorkerState {
     /// bounded by the recorded prefix of one recovered invocation.
     pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.retains_unclaimed_start_charged_to(quota))
     }
 
@@ -1608,8 +1596,7 @@ impl PrivateDurableWorkerState {
     /// shared cursor may still replay other owners' records. See
     /// [`ReplayState::claim_start_for_store`].
     pub(crate) fn store_continued_live(&self) -> bool {
-        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
-            && self.is_live()
+        self.store_replay_state.continued_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {

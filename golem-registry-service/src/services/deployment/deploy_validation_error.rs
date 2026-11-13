@@ -27,6 +27,14 @@ use golem_service_base::custom_api::PathSegment;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
+    #[error(
+        "Agent type {agent_type} changes its constructor in a way that changes the key of existing agents, at {path}: {reason}. Disable the environment's compatibility check to deploy it anyway; existing keyed agents are then no longer reachable by their key"
+    )]
+    IncompatibleConstructorChange {
+        agent_type: AgentTypeName,
+        path: String,
+        reason: String,
+    },
     #[error("Invalid MCP import {index}: {reason}")]
     InvalidMcpImport { index: u32, reason: String },
     #[error("MCP import {index} references unknown security scheme {security_scheme}")]

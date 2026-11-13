@@ -20,14 +20,14 @@ pub(super) use settling::historical_reconstruction_owner_failure;
 use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
-    AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CompletionMarker, CompletionMarkers,
-    ConcurrentReplayResolver, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
+    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, CHUNK_SIZE, CompletionMarker,
+    CompletionMarkers, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
     ForkResult, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName, HostResponse,
     HostResponseGolemApiFork, InvocationContextStack, InvocationFinishes, LivePublicationOutcome,
     LogLevel, MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
     OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayEvent,
-    ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, ReplayTransitionPhase, Resolution,
+    ReplayStarts, ReplayState, ReplayToLiveOutcome, ReplayTransitionPhase, Resolution,
     RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata, StartClaimAttempt,
     StartsByInvocationId, StreamObservationPositions, ToolAttachmentReconstruction,
     TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,

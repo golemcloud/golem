@@ -333,6 +333,7 @@ sealed trait JsHttpEndpointDetails extends js.Object {
   def authDetails: js.UndefOr[JsAuthDetails]                  = js.native
   def corsOptions: JsCorsOptions                              = js.native
   def durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.native
+  def mode: js.UndefOr[String]                                = js.native
 }
 
 @js.native
@@ -368,15 +369,9 @@ sealed trait JsDurableStreamRouteOptions extends js.Object
 object JsDurableStreamRouteOptions {
   def apply(
     slots: js.Array[JsDurableStreamSlotOptions],
-    writes: js.UndefOr[Boolean],
-    streamDelete: js.UndefOr[Boolean],
-    invocationDelete: js.UndefOr[Boolean],
     load: js.UndefOr[JsDurableStreamRouteLoadOptions]
   ): JsDurableStreamRouteOptions = {
     val obj = js.Dynamic.literal("slots" -> slots)
-    writes.foreach(v => obj.updateDynamic("allowExternalWrites")(v));
-    streamDelete.foreach(v => obj.updateDynamic("allowStreamDelete")(v))
-    invocationDelete.foreach(v => obj.updateDynamic("allowInvocationDelete")(v));
     load.foreach(v => obj.updateDynamic("load")(v))
     obj.asInstanceOf[JsDurableStreamRouteOptions]
   }
@@ -390,7 +385,8 @@ object JsHttpEndpointDetails {
     queryVars: js.Array[JsQueryVariable],
     corsOptions: JsCorsOptions,
     authDetails: js.UndefOr[JsAuthDetails] = js.undefined,
-    durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.undefined
+    durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.undefined,
+    mode: js.UndefOr[String] = js.undefined
   ): JsHttpEndpointDetails = {
     val obj = js.Dynamic.literal(
       "httpMethod"  -> httpMethod,
@@ -401,6 +397,7 @@ object JsHttpEndpointDetails {
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
     durableStreams.foreach(a => obj.updateDynamic("durableStreams")(a))
+    mode.foreach(a => obj.updateDynamic("mode")(a))
     obj.asInstanceOf[JsHttpEndpointDetails]
   }
 }

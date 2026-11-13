@@ -24,11 +24,15 @@ Generated projects include compatible versions of `effect` and `@golemcloud/effe
 <Tabs.Tab>
 ### Setup Rust
 
-Developing **Golem agents** in **Rust** requires a stable Rust compiler (**rustc and cargo 1.94 or newer**) and the WASM target used by Golem 1.6.
+Developing **Golem agents** in **Rust** requires **Rust 1.99.1** (`rustc` and `cargo`) and the WASM target used by Golem 1.6.
+
+<Callout type="warning">
+Golem 1.6 does not support agents built with Rust 1.100 or newer yet. Rust 1.100 changes how a WebAssembly component starts, and agents built with it can fail to resume after an update or a restart. Build Golem 1.6 agents with Rust 1.99.1, also when a newer stable Rust is installed. From Golem 1.6.4, `golem build` stops with an error when the application builds with Rust 1.100 or newer.
+</Callout>
 
 #### Installing Rust
 
-Use the [official guide](https://www.rust-lang.org/learn/get-started) to install the latest **stable** version of the Rust compiler.
+Use the [official guide](https://www.rust-lang.org/learn/get-started) to install `rustup`.
 
 <Callout type="info">
 For MacOS the recommended way is using `rustup` by running the following installation script:
@@ -39,17 +43,31 @@ $ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 </Callout>
 
-#### Enabling WebAssembly targets
+#### Installing Rust 1.99.1 and the WebAssembly target
 
-With **Rust** and `rustup` installed, the next step is to enable the **WebAssembly** target used by Golem builds:
+With `rustup` installed, install Rust 1.99.1 with the **WebAssembly** target used by Golem builds:
 
 ```shell
-$ rustup target add wasm32-wasip2
+$ rustup toolchain install 1.99.1 --target wasm32-wasip2
 ```
 
-To verify if this step was successful, run:
+#### Pinning Rust 1.99.1 for the application
+
+Add a `rust-toolchain.toml` file to the root directory of your application, next to `golem.yaml`:
+
+```toml filename="rust-toolchain.toml"
+[toolchain]
+channel = "1.99.1"
+targets = ["wasm32-wasip2"]
+```
+
+`rustup` then uses Rust 1.99.1 for every `cargo` command in the application directory, including the commands that `golem build` runs. Other projects keep their own toolchain.
+
+To verify the setup, run in the application directory:
 
 ```shell
+$ rustc --version
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
 $ rustup target list --installed | grep wasm32-wasip2
 wasm32-wasip2
 ```

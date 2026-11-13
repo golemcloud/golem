@@ -71,6 +71,9 @@
       "golem:core/types@2.0.0": [
         "types/golem_core_2_0_0_types.d.ts"
       ],
+      "golem:core/http@2.0.0": [
+        "types/golem_core_2_0_0_http.d.ts"
+      ],
       "golem:rdbms/ignite2@1.5.0": [
         "types/golem_rdbms_1_5_0_ignite2.d.ts"
       ]

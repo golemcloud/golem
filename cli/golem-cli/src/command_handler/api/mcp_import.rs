@@ -632,7 +632,7 @@ mcp:
     #[test]
     fn url_selection_ignores_unresolved_candidates_but_reports_them_without_a_match() {
         let missing: crate::model::app_raw::McpImport = serde_json::from_value(serde_json::json!({
-            "url": "https://secret-template.example/{{ GOL_875_MISSING_REVIEW_URL }}/private-token"
+            "url": "https://secret-template.example/{{ DEFINITELY_MISSING_REVIEW_URL }}/private-token"
         }))
         .unwrap();
         let literal: crate::model::app_raw::McpImport = serde_json::from_value(serde_json::json!({
@@ -650,7 +650,7 @@ mcp:
             let error = super::select_import(&imports, "https://absent.example/mcp")
                 .unwrap_err()
                 .to_string();
-            assert!(error.contains("GOL_875_MISSING_REVIEW_URL"));
+            assert!(error.contains("DEFINITELY_MISSING_REVIEW_URL"));
             assert!(!error.contains("secret-template"));
             assert!(!error.contains("private-token"));
         }

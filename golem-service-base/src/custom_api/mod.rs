@@ -30,6 +30,7 @@ use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecurityS
 use golem_common::model::security_scheme::{SecuritySchemeLogin, SecuritySchemeRevision};
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
 use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
+pub use golem_schema::http::HttpRouteMode as AgentRouteMode;
 use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sha2::Sha256;
@@ -606,12 +607,6 @@ pub enum PhantomSelection {
     Original,
     Path { index: SafeIndex },
     Query { name: String, optional: bool },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
-pub enum AgentRouteMode {
-    Rest,
-    DurableStreams,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]

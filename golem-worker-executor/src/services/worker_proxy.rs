@@ -207,6 +207,7 @@ pub trait WorkerProxy: Send + Sync {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -908,6 +909,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
@@ -920,6 +922,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     target_agent_id: Some(target_agent_id.clone().into()),
                     oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: Some(principal.clone().into()),
                 }))
             })
             .await?

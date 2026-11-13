@@ -18,17 +18,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn deletion_owns_retirement(&self) -> bool {
         self.instance.lock().await.deletion_owns_retirement()
     }
+    /// Whether reads and management calls answer this generation as a missing agent: a delete
+    /// is running on it, or a delete removed its durable state. A delete that failed earlier
+    /// leaves the agent in place, so it does not count until a retry claims it again. A
+    /// generation retired for a lost shard keeps its error unchanged.
+    pub(crate) async fn answers_as_deleted(&self) -> bool {
+        if self.retired_for_lost_shard() {
+            return false;
+        }
+        match self.instance.lock().await.state() {
+            WorkerInstance::Deleting(deleting) => {
+                deleting.handle.result().is_none()
+                    || deleting.completed_stage >= WorkerDeletionStage::DurableStateRemoved
+            }
+            _ => false,
+        }
+    }
     pub(in crate::worker) async fn deletion_stage_completed(
         &self,
         stage: WorkerDeletionStage,
     ) -> bool {
-        matches!(&*self.instance.lock().await, WorkerInstance::Deleting(deleting) if deleting.completed_stage >= stage)
+        matches!(self.instance.lock().await.state(), WorkerInstance::Deleting(deleting) if deleting.completed_stage >= stage)
     }
     pub(in crate::worker) async fn complete_deletion_stage(&self, stage: WorkerDeletionStage) {
-        let mut instance = self.instance.lock().await;
-        if let WorkerInstance::Deleting(deleting) = &mut *instance {
-            deleting.completed_stage = deleting.completed_stage.max(stage);
-        }
+        self.instance.lock().await.complete_deletion_stage(stage);
     }
     /// Atomically claims worker-owned deletion and starts an executor-owned attempt. Overlapping
     /// callers share the retained result; after failure, the next explicit call claims one retry.
@@ -51,37 +64,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !self.active_agents().contains_worker_generation(self).await {
             return Ok(None);
         }
-        let retry_cleanup = matches!(
-            instance.deletion_runtime(),
-            WorkerInstance::CleanupFailed(_)
-        );
-        let (outcome, sender) = match &mut *instance {
-            WorkerInstance::Deleting(deleting) => match deleting.handle.result() {
-                None | Some(Ok(())) => (
-                    DeleteOutcome::AlreadyDeleting(deleting.handle.clone()),
-                    None,
-                ),
-                Some(Err(_)) => {
-                    let (handle, sender) = DeletionHandle::new();
-                    deleting.handle = handle.clone();
-                    (DeleteOutcome::Started(handle), Some(sender))
-                }
-            },
-            _ => {
-                let (handle, sender) = DeletionHandle::new();
-                let runtime = std::mem::replace(
-                    &mut *instance,
-                    WorkerInstance::Unloaded {
-                        startup_failure: None,
-                    },
-                );
-                *instance = WorkerInstance::Deleting(DeletingWorker {
-                    runtime: Box::new(runtime),
-                    handle: handle.clone(),
-                    completed_stage: WorkerDeletionStage::Claimed,
-                });
-                (DeleteOutcome::Started(handle), Some(sender))
-            }
+        let retry_cleanup = instance.cleanup_failure().is_some();
+        let Some((outcome, sender)) = instance.claim_deletion() else {
+            return Err(WorkerExecutorError::runtime(
+                "Worker deletion found no initialized runtime",
+            ));
         };
         let started = matches!(outcome, DeleteOutcome::Started(_));
         drop(instance);
@@ -163,7 +150,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let retirement = self.retire_durable_stream_producer();
             let error = WorkerExecutorError::invalid_request("Worker is being deleted");
             self.stop_internal(
-                false,
+                StopOrigin::External,
                 Some(error),
                 UnloadRequest::ordinary(UnloadReason::Deleting),
                 FinalWorkerState::Deleting,
@@ -173,13 +160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.tasks.stop_roots_and_wait().await;
             self.durable_stream_attachment_reconciler.stop().await;
             retirement.await?;
-            let cleanup_error = {
-                let instance = self.instance.lock().await;
-                match instance.deletion_runtime() {
-                    WorkerInstance::CleanupFailed(error) => Some(error.clone()),
-                    _ => None,
-                }
-            };
+            let cleanup_error = self.instance.lock().await.cleanup_failure().cloned();
             if let Some(error) = cleanup_error {
                 // A shutdown failure observed by this attempt belongs to its immutable result.
                 // Only an explicit claim made after the failure may join or retry final cleanup.
@@ -190,8 +171,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let retry = cleanup.retry();
                 *self.unload_cleanup.lock().unwrap() = Some(retry.clone());
                 retry.wait().await?;
-                *self.instance.lock().await.deletion_runtime_mut() =
-                    WorkerInstance::StoppedForDeletion;
+                self.instance.lock().await.deletion_cleanup_completed();
             }
             self.wait_for_unload_cleanup().await?;
             self.complete_deletion_stage(WorkerDeletionStage::RuntimeStopped)
@@ -405,7 +385,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether this generation holds a deletion whose last attempt failed, with nothing running.
     pub(in crate::worker) async fn deletion_failed(&self) -> bool {
         matches!(
-            &*self.instance.lock().await,
+            self.instance.lock().await.state(),
             WorkerInstance::Deleting(deleting) if matches!(deleting.handle.result(), Some(Err(_)))
         )
     }
@@ -544,7 +524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 }
 
 impl DeletionHandle {
-    pub(in crate::worker) fn new() -> (Self, oneshot::Sender<Result<(), WorkerExecutorError>>) {
+    pub(in crate::worker) fn new() -> (Self, DeletionSender) {
         let (sender, receiver) = oneshot::channel();
         let completion = async move {
             receiver.await.unwrap_or_else(|_| {
@@ -577,7 +557,7 @@ impl DeleteOutcome {
 
 impl WorkerInstance {
     pub(in crate::worker) fn ensure_not_deleting(&self) -> Result<(), WorkerExecutorError> {
-        if matches!(self, Self::Deleting(_) | Self::StoppedForDeletion) {
+        if matches!(self, Self::Deleting(_)) {
             Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             ))
@@ -587,31 +567,6 @@ impl WorkerInstance {
     }
 
     pub(in crate::worker) fn deletion_owns_retirement(&self) -> bool {
-        matches!(self, Self::Deleting(_) | Self::StoppedForDeletion)
-    }
-
-    pub(in crate::worker) fn deletion_runtime(&self) -> &Self {
-        match self {
-            Self::Deleting(deleting) => &deleting.runtime,
-            instance => instance,
-        }
-    }
-
-    pub(in crate::worker) fn deletion_runtime_mut(&mut self) -> &mut Self {
-        match self {
-            Self::Deleting(deleting) => &mut deleting.runtime,
-            instance => instance,
-        }
-    }
-
-    pub(in crate::worker) fn retained_cleanup_failure(&self) -> Option<&WorkerExecutorError> {
-        match self.deletion_runtime() {
-            Self::CleanupFailed(error) => Some(error),
-            Self::Stopping(stopping) => match &stopping.final_state {
-                FinalWorkerState::CleanupFailed(error) => Some(error),
-                _ => None,
-            },
-            _ => None,
-        }
+        matches!(self, Self::Deleting(_))
     }
 }

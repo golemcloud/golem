@@ -195,7 +195,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             .await?;
         let parsed_agent_id = match &existing_metadata {
             Some(metadata) => metadata.parse_agent_id(&component.metadata),
-            None => ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
+            None => ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata),
         }
         .map_err(|details| RpcError::ProtocolError { details })?;
         validate_agent_method_invocation(
@@ -401,6 +401,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     agent_id: self_agent_id.clone(),
                 }),
                 freshness_disposition,
+                CreateIntent::Create {
+                    exclusive: false,
+                    idempotency_key: idempotency_key.clone(),
+                },
             )
             .await?;
 
@@ -506,6 +510,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 &self_stack,
                 principal.clone(),
                 freshness_disposition,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(idempotency_key.clone()),
+                },
             )
             .await?;
 
@@ -629,6 +636,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             &self_stack,
             principal.clone(),
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::Invocation {
+                idempotency_key: Some(idempotency_key.clone()),
+            },
         )
         .await?;
         if worker.get_initial_worker_metadata().fingerprint != expected_callee_fingerprint {
@@ -998,6 +1008,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 &self_stack,
                 principal.clone(),
                 freshness_disposition,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(idempotency_key.clone()),
+                },
             )
             .await?;
 

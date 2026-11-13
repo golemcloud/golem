@@ -27,7 +27,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, IdempotencyKey, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
 };
-use golem_common::schema::{ParsedAgentId, TypedSchemaValue};
+use golem_common::schema::{ParsedAgentKey, TypedSchemaValue};
 use golem_common::serialization::deserialize;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -208,7 +208,7 @@ async fn wait_for_scheduled_start(
 async fn counter(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentId,
+    agent: &ParsedAgentKey,
 ) -> anyhow::Result<u64> {
     executor
         .invoke_and_await_agent(component, agent, "get_global_value", data_value!())
@@ -221,7 +221,7 @@ async fn counter(
 async fn assert_ran_once(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    server: &ParsedAgentId,
+    server: &ParsedAgentKey,
     target: &AgentId,
     expected: u64,
 ) -> anyhow::Result<()> {
@@ -254,7 +254,7 @@ async fn start_agents(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     server_name: &str,
-) -> anyhow::Result<(ParsedAgentId, AgentId)> {
+) -> anyhow::Result<(ParsedAgentKey, AgentId)> {
     let server = agent_id!("ScheduledInvocationServer", server_name);
     let target = executor.start_agent(&component.id, server.clone()).await?;
     executor

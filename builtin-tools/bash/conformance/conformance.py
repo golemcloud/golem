@@ -162,7 +162,12 @@ def outcome(result):
 
 
 def wasm_outcome(result, status_file):
-    """Read the shell status separately from WASI's success/failure process status."""
+    """Read the shell status from its report and check that the WASI process status agrees.
+
+    Rust 1.100 and later exit with the status itself. Earlier toolchains, such as the one
+    builtin-tools/bash/rust-toolchain.toml pins for the released bash.wasm, report only success
+    or failure, so a nonzero status exits with 1.
+    """
     try:
         status = int(status_file.read_text(encoding="ascii"))
     except (OSError, ValueError) as error:
@@ -171,8 +176,8 @@ def wasm_outcome(result, status_file):
         ) from error
     if not 0 <= status <= 255:
         raise ValueError(f"shell status is outside the u8 range: {status}")
-    process_status = 0 if status == 0 else 1
-    if result.returncode != process_status:
+    process_statuses = {0} if status == 0 else {1, status}
+    if result.returncode not in process_statuses:
         raise ValueError(
             f"WASI process status {result.returncode} disagrees with reported shell status {status}"
         )
