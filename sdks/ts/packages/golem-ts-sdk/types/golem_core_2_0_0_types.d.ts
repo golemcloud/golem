@@ -110,6 +110,12 @@ declare module 'golem:core/types@2.0.0' {
    */
   export type PromiseId = {
     agentId: AgentId;
+    /**
+     * Fingerprint of the agent incarnation that created the promise. A deleted and
+     * re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+     * of the deleted incarnation do not reach the new one.
+     */
+    fingerprint: Uuid;
     oplogIdx: OplogIndex;
   };
   /**

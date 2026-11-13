@@ -131,6 +131,14 @@ impl WorkerService for MockWorkerService {
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
+    async fn run_excluding_removal<'a>(
+        &self,
+        _agent_id: &AgentId,
+        operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        operation.await
+    }
+
     async fn remove_cached_status(
         &self,
         _owned_agent_id: &OwnedAgentId,

@@ -944,6 +944,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed, replayed or live, and can change the state of the agent.
+    pub(crate) fn last_state_change(&self) -> Option<OplogIndex> {
+        self.state.last_state_change
+    }
+
     pub(crate) fn live_stream_event_capacity(&self) -> usize {
         self.state
             .config
@@ -1210,6 +1216,12 @@ struct PrivateDurableWorkerState {
     /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
     read_only_method_name: Option<String>,
 
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed and can change the state of the agent, replayed or live. A `read_only` agent
+    /// method cannot. Replay sets it from the history after the baseline of the start, so after a
+    /// restart it still points at a change that no later automatic snapshot record holds.
+    last_state_change: Option<OplogIndex>,
+
     /// Oplog-processor plugin calls are admitted by the operator when the plugin is installed,
     /// outside the per-agent permission-card model. This is set only while dispatching the
     /// executor-created `ProcessOplogEntries` invocation and reset before invocation teardown.
@@ -1372,6 +1384,7 @@ impl WakeupScheduler {
             .promise_service
             .create(
                 &self.owned_agent_id.agent_id,
+                self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
             .await?;

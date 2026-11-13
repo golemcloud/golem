@@ -500,8 +500,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn complete_promise(
         &self,
-        agent_id: &AgentId,
-        oplog_id: u64,
+        promise_id: &PromiseId,
         data: Vec<u8>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -1202,20 +1201,16 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn complete_promise(
         &self,
-        agent_id: &AgentId,
-        oplog_id: u64,
+        promise_id: &PromiseId,
         data: Vec<u8>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
-        let promise_id = PromiseId {
-            agent_id: agent_id.clone(),
-            oplog_idx: OplogIndex::from_u64(oplog_id),
-        };
+        let promise_id = promise_id.clone();
 
         let result = self
             .call_worker_executor(
-                agent_id.clone(),
+                promise_id.agent_id.clone(),
                 "complete_promise",
                 move |worker_executor_client| {
                     let promise_id = promise_id.clone();

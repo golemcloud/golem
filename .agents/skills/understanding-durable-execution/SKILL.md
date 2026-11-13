@@ -121,9 +121,28 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -2830,7 +2849,15 @@ update then fails as a failed update, and the agent stays on its revision: chang
 `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
 agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
 the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+(`invocation_loop/snapshots.rs::snapshot_baseline_timestamp`). A periodic snapshot is needed only
+when an invocation that can change the state, not a `read_only` method, finished after the
+automatic record that a start would select (`invocation_loop/snapshots.rs::state_changed_since_snapshot`,
+`snapshot_selection::periodic_snapshot_holding_state`), so an idle agent writes no record. A record
+whose upload failed or that a start rejected does not count, so the next period takes the snapshot
+again. The
+Store records the index of that `AgentInvocationFinished` entry for replayed and live invocations
+alike (`DurableWorkerCtx::last_state_change`), so a change replayed after a restart still takes its
+pending snapshot. A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.

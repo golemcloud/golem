@@ -172,6 +172,8 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+      - name: Test sticky disk cleanup
+        run: python3 -m unittest discover -s .github/scripts -p 'test_cleanup_sticky_disks.py'
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs
@@ -951,8 +953,8 @@ jobs:
           retention-days: 35
 
   # Each run creates one sticky disk per producer, and the Blacksmith installation allows 500.
-  # Keep the disks of a run that has a failed consumer, so its failed jobs can be rerun; inactive
-  # disks expire after seven days.
+  # Keep failed-run disks for consumer reruns. The cleanup-sticky-disks workflow can evict
+  # old PR publications under capacity pressure; Blacksmith also expires inactive disks after seven days.
   delete-sticky-disks:
     if: ${{ always() && !contains(needs.*.result, 'failure') }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
@@ -1143,6 +1145,23 @@ jobs:
         run: cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
       - name: Test feature-gated validation with default features
         run: cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
+
+  # The compile-fail tests use trybuild, which runs cargo, so they cannot run in the unit tests.
+  # The expected compiler output is the output of a toolchain without rust-src, as setup-rust
+  # installs it.
+  golem-schema-derive:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-cargo-make: 'false'
+      - name: Test the compile errors of the derive macros
+        run: cargo test -p golem-schema-derive --test compile_fail -- --nocapture --report-time
 
   golem-client:
     runs-on: blacksmith
@@ -1962,6 +1981,7 @@ jobs:
       - config-checks
       - middleware-unit-tests
       - golem-schema-guest
+      - golem-schema-derive
       - worker-tests
       - managed-xfs-tests
       - apfs-tests

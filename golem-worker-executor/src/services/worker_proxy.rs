@@ -986,6 +986,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(promise_id.agent_id.clone().into()),
                     complete_parameters: Some(CompleteParameters {
                         oplog_idx: promise_id.oplog_idx.into(),
+                        fingerprint: Some(promise_id.fingerprint.0.into()),
                         data: data.clone(),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
