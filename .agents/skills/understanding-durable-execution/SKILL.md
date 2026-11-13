@@ -2332,11 +2332,12 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
    recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
    `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
-   targets carry none. Local dispatch (`services/rpc/direct.rs`) resolves the callee only through
-   `get_existing_with_fingerprint`, never get-or-create, and the local streaming path uses the
-   exact-existing lookup too. Local dispatch holds no task-scope bind, so a deletion can still
-   finish between the lookup and the enqueue; a refusal before admission is therefore answered
-   with `Worker::deleted_incarnation_as_not_found`, which applies the same
+   targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
+   through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
+   the exact-existing lookup too. An unpinned ephemeral call may still create its phantom, keyed by
+   the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
+   can still finish between the lookup and the enqueue; a refusal before admission is therefore
+   answered with `Worker::deleted_incarnation_as_not_found`, which applies the same
    `pinned_deletion_refusal` rule as admission. Remote dispatch sends the fingerprint in
    `InvokeAgentRequest.expected_callee_fingerprint`; the worker service checks the incarnation
    before it validates the method, and the target executor applies the same existing-only check.
