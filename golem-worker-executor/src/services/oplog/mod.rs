@@ -375,6 +375,11 @@ pub trait OplogService: Debug + Send + Sync {
     /// pagination correctly.
     ///
     /// Pages can be empty. This operation is slow and is not locking the oplog.
+    ///
+    /// Gives the cursor of the next page, the agents of this page, and the number of storage keys
+    /// the scan examined for the page. That number also counts the keys of agents left out of the
+    /// page, such as those a lower oplog layer lists, so it is the work the page cost. `count` is
+    /// a hint to the storage, which can examine more or fewer keys.
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
@@ -382,7 +387,7 @@ pub trait OplogService: Debug + Send + Sync {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>;
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_raw_payload(

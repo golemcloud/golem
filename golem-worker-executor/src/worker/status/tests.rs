@@ -5128,7 +5128,7 @@ impl OplogService for TestCase {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         unreachable!()
     }
 

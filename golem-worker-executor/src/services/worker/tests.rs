@@ -228,7 +228,7 @@ impl OplogService for IndexTestOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         unreachable!()
     }
 
@@ -2318,7 +2318,7 @@ impl OplogService for FakeOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         unreachable!()
     }
 

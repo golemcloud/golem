@@ -157,9 +157,14 @@ impl SafeDisplay for Limits {
 /// entries or agents for few matches returns a partial page with a cursor when the budget is
 /// spent, and the caller continues with the cursor. A call always scans at least one chunk, so
 /// every call makes progress.
+///
+/// The bound is soft: a call checks the budget between chunks and does not cut a chunk, so it can
+/// scan one chunk more than the budget. An agent listing asks the storage for at most the
+/// remaining budget, but the storage can return more keys (Redis `SCAN COUNT` is a hint).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ScanBudget {
-    /// The number of oplog entries, or of agents, that one call scans at most.
+    /// The number of oplog entries, or of agent keys, after which a call stops scanning. A call
+    /// can overshoot it by one storage batch.
     pub entries: NonZeroU64,
     /// The time after which a call stops scanning at the end of its current chunk.
     #[serde(with = "humantime_serde")]
