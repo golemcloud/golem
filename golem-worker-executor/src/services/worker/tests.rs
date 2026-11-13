@@ -2154,7 +2154,15 @@ struct FakeOplogService {
     fail_delete_once: AtomicBool,
     hide_identity_after_delete_attempt: bool,
     delete_attempts: AtomicUsize,
+    /// The storage batches that `scan_for_component` answers with, in order.
+    scan_batches: std::sync::Mutex<VecDeque<ScanBatch>>,
+    /// The key counts that `scan_for_component` was asked for, in order.
+    scan_requests: std::sync::Mutex<Vec<u64>>,
 }
+
+/// One storage batch of an agent scan: the cursor after it, the agents it lists, and the number of
+/// keys it examined.
+type ScanBatch = (ScanCursor, Vec<OwnedAgentId>, u64);
 
 #[async_trait]
 impl OplogService for FakeOplogService {
@@ -2317,9 +2325,15 @@ impl OplogService for FakeOplogService {
         _component_id: &ComponentId,
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
-        _count: u64,
+        count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
-        unreachable!()
+        self.scan_requests.lock().unwrap().push(count);
+        Ok(self
+            .scan_batches
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("the scan asked for more batches than the storage has"))
     }
 
     async fn upload_raw_payload(
@@ -3024,4 +3038,68 @@ async fn recovery_scan_reports_an_unreadable_index() {
         result.is_err(),
         "expected the index read failure to surface"
     );
+}
+
+/// Lists the agents of a component over scripted storage batches with a budget of three keys.
+/// Returns the cursor of the listing and the key counts it asked the storage for.
+async fn list_agents_over_batches(batches: Vec<ScanBatch>) -> (Option<ScanCursor>, Vec<u64>) {
+    use crate::services::golem_config::ScanBudget;
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+
+    let oplog_service = Arc::new(FakeOplogService {
+        scan_batches: std::sync::Mutex::new(batches.into()),
+        ..Default::default()
+    });
+    let mut config = GolemConfig::default();
+    config.limits.scan_budget = ScanBudget {
+        entries: std::num::NonZeroU64::new(3).unwrap(),
+        time: std::time::Duration::from_secs(600),
+    };
+    let enumeration = DefaultWorkerEnumerationService::new(
+        Arc::new(test_worker_service(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            oplog_service.clone(),
+        )),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(config),
+    );
+    let (cursor, agents) = enumeration
+        .get(
+            &EnvironmentId::new(),
+            &ComponentId(Uuid::new_v4()),
+            None,
+            ScanCursor::default(),
+            i64::MAX as u64,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(agents.is_empty());
+    let requests = oplog_service.scan_requests.lock().unwrap().clone();
+    (cursor, requests)
+}
+
+/// The batches list no agent: the multi-layer oplog service drops the keys of agents that a lower
+/// layer also has, as it does for an archived agent with a primary tail, and still counts them as
+/// examined. The listing charges the examined keys, not the listed agents.
+#[test]
+async fn agent_listing_charges_examined_keys_and_stops_after_the_batch_that_spends_the_budget() {
+    let batch =
+        |cursor: &str, examined: u64| (ScanCursor::new(cursor.to_string()), vec![], examined);
+
+    // Two examined keys leave one key of the budget, so the listing asks for one more key and
+    // stops after it. A listing that charged the listed agents would ask for three keys again.
+    let (cursor, requests) =
+        list_agents_over_batches(vec![batch("1", 2), batch("2", 1), batch("3", 1)]).await;
+    assert_eq!(requests, vec![3, 1]);
+    assert_eq!(cursor, Some(ScanCursor::new("2".to_string())));
+
+    // The storage answers the request for three keys with five, as Redis `SCAN COUNT` can. The
+    // listing keeps the whole batch and stops after it, and leaves the next batch to the next call.
+    let (cursor, requests) = list_agents_over_batches(vec![batch("1", 5), batch("2", 1)]).await;
+    assert_eq!(requests, vec![3]);
+    assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
 }

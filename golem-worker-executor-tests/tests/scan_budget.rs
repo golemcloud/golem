@@ -361,8 +361,9 @@ async fn agent_list_with_an_unbounded_count_stops_at_the_scan_budget(
 }
 
 /// Redis `SCAN COUNT` is a hint: a scan returns the keys of whole hash buckets, so one storage
-/// batch can hold more keys than the budget. A call lists the whole batch and stops after it, and
-/// the cursors skip no agent and repeat none.
+/// batch can hold more keys than the budget. A call keeps the whole batch, and the cursors skip no
+/// agent and repeat none. That a call stops after the first batch that spends the budget is checked
+/// with scripted batches in `agent_listing_charges_examined_keys_and_stops_after_the_batch_that_spends_the_budget`.
 #[test]
 #[timeout("10m")]
 async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
@@ -437,8 +438,8 @@ async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
     let unique = listed.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(listed.len(), unique.len(), "an agent was listed twice");
     assert_eq!(unique, expected);
-    // A batch without keys costs nothing, so a call stops only after a batch with keys. With a
-    // budget of one key, that is its first such batch, whatever its size.
+    // A batch without keys costs nothing, so a call stops only after a batch with keys, and keeps
+    // all the agents of that batch.
     let (last, stopped) = pages.split_last().unwrap();
     let sizes = stopped.iter().map(Vec::len).collect::<Vec<_>>();
     assert!(
