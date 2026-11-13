@@ -294,7 +294,9 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 self_stack,
                 principal,
                 freshness_disposition,
-                CreateIntent::UNKEYED_INVOCATION,
+                CreateIntent::Invocation {
+                    idempotency_key: Some(request_key.owner_key(method_name)),
+                },
             )
             .await?),
         }

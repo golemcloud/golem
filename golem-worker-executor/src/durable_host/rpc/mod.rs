@@ -189,7 +189,7 @@ pub enum WasmRpcTargetActivation {
 
 #[derive(Clone)]
 struct RpcTargetActivation {
-    target_fingerprint: Option<AgentFingerprint>,
+    target_fingerprint: AgentFingerprint,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
 }

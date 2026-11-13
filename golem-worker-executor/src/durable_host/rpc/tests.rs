@@ -294,10 +294,6 @@ struct ActivatingRpc {
     dispatched_fingerprint: Mutex<Option<AgentFingerprint>>,
 }
 
-struct ActivationFailureRpc {
-    invoke_called: AtomicBool,
-}
-
 struct RecordingScopeCardRpc {
     fingerprint: AgentFingerprint,
     dispatched_scope_card: Mutex<Option<ScopeCard>>,
@@ -392,95 +388,6 @@ impl Rpc for ActivatingRpc {
         _scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
         *self.dispatched_fingerprint.lock().unwrap() = expected_callee_fingerprint;
-        self.invoke_called.store(true, Ordering::SeqCst);
-        Ok(SchemaValue::Tuple { elements: vec![] })
-    }
-
-    async fn invoke(
-        &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
-        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
-        _method_name: String,
-        _method_parameters: SchemaValue,
-        _self_created_by: AccountId,
-        _self_agent_id: &AgentId,
-        _self_env: &[(String, String)],
-        _self_stack: InvocationContextStack,
-        _config: Vec<AgentConfigEntryDto>,
-        _auth_ctx: &AuthCtx,
-    ) -> Result<(), ServiceRpcError> {
-        unreachable!("test only exercises invoke-and-await dispatch")
-    }
-}
-
-#[async_trait]
-impl Rpc for ActivationFailureRpc {
-    async fn cancel_scheduled_invocation(
-        &self,
-        _target: &OwnedAgentId,
-        _key: IdempotencyKey,
-        _receipt: golem_common::model::ScheduleId,
-        _owner: &AgentId,
-        _auth: &AuthCtx,
-    ) -> Result<bool, ServiceRpcError> {
-        Err(ServiceRpcError::ProtocolError {
-            details: "schedule cancellation is not supported by this test RPC".to_string(),
-        })
-    }
-
-    async fn schedule_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _expected_fingerprint: AgentFingerprint,
-        _request_key: InvocationRequestKey,
-        _invocation: golem_common::model::AgentInvocation,
-        _scheduled_at: chrono::DateTime<chrono::Utc>,
-        _auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
-        Err(ServiceRpcError::ProtocolError {
-            details: "scheduling is not supported by this test RPC".to_string(),
-        })
-    }
-
-    async fn create_demand(
-        &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
-        _method_name: &str,
-        _self_created_by: AccountId,
-        _self_agent_id: &AgentId,
-        _self_env: &[(String, String)],
-        _self_stack: InvocationContextStack,
-        _config: Vec<AgentConfigEntryDto>,
-        _auth_ctx: &AuthCtx,
-        _idempotency_key: Option<IdempotencyKey>,
-        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
-    ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
-        Err(ServiceRpcError::Denied {
-            details: "activation denied".to_string(),
-        })
-    }
-
-    async fn invoke_and_await(
-        &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
-        _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
-        _method_name: String,
-        _method_parameters: SchemaValue,
-        _self_created_by: AccountId,
-        _self_agent_id: &AgentId,
-        _self_env: &[(String, String)],
-        _self_stack: InvocationContextStack,
-        _config: Vec<AgentConfigEntryDto>,
-        _auth_ctx: &AuthCtx,
-        _scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, ServiceRpcError> {
         self.invoke_called.store(true, Ordering::SeqCst);
         Ok(SchemaValue::Tuple { elements: vec![] })
     }
@@ -660,7 +567,7 @@ async fn replay_pending_activation_makes_no_create_request() {
         None,
         AuthCtx::system(),
         Some(RpcTargetActivation {
-            target_fingerprint: Some(persisted_fingerprint),
+            target_fingerprint: persisted_fingerprint,
             env: vec![],
             config: vec![],
         }),
@@ -680,90 +587,6 @@ async fn replay_pending_activation_makes_no_create_request() {
         *rpc.dispatched_fingerprint.lock().unwrap(),
         Some(persisted_fingerprint),
         "the call must be pinned to the recorded incarnation"
-    );
-}
-
-#[test]
-async fn first_authorized_call_activates_a_new_durable_target_without_a_prior_fingerprint() {
-    let rpc = Arc::new(ActivatingRpc {
-        live_fingerprint: AgentFingerprint(Uuid::from_u128(11)),
-        create_called: AtomicBool::new(false),
-        invoke_called: AtomicBool::new(false),
-        dispatched_fingerprint: Mutex::new(None),
-    });
-
-    let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-        None,
-        rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("first-authorized-activation".to_string()),
-        "run".to_string(),
-        SchemaValue::Tuple { elements: vec![] },
-        AccountId::new(),
-        agent_id("caller"),
-        vec![],
-        vec![],
-        InvocationContextStack::fresh(),
-        None,
-        AuthCtx::system(),
-        Some(RpcTargetActivation {
-            target_fingerprint: None,
-            env: vec![],
-            config: vec![],
-        }),
-        None,
-        InvocationFreshnessDisposition::MayExist,
-        None,
-    )
-    .await;
-
-    result.unwrap().unwrap();
-    assert!(rpc.create_called.load(Ordering::SeqCst));
-    assert_eq!(
-        *rpc.dispatched_fingerprint.lock().unwrap(),
-        Some(AgentFingerprint(Uuid::from_u128(11))),
-        "the call must be pinned to the incarnation the activation created"
-    );
-}
-
-#[test]
-async fn deferred_activation_create_demand_failure_is_a_host_failure_not_rpc_result() {
-    let rpc = Arc::new(ActivationFailureRpc {
-        invoke_called: AtomicBool::new(false),
-    });
-
-    let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-        None,
-        rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("deferred-activation-failure".to_string()),
-        "run".to_string(),
-        SchemaValue::Tuple { elements: vec![] },
-        AccountId::new(),
-        agent_id("caller"),
-        vec![],
-        vec![],
-        InvocationContextStack::fresh(),
-        None,
-        AuthCtx::system(),
-        Some(RpcTargetActivation {
-            target_fingerprint: None,
-            env: vec![],
-            config: vec![],
-        }),
-        None,
-        InvocationFreshnessDisposition::MayExist,
-        None,
-    )
-    .await;
-
-    assert!(
-        !rpc.invoke_called.load(Ordering::SeqCst),
-        "activation failure must stop before dispatching the RPC method"
-    );
-    assert!(
-        result.is_err(),
-        "activation failure happened before the RPC method call and must be an outer host failure, not a completed RPC result: {result:?}"
     );
 }
 
@@ -1141,16 +964,15 @@ fn pinned_ephemeral_identity_skips_durable_activation() {
 }
 
 #[test]
-fn deferred_durable_target_activates_without_a_replay_fingerprint() {
+fn deferred_durable_target_has_no_spawned_activation() {
     let target = WasmRpcTargetActivation::DeferredDurable {
         env: vec![("KEY".to_string(), "value".to_string())],
         config: vec![],
     };
 
-    let activation = target.deferred_activation().unwrap();
-    assert_eq!(activation.target_fingerprint, None);
+    assert!(target.deferred_activation().is_none());
     assert_eq!(
-        activation.env,
+        target.target_creation_data().0,
         vec![("KEY".to_string(), "value".to_string())]
     );
 }

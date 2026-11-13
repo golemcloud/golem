@@ -532,7 +532,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         stack.clone(),
                         target_activation.config,
                         &auth_ctx,
-                        target_activation.target_fingerprint,
+                        Some(target_activation.target_fingerprint),
                         None,
                     )
                     .await
@@ -791,7 +791,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                             stack.clone(),
                             target_activation.config,
                             &auth_ctx,
-                            target_activation.target_fingerprint,
+                            Some(target_activation.target_fingerprint),
                             None,
                         )
                         .await?,

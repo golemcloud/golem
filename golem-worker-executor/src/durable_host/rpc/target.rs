@@ -540,24 +540,23 @@ impl WasmRpcTargetActivation {
         }
     }
 
+    /// The activation a spawned call rebuilds before it dispatches. Only a target whose activation
+    /// was recorded before the Store was replaced has one; it is rebuilt from the recorded
+    /// fingerprint and creates nothing.
     pub(super) fn deferred_activation(&self) -> Option<RpcTargetActivation> {
         match self {
-            WasmRpcTargetActivation::DeferredEphemeral { .. } => None,
-            WasmRpcTargetActivation::DeferredDurable { env, config } => Some(RpcTargetActivation {
-                target_fingerprint: None,
-                env: env.clone(),
-                config: config.clone(),
-            }),
             WasmRpcTargetActivation::ReplayPending {
                 target_fingerprint,
                 env,
                 config,
             } => Some(RpcTargetActivation {
-                target_fingerprint: Some(*target_fingerprint),
+                target_fingerprint: *target_fingerprint,
                 env: env.clone(),
                 config: config.clone(),
             }),
-            WasmRpcTargetActivation::Activated { .. } => None,
+            WasmRpcTargetActivation::DeferredEphemeral { .. }
+            | WasmRpcTargetActivation::DeferredDurable { .. }
+            | WasmRpcTargetActivation::Activated { .. } => None,
         }
     }
 
