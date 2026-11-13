@@ -140,6 +140,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_tool_invoke_session_result
     ),
     registry_entry!(
+        "ToolInvokeHelpView",
+        "tool.invoke-help",
+        arb_tool_invoke_help_result
+    ),
+    registry_entry!(
         "AgentInvocationSessionEvent",
         "agent.invoke-session",
         arb_agent_invocation_session_event
@@ -731,6 +736,45 @@ fn cli_output_schema_export_documents_are_multi_document() {
         );
     }
     assert_eq!(definitions["agent.oplog"]["x-golem-output-mode"], "stream");
+}
+
+#[test]
+fn cli_output_schema_commands_resolve_in_clap_tree() {
+    use crate::command::GolemCliCommand;
+    use clap::CommandFactory;
+
+    let schema = load_command_output_schema();
+    let definitions = schema_definitions(&schema);
+    let root = GolemCliCommand::command();
+    let mut unknown = BTreeSet::new();
+    for output_type in schema_output_entries(&schema).keys() {
+        let definition = &definitions[output_type];
+        let commands = definition
+            .get("x-golem-command")
+            .into_iter()
+            .chain(
+                definition
+                    .get("x-golem-commands")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter_map(Value::as_str);
+        for command in commands {
+            let resolves = command
+                .split(' ')
+                .try_fold(&root, |parent, name| parent.find_subcommand(name))
+                .is_some();
+            if !resolves {
+                unknown.insert(format!("{output_type}: `{command}`"));
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "output types name commands that are not in the CLI:\n  {}",
+        unknown.into_iter().collect::<Vec<_>>().join("\n  ")
+    );
 }
 
 #[test]
@@ -3588,6 +3632,14 @@ fn arb_agent_invoke_result() -> OutputDocumentStrategy {
             .expect("generated invoke result should serialize")
         })
         .boxed()
+}
+
+fn arb_tool_invoke_help_result() -> OutputDocumentStrategy {
+    ".*".prop_map(|help| {
+        to_structured_output_value(crate::model::tool_invoke::ToolInvokeHelpView { help })
+            .expect("generated tool invoke help should serialize")
+    })
+    .boxed()
 }
 
 fn arb_tool_invoke_result() -> OutputDocumentStrategy {

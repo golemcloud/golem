@@ -262,6 +262,9 @@
       "$ref": "#/definitions/tool.invoke-session"
     },
     {
+      "$ref": "#/definitions/tool.invoke-help"
+    },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
@@ -3101,10 +3104,10 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
+      "description": "Single structured output document emitted by `golem redeploy-agents` and `golem component redeploy-agents`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent redeploy",
-      "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
+      "x-golem-command": "redeploy-agents",
+      "x-golem-commands": ["redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
@@ -8560,6 +8563,18 @@
       },
       "additionalProperties": false
     },
+    "tool.invoke-help": {
+      "type": "object",
+      "description": "Help of a native external tool or of one of its subcommands, which `golem tool invoke` returns for `-- --help` instead of invoking the tool.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "help"],
+      "properties": {
+        "$type": { "const": "tool.invoke-help" },
+        "help": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "PublicNativeToolTarget": {
       "oneOf": [
         {
@@ -10889,6 +10904,10 @@
     {
       "type": "tool.invoke-session",
       "rustType": "ToolInvocationSessionView"
+    },
+    {
+      "type": "tool.invoke-help",
+      "rustType": "ToolInvokeHelpView"
     },
     {
       "type": "deploy.environment-setup-plan",
