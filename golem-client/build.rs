@@ -45,6 +45,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account::AccountCreation",
             ),
             (
+                "AccountDeletionHold",
+                "golem_common::model::account::AccountDeletionHold",
+            ),
+            (
+                "AccountDeletionHoldCreation",
+                "golem_common::model::account::AccountDeletionHoldCreation",
+            ),
+            (
                 "AccountSetPlan",
                 "golem_common::model::account::AccountSetPlan",
             ),

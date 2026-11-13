@@ -411,6 +411,12 @@ impl From<AccountError> for ApiError {
             AccountError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
+            AccountError::DeletionHeld(_) => {
+                Self::conflict(api::error_code::ACCOUNT_DELETION_HELD, error)
+            }
+            AccountError::InvalidDeletionHold(_) => {
+                Self::bad_request(api::error_code::INVALID_ACCOUNT_DELETION_HOLD, error)
+            }
             AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),

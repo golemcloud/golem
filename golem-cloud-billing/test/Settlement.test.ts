@@ -3,7 +3,16 @@ import { TestClock } from "effect/testing"
 import { describe, expect, it } from "vitest"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Registry from "../src/Registry.ts"
-import { ORDER_PAYMENT_GRACE_MS, planFor, SETTLEMENT_MARGIN_MS, sweeper } from "../src/Settlement.ts"
+import * as RegistryAccounts from "../src/RegistryAccounts.ts"
+import {
+  holdFor,
+  holdReasonText,
+  type HoldReason,
+  ORDER_PAYMENT_GRACE_MS,
+  planFor,
+  SETTLEMENT_MARGIN_MS,
+  sweeper
+} from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
 import type { PendingOrder, Subscription } from "../src/Subscriptions.ts"
 import { polarProductId, testConfig } from "./support.ts"
@@ -82,6 +91,47 @@ describe("planFor", () => {
   })
 })
 
+const canceledAtPeriodEnd = subscription({ cancelAtPeriodEnd: true })
+
+describe("holdFor", () => {
+  it.each([
+    ["no subscription", [], [], [], false],
+    ["an active subscription", ["subscription"], [subscription()], [], false],
+    ["a trialing subscription", ["subscription"], [subscription({ status: "trialing" })], [], false],
+    ["a past_due subscription", ["subscription"], [pastDue], [], false],
+    ["a subscription canceled at the period end", ["canceledSubscription"], [canceledAtPeriodEnd], [], false],
+    [
+      "a canceled subscription next to one that continues",
+      ["subscription"],
+      [canceledAtPeriodEnd, subscription({ subscriptionId: "sub_2" })],
+      [],
+      false
+    ],
+    ["an ended subscription", [], [subscription({ status: "canceled" })], [], false],
+    ["a paused subscription", [], [subscription({ status: "paused" })], [], false],
+    ["an ended subscription with unbilled usage", ["unbilledUsage"], [subscription({ status: "canceled" })], [], true],
+    ["an unpaid order with overage", ["unpaidOverage"], [subscription({ status: "canceled" })], [pending()], false],
+    ["an unpaid order of the price alone", [], [subscription({ status: "canceled" })], [priceOnly], false],
+    [
+      "an active subscription with every other reason",
+      ["subscription", "unbilledUsage", "unpaidOverage"],
+      [subscription()],
+      [overdue],
+      true
+    ]
+  ] as const)("%s gives %j", (_, reasons, subscriptions, orders, unbilledUsage) => {
+    expect(holdFor(subscriptions, orders, unbilledUsage)).toEqual(reasons)
+  })
+
+  it("writes every reason within the 1000 characters of a registry hold", () => {
+    const every: ReadonlyArray<HoldReason> = ["subscription", "canceledSubscription", "unbilledUsage", "unpaidOverage"]
+    const text = holdReasonText(every, "https://billing.golem.cloud")
+
+    expect(text.length).toBeLessThanOrEqual(1000)
+    expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
+  })
+})
+
 describe("sweeper", () => {
   it("runs the sweep when the web app starts and then every minute", async () => {
     const sweeps: Array<string> = []
@@ -89,9 +139,14 @@ describe("sweeper", () => {
       ending: (productId: string) => Effect.sync(() => (sweeps.push(productId), [])),
       awaitingPayment: () => Effect.succeed([]),
       pastDue: () => Effect.succeed([]),
+      holdCandidates: () => Effect.succeed([]),
+      settleUsage: () => Effect.die("unused"),
+      recordHold: () => Effect.die("unused"),
+      forgetHold: () => Effect.die("unused"),
       record: () => Effect.die("unused"),
       recordOrder: () => Effect.die("unused"),
       pendingOrders: () => Effect.die("unused"),
+      unbilledUsage: () => Effect.die("unused"),
       ofAccount: () => Effect.die("unused"),
       latest: () => Effect.die("unused"),
       isDelivered: () => Effect.die("unused"),
@@ -101,6 +156,10 @@ describe("sweeper", () => {
     const services = Layer.mergeAll(
       subscriptions,
       Layer.succeed(Registry.Registry, {} as Registry.RegistryShape),
+      Layer.succeed(RegistryAccounts.RegistryAccounts, {
+        isDeleted: () => Effect.die("unused"),
+        deletedAmong: () => Effect.succeed([])
+      }),
       Layer.succeed(BillingConfig, testConfig())
     )
 

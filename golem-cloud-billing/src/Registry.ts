@@ -14,6 +14,24 @@ export const TokenWithSecret = Schema.Struct({
 })
 export type TokenWithSecret = typeof TokenWithSecret.Type
 
+/** `Token` of the registry service API: a token without its secret. */
+export const Token = Schema.Struct({
+  id: Uuid,
+  accountId: Uuid,
+  createdAt: Schema.String,
+  expiresAt: Schema.String
+})
+export type Token = typeof Token.Type
+
+/** `AccountDeletionHold` of the registry service API. */
+export const DeletionHold = Schema.Struct({
+  accountId: Uuid,
+  holderAccountId: Uuid,
+  reason: Schema.String,
+  createdAt: Schema.String
+})
+export type DeletionHold = typeof DeletionHold.Type
+
 /** The fields of the registry service's `Account` that the billing app reads. */
 export const Account = Schema.Struct({
   id: Uuid,
@@ -138,6 +156,27 @@ export interface RegistryShape {
     accountId: string,
     mode: MonthlyUsageMode
   ) => Effect.Effect<UsageModeChange, RegistryError>
+  /** The token itself, through `GET /v1/me/token`, for the account that owns it. */
+  readonly currentToken: (token: Redacted.Redacted<string>) => Effect.Effect<Token, RegistryError>
+  /**
+   * Places or replaces the deletion hold of `holderAccountId` on the account, through
+   * `PUT /v1/accounts/{account_id}/deletion-holds/{holder_account_id}`. The registry refuses to
+   * delete an account with a deletion hold, and shows the reason to the caller of the delete.
+   * The holder is the account of the token, unless the token has the system permission
+   * `override-deletion-hold`.
+   */
+  readonly placeDeletionHold: (
+    token: Redacted.Redacted<string>,
+    accountId: string,
+    holderAccountId: string,
+    reason: string
+  ) => Effect.Effect<DeletionHold, RegistryError>
+  /** Removes the deletion hold of `holderAccountId` from the account. It succeeds also when there is none. */
+  readonly removeDeletionHold: (
+    token: Redacted.Redacted<string>,
+    accountId: string,
+    holderAccountId: string
+  ) => Effect.Effect<void, RegistryError>
 }
 
 export class Registry extends Context.Service<Registry, RegistryShape>()(
@@ -228,6 +267,54 @@ export const layer: Layer.Layer<Registry, never, BillingConfig | HttpClient.Http
         )
     }
 
-    return { exchangeGitHubAccessToken, getAccount, setAccountPlan, getLimits, setMonthlyUsageMode }
+    const currentToken = (token: Redacted.Redacted<string>) =>
+      client
+        .get(`${baseUrl}/v1/me/token`, {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true
+        })
+        .pipe(
+          Effect.flatMap(HttpIncomingMessage.schemaBodyJson(Token)),
+          Effect.mapError(toRegistryError("current_token"))
+        )
+
+    const deletionHoldUrl = (accountId: string, holderAccountId: string) =>
+      `${baseUrl}/v1/accounts/${encodeURIComponent(accountId)}/deletion-holds/${encodeURIComponent(holderAccountId)}`
+
+    const placeDeletionHold = (
+      token: Redacted.Redacted<string>,
+      accountId: string,
+      holderAccountId: string,
+      reason: string
+    ) =>
+      client
+        .put(deletionHoldUrl(accountId, holderAccountId), {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true,
+          body: HttpBody.jsonUnsafe({ reason })
+        })
+        .pipe(
+          Effect.flatMap(HttpIncomingMessage.schemaBodyJson(DeletionHold)),
+          Effect.mapError(toRegistryError("place_deletion_hold"))
+        )
+
+    const removeDeletionHold = (token: Redacted.Redacted<string>, accountId: string, holderAccountId: string) =>
+      client
+        .del(deletionHoldUrl(accountId, holderAccountId), {
+          headers: { authorization: `Bearer ${Redacted.value(token)}` },
+          acceptJson: true
+        })
+        .pipe(Effect.asVoid, Effect.mapError(toRegistryError("remove_deletion_hold")))
+
+    return {
+      exchangeGitHubAccessToken,
+      getAccount,
+      setAccountPlan,
+      getLimits,
+      setMonthlyUsageMode,
+      currentToken,
+      placeDeletionHold,
+      removeDeletionHold
+    }
   })
 )

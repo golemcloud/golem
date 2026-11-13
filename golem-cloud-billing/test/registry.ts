@@ -14,6 +14,11 @@ export const meteringTables = [
   "account_monthly_policy_attribution"
 ]
 
+/** The registry columns that the database role of the billing app can read, for each table. */
+export const accountColumns: Readonly<Record<string, ReadonlyArray<string>>> = {
+  accounts: ["account_id", "deleted_at"]
+}
+
 export interface Dimensions {
   readonly computeFuel?: bigint
   readonly memoryGbSeconds?: bigint
@@ -98,6 +103,9 @@ export class RegistryDatabase {
     await this.admin.query(
       `GRANT SELECT ON ${meteringTables.map((table) => `public.${table}`).join(", ")} TO "${this.role}"`
     )
+    for (const [table, columns] of Object.entries(accountColumns)) {
+      await this.admin.query(`GRANT SELECT (${columns.join(", ")}) ON public.${table} TO "${this.role}"`)
+    }
   }
 
   /** Drops the database. Every other pool that connects to it must be closed with `closePool` first. */
@@ -116,6 +124,13 @@ export class RegistryDatabase {
       [id, `${id}@example.com`]
     )
     return id
+  }
+
+  /** Deletes the account as the registry does: it sets `deleted_at` and keeps the row. */
+  async deleteAccount(accountId: string): Promise<void> {
+    await this.admin.query("UPDATE accounts SET deleted_at = now(), updated_at = now() WHERE account_id = $1", [
+      accountId
+    ])
   }
 
   async revision(

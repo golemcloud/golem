@@ -1,7 +1,14 @@
-import { Effect, Layer, Schedule } from "effect"
+import { Effect, Layer, Option, Ref, Schedule } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
-import { Registry, type RegistryError } from "./Registry.ts"
-import { type PendingOrder, type Subscription, Subscriptions, type SubscriptionsError } from "./Subscriptions.ts"
+import { type Account, Registry, type RegistryError } from "./Registry.ts"
+import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
+import {
+  billableStatuses,
+  type PendingOrder,
+  type Subscription,
+  Subscriptions,
+  type SubscriptionsError
+} from "./Subscriptions.ts"
 
 /**
  * Settlement: the plan of an account follows what the account has paid.
@@ -33,6 +40,11 @@ import { type PendingOrder, type Subscription, Subscriptions, type Subscriptions
  *
  * The registry sets an account on a plan without overage to hardLimit. Only the owner can turn
  * paid overage on again, also after the account is back on the paid plan.
+ *
+ * Settlement also places a deletion hold on the account while the account has a billable
+ * subscription or owes paid overage (`holdFor`), so the registry refuses to delete it. Golem does
+ * not charge early and does not end a paid period early: the person deletes the account after the
+ * subscription ends and Polar has billed the paid overage and been paid for it.
  */
 
 /**
@@ -49,6 +61,13 @@ export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
  * subscription `past_due`: only the age of the order shows the failure.
  */
 export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
+
+/**
+ * How old a recorded deletion hold gets before the sweep reconciles the account again. A placement
+ * refreshes the record, so a held account is checked about once in this time. A removal that
+ * failed keeps the old record, so the sweep tries it again, long after the last webhook.
+ */
+export const HOLD_RECHECK_MS = 60 * 60 * 1000
 
 /**
  * How long the sweep still checks a subscription after its end or after its past-due grace, or an
@@ -116,54 +135,176 @@ export const planFor = (
     : "free"
 }
 
+/** Why an account needs a deletion hold. */
+export type HoldReason =
+  /** A billable subscription is not canceled at the period end. */
+  | "subscription"
+  /** A billable subscription is canceled at the period end, and runs to the end of the period. */
+  | "canceledSubscription"
+  /** The usage push recorded paid overage that no order bills yet. */
+  | "unbilledUsage"
+  /** A pending order has an amount for a metered price. */
+  | "unpaidOverage"
+
+/**
+ * The reasons for a deletion hold on the account; none when the account has no billable
+ * subscription and owes no paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`.
+ *
+ * A billable subscription holds the account to the end of the period, also after a cancellation.
+ * Paid overage needs the paid plan, and the paid plan needs a billable subscription, so the
+ * account has a hold for as long as it can run up paid overage. The owner turns paid overage on
+ * and off in the registry, which the app does not see, so a hold that followed the switch would
+ * come too late. The cleanup of deleted accounts checks the same reasons before it deletes a
+ * Polar customer, so it never ends a paid period early.
+ */
+export const holdFor = (
+  subscriptions: ReadonlyArray<Subscription>,
+  pendingOrders: ReadonlyArray<PendingOrder>,
+  unbilledUsage: boolean
+): ReadonlyArray<HoldReason> => {
+  const reasons: Array<HoldReason> = []
+  const billable = subscriptions.filter((subscription) => billableStatuses.includes(subscription.status))
+  if (billable.some((subscription) => !subscription.cancelAtPeriodEnd)) {
+    reasons.push("subscription")
+  } else if (billable.length > 0) {
+    reasons.push("canceledSubscription")
+  }
+  if (unbilledUsage) {
+    reasons.push("unbilledUsage")
+  }
+  if (pendingOrders.some((order) => order.meteredAmount > 0)) {
+    reasons.push("unpaidOverage")
+  }
+  return reasons
+}
+
+/**
+ * The reason text of the deletion hold. The registry shows it to the person who tries to delete
+ * the account, so each sentence says what to do. `billingUrl` is the page of the billing app.
+ */
+export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: string): string => {
+  const sentences: Record<HoldReason, string> = {
+    subscription: `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
+    canceledSubscription:
+      "The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends.",
+    unbilledUsage:
+      "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
+    unpaidOverage: `An invoice for paid overage is not paid. Pay it in Manage billing at ${billingUrl}.`
+  }
+  return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason])].join(" ")
+}
+
 export interface SettlementShape {
   /**
-   * Moves the account to the plan of its subscriptions at `now`. An account on a plan that the
-   * app does not manage keeps it. The caller holds the account lock of `Subscriptions`.
+   * Sets the deletion hold of the account and moves the account to the plan of its subscriptions
+   * at `now`. An account on a plan that the app does not manage keeps it, and gets the deletion
+   * hold all the same. A deleted account keeps its plan and its deletion hold. The caller holds
+   * the account lock of `Subscriptions`.
    */
-  readonly reconcile: (accountId: string, now: Date) => Effect.Effect<void, RegistryError | SubscriptionsError>
+  readonly reconcile: (
+    accountId: string,
+    now: Date
+  ) => Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError>
   /**
-   * Reconciles every account whose plan can change with the time alone: a subscription that ends
-   * within the settlement margin, an order that is still pending after `ORDER_PAYMENT_GRACE_MS`,
-   * and a subscription whose past-due grace ends.
+   * Reconciles every account whose plan or deletion hold can change with the time alone: a
+   * subscription that ends within the settlement margin, an order that is still pending after
+   * `ORDER_PAYMENT_GRACE_MS`, a subscription whose past-due grace ends, and the candidates of
+   * `Subscriptions.holdCandidates`.
    */
   readonly sweep: (now: Date) => Effect.Effect<void>
 }
 
-export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registry | Subscriptions> = Effect.gen(
+export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registry | RegistryAccounts | Subscriptions> = Effect.gen(
   function* () {
     const config = yield* BillingConfig
     const registry = yield* Registry
+    const registryAccounts = yield* RegistryAccounts
     const subscriptions = yield* Subscriptions
     const planIds: Readonly<Record<ManagedPlan, string>> = config.plans
     const managed = new Set(Object.values(planIds))
+    const billingUrl = config.baseUrl.origin
 
-    const reconcile = (accountId: string, now: Date) =>
-      Effect.gen(function* () {
-        const plan = planFor(
-          yield* subscriptions.ofAccount(accountId, config.polar.productId),
-          yield* subscriptions.pendingOrders(accountId, config.polar.productId),
-          now,
-          config.pastDueGraceMs
+    // The billing account is the holder of every deletion hold of the app. The first successful
+    // read is kept; a failed read is tried again at the next call.
+    const holder = yield* Ref.make(Option.none<string>())
+    const holderAccountId = Effect.flatMap(Ref.get(holder), (known) =>
+      Option.isSome(known)
+        ? Effect.succeed(known.value)
+        : registry.currentToken(config.registryBillingToken).pipe(
+            Effect.map((token) => token.accountId),
+            Effect.tap((accountId) => Ref.set(holder, Option.some(accountId)))
+          )
+    )
+
+    // The registry answers 404 both for a deleted account and for an account that the billing
+    // account cannot see. Only a deleted account is not an error.
+    const getAccount = (accountId: string) =>
+      registry.getAccount(config.registryBillingToken, accountId).pipe(
+        Effect.map(Option.some),
+        Effect.catchIf(
+          (error) => error.status === 404,
+          (error) =>
+            Effect.flatMap(registryAccounts.isDeleted(accountId), (deleted) =>
+              deleted ? Effect.succeed(Option.none()) : Effect.fail(error)
+            )
         )
+      )
+
+    const changePlan = (account: Account, plan: ManagedPlan) =>
+      Effect.gen(function* () {
         const target = planIds[plan]
-        const account = yield* registry.getAccount(config.registryBillingToken, accountId)
         if (account.planId === target) {
           return
         }
         if (!managed.has(account.planId)) {
           yield* Effect.logWarning("The account has a plan that subscriptions do not change").pipe(
-            Effect.annotateLogs({ golemAccountId: accountId, planId: account.planId })
+            Effect.annotateLogs({ golemAccountId: account.id, planId: account.planId })
           )
           return
         }
         yield* registry.setAccountPlan(config.registryBillingToken, account, target)
         yield* Effect.logInfo("Changed the plan of the account").pipe(
-          Effect.annotateLogs({ golemAccountId: accountId, fromPlanId: account.planId, toPlanId: target, plan })
+          Effect.annotateLogs({ golemAccountId: account.id, fromPlanId: account.planId, toPlanId: target, plan })
+        )
+      })
+
+    const reconcile = (accountId: string, now: Date) =>
+      Effect.gen(function* () {
+        const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
+        const pendingOrders = yield* subscriptions.pendingOrders(accountId, config.polar.productId)
+        const found = yield* getAccount(accountId)
+        if (Option.isNone(found)) {
+          yield* Effect.logInfo("The registry deleted the account; its plan and deletion hold stay").pipe(
+            Effect.annotateLogs({ golemAccountId: accountId })
+          )
+          return
+        }
+        const account = found.value
+
+        const reasons = holdFor(accountSubscriptions, pendingOrders, yield* subscriptions.unbilledUsage(accountId))
+        const holderId = yield* holderAccountId
+        // The hold goes on before the plan changes and comes off after it, so the account is never
+        // on the paid plan without a hold.
+        if (reasons.length > 0) {
+          const reason = holdReasonText(reasons, billingUrl)
+          yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
+          yield* subscriptions.recordHold(accountId, reason)
+        }
+        yield* changePlan(account, planFor(accountSubscriptions, pendingOrders, now, config.pastDueGraceMs))
+        if (reasons.length === 0) {
+          yield* registry.removeDeletionHold(config.registryBillingToken, accountId, holderId)
+          yield* subscriptions.forgetHold(accountId)
+        }
+        yield* Effect.logDebug("Set the deletion hold of the account").pipe(
+          Effect.annotateLogs({ golemAccountId: accountId, reasons: reasons.join(",") })
         )
       }).pipe(
         // 409: the account changed between the read and the write; read it again.
-        Effect.retry({ times: 3, while: (error: RegistryError | SubscriptionsError) => "status" in error && error.status === 409 })
+        Effect.retry({
+          times: 3,
+          while: (error: RegistryError | SubscriptionsError | RegistryAccountsError) =>
+            "status" in error && error.status === 409
+        })
       )
 
     const settle = (accountId: string, now: Date) =>
@@ -193,8 +334,16 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           at(-config.pastDueGraceMs - SWEEP_WINDOW_MS),
           at(-config.pastDueGraceMs)
         )
+        const holdCandidates = yield* subscriptions.holdCandidates(
+          config.polar.productId,
+          at(-SWEEP_WINDOW_MS),
+          at(-HOLD_RECHECK_MS)
+        )
+        const candidates = [...new Set([...ending, ...awaitingPayment, ...pastDueGraceEnding, ...holdCandidates])]
+        // The reconcile changes nothing for a deleted account, so the sweep skips it.
+        const deleted = new Set(yield* registryAccounts.deletedAmong(candidates))
         yield* Effect.forEach(
-          new Set([...ending, ...awaitingPayment, ...pastDueGraceEnding]),
+          candidates.filter((accountId) => !deleted.has(accountId)),
           (accountId) => settle(accountId, now),
           { discard: true }
         )
@@ -211,7 +360,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
 )
 
 /** Runs the sweep every minute while the web app runs. Every replica runs it; the account lock orders them. */
-export const sweeper: Layer.Layer<never, never, BillingConfig | Registry | Subscriptions> = Layer.effectDiscard(
+export const sweeper: Layer.Layer<never, never, BillingConfig | Registry | RegistryAccounts | Subscriptions> = Layer.effectDiscard(
   Effect.gen(function* () {
     const { sweep } = yield* make
     yield* Effect.forkScoped(

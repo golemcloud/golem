@@ -19,6 +19,8 @@ use golem_common::model::card::{
     CardId, CardManagedBy, CardManagedByAccountRoot, CardManagedByEnvironmentDefault,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_registry_service::config::OAuth2Config;
+use golem_registry_service::model::login::ExternalLogin;
 use golem_registry_service::repo::account::{AccountRepo, DbAccountRepo};
 use golem_registry_service::repo::account_resource_override::AccountResourceOverrideRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
@@ -44,18 +46,28 @@ use golem_registry_service::repo::model::environment::{
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
+use golem_registry_service::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
+use golem_registry_service::repo::oauth2_webflow_state::{
+    DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo,
+};
 use golem_registry_service::repo::plan::{DbPlanRepo, PlanRepo};
 use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::repo::retry_policy::RetryPolicyRepo;
+use golem_registry_service::repo::token::{DbTokenRepo, TokenRepo};
 use golem_registry_service::repo::tool_middleware_release::ToolMiddlewareReleaseRepo;
 use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
+use golem_registry_service::services::oauth2::OAuth2Service;
+use golem_registry_service::services::oauth2_github_client::{
+    OAuth2GithubClient, OAuth2GithubClientError,
+};
 use golem_registry_service::services::plan::PlanService;
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
+use golem_registry_service::services::token::TokenService;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -244,6 +256,44 @@ impl Deps {
         }
     }
 
+    /// An OAuth2 service whose GitHub client returns `login` for every access token.
+    pub fn oauth2_service(&self, login: ExternalLogin) -> OAuth2Service {
+        match &self.test_db {
+            TestDb::Postgres(pool) => self.oauth2_service_for_pool(pool.clone(), login),
+            TestDb::Sqlite(pool) => self.oauth2_service_for_pool(pool.clone(), login),
+        }
+    }
+
+    fn oauth2_service_for_pool<DBP>(&self, pool: DBP, login: ExternalLogin) -> OAuth2Service
+    where
+        DBP: Pool + Clone + 'static,
+        DbAccountRepo<DBP>: AccountRepo + 'static,
+        DbPlanRepo<DBP>: PlanRepo + 'static,
+        DbTokenRepo<DBP>: TokenRepo + 'static,
+        DbOAuth2TokenRepo<DBP>: OAuth2TokenRepo + 'static,
+        DbOAuth2WebflowStateRepo<DBP>: OAuth2WebflowStateRepo + 'static,
+    {
+        let account_service = self.account_service_for_pool(pool.clone());
+        let token_service = Arc::new(TokenService::new(
+            Arc::new(DbTokenRepo::new(pool.clone())),
+            account_service.clone(),
+            self.test_registry_change_notifier(),
+        ));
+        OAuth2Service::new(
+            Arc::new(FixedLoginGithubClient { login }),
+            account_service,
+            token_service,
+            Arc::new(DbOAuth2TokenRepo::new(pool.clone())),
+            Arc::new(DbOAuth2WebflowStateRepo::new(pool)),
+            &OAuth2Config {
+                webflow_state_expiry: std::time::Duration::from_secs(600),
+                cli_redirect: url::Url::parse("https://golem.cloud").unwrap(),
+                allowed_redirect_domains: Vec::new(),
+            },
+        )
+        .unwrap()
+    }
+
     fn account_service_for_pool<DBP>(&self, pool: DBP) -> Arc<AccountService>
     where
         DBP: Pool + Clone + 'static,
@@ -398,5 +448,34 @@ fn environment_ext(
         current_deployment_deployment_revision: scoped.current_deployment_deployment_revision,
         current_deployment_deployment_version: scoped.current_deployment_deployment_version,
         current_deployment_deployment_hash: scoped.current_deployment_deployment_hash,
+    }
+}
+
+struct FixedLoginGithubClient {
+    login: ExternalLogin,
+}
+
+#[async_trait::async_trait]
+impl OAuth2GithubClient for FixedLoginGithubClient {
+    async fn get_authorize_url(
+        &self,
+        _state: &golem_common::model::login::OAuth2WebflowStateId,
+    ) -> String {
+        String::new()
+    }
+
+    async fn exchange_code_for_token(
+        &self,
+        _code: &str,
+        _state: &golem_common::model::login::OAuth2WebflowStateId,
+    ) -> Result<String, OAuth2GithubClientError> {
+        Ok(String::new())
+    }
+
+    async fn get_external_login(
+        &self,
+        _access_token: &str,
+    ) -> Result<ExternalLogin, OAuth2GithubClientError> {
+        Ok(self.login.clone())
     }
 }
