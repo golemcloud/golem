@@ -31,6 +31,7 @@
 //! The generated project depends only on the JDK (`java.net.http`) and a
 //! hand-rolled JSON model and targets Scala 3.
 
+mod quantity;
 #[allow(clippy::module_inception)]
 pub mod scala;
 pub mod scala_writer;
@@ -38,8 +39,9 @@ mod schema_graph;
 pub mod tool;
 pub mod type_name;
 
-pub use type_name::{RemappedType, ScalaTypeName};
+pub use type_name::ScalaTypeName;
 
+use crate::bridge_gen::scala::quantity::QuantityUnits;
 use crate::bridge_gen::scala::scala::{
     escape_scala_ident, is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents,
     unique_idents_with_reserved,
@@ -59,7 +61,7 @@ use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
+use golem_common::schema::schema_type::{QuantitySpec, SchemaType, VariantCaseType};
 use golem_common::schema::unstructured::{
     unstructured_binary_restrictions, unstructured_text_restrictions,
 };
@@ -97,7 +99,7 @@ const CLIENT_PKG_BASE: &str = "golem.bridge.client";
 const SV: &str = "_root_.golem.bridge.runtime.SchemaValue";
 
 /// Fully-qualified runtime `SchemaValueCodec` object, holding the typed
-/// accessors and the UUID builtin codec the generated codecs lean on.
+/// accessors the generated codecs lean on.
 const CODEC: &str = "_root_.golem.bridge.runtime.SchemaValueCodec";
 
 /// Fully-qualified runtime `SchemaResult` companion.
@@ -135,6 +137,7 @@ const BRIDGE: &str = "_root_.golem.bridge.runtime.Bridge";
 
 /// Fully-qualified runtime `Configuration` object/type.
 const CONFIGURATION: &str = "_root_.golem.bridge.runtime.Configuration";
+const CANCELLATION_TOKEN: &str = "_root_.golem.bridge.runtime.CancellationToken";
 
 /// Fully-qualified runtime `ResolvedAgent` case class.
 const RESOLVED_AGENT: &str = "_root_.golem.bridge.runtime.ResolvedAgent";
@@ -145,11 +148,12 @@ const AGENT_ID: &str = "_root_.golem.bridge.runtime.AgentId";
 /// Fully-qualified runtime `GolemServer` type.
 const GOLEM_SERVER: &str = "_root_.golem.bridge.runtime.GolemServer";
 
-/// Fully-qualified runtime `Datetime` type (scheduling instant).
-const DATETIME: &str = "_root_.golem.bridge.runtime.Datetime";
+/// The time argument of `scheduleAt`, in both bridge modes.
+const SCHEDULE_TIME: &str = "_root_.java.time.Instant";
 
-/// Fully-qualified runtime `Uuid` type (phantom ids).
-const UUID: &str = "_root_.golem.bridge.runtime.Uuid";
+/// Fully-qualified UUID type, used for native `uuid` values and phantom ids in
+/// both bridge modes.
+const UUID: &str = "_root_.java.util.UUID";
 
 const GUEST_SV: &str = "_root_.golem.schema.SchemaValue";
 const GUEST_CODEC: &str = "_root_.golem.runtime.rpc.SchemaRpcCodec";
@@ -163,12 +167,19 @@ const GUEST_CONFIGURATION: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_RESOLVED_AGENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
 const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
-const GUEST_DATETIME: &str = "_root_.golem.Datetime";
-const GUEST_UUID: &str = "_root_.golem.Uuid";
 const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
 const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
     "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
 const GUEST_SCOPE_CARD: &str = "_root_.golem.host.PermissionsApi.ScopeCard";
+const GUEST_QUOTA_TOKEN: &str = "_root_.golem.host.QuotaApi.QuotaToken";
+const GUEST_NAMED_QUOTA_TOKEN: &str = "_root_.golem.host.QuotaApi.NamedQuotaToken";
+const GUEST_UNSTRUCTURED_TEXT: &str = "_root_.golem.schema.UnstructuredText";
+/// The Scala SDK's bare `text` type. The schema restrictions are not encoded in
+/// the type; the server checks them.
+const GUEST_TEXT: &str = "_root_.golem.schema.Text";
+/// The Scala SDK's unstructured binary type. Its `Inline` case is also the
+/// type of a bare `binary`, so both binary forms share one byte type.
+const GUEST_UNSTRUCTURED_BINARY: &str = "_root_.golem.schema.UnstructuredBinary";
 const GUEST_AGENT_CLIENT_RUNTIME: &str = "_root_.golem.runtime.rpc.AgentClientRuntime";
 /// The nested class of every generated method class whose awaited calls borrow
 /// a scope card. Generated types are always referenced by their rooted name, so
@@ -180,6 +191,7 @@ const GUEST_SCOPE_CARD_MEMBER_NAMES: &[&str] = &["withDefaultScopeCard", "withou
 
 /// Scala `Future`, `ExecutionContext`, `String`, `Unit`.
 const FUTURE: &str = "_root_.scala.concurrent.Future";
+const DURATION: &str = "_root_.scala.concurrent.duration.Duration";
 const EXECUTION_CONTEXT: &str = "_root_.scala.concurrent.ExecutionContext";
 const STRING: &str = "_root_.scala.Predef.String";
 const UNIT: &str = "_root_.scala.Unit";
@@ -298,14 +310,16 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "GolemServer",
     "Configuration",
     "AgentId",
-    "Uuid",
-    "Datetime",
+    "GolemPath",
     "UByte",
     "UShort",
     "UInt",
     "ULong",
     "UnstructuredText",
     "UnstructuredBinary",
+    "Quantity",
+    "QuantityUnit",
+    "Text",
     "Bridge",
     "BridgeProtocol",
     "AgentConfigEntry",
@@ -321,14 +335,11 @@ const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
     "SchemaMapEntry",
     "SchemaResult",
     "Datetime",
-    "Uuid",
     "ClientError",
     "CancellationToken",
     "ConfigOverride",
     "RemoteAgentClient",
     "ToolRpcClient",
-    "UnstructuredText",
-    "UnstructuredBinary",
 ];
 
 /// The `(case_name, payload_schema)` modality pairs of one multimodal set.
@@ -392,7 +403,7 @@ impl ScalaRuntimeConfig {
                 resolved_agent: RESOLVED_AGENT,
                 agent_id: AGENT_ID,
                 golem_server: GOLEM_SERVER,
-                datetime: DATETIME,
+                datetime: SCHEDULE_TIME,
                 uuid: UUID,
             },
             ScalaBridgeMode::GuestWasmRpc => Self {
@@ -410,8 +421,8 @@ impl ScalaRuntimeConfig {
                 resolved_agent: GUEST_RESOLVED_AGENT,
                 agent_id: GUEST_AGENT_ID,
                 golem_server: GUEST_GOLEM_SERVER,
-                datetime: GUEST_DATETIME,
-                uuid: GUEST_UUID,
+                datetime: SCHEDULE_TIME,
+                uuid: UUID,
             },
         }
     }
@@ -442,6 +453,9 @@ pub struct ScalaBridgeGenerator {
     /// `list<variant<…>>`), so the discovery order only affects the generated
     /// Scala API surface, never the bytes on the wire.
     multimodals: Vec<NamedMultimodal>,
+    /// One generated unit marker per distinct quantity unit, named clear of
+    /// the reserved names and reserved in [`TypeNaming`] like the multimodals.
+    quantity_units: QuantityUnits,
     schema_graphs: RefCell<schema_graph::SchemaGraphRegistry>,
 }
 
@@ -524,32 +538,32 @@ impl ScalaBridgeGenerator {
         // `Multimodal<N>` names can be reserved in the walker below.
         let multimodals = collect_multimodals(&agent_type)?;
 
-        let reserved = runtime_config
+        let reserved_names = runtime_config
             .reserved_type_names()
             .iter()
-            .map(|name| ScalaTypeName::Derived((*name).to_string()))
-            .chain(std::iter::once(ScalaTypeName::Derived(client_object_name(
-                &agent_type,
-            ))))
-            .chain(std::iter::once(ScalaTypeName::Derived(remote_trait_name(
-                &agent_type,
-            ))))
+            .map(|name| (*name).to_string())
+            .chain(std::iter::once(client_object_name(&agent_type)))
+            .chain(std::iter::once(remote_trait_name(&agent_type)))
             // The generated codecs object lives in the client package alongside
             // the generated types, so its name must not be taken by one of them.
-            .chain(std::iter::once(ScalaTypeName::Derived(
-                CODECS_OBJECT.to_string(),
-            )))
-            .chain(std::iter::once(ScalaTypeName::Derived(
-                schema_graph::REGISTRY_OBJECT.to_string(),
-            )))
+            .chain(std::iter::once(CODECS_OBJECT.to_string()))
+            .chain(std::iter::once(schema_graph::REGISTRY_OBJECT.to_string()))
             // The generated multimodal sealed traits live in the client package
             // too, so a user type must not be assigned one of their names.
-            .chain(
-                multimodals
-                    .iter()
-                    .map(|(_, name)| ScalaTypeName::Derived(name.clone())),
-            )
-            .chain(extra_reserved_names.into_iter().map(ScalaTypeName::Derived));
+            .chain(multimodals.iter().map(|(_, name)| name.clone()))
+            .chain(extra_reserved_names)
+            .collect::<Vec<_>>();
+        let quantity_units = QuantityUnits::collect(
+            &agent_type,
+            &reserved_names
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        );
+        let reserved = reserved_names
+            .into_iter()
+            .chain(quantity_units.names())
+            .map(ScalaTypeName);
         let type_naming =
             TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved)?;
 
@@ -561,6 +575,7 @@ impl ScalaBridgeGenerator {
             same_language,
             type_naming,
             multimodals,
+            quantity_units,
             schema_graphs: RefCell::new(schema_graph::SchemaGraphRegistry::default()),
         })
     }
@@ -767,7 +782,6 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         self.write_type_definitions(&mut writer)?;
-        self.write_guest_unstructured_definitions(&mut writer);
         self.write_multimodal_definitions(&mut writer)?;
         self.write_codecs(&mut writer)?;
         self.write_guest_client_object(&mut writer)?;
@@ -785,70 +799,6 @@ impl ScalaBridgeGenerator {
 
     fn rewrite_guest_runtime_refs(&self, source: String) -> String {
         rewrite_guest_runtime_refs_outside_string_literals(&source)
-    }
-
-    fn write_guest_unstructured_definitions(&self, writer: &mut ScalaWriter) {
-        writer.line("sealed trait UnstructuredText extends _root_.scala.Product with _root_.scala.Serializable");
-        writer.line("object UnstructuredText {");
-        writer.indent();
-        writer.line("final case class Inline(value: _root_.scala.Predef.String, languageCode: _root_.scala.Option[_root_.scala.Predef.String]) extends UnstructuredText");
-        writer.line(
-            "final case class Url(value: _root_.scala.Predef.String) extends UnstructuredText",
-        );
-        writer.blank();
-        writer.line("def fromInline(value: _root_.scala.Predef.String, languageCode: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None): UnstructuredText = Inline(value, languageCode)");
-        writer.line("def fromUrl(url: _root_.scala.Predef.String): UnstructuredText = Url(url)");
-        writer.blank();
-        writer.line("def toSchemaValue(input: UnstructuredText): _root_.golem.schema.SchemaValue = input match {");
-        writer.indent();
-        writer.line("case Inline(value, languageCode) => _root_.golem.schema.SchemaValue.VariantValue(0, _root_.scala.Some(_root_.golem.schema.SchemaValue.TextValue(value, languageCode)))");
-        writer.line("case Url(url) => _root_.golem.schema.SchemaValue.VariantValue(1, _root_.scala.Some(_root_.golem.schema.SchemaValue.UrlValue(url)))");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
-        writer.line("def fromSchemaValue(parameterName: _root_.scala.Predef.String, value: _root_.golem.schema.SchemaValue, allowedCodes: _root_.scala.collection.immutable.List[_root_.scala.Predef.String]): _root_.scala.Either[_root_.scala.Predef.String, UnstructuredText] = value match {");
-        writer.indent();
-        writer.line("case _root_.golem.schema.SchemaValue.VariantValue(1, _root_.scala.Some(_root_.golem.schema.SchemaValue.UrlValue(url))) => _root_.scala.Right(Url(url))");
-        writer.line("case _root_.golem.schema.SchemaValue.VariantValue(0, _root_.scala.Some(_root_.golem.schema.SchemaValue.TextValue(text, language))) =>");
-        writer.indent();
-        writer.line("if (allowedCodes.nonEmpty && language.exists(l => !allowedCodes.contains(l))) _root_.scala.Left(s\"Invalid value for parameter $parameterName. Language code `${language.get}` is not allowed. Allowed codes: ${allowedCodes.mkString(\", \")}\")");
-        writer.line("else _root_.scala.Right(Inline(text, language))");
-        writer.dedent();
-        writer.line("case other => _root_.scala.Left(s\"Invalid value for parameter $parameterName. Expected an unstructured-text variant, got $other\")");
-        writer.dedent();
-        writer.line("}");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
-
-        writer.line("sealed trait UnstructuredBinary extends _root_.scala.Product with _root_.scala.Serializable");
-        writer.line("object UnstructuredBinary {");
-        writer.indent();
-        writer.line("final case class Inline(bytes: _root_.scala.collection.immutable.Vector[_root_.scala.Byte], mimeType: _root_.scala.Option[_root_.scala.Predef.String]) extends UnstructuredBinary");
-        writer.line(
-            "final case class Url(value: _root_.scala.Predef.String) extends UnstructuredBinary",
-        );
-        writer.blank();
-        writer.line("def fromInline(bytes: _root_.scala.collection.immutable.Vector[_root_.scala.Byte], mimeType: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None): UnstructuredBinary = Inline(bytes, mimeType)");
-        writer.line("def fromUrl(url: _root_.scala.Predef.String): UnstructuredBinary = Url(url)");
-        writer.blank();
-        writer.line("def toSchemaValue(input: UnstructuredBinary): _root_.golem.schema.SchemaValue = input match {");
-        writer.indent();
-        writer.line("case Inline(bytes, mimeType) => _root_.golem.schema.SchemaValue.VariantValue(0, _root_.scala.Some(_root_.golem.schema.SchemaValue.BinaryValue(bytes, mimeType)))");
-        writer.line("case Url(url) => _root_.golem.schema.SchemaValue.VariantValue(1, _root_.scala.Some(_root_.golem.schema.SchemaValue.UrlValue(url)))");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
-        writer.line("def fromSchemaValue(parameterName: _root_.scala.Predef.String, value: _root_.golem.schema.SchemaValue): _root_.scala.Either[_root_.scala.Predef.String, UnstructuredBinary] = value match {");
-        writer.indent();
-        writer.line("case _root_.golem.schema.SchemaValue.VariantValue(1, _root_.scala.Some(_root_.golem.schema.SchemaValue.UrlValue(url))) => _root_.scala.Right(Url(url))");
-        writer.line("case _root_.golem.schema.SchemaValue.VariantValue(0, _root_.scala.Some(_root_.golem.schema.SchemaValue.BinaryValue(bytes, mimeType))) => _root_.scala.Right(Inline(bytes, mimeType))");
-        writer.line("case other => _root_.scala.Left(s\"Invalid value for parameter $parameterName. Expected an unstructured-binary variant, got $other\")");
-        writer.dedent();
-        writer.line("}");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
     }
 
     // --- Client object ------------------------------------------------------
@@ -1187,10 +1137,11 @@ impl ScalaBridgeGenerator {
         writer.blank();
 
         let schedule_decls = if param_decls.is_empty() {
-            format!("when: {GUEST_DATETIME}")
+            format!("when: {SCHEDULE_TIME}")
         } else {
-            format!("{param_decls}, when: {GUEST_DATETIME}")
+            format!("{param_decls}, when: {SCHEDULE_TIME}")
         };
+        let when = format!("{GUEST_RUNTIME_PKG}.Datetime.fromInstant(when)");
         let schedule_result = if ephemeral {
             format!("{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationReceipt")
         } else {
@@ -1205,11 +1156,11 @@ impl ScalaBridgeGenerator {
         ));
         if ephemeral {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocationWithMetadata(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocationWithMetadata({when}, {method_name_lit}, parameters))"
             ));
         } else {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocation(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleInvocation({when}, {method_name_lit}, parameters))"
             ));
         }
         writer.dedent();
@@ -1230,11 +1181,11 @@ impl ScalaBridgeGenerator {
         ));
         if ephemeral {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocationWithMetadata(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocationWithMetadata({when}, {method_name_lit}, parameters))"
             ));
         } else {
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocation(when, {method_name_lit}, parameters))"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.scheduleCancelableInvocation({when}, {method_name_lit}, parameters))"
             ));
         }
         writer.dedent();
@@ -1363,9 +1314,9 @@ impl ScalaBridgeGenerator {
 
         if self.agent_type.mode == AgentMode::Durable {
             let phantom_decls = if param_decls.is_empty() {
-                format!("phantom: {GUEST_UUID}")
+                format!("phantom: {UUID}")
             } else {
-                format!("{param_decls}, phantom: {GUEST_UUID}")
+                format!("{param_decls}, phantom: {UUID}")
             };
             writer.line(format!(
                 "def getPhantom({phantom_decls}): {remote_name} = {{"
@@ -1428,7 +1379,7 @@ impl ScalaBridgeGenerator {
                 writer.blank();
                 writer.line(format!(
                     "def getPhantomWithConfig({}): {remote_name} = {{",
-                    with_config_decls(&format!("phantom: {GUEST_UUID}"))
+                    with_config_decls(&format!("phantom: {UUID}"))
                 ));
                 writer.indent();
                 self.write_guest_config_list(writer, &config_param_names, &local_configs)?;
@@ -1589,10 +1540,6 @@ impl ScalaBridgeGenerator {
             .is_ok_and(|value| value.is_some())
             || unstructured_binary_restrictions(self.type_naming.graph(), ty)
                 .is_ok_and(|value| value.is_some())
-            || matches!(
-                self.type_naming.type_name_for_type(ty),
-                Some(ScalaTypeName::Remapped(_))
-            )
         {
             return false;
         }
@@ -1680,11 +1627,11 @@ impl ScalaBridgeGenerator {
 
         // Configuration convenience, delegating to the shared runtime cell.
         writer.line(format!(
-            "def configure(server: {GOLEM_SERVER}, appName: {STRING}, envName: {STRING}, executionContext: {EXECUTION_CONTEXT} = {EXECUTION_CONTEXT}.global): {UNIT} ="
+            "def configure(server: {GOLEM_SERVER}, appName: {STRING}, envName: {STRING}, executionContext: {EXECUTION_CONTEXT} = {EXECUTION_CONTEXT}.global, reconnectWindow: {DURATION} = {CONFIGURATION}.DefaultReconnectWindow): {UNIT} ="
         ));
         writer.indent();
         writer.line(format!(
-            "{CONFIGURATION}.configure(server, appName, envName, executionContext)"
+            "{CONFIGURATION}.configure(server, appName, envName, executionContext, reconnectWindow)"
         ));
         writer.dedent();
         writer.blank();
@@ -1797,9 +1744,19 @@ impl ScalaBridgeGenerator {
         } else {
             ret_ty.clone()
         };
-        writer.line(format!(
-            "def apply({param_decls}): {FUTURE}[{awaited_ty}] = {{"
-        ));
+        if uses_streams {
+            writer.line(format!(
+                "def apply({param_decls}): {FUTURE}[{awaited_ty}] = this.cancelable({invoke_args})._1"
+            ));
+            writer.blank();
+            writer.line(format!(
+                "def cancelable({param_decls}): ({FUTURE}[{awaited_ty}], {CANCELLATION_TOKEN}) = {{"
+            ));
+        } else {
+            writer.line(format!(
+                "def apply({param_decls}): {FUTURE}[{awaited_ty}] = {{"
+            ));
+        }
         writer.indent();
         writer.line(format!(
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
@@ -1819,8 +1776,9 @@ impl ScalaBridgeGenerator {
                 );
             let config_codecs = self.public_config_codecs()?;
             writer.line(format!(
-                "{BRIDGE}.invokeStreamingAgent(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs}).map {{ __result =>"
+                "val (__invocation, __cancellation) = {BRIDGE}.invokeStreamingAgentCancelable(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs})"
             ));
+            writer.line("(__invocation.map { __result =>");
         } else {
             writer.line(format!(
                 "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.None).map {{ __result =>",
@@ -1835,7 +1793,11 @@ impl ScalaBridgeGenerator {
             writer.line(decode_block);
         }
         writer.dedent();
-        writer.line("}");
+        writer.line(if uses_streams {
+            "}, __cancellation)"
+        } else {
+            "}"
+        });
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1870,9 +1832,9 @@ impl ScalaBridgeGenerator {
 
         // scheduleAt (schedule, at a time).
         let schedule_decls = if param_decls.is_empty() {
-            format!("when: {DATETIME}")
+            format!("when: {SCHEDULE_TIME}")
         } else {
-            format!("{param_decls}, when: {DATETIME}")
+            format!("{param_decls}, when: {SCHEDULE_TIME}")
         };
         writer.line(format!(
             "def scheduleAt({schedule_decls}): {FUTURE}[{receipt_ty}] = {{"
@@ -1882,7 +1844,7 @@ impl ScalaBridgeGenerator {
             "implicit val ec: {EXECUTION_CONTEXT} = resolved.configuration.executionContext"
         ));
         writer.line(format!(
-            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some(when.toIsoString)).map({})",
+            "{BRIDGE}.invokeAgent(resolved, {method_name_lit}, methodParameters({invoke_args}), {}, _root_.scala.Some({CODEC}.formatDatetime(when))).map({})",
             scala_string_literal(MODE_SCHEDULE),
             if self.agent_type.mode == AgentMode::Ephemeral { "r => _root_.golem.bridge.runtime.InvocationReceipt(r.agentId, r.idempotencyKey)" } else { "_ => ()" }
         ));
@@ -1994,7 +1956,7 @@ impl ScalaBridgeGenerator {
             writer.blank();
         }
 
-        let phantom_some = format!("_root_.scala.Some({UUID}.toStandardString(phantom))");
+        let phantom_some = "_root_.scala.Some(phantom.toString)".to_string();
         if self.agent_type.mode == AgentMode::Durable {
             // `getPhantom`: resolve with an explicit phantom UUID.
             let phantom_decls = if param_decls.is_empty() {
@@ -2013,9 +1975,9 @@ impl ScalaBridgeGenerator {
 
             // `newPhantom`: like `getPhantom` but with a fresh random phantom id.
             let new_phantom_args = if invoke_args.is_empty() {
-                format!("{UUID}.random()")
+                format!("{UUID}.randomUUID()")
             } else {
-                format!("{invoke_args}, {UUID}.random()")
+                format!("{invoke_args}, {UUID}.randomUUID()")
             };
             writer.line(format!(
             "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = getPhantom({new_phantom_args})"
@@ -2103,7 +2065,7 @@ impl ScalaBridgeGenerator {
                 self.write_create_agent_body(
                     writer,
                     &invoke_args,
-                    &format!("_root_.scala.Some({UUID}.toStandardString({UUID}.random()))"),
+                    &format!("_root_.scala.Some({UUID}.randomUUID().toString)"),
                     "agentConfig",
                 );
                 writer.dedent();
@@ -2606,11 +2568,7 @@ impl ScalaBridgeGenerator {
             .collect();
 
         for (typ, name) in &types {
-            let ScalaTypeName::Derived(name_str) = name else {
-                // Remapped names (e.g. the `uuid.Uuid` builtin) reference an
-                // existing runtime type and emit no definition.
-                continue;
-            };
+            let ScalaTypeName(name_str) = name;
             let resolved = self.resolve_ref(typ);
             if !is_named_composite(resolved) {
                 // Non-composite named defs (aliases to scalars / lists / …) are
@@ -2621,6 +2579,8 @@ impl ScalaBridgeGenerator {
             self.write_type_definition(writer, name_str, resolved)?;
             writer.blank();
         }
+        self.quantity_units
+            .write(writer, self.mode, &self.client_pkg());
         Ok(())
     }
 
@@ -2741,9 +2701,8 @@ impl ScalaBridgeGenerator {
     /// Encode functions map the generated Scala type to a runtime
     /// [`SchemaValue`](golem.bridge.runtime.SchemaValue); decode functions do
     /// the reverse, throwing [`BridgeException`](golem.bridge.runtime.BridgeException)
-    /// on a wire-shape mismatch. Remapped types (the `uuid.Uuid` builtin) and
-    /// non-composite aliases are encoded inline by `encode_expr` / `decode_expr`
-    /// and have no entry here.
+    /// on a wire-shape mismatch. Non-composite aliases are encoded inline by
+    /// `encode_expr` / `decode_expr` and have no entry here.
     fn write_codecs(&self, writer: &mut ScalaWriter) -> anyhow::Result<()> {
         let types: Vec<(SchemaType, ScalaTypeName)> = self
             .type_naming
@@ -2755,9 +2714,7 @@ impl ScalaBridgeGenerator {
         writer.indent();
 
         for (typ, name) in &types {
-            let ScalaTypeName::Derived(name_str) = name else {
-                continue;
-            };
+            let ScalaTypeName(name_str) = name;
             let resolved = self.resolve_ref(typ);
             if !is_named_composite(resolved) {
                 continue;
@@ -2994,8 +2951,7 @@ impl ScalaBridgeGenerator {
 
     /// A `SchemaValue` expression encoding `val_expr` (a value of the Scala type
     /// for `typ`). Named composites delegate to their `Codecs.encode<Name>`;
-    /// the `uuid.Uuid` remap delegates to the runtime UUID codec; everything
-    /// else is encoded structurally inline. Mirrors `type_reference`'s dispatch
+    /// everything else is encoded structurally inline. Mirrors `type_reference`'s dispatch
     /// so the encoded value always matches the rendered type.
     fn encode_expr(
         &self,
@@ -3003,20 +2959,13 @@ impl ScalaBridgeGenerator {
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(RemappedType::Uuid) => {
-                    return Ok(format!("{CODEC}.encodeUuid({val_expr})"));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!(
-                            "{}.{CODECS_OBJECT}.encode{name_str}({val_expr})",
-                            self.client_pkg()
-                        ));
-                    }
-                }
-            }
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!(
+                "{}.{CODECS_OBJECT}.encode{name_str}({val_expr})",
+                self.client_pkg()
+            ));
         }
         self.encode_structural(val_expr, typ, depth)
     }
@@ -3029,20 +2978,13 @@ impl ScalaBridgeGenerator {
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(RemappedType::Uuid) => {
-                    return Ok(format!("{CODEC}.decodeUuidOrThrow({val_expr})"));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!(
-                            "{}.{CODECS_OBJECT}.decode{name_str}({val_expr})",
-                            self.client_pkg()
-                        ));
-                    }
-                }
-            }
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!(
+                "{}.{CODECS_OBJECT}.decode{name_str}({val_expr})",
+                self.client_pkg()
+            ));
         }
         self.decode_structural(val_expr, typ, depth)
     }
@@ -3056,22 +2998,23 @@ impl ScalaBridgeGenerator {
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
             if self.mode == ScalaBridgeMode::GuestWasmRpc {
+                let allowed = guest_allow_list_type(restrictions.languages.as_deref());
                 return Ok(format!(
-                    "{}.UnstructuredText.toSchemaValue({val_expr})",
-                    self.client_pkg()
+                    "{GUEST_UNSTRUCTURED_TEXT}.intoSchema[{allowed}].toValue({val_expr})"
                 ));
             }
             return Ok(format!(
                 "{RUNTIME_PKG}.UnstructuredText.toSchemaValue({val_expr})"
             ));
         }
-        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
             if self.mode == ScalaBridgeMode::GuestWasmRpc {
+                let allowed = guest_allow_list_type(restrictions.mime_types.as_deref());
                 return Ok(format!(
-                    "{}.UnstructuredBinary.toSchemaValue({val_expr})",
-                    self.client_pkg()
+                    "{GUEST_UNSTRUCTURED_BINARY}.intoSchema[{allowed}].toValue({val_expr})"
                 ));
             }
             return Ok(format!(
@@ -3154,22 +3097,30 @@ impl ScalaBridgeGenerator {
                     "{val_expr} match {{\n  case _root_.scala.Right({r}) => {ok_arm}\n  case _root_.scala.Left({l}) => {err_arm}\n}}"
                 )
             }
-            SchemaType::Path { .. } => format!("{SV}.PathValue({val_expr})"),
-            SchemaType::Url { .. } => format!("{SV}.UrlValue({val_expr})"),
+            SchemaType::Path { .. } => format!("{CODEC}.encodePath({val_expr})"),
+            SchemaType::Url { .. } => format!("{CODEC}.encodeUrl({val_expr})"),
             SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.UuidValue({val_expr})")
             }
             SchemaType::Uuid { .. } => format!("{SV}.UuidValue({val_expr})"),
-            SchemaType::Datetime { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
-                "{GUEST_SV}.DatetimeValue(_root_.golem.schema.Datetime({val_expr}.getEpochSecond, {val_expr}.getNano))"
-            ),
-            SchemaType::Datetime { .. } => format!("{SV}.DatetimeValue({val_expr}.toString)"),
-            SchemaType::Duration { .. } => format!("{SV}.DurationValue({val_expr})"),
+            SchemaType::Datetime { .. } => format!("{CODEC}.encodeDatetime({val_expr})"),
+            SchemaType::Duration { .. } => format!("{CODEC}.encodeDuration({val_expr})"),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.SecretValue({val_expr})")
             }
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.QuotaTokenHandle({val_expr}.handle)")
+            }
+            SchemaType::Quantity { spec, .. } => {
+                let marker = self.quantity_marker(spec)?;
+                match self.mode {
+                    ScalaBridgeMode::GuestWasmRpc => format!(
+                        "_root_.golem.schema.Quantity.intoSchema[{marker}].toValue({val_expr})"
+                    ),
+                    ScalaBridgeMode::ExternalRest => {
+                        format!("{RUNTIME_PKG}.Quantity.toSchemaValue[{marker}]({val_expr})")
+                    }
+                }
             }
             SchemaType::PermissionCard { spec, .. }
                 if self.mode == ScalaBridgeMode::GuestWasmRpc =>
@@ -3188,10 +3139,20 @@ impl ScalaBridgeGenerator {
             SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 format!("{SV}.BinaryValue({val_expr}.bytes, {val_expr}.mimeType)")
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no Scala bridge encoding; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
-            ),
+            SchemaType::Binary { .. } => {
+                let b = format!("b{depth}");
+                format!(
+                    "{{ val {b} = {val_expr}; {GUEST_SV}.BinaryValue({b}.data.toVector, {b}.mimeType.map(_.toString)) }}"
+                )
+            }
+            SchemaType::Text { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => {
+                    format!("{GUEST_TEXT}.intoSchema.toValue({val_expr})")
+                }
+                ScalaBridgeMode::ExternalRest => {
+                    format!("{RUNTIME_PKG}.Text.toSchemaValue({val_expr})")
+                }
+            },
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()
@@ -3220,8 +3181,7 @@ impl ScalaBridgeGenerator {
                     "_root_.golem.schema.AgentStream.intoSchema[{item_type}](new _root_.golem.schema.IntoSchema[{item_type}] {{ override def graph: _root_.golem.schema.SchemaGraph = {graph}; override def toValue({item}: {item_type}): {GUEST_SCHEMA_VALUE_TYPE} = {encoded} }}).toValue({val_expr})"
                 )
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -3240,6 +3200,12 @@ impl ScalaBridgeGenerator {
         depth: usize,
     ) -> anyhow::Result<String> {
         if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            if self.mode == ScalaBridgeMode::GuestWasmRpc {
+                let allowed = guest_allow_list_type(restrictions.languages.as_deref());
+                return Ok(format!(
+                    "{GUEST_UNSTRUCTURED_TEXT}.fromSchema[{allowed}].fromValue({val_expr}).fold(__err => throw __err, _root_.scala.Predef.identity)"
+                ));
+            }
             let allowed = restrictions
                 .languages
                 .as_deref()
@@ -3248,21 +3214,16 @@ impl ScalaBridgeGenerator {
                 .map(|code| scala_string_literal(code))
                 .collect::<Vec<_>>()
                 .join(", ");
-            if self.mode == ScalaBridgeMode::GuestWasmRpc {
-                return Ok(format!(
-                    "{}.UnstructuredText.fromSchemaValue(\"output\", {val_expr}, {LIST}({allowed})).fold(__err => throw {GUEST_CLIENT_ERROR}(__err), _root_.scala.Predef.identity)",
-                    self.client_pkg()
-                ));
-            }
             return Ok(format!(
                 "{RUNTIME_PKG}.UnstructuredText.fromSchemaValue(\"output\", {val_expr}, {LIST}({allowed})).fold(__err => throw {BRIDGE_EXCEPTION}(__err), _root_.scala.Predef.identity)"
             ));
         }
-        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
             if self.mode == ScalaBridgeMode::GuestWasmRpc {
+                let allowed = guest_allow_list_type(restrictions.mime_types.as_deref());
                 return Ok(format!(
-                    "{}.UnstructuredBinary.fromSchemaValue(\"output\", {val_expr}).fold(__err => throw {GUEST_CLIENT_ERROR}(__err), _root_.scala.Predef.identity)",
-                    self.client_pkg()
+                    "{GUEST_UNSTRUCTURED_BINARY}.fromSchema[{allowed}].fromValue({val_expr}).fold(__err => throw __err, _root_.scala.Predef.identity)"
                 ));
             }
             return Ok(format!(
@@ -3354,9 +3315,23 @@ impl ScalaBridgeGenerator {
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{val_expr} match {{ case {GUEST_SV}.SecretValue(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected secret value, got $other\") }}"
             ),
-            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
-                "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new _root_.golem.host.QuotaApi.QuotaToken(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
-            ),
+            SchemaType::QuotaToken { spec, .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                let token = guest_quota_token_type(spec.resource_name.as_deref());
+                format!(
+                    "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new {token}(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
+                )
+            }
+            SchemaType::Quantity { spec, .. } => {
+                let marker = self.quantity_marker(spec)?;
+                match self.mode {
+                    ScalaBridgeMode::GuestWasmRpc => format!(
+                        "_root_.golem.schema.Quantity.fromSchema[{marker}].fromValue({val_expr}).fold(__err => throw __err, _root_.scala.Predef.identity)"
+                    ),
+                    ScalaBridgeMode::ExternalRest => {
+                        format!("{RUNTIME_PKG}.Quantity.fromSchemaValue[{marker}]({val_expr})")
+                    }
+                }
+            }
             SchemaType::PermissionCard { spec, .. }
                 if self.mode == ScalaBridgeMode::GuestWasmRpc =>
             {
@@ -3376,10 +3351,21 @@ impl ScalaBridgeGenerator {
             SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => format!(
                 "{{ val b = {val_expr}; {RUNTIME_PKG}.AgentBinary({CODEC}.asBinary(b)._1, {CODEC}.asBinary(b)._2) }}"
             ),
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no Scala bridge decoding; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
-            ),
+            SchemaType::Binary { restrictions, .. } => {
+                let mime = format!("mime{depth}");
+                let allowed = guest_allow_list_type(restrictions.mime_types.as_deref());
+                format!(
+                    "{val_expr} match {{ case {GUEST_SV}.BinaryValue(bytes, {mime}) => {GUEST_UNSTRUCTURED_BINARY}.Inline[{allowed}](bytes.toArray, {mime}.asInstanceOf[_root_.scala.Option[{allowed}]]); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected binary value, got $other\") }}"
+                )
+            }
+            SchemaType::Text { .. } => match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => format!(
+                    "{GUEST_TEXT}.fromSchema.fromValue({val_expr}).fold(__err => throw __err, _root_.scala.Predef.identity)"
+                ),
+                ScalaBridgeMode::ExternalRest => {
+                    format!("{RUNTIME_PKG}.Text.fromSchemaValue({val_expr})")
+                }
+            },
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()
@@ -3407,8 +3393,7 @@ impl ScalaBridgeGenerator {
                     "_root_.golem.schema.AgentStream.fromSchema[{item_type}](new _root_.golem.schema.FromSchema[{item_type}] {{ override def fromValue({item}: {GUEST_SCHEMA_VALUE_TYPE}): _root_.scala.Either[_root_.golem.schema.FromSchemaError, {item_type}] = _root_.scala.Right({decoded}) }}).fromValue({val_expr}).fold(error => throw error, value => value)"
                 )
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -3503,32 +3488,27 @@ impl ScalaBridgeGenerator {
     /// Scala SDK's codegen style.
     fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         // A registered composite name (record / variant / enum / flags / union)
-        // or a remapped runtime type (the `uuid.Uuid` builtin) is referenced by
-        // its name. Non-composite named defs are inlined below.
-        if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            match name {
-                ScalaTypeName::Remapped(remapped) => {
-                    return Ok(format!("{RUNTIME_PKG}.{}", remapped.rendered()));
-                }
-                ScalaTypeName::Derived(name_str) => {
-                    if is_named_composite(self.resolve_ref(typ)) {
-                        return Ok(format!("{}.{name_str}", self.client_pkg()));
-                    }
-                }
-            }
+        // is referenced by its name. Non-composite named defs are inlined below.
+        if let Some(ScalaTypeName(name_str)) = self.type_naming.type_name_for_type(typ)
+            && is_named_composite(self.resolve_ref(typ))
+        {
+            return Ok(format!("{}.{name_str}", self.client_pkg()));
         }
 
-        // Role-marked unstructured-text/binary variant → ergonomic runtime
-        // wrapper type.
-        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+        // Role-marked unstructured-text/binary variant: the SDK type, typed by
+        // its allow-list, in guest mode; the runtime wrapper otherwise.
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
             if self.mode == ScalaBridgeMode::GuestWasmRpc {
-                return Ok(format!("{}.UnstructuredText", self.client_pkg()));
+                let allowed = guest_allow_list_type(restrictions.languages.as_deref());
+                return Ok(format!("{GUEST_UNSTRUCTURED_TEXT}[{allowed}]"));
             }
             return Ok(format!("{RUNTIME_PKG}.UnstructuredText"));
         }
-        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
             if self.mode == ScalaBridgeMode::GuestWasmRpc {
-                return Ok(format!("{}.UnstructuredBinary", self.client_pkg()));
+                let allowed = guest_allow_list_type(restrictions.mime_types.as_deref());
+                return Ok(format!("{GUEST_UNSTRUCTURED_BINARY}[{allowed}]"));
             }
             return Ok(format!("{RUNTIME_PKG}.UnstructuredBinary"));
         }
@@ -3584,20 +3564,29 @@ impl ScalaBridgeGenerator {
                 };
                 Ok(format!("_root_.scala.Either[{err_type}, {ok_type}]"))
             }
-            SchemaType::Path { .. } | SchemaType::Url { .. } => {
-                Ok("_root_.scala.Predef.String".to_string())
+            SchemaType::Path { .. } => Ok(match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => "_root_.golem.schema.GolemPath",
+                ScalaBridgeMode::ExternalRest => "_root_.golem.bridge.runtime.GolemPath",
             }
-            SchemaType::Uuid { .. } => Ok(match self.mode {
-                ScalaBridgeMode::ExternalRest => UUID.to_string(),
-                ScalaBridgeMode::GuestWasmRpc => GUEST_UUID.to_string(),
-            }),
+            .to_string()),
+            SchemaType::Url { .. } => Ok("_root_.java.net.URI".to_string()),
+            SchemaType::Uuid { .. } => Ok(UUID.to_string()),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
-            SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
+            SchemaType::Duration { .. } => Ok("_root_.java.time.Duration".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 Ok("_root_.golem.schema.GuestSecretHandle".to_string())
             }
-            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
-                Ok("_root_.golem.host.QuotaApi.QuotaToken".to_string())
+            SchemaType::QuotaToken { spec, .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok(guest_quota_token_type(spec.resource_name.as_deref()))
+            }
+            SchemaType::Quantity { spec, .. } => {
+                let marker = self.quantity_marker(spec)?;
+                Ok(match self.mode {
+                    ScalaBridgeMode::GuestWasmRpc => {
+                        format!("_root_.golem.schema.Quantity[{marker}]")
+                    }
+                    ScalaBridgeMode::ExternalRest => format!("{RUNTIME_PKG}.Quantity[{marker}]"),
+                })
             }
             SchemaType::PermissionCard { spec, .. }
                 if self.mode == ScalaBridgeMode::GuestWasmRpc =>
@@ -3619,10 +3608,14 @@ impl ScalaBridgeGenerator {
             SchemaType::Binary { .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 Ok(format!("{RUNTIME_PKG}.AgentBinary"))
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
-                "Bare text/binary rich scalars have no Scala bridge type; \
-                 wrap them in the unstructured text/binary variant ({resolved:?})"
-            ),
+            SchemaType::Binary { restrictions, .. } => Ok(format!(
+                "{GUEST_UNSTRUCTURED_BINARY}.Inline[{}]",
+                guest_allow_list_type(restrictions.mime_types.as_deref())
+            )),
+            SchemaType::Text { .. } => Ok(match self.mode {
+                ScalaBridgeMode::GuestWasmRpc => GUEST_TEXT.to_string(),
+                ScalaBridgeMode::ExternalRest => format!("{RUNTIME_PKG}.Text"),
+            }),
             SchemaType::Stream { inner, .. } if self.mode == ScalaBridgeMode::ExternalRest => {
                 let inner = inner
                     .as_deref()
@@ -3641,8 +3634,7 @@ impl ScalaBridgeGenerator {
                     self.type_reference(inner)?
                 ))
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => bail!(
@@ -3674,6 +3666,15 @@ impl ScalaBridgeGenerator {
         }
     }
 
+    /// The fully qualified unit marker of a quantity.
+    fn quantity_marker(&self, spec: &QuantitySpec) -> anyhow::Result<String> {
+        let name = self
+            .quantity_units
+            .name_for(spec)
+            .ok_or_else(|| anyhow!("No unit marker was collected for quantity spec {spec:?}"))?;
+        Ok(format!("{}.{name}", self.client_pkg()))
+    }
+
     /// Resolve all [`SchemaType::Ref`] indirections against the agent's schema
     /// graph; inline types are returned unchanged.
     fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
@@ -3688,6 +3689,29 @@ impl ScalaBridgeGenerator {
 /// characters that would otherwise break out of, or be misinterpreted inside,
 /// the literal. The result is a normal `"..."` literal (not an `s"..."`
 /// interpolator), so `$` is emitted verbatim.
+/// The guest token type of a `quota-token` schema: a `NamedQuotaToken` typed by
+/// its resource name when the schema names one, a plain `QuotaToken` otherwise.
+fn guest_quota_token_type(resource_name: Option<&str>) -> String {
+    match resource_name {
+        Some(name) => format!("{GUEST_NAMED_QUOTA_TOKEN}[{}]", scala_string_literal(name)),
+        None => GUEST_QUOTA_TOKEN.to_string(),
+    }
+}
+
+/// The allow-list type argument of the SDK's unstructured types: `String`
+/// when the schema allows every value (no list or an empty one), otherwise
+/// the union of the allowed values as literal types.
+fn guest_allow_list_type(values: Option<&[String]>) -> String {
+    match values {
+        Some(values) if !values.is_empty() => values
+            .iter()
+            .map(|value| scala_string_literal(value))
+            .collect::<Vec<_>>()
+            .join(" | "),
+        _ => STRING.to_string(),
+    }
+}
+
 fn scala_string_literal(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
@@ -3719,7 +3743,6 @@ fn rewrite_guest_runtime_refs_outside_string_literals(source: &str) -> String {
         (SCHEMA_VALUE_TYPE, GUEST_SCHEMA_VALUE_TYPE),
         (SV, GUEST_SV),
         (AGENT_CONFIG_ENTRY, GUEST_AGENT_CONFIG_ENTRY),
-        (UUID, GUEST_UUID),
         ("_root_.golem.bridge.runtime.UByte", "_root_.golem.UByte"),
         ("_root_.golem.bridge.runtime.UShort", "_root_.golem.UShort"),
         ("_root_.golem.bridge.runtime.UInt", "_root_.golem.UInt"),
@@ -3960,8 +3983,8 @@ mod tests {
             runtime_config.schema_map_entry,
             "_root_.golem.schema.SchemaMapEntry"
         );
-        assert_eq!(runtime_config.datetime, "_root_.golem.Datetime");
-        assert_eq!(runtime_config.uuid, "_root_.golem.Uuid");
+        assert_eq!(runtime_config.datetime, "_root_.java.time.Instant");
+        assert_eq!(runtime_config.uuid, "_root_.java.util.UUID");
         assert!(
             runtime_config
                 .reserved_type_names()
@@ -4283,7 +4306,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_generation_does_not_emit_missing_unstructured_sdk_helpers() {
+    fn guest_generation_uses_sdk_unstructured_types() {
         let dir = TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -4325,15 +4348,21 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("sealed trait UnstructuredText"));
-        assert!(client_source.contains("sealed trait UnstructuredBinary"));
-        assert!(client_source.contains("_root_.golem.schema.SchemaValue.TextValue"));
-        assert!(client_source.contains("_root_.golem.schema.SchemaValue.BinaryValue"));
+        assert!(!client_source.contains("sealed trait UnstructuredText"));
+        assert!(!client_source.contains("sealed trait UnstructuredBinary"));
         assert!(client_source.contains(
-            "_root_.golem.bridge.client.alpha_agent.UnstructuredText.toSchemaValue(document)"
+            "document: _root_.golem.schema.UnstructuredText[_root_.scala.Predef.String]"
+        ));
+        assert!(
+            client_source.contains(
+                "image: _root_.golem.schema.UnstructuredBinary[_root_.scala.Predef.String]"
+            )
+        );
+        assert!(client_source.contains(
+            "_root_.golem.schema.UnstructuredText.intoSchema[_root_.scala.Predef.String].toValue(document)"
         ));
         assert!(client_source.contains(
-            "_root_.golem.bridge.client.alpha_agent.UnstructuredBinary.toSchemaValue(image)"
+            "_root_.golem.schema.UnstructuredBinary.intoSchema[_root_.scala.Predef.String].toValue(image)"
         ));
         assert!(
             !client_source.contains("_root_.golem.UnstructuredText"),
@@ -4472,7 +4501,9 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("_root_.golem.schema.SchemaValue.PathValue(value)"));
+        assert!(
+            client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodePath(value)")
+        );
         assert!(client_source.contains("private object __GolemSchemaGraphs"));
         assert!(client_source.contains("_root_.golem.schema.SchemaTypeBody.PathType("));
         assert!(client_source.contains(
@@ -4516,7 +4547,10 @@ mod tests {
                 .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
         )
         .unwrap();
-        assert!(client_source.contains("_root_.golem.bridge.client.alpha_agent.UnstructuredText"));
+        assert!(
+            client_source
+                .contains("_root_.golem.schema.UnstructuredText[_root_.scala.Predef.String]")
+        );
         assert!(client_source.contains("private object __GolemSchemaGraphs"));
         assert!(client_source.contains("_root_.golem.schema.Role.UnstructuredText"));
         assert!(!client_source.contains("typedSchemaValueFromSchemaGraphJson"));

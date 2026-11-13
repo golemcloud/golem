@@ -16,12 +16,12 @@ use super::*;
 use golem_common::model::oplog::OplogEntry as M;
 
 golem_common::oplog_entry_metadata!(generate_entry_conversion;
-from (oplog::OplogEntry => golem_common::model::oplog::OplogEntry)
+from (oplog::OplogEntry => golem_common::model::oplog::OplogEnrichmentEntry)
 before (value) {}
 {
-    Create { record (params) {
+    Create { override (oplog::OplogEntry::Create(params)) => Ok(Self::CreateProjection {
         timestamp: timestamp_from_datetime(params.timestamp),
-        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+        parameters: Box::new(golem_common::model::oplog::CreateProjectionParameters {
             agent_id: golem_common::model::AgentId::from(params.agent_id),
             owner_kind: match params.owner_kind {
                 oplog::OwnerKind::ComponentAgent => {
@@ -29,6 +29,9 @@ before (value) {}
                 }
                 oplog::OwnerKind::EphemeralExternalTool => {
                     golem_common::model::agent::OwnerKind::EphemeralExternalTool
+                }
+                oplog::OwnerKind::OplogProcessor => {
+                    golem_common::model::agent::OwnerKind::OplogProcessor
                 }
             },
             agent_mode: match params.agent_mode {
@@ -75,7 +78,7 @@ before (value) {}
                 params.instance_id.low_bits,
             ),
         }),
-    } }
+    }) }
     Start { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
         parent_start_index: params
@@ -116,7 +119,7 @@ before (value) {}
                         .into_iter()
                         .map(golem_common::model::oplog::SpanData::try_from)
                         .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Self::AgentInvocationStarted {
+                    Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         idempotency_key: golem_common::model::IdempotencyKey::new(
                             params.idempotency_key,
@@ -178,8 +181,9 @@ before (value) {}
                         .into_iter()
                         .map(golem_common::model::oplog::SpanData::try_from)
                         .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Self::PendingAgentInvocation {
+                    Ok(M::PendingAgentInvocation {
                         timestamp: timestamp_from_datetime(params.timestamp),
+                        not_before: params.not_before.map(timestamp_from_datetime),
                         idempotency_key: golem_common::model::IdempotencyKey::new(
                             params.idempotency_key,
                         ),
@@ -373,7 +377,7 @@ before (value) {}
     SetRetryPolicy { override (oplog::OplogEntry::SetRetryPolicy(params)) => {
                     let named: golem_common::model::retry_policy::NamedRetryPolicy =
                         params.policy.try_into()?;
-                    Ok(Self::SetRetryPolicy {
+                    Ok(M::SetRetryPolicy {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         entity_parent_start_index: None,
                         policy: Box::new(named),
@@ -441,7 +445,7 @@ before (value) {}
                     let observation = golem_common::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(observation.value()).map_err(|error| error.to_string())?;
                     observation.validate_payload_presence(params.payload.is_some())
                         .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
-                    Ok(Self::ToolAttachmentRead {
+                    Ok(M::ToolAttachmentRead {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
                         observation: Box::new(observation),
@@ -453,7 +457,7 @@ before (value) {}
                     use golem_common::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentControl};
                     let attachment = golem_schema::schema::wit::decode_typed(&params.attachment).map_err(|error| error.to_string())?;
                     let transition = golem_schema::schema::wit::decode_typed(&params.transition).map_err(|error| error.to_string())?;
-                    Ok(Self::ToolAttachmentControl {
+                    Ok(M::ToolAttachmentControl {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
                         attachment: ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
@@ -502,6 +506,12 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         filesystem_snapshot: params.filesystem_snapshot.parse()?,
     } }
+    SpanClosed { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+        resource_start_index: params.resource_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+        span_finished: raw_span_finished_from_wit(params.span_finished)?,
+    } }
 });
 
 golem_common::oplog_entry_metadata!(generate_entry_conversion;
@@ -513,6 +523,9 @@ before (value) {}
                     parameters,
                 }) => {
                     let golem_common::model::oplog::CreateParameters {
+                        component_id: _,
+                        agent_type_name: _,
+                        canonical_key: _,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -527,6 +540,7 @@ before (value) {}
                         local_agent_config,
                         original_phantom_id,
                         instance_id,
+                        create_request: _,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
@@ -537,6 +551,9 @@ before (value) {}
                             }
                             golem_common::model::agent::OwnerKind::EphemeralExternalTool => {
                                 oplog::OwnerKind::EphemeralExternalTool
+                            }
+                            golem_common::model::agent::OwnerKind::OplogProcessor => {
+                                oplog::OwnerKind::OplogProcessor
                             }
                         },
                         agent_mode: match agent_mode {
@@ -632,6 +649,7 @@ before (value) {}
     Exited { override (M::Exited { timestamp }) => Ok(Self::Exited(timestamp.into())) }
     PendingAgentInvocation { record () => RawPendingAgentInvocationParameters {
         timestamp: timestamp.into(),
+        not_before: not_before.map(Into::into),
         idempotency_key: idempotency_key.value,
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
@@ -900,5 +918,11 @@ before (value) {}
     SnapshotConfirmed { record () => SnapshotConfirmedParameters {
         timestamp: timestamp.into(),
         filesystem_snapshot: filesystem_snapshot.into(),
+    } }
+    SpanClosed { record () => RawSpanClosedParameters {
+        timestamp: timestamp.into(),
+        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+        resource_start_index: resource_start_index.map(Into::into),
+        span_finished: raw_span_finished_to_wit(span_finished),
     } }
 });

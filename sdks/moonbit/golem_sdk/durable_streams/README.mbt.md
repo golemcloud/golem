@@ -15,14 +15,14 @@ sequence and close flag. Custom component worlds must import that interface.
 ```mbt check
 ///|
 test "construct an external source without starting HTTP" {
-  let reader : @durable_streams.Reader[Int] = @durable_streams.json_reader(
+  let reader : @durable_streams.Reader[Int32] = @durable_streams.json_reader(
     "https://streams.example/events",
     offset="now",
     transport=@durable_streams.Transport::SSE,
   )
   let stream = reader.into_stream()
   stream.drop()
-  let writer : @durable_streams.Writer[Int] = @durable_streams.json_writer(
+  let writer : @durable_streams.Writer[Int32] = @durable_streams.json_writer(
     "https://streams.example/events",
     producer_id="orders",
     epoch=3,

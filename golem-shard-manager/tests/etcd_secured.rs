@@ -779,10 +779,10 @@ async fn a_replica_with_a_user_that_trusts_another_ca_does_not_start(
 }
 
 #[test]
-// While a replica runs, a refused certificate is retried, because etcd's certificate can be fixed
-// on etcd's side. Renewed files take effect only on a restart, so once the files have changed, the
-// replica stops, and a new start reads them.
-async fn a_running_replica_stops_on_a_refused_certificate_only_when_its_files_changed(
+// Renewed TLS files are used by the next connection of a running replica, without a restart. etcd
+// comes back with a certificate from another CA, which also signs the client certificates it
+// accepts: the replicas' connections are refused until their files hold the new certificates.
+async fn a_running_replica_uses_renewed_tls_files_without_a_restart(
     _tracing: &Tracing,
     _crypto: &CryptoProvider,
 ) {
@@ -792,16 +792,15 @@ async fn a_running_replica_stops_on_a_refused_certificate_only_when_its_files_ch
         DockerEtcd::new_with_options(old_pki.mtls_etcd_options().with_host_port(port)).await;
     let mut config = tls_config(&old_etcd.client_url(), old_pki.mtls());
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        // The certificate check runs every `retry_max_delay`.
         etcd.retry_max_delay = Duration::from_secs(1);
+        // The files are looked at every second instead of every minute.
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
     }
-    let (_leader, leader_details) = spawn_replica(config.clone());
+    let (leader, leader_details) = spawn_replica(config.clone());
     started(leader_details).await;
     let (_standby, mut standby_details) = spawn_replica(config.clone());
     tokio::time::sleep(STANDBY_SETTLE).await;
 
-    // etcd comes back on the same address with a certificate from another CA, which also signs
-    // the client certificates it accepts.
     old_etcd.stop().await;
     let new_pki = TestPki::new();
     let _new_etcd =
@@ -811,26 +810,32 @@ async fn a_running_replica_stops_on_a_refused_certificate_only_when_its_files_ch
         timeout(Duration::from_secs(4), &mut standby_details)
             .await
             .is_err(),
-        "With unchanged files, the standby must keep retrying"
+        "With the old files, etcd refuses the standby, which keeps retrying"
     );
 
     for name in ["ca.pem", "client.pem", "client-key.pem"] {
         std::fs::copy(new_pki.path(name), old_pki.path(name)).unwrap();
     }
-    let stopped = timeout(STARTUP_TIMEOUT, standby_details)
-        .await
-        .expect("With changed files, the standby must stop")
-        .expect("The standby task ended without a result")
-        .map(|_| ())
-        .expect_err("The standby must not become a leader with the old certificates");
-    let message = format!("{stopped:#}");
-    assert!(
-        message.contains("the TLS files have changed since then"),
-        "The standby should stop because its files changed, but stopped with: {message}"
-    );
 
-    let (_restarted, restarted_details) = spawn_replica(config);
-    started(restarted_details).await;
+    // The standby keeps campaigning, and wins on the new etcd with the new files: no restart.
+    let standby = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("With renewed files, the standby should lead without a restart")
+        .expect("The standby task ended without a result")
+        .expect("The standby should lead, not stop for its changed files");
+    assert!(standby.leadership.is_some());
+
+    // The leader's lease died with the old etcd, which is the end of that leader.
+    let ended = timeout(STARTUP_TIMEOUT, leader)
+        .await
+        .expect("A leader whose lease is gone must end")
+        .expect("The leader task panicked")
+        .expect_err("A leader whose lease is gone must end with an error");
+    let message = format!("{ended:#}");
+    assert!(
+        message.contains("lost its etcd leader lease"),
+        "The leader should end because its lease is gone, but ended with: {message}"
+    );
 }
 
 #[test]
@@ -847,6 +852,12 @@ async fn a_user_who_may_only_read_does_not_start(_tracing: &Tracing, _crypto: &C
         .await
         .unwrap();
     auth.user_add("reader", PASSWORD, None).await.unwrap();
+
+    // An auth mutation invalidates the root client's token. Log in again before the next
+    // administrative operation so the setup does not depend on the token's invalidation timing.
+    let mut auth = inspection_client_auth(&etcd.client_url(), &pki)
+        .await
+        .auth_client();
     auth.user_grant_role("reader", "reader").await.unwrap();
 
     let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
@@ -1122,14 +1133,14 @@ impl Drop for TcpRelay {
 #[test]
 // A replica's two etcd clients hold separate connections, and one can break while the other stays
 // up - behind a Service, when the etcd member under one of them restarts. A standby whose
-// certificate expired after its files were renewed must stop, so that its restart reads them, also
-// when only its election connection is refused: that is the connection it needs to take over.
-async fn a_standby_stops_when_only_its_election_connection_meets_a_refused_certificate(
+// certificate expired after its files were renewed must go on campaigning when only its election
+// connection is refused: its next connection uses the renewed files.
+async fn a_standby_keeps_campaigning_after_its_election_connection_meets_a_refused_certificate(
     _tracing: &Tracing,
     _crypto: &CryptoProvider,
 ) {
-    // Client certificates and a user: the check of the renewed files sends no login, so etcd
-    // refuses its read after the handshake, and that answer must still count as accepted files.
+    // Client certificates and a user: the probe of the renewed files logs in as that user, like
+    // every other connection, so the renewed files are tried the way the replica will use them.
     let pki = TestPki::new();
     let etcd = auth_etcd(&pki, pki.mtls_etcd_options()).await;
     let with_user = |url: &str, tls: EtcdTlsConfig| {
@@ -1138,13 +1149,14 @@ async fn a_standby_stops_when_only_its_election_connection_meets_a_refused_certi
             tls: Some(tls),
             username: Some(USER.to_string()),
             password: Some(EtcdPassword::from(PASSWORD)),
-            // The certificate check runs every `retry_max_delay`.
             retry_max_delay: Duration::from_secs(1),
+            // The files are looked at every second instead of every minute.
+            test_tls_reload_interval: Some(Duration::from_secs(1)),
             ..EtcdConfig::default()
         })
     };
     let (_leader, leader_details) = spawn_replica(with_user(&etcd.client_url(), pki.mtls()));
-    started(leader_details).await;
+    let leader = started(leader_details).await;
 
     let relay = TcpRelay::start(&etcd).await;
     let expiry = SystemTime::now() + Duration::from_secs(8);
@@ -1165,17 +1177,96 @@ async fn a_standby_stops_when_only_its_election_connection_meets_a_refused_certi
     pki.write_client_certificate("standby", Validity::Long);
     relay.cut(1);
 
-    let stopped = timeout(STARTUP_TIMEOUT, standby_details)
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    match standby_details.try_recv() {
+        Err(oneshot::error::TryRecvError::Empty) => {}
+        other => panic!(
+            "The standby must go on campaigning with its renewed files, but its startup ended: \
+             {:?}",
+            other.map(|result| result.map(|_| ()))
+        ),
+    }
+
+    leader
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
         .await
-        .expect("A standby refused on its election connection, with changed files, must stop")
+        .expect("The leader steps down");
+    let standby = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("The standby should take over with its renewed files")
         .expect("The standby task ended without a result")
-        .map(|_| ())
-        .expect_err("The standby must not become a leader with its expired certificate");
-    let message = format!("{stopped:#}");
+        .expect("The standby should lead");
+    assert!(standby.leadership.is_some());
+}
+
+#[test]
+// Changed files that etcd refuses are not taken into use: the clients keep the files they have,
+// and the leader and the standby go on as they were. Restored files are used again.
+async fn a_replica_keeps_its_clients_while_etcd_refuses_the_renewed_files(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = mtls_etcd(&pki).await;
+    let mut config = tls_config(&etcd.client_url(), pki.mtls());
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.retry_max_delay = Duration::from_secs(1);
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
+    }
+    let (leader_task, leader_details) = spawn_replica(config.clone());
+    let leader = started(leader_details).await;
+    let (_standby, mut standby_details) = spawn_replica(config);
+    tokio::time::sleep(STANDBY_SETTLE).await;
+
+    let failures = || {
+        golem_service_base::metrics::tls::RELOAD_FAILURES_TOTAL
+            .with_label_values(&["etcd client"])
+            .get()
+    };
+    let failures_before = failures();
+
+    // A client certificate from a CA that etcd does not trust: a valid certificate and a key that
+    // belongs to it, which etcd refuses.
+    let other_pki = TestPki::new();
+    for name in ["client.pem", "client-key.pem"] {
+        std::fs::copy(other_pki.path(name), pki.path(name)).unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(
-        message.contains("the TLS files have changed since then"),
-        "The standby should stop because its files changed, but stopped with: {message}"
+        standby_details.try_recv().is_err(),
+        "The standby must keep campaigning while etcd refuses the changed files"
     );
+    assert!(
+        !leader_task.is_finished(),
+        "The leader must keep leading while etcd refuses the changed files"
+    );
+    assert!(
+        failures() > failures_before,
+        "A changed set of files that etcd refuses is counted"
+    );
+
+    // Files that etcd accepts again: nothing breaks.
+    pki.write_client_certificate("client", Validity::Long);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(standby_details.try_recv().is_err());
+    assert!(!leader_task.is_finished());
+
+    leader
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
+        .await
+        .expect("The leader steps down");
+    let standby = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("The standby should take over")
+        .expect("The standby task ended without a result")
+        .expect("The standby should lead");
+    assert!(standby.leadership.is_some());
 }
 
 #[test]
@@ -1191,6 +1282,7 @@ async fn a_replica_with_renewed_files_keeps_running_while_etcds_certificate_has_
     let mut config = tls_config(&etcd.client_url(), pki.mtls());
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
         etcd.retry_max_delay = Duration::from_secs(1);
+        etcd.test_tls_reload_interval = Some(Duration::from_secs(1));
     }
     let (_leader, leader_details) = spawn_replica(config.clone());
     started(leader_details).await;

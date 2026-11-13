@@ -61,14 +61,23 @@ export const StreamingAgentImpl = StreamingAgent.implement({
         for await (const value of values) yield value * 2;
       })());
     },
+    siblings() {
+      return [
+        AgentStream.from(['first', 'second']),
+        AgentStream.from([{ label: 'batch', values: AgentStream.from([1, 2]) }]),
+      ];
+    },
   },
 });
 ```
 
 `AgentStream.from` is lazy. Across RPC, each accepted write gates the next source pull and provides
 back-pressure. An early `break` from `for await` calls `return()` and closes the readable endpoint.
-Call `await stream.return()` yourself when abandoning a stream outside a loop. `throw(reason)`
-closes locally and rejects with that local reason; the reason is not sent to the producer.
+Call `await stream.return()` yourself when abandoning a stream outside a loop.
+On a received P3 stream, `throw(reason)` closes locally and rejects with that local reason;
+the reason is not sent to the producer. On `AgentStream.from`, `throw` follows the
+wrapped iterator's behavior instead. Streams have no JSON representation; this does not
+prevent transferring them through typed agent RPC.
 
 Forward an unread input by returning the same object. Encoding, passing, returning, or forwarding
 a stream transfers ownership; do not reuse it afterward. A stream is single-reader and operations
@@ -102,8 +111,11 @@ for await (const value of output) {
 
 For cross-component calls, declare `dependencies.agents` and follow the
 [`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-another-agent-ts) guide. Generated guest clients preserve nested stream locations.
-Stream-bearing methods only support awaited calls: `.trigger`, `.schedule`, and
-`.scheduleCancelable` are omitted. Stream-bearing constructors are not supported.
+Stream-bearing methods only support awaited calls. Generated guest clients omit
+`.trigger`, `.schedule`, and `.scheduleCancelable` for those methods. Definition
+clients still expose `.trigger` and `.schedule`, but the host does not support
+these operations with streams; surface availability is not a capability guarantee.
+Stream-bearing constructors are not supported.
 
 For external Node.js clients, declare `bridge.ts.external` as described by
 [`golem-call-from-external-ts`](/next/how-to-guides/ts/golem-call-from-external-ts). The generated package exports single-consumer `AgentStream<T>` and
@@ -126,7 +138,7 @@ method when the agent must also be callable through MCP.
 ## Start and Verify
 
 ```shell
-golem new --yes --language ts streaming-agent
+golem new --yes --template ts streaming-agent
 golem build
 golem deploy --yes
 ```

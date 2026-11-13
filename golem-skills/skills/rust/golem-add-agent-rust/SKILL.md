@@ -63,7 +63,7 @@ impl MyAgent for MyAgentImpl {
 
 ## Custom Types
 
-All parameter and return types must implement the `Schema` trait. For custom types, derive it along with `IntoValue` and `FromValueAndType`:
+All parameter and return types must support the schema and wire traits. For custom types, derive `Schema`, which supplies `IntoSchema`, `FromSchema`, `IntoWire`, `FromWire`, and `WireSchema`:
 
 ```rust
 use golem_rust::Schema;
@@ -130,8 +130,8 @@ Returning `Err(WithdrawError::...)` completes the invocation successfully — th
 ## Key Constraints
 
 - All agent method parameters are passed by value (no references)
-- All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
+- All custom types need the `Schema` derive
 - Constructor parameters form the agent identity — two agents with the same parameters are the same agent
 - Agents are created implicitly on first invocation — no separate creation step
-- Invocations are processed sequentially in a single thread — no concurrency within a single agent
+- Invocations are processed sequentially. Async I/O and stream tasks can overlap cooperatively within one invocation; this does not provide CPU-thread parallelism.
 - **Never use `block_on`** — all agent methods run in an async context. Use `async` methods and `.await` instead of blocking on futures

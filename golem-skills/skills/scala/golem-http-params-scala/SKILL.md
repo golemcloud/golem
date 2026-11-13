@@ -78,7 +78,7 @@ Only these types can be used for parameters bound to path/query/header variables
 | Scala Type | Behavior |
 |---|---|
 | `Option[T]` (where `T` is a supported type above) | Optional — absent query param or header produces `None` |
-| `List[T]` / `Array[T]` (where `T` is a supported type above) | Repeated query params or comma-separated header values |
+| `List[T]` / `Array[T]` (where `T` is a supported type above) | Repeated query params or repeated header occurrences; commas are not split |
 
 **All other types** (case classes, tuples, sealed traits with data, etc.) can only be used as **body parameters**.
 
@@ -168,7 +168,8 @@ raw bytes (200), 404 for `Right(None)`, and a JSON error (500) for `Left`.
 | Scala Type | JSON Representation |
 |---|---|
 | `String` | JSON string |
-| `Int`, `Long` | JSON number (integer) |
+| `Int` | JSON number (integer), e.g. `42` |
+| `Long` | Decimal JSON string (s64), e.g. `"42"` |
 | `Float`, `Double` | JSON number (float) |
 | `Boolean` | JSON boolean |
 | `Array[T]`, `List[T]` | JSON array |
@@ -177,6 +178,7 @@ raw bytes (200), 404 for `Right(None)`, and a JSON error (500) for `Left`.
 | sealed trait / enum | JSON variant |
 | `Tuple` | JSON array |
 
+These are the public HTTP schema encodings, not a general Scala JSON library's defaults. For example, `def setCount(count: Long)` expects `{"count":"42"}`. URL and header variables still use decimal text without JSON quotes.
 
 ## Related Skills
 

@@ -53,6 +53,7 @@ pub(all) struct HttpEndpointInfo {
   auth : Bool?
   cors : Array[String]
   durable_streams : DurableStreamRouteInfo?
+  mode : String?
 } derive(Debug, Eq)
 
 ///|
@@ -71,11 +72,8 @@ pub(all) struct DurableStreamSlotInfo {
 ///|
 pub(all) struct DurableStreamRouteInfo {
   slots : Array[DurableStreamSlotInfo]
-  allow_external_writes : Bool?
-  allow_stream_delete : Bool?
-  allow_invocation_delete : Bool?
-  max_concurrent_readers_per_stream : UInt?
-  max_append_requests_per_second_per_stream : UInt?
+  max_concurrent_readers_per_stream : UInt32?
+  max_append_requests_per_second_per_stream : UInt32?
 } derive(Debug, Eq)
 
 ///|
@@ -140,7 +138,7 @@ pub(all) enum AgentSnapshotting {
   Disabled
   Default
   Periodic(UInt64)
-  EveryNInvocation(UInt)
+  EveryNInvocation(UInt32)
 } derive(Debug, Eq)
 
 ///|
@@ -484,11 +482,11 @@ fn parse_uint64(s : String) -> UInt64? {
 
 ///|
 /// Parses a decimal string as a UInt. Returns None if the string is empty or contains non-digits.
-fn parse_uint(s : String) -> UInt? {
+fn parse_uint(s : String) -> UInt32? {
   if s.length() == 0 {
     return None
   }
-  let mut result : UInt = 0
+  let mut result : UInt32 = 0
   for ch in s {
     if ch >= '0' && ch <= '9' {
       result = result * 10 + (ch.to_int() - '0'.to_int()).reinterpret_as_uint()
@@ -692,7 +690,7 @@ pub fn unwrap_secret_type(pt : ParamType) -> ParamType? {
 /// Returns the parameter name, the inner config type name, and its index.
 pub fn find_config_param(
   params : Array[(String, ParamType)],
-) -> (String, String, Int)? {
+) -> (String, String, Int32)? {
   for i, p in params {
     match unwrap_config_type(p.1) {
       Some(Simple(name)) => return Some((p.0, name, i))
@@ -705,7 +703,7 @@ pub fn find_config_param(
 
 ///|
 /// Returns the index of the first `Principal` parameter, if any.
-pub fn find_principal_index(params : Array[(String, ParamType)]) -> Int? {
+pub fn find_principal_index(params : Array[(String, ParamType)]) -> Int32? {
   for i, p in params {
     if is_principal_type(p.1) {
       return Some(i)
@@ -1027,28 +1025,11 @@ fn quoted_value(
 }
 
 ///|
-fn bool_value(
-  value : String,
-  annotation : String,
-  key : String,
-) -> Bool raise AgentParseError {
-  if value == "true" {
-    true
-  } else if value == "false" {
-    false
-  } else {
-    raise AgentParseError(
-      "#derive.\{annotation} property '\{key}' must be true or false",
-    )
-  }
-}
-
-///|
 fn uint_value(
   value : String,
   annotation : String,
   key : String,
-) -> UInt raise AgentParseError {
+) -> UInt32 raise AgentParseError {
   if value.is_empty() {
     raise AgentParseError(
       "#derive.\{annotation} property '\{key}' must be an unsigned integer",
@@ -1078,11 +1059,8 @@ fn extract_durable_streams(
 ) -> DurableStreamRouteInfo? raise AgentParseError {
   let slots : Array[DurableStreamSlotInfo] = []
   let mut route_seen = false
-  let mut allow_external_writes : Bool? = None
-  let mut allow_stream_delete : Bool? = None
-  let mut allow_invocation_delete : Bool? = None
-  let mut max_readers : UInt? = None
-  let mut max_appends : UInt? = None
+  let mut max_readers : UInt32? = None
+  let mut max_appends : UInt32? = None
   attrs.each(attr => {
     if attr.raw.has_prefix("#derive.durable_stream_slot") {
       let props = parse_derive_properties(attr.raw, "durable_stream_slot")
@@ -1130,18 +1108,6 @@ fn extract_durable_streams(
       let props = parse_derive_properties(attr.raw, "durable_streams")
       for key, value in props {
         match key {
-          "allow_external_writes" =>
-            allow_external_writes = Some(
-              bool_value(value, "durable_streams", key),
-            )
-          "allow_stream_delete" =>
-            allow_stream_delete = Some(
-              bool_value(value, "durable_streams", key),
-            )
-          "allow_invocation_delete" =>
-            allow_invocation_delete = Some(
-              bool_value(value, "durable_streams", key),
-            )
           "max_concurrent_readers_per_stream" =>
             max_readers = Some(uint_value(value, "durable_streams", key))
           "max_append_requests_per_second_per_stream" =>
@@ -1159,9 +1125,6 @@ fn extract_durable_streams(
   } else {
     Some({
       slots,
-      allow_external_writes,
-      allow_stream_delete,
-      allow_invocation_delete,
       max_concurrent_readers_per_stream: max_readers,
       max_append_requests_per_second_per_stream: max_appends,
     })
@@ -1183,8 +1146,21 @@ fn extract_endpoint(
           )
         }
         let found : Array[(String, String)] = []
+        let mut mode : String? = None
         props.each(fn(prop) {
           match prop {
+            Labeled("mode", String(value)) => {
+              if mode is Some(_) {
+                raise AgentParseError("Duplicate endpoint mode")
+              }
+              if value != "durableStreams" &&
+                value != "plain" &&
+                value != "sse" &&
+                value != "webSocket" {
+                raise AgentParseError("Unknown HTTP route mode '\{value}'")
+              }
+              mode = Some(value)
+            }
             Labeled(label, String(path)) =>
               if http_methods.contains(label) {
                 found.push((label, path))
@@ -1210,6 +1186,7 @@ fn extract_endpoint(
             auth: None,
             cors: [],
             durable_streams: None,
+            mode,
           })
         }
       }
@@ -1306,6 +1283,7 @@ fn build_endpoint_info(
       auth: None,
       cors: [],
       durable_streams: None,
+      mode: None,
     })
   }
   match endpoint {
@@ -1374,7 +1352,7 @@ fn extract_return_type(
 fn validate_snapshot_loader(
   fun_decl : @syntax.FunDecl,
   agent_name : String,
-  multipart? : Bool = false,
+  multipart~ : Bool = false,
 ) -> Unit raise AgentParseError {
   let loader = if multipart {
     "async \{agent_name}::load_snapshot_parts(@agents.MultipartSnapshot"

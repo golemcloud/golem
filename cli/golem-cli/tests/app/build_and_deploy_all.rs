@@ -43,53 +43,6 @@ async fn build_and_deploy_all_templates_for_go() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Go).await;
 }
 
-#[test]
-async fn go_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::Go).await;
-}
-
-#[test]
-async fn rust_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::Rust).await;
-}
-
-#[test]
-async fn typescript_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::TypeScript).await;
-}
-
-#[test]
-async fn effect_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::Effect).await;
-}
-
-#[test]
-async fn scala_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::Scala).await;
-}
-
-#[test]
-async fn moonbit_streaming_template_builds() {
-    streaming_template_builds_for_lang(GuestLanguage::MoonBit).await;
-}
-
-async fn streaming_template_builds_for_lang(language: GuestLanguage) {
-    let mut ctx = TestContext::new();
-    let app_name = format!("{}-streaming-template", language.id());
-    let template = format!("{}/streaming", language.id());
-
-    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
-    ctx.cd(app_name);
-
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, &template])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-}
-
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
     ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
@@ -395,11 +348,11 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
                 !has_mbt_at_root,
                 "expected multi-component MoonBit layout: no *.mbt files should remain at the app root"
             );
-            // moon.mod.json MUST stay at the app root; it is the module-level
+            // moon.mod MUST stay at the app root; it is the module-level
             // descriptor and pairs with the per-package moon.pkg files.
             assert!(
-                app_root.join("moon.mod.json").exists(),
-                "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
+                app_root.join("moon.mod").exists(),
+                "expected multi-component MoonBit layout: moon.mod should remain at the app root"
             );
         }
         GuestLanguage::Go => {

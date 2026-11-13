@@ -19,7 +19,7 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    subscriptions may vanish at any instruction boundary. Suspend, evict, reshard, restart and
    crash all reconstruct the instance from the oplog through the same path
    (`src/worker/invocation_loop/mod.rs::run` → `src/durable_host/recovery.rs::prepare_instance` →
-   `resume_replay`). Do not design feature-specific "safe to unload" gates; make every pending
+   `replay`). Do not design feature-specific "safe to unload" gates; make every pending
    obligation durable or deterministically recomputable instead.
 3. **Durable agent RPC is exactly-once per logical target invocation.** Caller attempts (replay,
    transport retry, individual call repair) share one idempotency key derived from the caller's
@@ -38,7 +38,32 @@ from the oplog. Derived and disposable: `Store` memory, in-memory queues, caches
 subscriptions, spawned store tasks, sockets. Never let correctness after a restart depend on
 anything in the second list.
 
+A host resource drop that has no guest-observable result and no remote effect must not open a
+durable call: the guest may release the resource at different points in different runs (garbage
+collection, a heap restored from a snapshot). Delete the resident state and record a hint for
+observability, as `wasm-rpc` and `span` drops do with `SpanClosed`.
+
+A drop that terminates a real durable effect must preserve the operation's terminal, but must
+never wait for recorded history on the guest thread or in a cleanup drain. Defer replay waits
+under the resident runtime's task ownership. Missing terminals may continue live only at the
+natural replay tail. A changed disposal time does not permit changed guest reads, completed
+effects, call identities, or terminal kinds.
+
 ## External effects
+
+Tool isolation is limited to the fixed Wasm instruction-trap allowlist in
+`worker/invocation.rs::permanent_tool_guest_trap`. A trapped tool records
+`body_execution: Trapped` with `RemoteInternalError`; typed quotas, policy exhaustion,
+`WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner recovery even when
+their retry decision is exhausted. Destroy the physical Wasmtime Store but retain its original
+`Ctx` for cleanup. Independent supervisors settle failed parents and cancel their descendants
+without replacing selected outcomes or cancelling unrelated siblings. Replay re-executes trapped
+bodies and their recorded host calls to rebuild shared filesystem effects and partial stdout,
+then validates the exact terminal and descendants; completed external effects are not repeated.
+Stream completion is independent of the structured result: an already-completed stream stays
+completed. Allocation-dependent `memory.grow` backing refusal returning -1 and leading to panic
+is a separate, preexisting nondeterminism limitation, not a universal isolation guarantee or a
+reason to introduce fork/snapshot recovery.
 
 Recovery repairs an incomplete durable call at its own `Start`; it does not restart a group of
 completed effects. SDK sagas compensate completed steps and loop in guest code, appending new

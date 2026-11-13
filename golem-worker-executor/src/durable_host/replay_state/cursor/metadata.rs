@@ -28,6 +28,24 @@ pub(in crate::durable_host::replay_state) fn recovery_metadata_floor(
 }
 
 impl ReplayState {
+    /// Installs an actor-FIFO status snapshot obtained without holding a cursor lock.
+    pub(crate) async fn install_entity_replay_progress(
+        &self,
+        status: &golem_common::model::AgentStatusRecord,
+        horizon: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if status.oplog_idx < horizon {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "entity replay metadata covering the committed replay horizon",
+                format!("status {} precedes horizon {horizon}", status.oplog_idx),
+            ));
+        }
+        let mut state = self.cursor.state.lock().await;
+        state.entity_replay_progress = status.entity_replay_progress.clone();
+        state.entity_replay_horizon = status.oplog_idx;
+        Ok(())
+    }
+
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -40,15 +58,20 @@ impl ReplayState {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
-        let (completion_markers, stream_observations, transaction_markers) =
-            Self::scan_completion_markers(
-                &oplog,
-                metadata_floor,
-                last_oplog_index,
-                &skipped_regions,
-                &mut tool_attachment_reconstruction,
-            )
-            .await?;
+        let ScannedRecoveryMetadata {
+            completion_markers,
+            stream_observations,
+            transaction_markers,
+            start_invocation_ids,
+            invocation_finishes,
+        } = Self::scan_completion_markers(
+            &oplog,
+            metadata_floor,
+            last_oplog_index,
+            &skipped_regions,
+            &mut tool_attachment_reconstruction,
+        )
+        .await?;
         crate::metrics::workers::record_replay_metadata_scan(
             if metadata_floor == OplogIndex::INITIAL {
                 "initial"
@@ -57,34 +80,39 @@ impl ReplayState {
             },
             (last_oplog_index.as_u64() + 1).saturating_sub(metadata_floor.as_u64()),
         );
-        let concurrent_resolver = ConcurrentReplayResolver::default();
-        let reconstruction_claims = concurrent_resolver.reconstruction_claims();
+        let starts = ReplayStarts::default();
+        let reconstruction_claims = starts.reconstruction_claims();
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
             wallet,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_in_progress: AtomicBool::new(false),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
+            start_invocation_ids: std::sync::Mutex::new(start_invocation_ids),
+            invocation_finishes: std::sync::Mutex::new(invocation_finishes),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 has_seen_logs: AtomicBool::new(false),
             },
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
-            transition_phase: AtomicU8::new(ReplayTransitionPhase::Replaying as u8),
+            transition_phase: AtomicReplayTransitionPhase::replaying(),
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
                 initial_snapshot_skip_end,
+                entity_replay_progress: Default::default(),
+                entity_replay_horizon: OplogIndex::NONE,
+                entity_start_routes: HashMap::new(),
+                entity_route_members: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
-                concurrent_resolver,
-                claimed_starts: HashSet::new(),
+                starts,
                 custom_subtrees: HashMap::new(),
-                retained_starts: std::collections::BTreeMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -109,7 +137,7 @@ impl ReplayState {
             tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
-        if cursor.is_live() {
+        if cursor.at_replay_tail() {
             cursor.publish_live();
         }
         Ok(Self {
@@ -117,7 +145,8 @@ impl ReplayState {
         })
     }
 
-    /// Scans retained history for delivery, transaction, stream and attachment recovery metadata.
+    /// Scans retained history for delivery, transaction, stream, invocation-boundary and
+    /// attachment recovery metadata.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
     /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(in crate::durable_host::replay_state) async fn scan_completion_markers(
@@ -126,18 +155,13 @@ impl ReplayState {
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
         attachments: &mut ToolAttachmentReconstruction,
-    ) -> Result<
-        (
-            CompletionMarkers,
-            StreamObservationPositions,
-            TransactionMarkers,
-        ),
-        WorkerExecutorError,
-    > {
+    ) -> Result<ScannedRecoveryMetadata, WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
-        let mut markers = HashMap::new();
-        let mut stream_observations = HashMap::new();
+        let mut markers = CompletionMarkers::default();
+        let mut stream_observations = StreamObservationPositions::new();
         let mut transaction_markers = TransactionMarkers::new();
+        let mut start_invocation_ids = StartsByInvocationId::new();
+        let mut invocation_finishes = InvocationFinishes::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -190,14 +214,26 @@ impl ReplayState {
                         }
                         None
                     }
-                    OplogEntry::Start {
-                        function_name,
-                        parent_start_index,
-                        observational_owner,
-                        invocation_id,
-                        request,
-                        ..
-                    } => {
+                    entry @ OplogEntry::Start { .. } => {
+                        let recorded = RecordedStart::of(&entry)
+                            .expect("a Start entry has a recorded identity");
+                        let OplogEntry::Start {
+                            function_name,
+                            parent_start_index,
+                            observational_owner,
+                            invocation_id,
+                            request,
+                            ..
+                        } = entry
+                        else {
+                            unreachable!("matched a Start entry");
+                        };
+                        if let Some(invocation_id) = invocation_id {
+                            start_invocation_ids
+                                .entry(invocation_id)
+                                .or_default()
+                                .insert(marker_idx, recorded);
+                        }
                         let attachment_write = matches!(
                             function_name,
                             HostFunctionName::GolemToolOutputWrite
@@ -351,6 +387,10 @@ impl ReplayState {
                         }
                         None
                     }
+                    OplogEntry::AgentInvocationFinished { .. } => {
+                        invocation_finishes.insert(marker_idx);
+                        None
+                    }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
                         Some((start_index, CompletionMarker::Delivered(marker_idx)))
                     }
@@ -456,7 +496,32 @@ impl ReplayState {
                 WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
             })?;
         attachments.index_logical_observations();
-        Ok((markers, stream_observations, transaction_markers))
+        Ok(ScannedRecoveryMetadata {
+            completion_markers: markers,
+            stream_observations,
+            transaction_markers,
+            start_invocation_ids,
+            invocation_finishes,
+        })
+    }
+
+    /// The first visible `AgentInvocationFinished` after the cursor and before `index`. Reads
+    /// only the scanned invocation finishes, never the oplog.
+    pub(in crate::durable_host::replay_state) fn invocation_finish_before(
+        &self,
+        index: OplogIndex,
+    ) -> Option<OplogIndex> {
+        let after_cursor = self.cursor.last_replayed_index().next();
+        if after_cursor >= index {
+            return None;
+        }
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(after_cursor..index)
+            .next()
+            .copied()
     }
 
     pub(crate) fn transaction_marker(
@@ -509,7 +574,8 @@ impl ReplayState {
     /// Sets the replay target. This is a phase-boundary operation (e.g. refreshing the target
     /// before replay resumes); it must not race with concurrent cursor advances.
     ///
-    /// The completion-marker map is kept in sync with the visible prefix `[.., target]`:
+    /// The completion-marker map and the other scanned recovery metadata, including the
+    /// invocation finishes, are kept in sync with the visible prefix `[.., target]`:
     ///
     /// - Growing the target makes a previously invisible oplog range visible, so the newly
     ///   visible range `(old_target, new_target]` is scanned for completion-delivery markers
@@ -546,18 +612,29 @@ impl ReplayState {
                         .completion_markers
                         .lock()
                         .unwrap()
-                        .retain(|_, marker| marker.index() <= new_target);
+                        .truncate_after(new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.start_invocation_ids.lock().unwrap().retain(|_, starts| {
+                        starts.retain(|index, _| *index <= new_target);
+                        !starts.is_empty()
+                    });
                     cursor.transaction_markers.lock().unwrap().retain(|_, entries| {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
                     });
+                    cursor.invocation_finishes.lock().unwrap().retain(|index| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
-                    let (additions, stream_observations, transaction_markers) = Self::scan_completion_markers(
+                    let ScannedRecoveryMetadata {
+                        completion_markers: additions,
+                        stream_observations,
+                        transaction_markers,
+                        start_invocation_ids,
+                        invocation_finishes,
+                    } = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
@@ -567,7 +644,7 @@ impl ReplayState {
                     .await?;
                     if !additions.is_empty() {
                         let mut markers = cursor.completion_markers.lock().unwrap();
-                        for (start_index, marker) in &additions {
+                        for (start_index, marker) in additions.iter() {
                             // Rediscovering the exact marker already in the map (recorded live by
                             // this instance before the target
                             // grew over it) is idempotent; only a *different* marker for the same
@@ -584,15 +661,24 @@ impl ReplayState {
                                 )));
                             }
                         }
-                        markers.extend(additions);
+                        for (start_index, marker) in additions.by_start {
+                            markers.insert(start_index, marker);
+                        }
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
+                    {
+                        let mut current = cursor.start_invocation_ids.lock().unwrap();
+                        for (invocation_id, starts) in start_invocation_ids {
+                            current.entry(invocation_id).or_default().extend(starts);
+                        }
+                    }
                     {
                         let mut current = cursor.transaction_markers.lock().unwrap();
                         for (owner, entries) in transaction_markers {
                             current.entry(owner).or_default().extend(entries);
                         }
                     }
+                    cursor.invocation_finishes.lock().unwrap().extend(invocation_finishes);
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
@@ -604,9 +690,7 @@ impl ReplayState {
                 }
             }
             if new_target > cursor.last_replayed_index() {
-                cursor
-                    .transition_phase
-                    .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
+                cursor.transition_phase.resume_replay();
                 cursor
                     .pending_replay_events
                     .lock()
@@ -614,7 +698,7 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
-            if cursor.is_live()
+            if cursor.at_replay_tail()
                 && let Some(wallet) = &cursor.wallet
             {
                 wallet.finish_replay_prefix();

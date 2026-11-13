@@ -1,7 +1,7 @@
 ///|
 fn decode_with_drop_counts(
   tree : @types.SchemaValueTree,
-) -> (Result[SchemaValue, SchemaModelError], Array[Int]) {
+) -> (Result[SchemaValue, SchemaModelError], Array[Int32]) {
   let counts = [0, 0, 0]
   let drops : SchemaValueResourceDrops = {
     drop_secret: fn(_) { counts[0] += 1 },

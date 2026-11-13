@@ -204,6 +204,15 @@ Worker service exposes the following Prometheus metrics:
 | `openapi_cache_total`               | counter   | `outcome`                                                                                                  | OpenAPI cache lookups and stale fencing                                         |
 | `openapi_generation_seconds`        | histogram | `outcome`                                                                                                  | Duration of an OpenAPI generation                                               |
 
+### TLS Certificates
+
+Every service that serves or calls gRPC with TLS, and the shard manager's etcd client, exports the following metrics for the certificate in use. See [TLS between the services](/next/deploy/cluster#tls-between-the-services) and [Renew certificates](/next/operate/shard-manager#renew-certificates).
+
+| Metric                                       | Type    | Labels | Description                                                                                              |
+| -------------------------------------------- | ------- | ------ | -------------------------------------------------------------------------------------------------------- |
+| `golem_tls_certificate_not_after_seconds`    | gauge   | `use`  | Unix time at which the TLS certificate in use expires. `use` is `grpc server`, `<target> client` or `etcd client` |
+| `golem_tls_certificate_reload_failures_total` | counter | `use`  | Changed TLS files that could not be used; counted once for each distinct set of files                    |
+
 ### OTLP Plugin
 
 The [OTLP plugin](/next/develop/observability#setting-up-the-otlp-plugin) exports durable stream summaries separately from the service's Prometheus endpoint:

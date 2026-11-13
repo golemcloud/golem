@@ -25,9 +25,11 @@ explicitly revised, **do not perform backward-compatibility work**.
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
 - **cargo-test-r**: Match the version CI installs, pinned in
   `.github/actions/restore-binaries/action.yml` (`cargo install --force --locked cargo-test-r@<VERSION>`)
-- **protoc**: Required to build `golem-shard-manager`, and therefore the `golem` binary. The
-  `etcd-client` crate's build script compiles its protos with `tonic-prost-build`, which shells out
-  to the protobuf compiler; the workspace's own protos use `protox` and need no binary
+- **WASI SDK**: Version pinned by `WASI_SDK_VERSION` in `.github/workflows/ci.yaml`, with
+  `WASI_SDK_PATH` set to its install directory; `cargo make build` compiles C dependencies of the
+  built-in tools for `wasm32-wasip2` with it
+- **Node.js and pnpm**: An official Node.js 24 build (fnm, nvm, or nodejs.org), not Homebrew's,
+  whose system zlib makes the built-in tools' `npm pack` provenance checks fail
 - **redis-server**: Required by worker-executor, service-integration, and CLI integration tests that
   use spawned test dependencies; not required by every unit test
 - **docker**: Required by tests that use containerized dependencies
@@ -102,6 +104,10 @@ includes Golem binaries such as `golem` and `golem-cli`, as well as tools and co
 - Non-CLI integration tests must use `golem-test-framework` for all process-backed dependencies and
   must not spawn additional processes directly.
 - CLI integration tests may spawn the external processes required by the behavior they exercise.
+
+Release-workflow fixtures are a separate exception. Keep them in the standalone workspace at
+`.github/scripts/release-tooling-tests/`, not in the CLI integration suite. They may execute release
+helpers and their tools against local fixtures. CI runs them in the **Test release tooling** step.
 
 The unit-test CI job runs prebuilt test binaries and is intentionally kept fast; subprocess
 execution in unit tests bypasses that design and can make the job time out.
@@ -282,3 +288,4 @@ their own workspace manifests.
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
 - `website/` - Marketing site for golem.cloud (Astro, deployed to Netlify) - separate from `docs/`
+- `golem-cloud-billing/` - Billing app of the hosted Golem Cloud (TypeScript, Effect, Better Auth, pnpm) - **not part of main build flow, see `golem-cloud-billing/README.md`**

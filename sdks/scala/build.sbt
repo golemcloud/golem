@@ -353,7 +353,20 @@ addCommandAlias(
      """.stripMargin
 )
 
+// The one command list for a local publish; `cargo make build-sdk-scala` and CI run this alias.
+// The projects publish one at a time because the sbt plugin and the 2.12 codegen build only
+// for Scala 2.12, so a plain `+publishLocal` gives conflicting cross-version suffixes.
 addCommandAlias(
   "golemPublishLocal",
-  "; set every version := \"0.0.0-SNAPSHOT\"; +publishLocal"
+  s"""; set every version := "0.0.0-SNAPSHOT"
+     ; ++$Scala3Golem
+     ; modelJVM/publishLocal
+     ; modelJS/publishLocal
+     ; macros/publishLocal
+     ; core/publishLocal
+     ; codegen/publishLocal
+     ; ++$Scala212
+     ; codegen/publishLocal
+     ; sbtPlugin/publishLocal
+     """.stripMargin
 )

@@ -16,12 +16,18 @@ use super::{
     AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AgentMetadata, AuthCtx,
     CancelInvocationRequest, DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest,
     ForkWorkerResponse, HasActiveAgents, HasAll, HasEvents, HasPromiseService, HasWorkerService,
-    HashMap, InvocationContextStack, LookupResult, OplogIndex, OwnedAgentId, RecvError,
+    HashMap, LookupResult, OplogIndex, OwnedAgentId, RecvError,
     ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
     UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
     from_proto_invocation_context, golem,
 };
+use crate::worker::CreateIntent;
+use golem_common::model::agent::{
+    AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
+};
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -83,10 +89,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+        let owned_agent_id = self
+            .canonicalize_agent_target(
+                owned_agent_id.environment_id,
+                &AgentTarget::Current(owned_agent_id.agent_id),
+            )
+            .await?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let freshness_disposition = if !wait_until_loaded
+            && request.freshness_disposition
+                == golem::worker::InvocationFreshnessDisposition::KnownFresh as i32
+        {
+            InvocationFreshnessDisposition::KnownFresh
+        } else {
+            InvocationFreshnessDisposition::MayExist
+        };
+        if let Some(key) = request.idempotency_key.clone() {
+            Worker::<Ctx>::validate_invocation_freshness(
+                self,
+                &owned_agent_id,
+                &key.into(),
+                freshness_disposition,
+            )
+            .await?;
+        } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            return Err(WorkerExecutorError::invalid_request(
+                "KnownFresh requires an idempotency key",
+            ));
+        }
 
         let principal = extract_principal(&request.principal);
 
@@ -107,7 +140,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        if !request.ignore_already_existing {
+        if !request.ignore_already_existing
+            && freshness_disposition == InvocationFreshnessDisposition::MayExist
+        {
             if let Some(existing) = self.active_agents().try_get(&owned_agent_id).await {
                 if !Self::is_same_worker_creation_request(
                     &existing.get_initial_worker_metadata(),
@@ -138,7 +173,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             from_proto_invocation_context(&request.invocation_context),
         );
 
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_suspended_with_freshness(
             self,
             &owned_agent_id,
             Some(env),
@@ -147,6 +182,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             &invocation_context,
             principal,
+            freshness_disposition,
+            CreateIntent::Create {
+                exclusive: !request.ignore_already_existing,
+                idempotency_key: request.idempotency_key.clone().map(Into::into),
+            },
         )
         .await?;
 
@@ -290,6 +330,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
                 &auth_ctx,
+                CreateRequest::new(
+                    CreateRequestKind::Fork,
+                    None,
+                    extract_principal(&request.principal),
+                    &InvocationContextStack::fresh(),
+                ),
             )
             .await?;
 
@@ -367,6 +413,55 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))?
             .into();
 
+        if let Some(scheduled) = request.scheduled {
+            let auth: AuthCtx = request.auth_ctx.unwrap().try_into().map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("invalid auth_ctx: {error}"))
+            })?;
+            if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "schedule cancellation requires an authenticated internal caller",
+                ));
+            }
+            let owner: AgentId = scheduled
+                .owner_agent_id
+                .ok_or_else(|| WorkerExecutorError::invalid_request("owner_agent_id not found"))?
+                .try_into()
+                .map_err(WorkerExecutorError::invalid_request)?;
+            let schedule_id = ScheduleId {
+                id: scheduled
+                    .schedule_id
+                    .ok_or_else(|| WorkerExecutorError::invalid_request("schedule_id not found"))?
+                    .into(),
+            };
+            let environment: EnvironmentId = scheduled
+                .target_environment_id
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("target_environment_id not found")
+                })?
+                .try_into()
+                .map_err(WorkerExecutorError::invalid_request)?;
+            if environment != owned_agent_id.environment_id {
+                return Err(WorkerExecutorError::invalid_request(
+                    "target environment mismatch",
+                ));
+            }
+            let worker = match Worker::get_exact_existing_suspended(
+                self,
+                &owned_agent_id,
+                Principal::anonymous(),
+            )
+            .await
+            {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            return worker
+                .cancel_scheduled_invocation(idempotency_key, schedule_id, &owner)
+                .await;
+        }
+
+        self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
@@ -379,18 +474,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
-            worker.cancel_invocation(idempotency_key).await?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
+            Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
+                .await?;
             Ok(true)
         } else if status.invocation_results.contains_key(&idempotency_key) {
             Ok(false)
@@ -400,17 +488,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
             match worker.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {
@@ -420,7 +500,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .iter()
                         .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
                     {
-                        worker.cancel_invocation(idempotency_key).await?;
+                        Self::not_found_if_deleting(
+                            &worker,
+                            worker.cancel_invocation(idempotency_key).await,
+                        )
+                        .await?;
                         Ok(true)
                     } else {
                         Err(WorkerExecutorError::invalid_request("Invocation not found"))

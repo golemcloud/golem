@@ -42,8 +42,8 @@ use golem_common::schema::find_host_managed_type;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, PermissionCardSpec, SchemaType, TextRestrictions,
-    VariantCaseType,
+    BinaryRestrictions, NamedFieldType, PermissionCardSpec, QuantitySpec, SchemaType,
+    TextRestrictions, VariantCaseType,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
@@ -65,7 +65,7 @@ mod type_name;
 mod wire;
 
 pub use config::RustBridgeGeneratorConfig;
-pub use type_name::{RustRemappedType, RustTypeName};
+pub use type_name::RustTypeName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RustBridgeMode {
@@ -97,6 +97,7 @@ struct GuestMethodNames {
 struct RustRuntimeConfig {
     mode: RustBridgeMode,
     reexport_golem_server_at_root: bool,
+    reexport_reconnect_policy_at_root: bool,
 }
 
 impl RustRuntimeConfig {
@@ -104,6 +105,7 @@ impl RustRuntimeConfig {
         Self {
             mode,
             reexport_golem_server_at_root: false,
+            reexport_reconnect_policy_at_root: false,
         }
     }
 
@@ -112,19 +114,88 @@ impl RustRuntimeConfig {
         self
     }
 
+    /// Datetimes outside the four-digit, non-negative RFC 3339 year range have no
+    /// canonical text form, and a `TimeDelta` can exceed the s64 nanosecond range of a
+    /// `duration` value, so both codecs check these before encoding and after decoding.
+    fn scalar_checks() -> TokenStream {
+        quote! {
+            pub fn check_datetime(value: &chrono::DateTime<chrono::Utc>) -> Result<chrono::DateTime<chrono::Utc>, String> {
+                let year = chrono::Datelike::year(value);
+                if (0..=9999).contains(&year) {
+                    Ok(*value)
+                } else {
+                    Err(format!("Datetime {value:?} has year {year}, outside the supported range 0..=9999"))
+                }
+            }
+
+            pub fn duration_nanoseconds(value: &chrono::TimeDelta) -> Result<i64, String> {
+                value.num_nanoseconds().ok_or_else(|| {
+                    format!("Duration {value} does not fit the signed 64-bit nanosecond range")
+                })
+            }
+        }
+    }
+
+    fn with_root_reconnect_policy_reexport(mut self, reexport: bool) -> Self {
+        self.reexport_reconnect_policy_at_root = reexport;
+        self
+    }
+
     fn generated_prelude(&self) -> TokenStream {
+        let scalar_checks = Self::scalar_checks();
         match self.mode {
             RustBridgeMode::ExternalRest => {
                 let root_golem_server_reexport = self
                     .reexport_golem_server_at_root
                     .then(|| quote! { pub use golem_client::bridge::GolemServer; });
+                let root_reconnect_policy_reexport = self
+                    .reexport_reconnect_policy_at_root
+                    .then(|| quote! { pub use golem_client::bridge::ReconnectPolicy; });
 
                 quote! {
                     #root_golem_server_reexport
+                    #root_reconnect_policy_reexport
 
                     pub mod __golem_bridge_runtime {
                     pub use golem_client::bridge::ClientError;
                     pub use golem_client::bridge::GolemServer;
+                    pub use golem_client::bridge::ReconnectPolicy;
+
+                    #scalar_checks
+
+                    pub(super) async fn create_agent(
+                        config: &golem_client::bridge::Configuration,
+                        agent_type_name: &str,
+                        constructor_parameters: schema::SchemaValue,
+                        phantom_id: Option<uuid::Uuid>,
+                        agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
+                    ) -> Result<golem_client::model::AgentId, ClientError> {
+                        let client = reqwest_middleware::ClientWithMiddleware::from(
+                            reqwest::Client::builder().build().unwrap()
+                        );
+                        let context = golem_client::Context {
+                            client,
+                            base_url: config.server.url(),
+                            security_token: config.server.token(),
+                        };
+                        let api_client = golem_client::api::AgentClientLive { context };
+                        let response = golem_client::api::AgentClient::create_agent(
+                            &api_client,
+                            &golem_client::model::CreateAgentRequest {
+                                app_name: config.app_name.to_string(),
+                                env_name: config.env_name.to_string(),
+                                agent_type_name: agent_type_name.to_string(),
+                                parameters: schema::ExternalSchemaValue::try_from(
+                                    constructor_parameters,
+                                ).map_err(|__e| ClientError::InvocationFailed {
+                                    message: format!("Failed to validate constructor parameters: {__e}"),
+                                })?,
+                                phantom_id,
+                                config: Some(agent_config),
+                            },
+                        ).await?;
+                        Ok(response.agent_id)
+                    }
 
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationResult<T> {
@@ -154,6 +225,8 @@ impl RustRuntimeConfig {
                 pub mod __golem_bridge_runtime {
                     pub use golem_rust::agentic::EphemeralInvocationResult;
 
+                    #scalar_checks
+
                     #[derive(Debug, Clone)]
                     pub enum ClientError {
                         SchemaEncodeFailed { message: String },
@@ -166,7 +239,8 @@ impl RustRuntimeConfig {
                     pub mod schema {
                         pub use golem_rust::SchemaValue;
                         pub use golem_rust::schema::{
-                            DurationValuePayload, ResultValuePayload, UnionValuePayload,
+                            BinaryValuePayload, DurationValuePayload, QuantityValue,
+                            ResultValuePayload, TextValuePayload, UnionValuePayload,
                             VariantValuePayload,
                         };
                     }
@@ -214,6 +288,9 @@ pub struct RustBridgeGenerator {
     /// Distinct binary mime-type restriction sets discovered while generating,
     /// each mapped to the generated `crate::mimetypes::*` enum name.
     generated_mimetypes_enums: Vec<(Vec<String>, String)>,
+    /// Distinct quantity units (base unit and allowed suffixes) discovered while
+    /// generating, each mapped to the generated `crate::units::*` marker name.
+    generated_quantity_units: Vec<((String, Vec<String>), String)>,
     /// Distinct multimodal modality sets discovered while generating, each
     /// mapped to the generated `crate::Multimodal*` enum name.
     known_multimodals: Vec<(Vec<(String, SchemaType)>, String)>,
@@ -316,6 +393,10 @@ impl RustBridgeGenerator {
                     "__golem_bridge_runtime",
                     "__golem_bridge_types",
                     "AgentBinary",
+                    "AgentText",
+                    "Quantity",
+                    "QuantityUnit",
+                    "QuantityValue",
                     "UnstructuredText",
                     "UnstructuredBinary",
                     "AnyLanguage",
@@ -323,29 +404,33 @@ impl RustBridgeGenerator {
                     "AllowedMimeTypes",
                     "languages",
                     "mimetypes",
+                    "units",
                 ]
                 .into_iter()
-                .map(|name| RustTypeName::Derived(name.to_string())),
+                .map(|name| RustTypeName(name.to_string())),
             )?,
             RustBridgeMode::GuestWasmRpc => {
                 let reserved_names = [
-                    RustTypeName::Derived("__golem_bridge_runtime".to_string()),
-                    RustTypeName::Derived(Self::guest_client_struct_name_string(
+                    RustTypeName("__golem_bridge_runtime".to_string()),
+                    RustTypeName(Self::guest_client_struct_name_string(
                         &agent_type.type_name.0,
                     )),
-                    RustTypeName::Derived(format!(
+                    RustTypeName(format!(
                         "{}WithScopeCard",
                         Self::guest_client_struct_name_string(&agent_type.type_name.0)
                     )),
-                    RustTypeName::Derived("languages".to_string()),
-                    RustTypeName::Derived("mimetypes".to_string()),
+                    RustTypeName("__golem_bridge_types".to_string()),
+                    RustTypeName("AgentBinary".to_string()),
+                    RustTypeName("AgentText".to_string()),
+                    RustTypeName("languages".to_string()),
+                    RustTypeName("mimetypes".to_string()),
+                    RustTypeName("units".to_string()),
                 ]
                 .into_iter()
-                .chain(extra.into_iter().map(RustTypeName::Derived));
+                .chain(extra.into_iter().map(RustTypeName));
                 TypeNaming::new_with_reserved_names(&agent_type, same_language, reserved_names)?
             }
         };
-        validate_remapped_types(&type_naming)?;
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -357,6 +442,7 @@ impl RustBridgeGenerator {
             type_naming,
             generated_language_enums: Vec::new(),
             generated_mimetypes_enums: Vec::new(),
+            generated_quantity_units: Vec::new(),
             known_multimodals: Vec::new(),
             schema_graphs: schema_graph::SchemaGraphRegistry::default(),
             stream_items: Vec::new(),
@@ -387,7 +473,6 @@ impl RustBridgeGenerator {
                 doc["features"] = Item::Table(Table::default());
                 doc["features"]["default"] = string_array(&["client"]);
                 doc["features"]["client"] = string_array(&[
-                    "dep:chrono",
                     "dep:golem-client",
                     "dep:golem-common",
                     "dep:reqwest",
@@ -395,9 +480,10 @@ impl RustBridgeGenerator {
                     "dep:serde_json",
                     "uuid/v4",
                 ]);
-                doc["features"]["serde"] = string_array(&["dep:serde", "uuid/serde"]);
+                doc["features"]["serde"] =
+                    string_array(&["dep:serde", "chrono/serde", "url/serde", "uuid/serde"]);
 
-                doc["dependencies"]["chrono"] = optional_dep("0.4", &[]);
+                doc["dependencies"]["chrono"] = dep("0.4.44", &[]);
                 doc["dependencies"]["golem-client"] =
                     optional(golem_source.dep_item("golem-client", &[])?)?;
                 doc["dependencies"]["golem-common"] =
@@ -406,6 +492,7 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["reqwest-middleware"] = optional_dep("0.5", &[]);
                 doc["dependencies"]["serde"] = optional_dep("1", &["derive", "std"]);
                 doc["dependencies"]["serde_json"] = optional_dep("1", &[]);
+                doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &[]);
             }
             RustBridgeMode::GuestWasmRpc => {
@@ -414,10 +501,11 @@ impl RustBridgeGenerator {
                 } else {
                     sdk_overrides()?.golem_rust_dependency()
                 };
-                doc["dependencies"]["chrono"] = dep("0.4", &[]);
+                doc["dependencies"]["chrono"] = dep("0.4.42", &[]);
                 doc["dependencies"]["golem-rust"] =
                     sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
+                doc["dependencies"]["url"] = dep("2.5.7", &[]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
             }
         }
@@ -622,7 +710,7 @@ impl RustBridgeGenerator {
             quote! { None }
         };
         let created_fields = if self.agent_type.mode == AgentMode::Durable {
-            quote! { constructor_parameters, phantom_id, agent_id: response.agent_id, session_config }
+            quote! { constructor_parameters, phantom_id, agent_id, session_config }
         } else {
             {
                 quote! { constructor_parameters, phantom_id: None, agent_config, session_config }
@@ -635,10 +723,12 @@ impl RustBridgeGenerator {
             self.external_multimodal_parts()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
+        let units = self.units_module();
         let portable_helpers = self.external_portable_helpers();
         let helper_codecs = self.external_helper_codecs();
         let runtime_prelude = RustRuntimeConfig::new(self.mode)
             .with_root_golem_server_reexport(!self.root_type_name_conflicts("GolemServer"))
+            .with_root_reconnect_policy_reexport(!self.root_type_name_conflicts("ReconnectPolicy"))
             .generated_prelude();
 
         let tokens = quote! {
@@ -655,6 +745,8 @@ impl RustBridgeGenerator {
             #languages
 
             #mimetypes
+
+            #units
 
             #[cfg(feature = "client")]
             mod __golem_bridge_client {
@@ -714,30 +806,12 @@ impl RustBridgeGenerator {
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     #ephemeral_local_return
                     let config = CONFIG.get().expect("Configuration has not been set");
-
-                    let client = reqwest_middleware::ClientWithMiddleware::from(
-                        reqwest::Client::builder().build().unwrap()
-                    );
-                    let context = golem_client::Context {
-                        client,
-                        base_url: config.server.url(),
-                        security_token: config.server.token(),
-                    };
-                    let api_client = golem_client::api::AgentClientLive { context };
-                    let response = golem_client::api::AgentClient::create_agent(
-                        &api_client,
-                        &golem_client::model::CreateAgentRequest {
-                            app_name: config.app_name.to_string(),
-                            env_name: config.env_name.to_string(),
-                            agent_type_name: #agent_type_name.to_string(),
-                            parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
-                                constructor_parameters.clone(),
-                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                                message: format!("Failed to validate constructor parameters: {__e}"),
-                            })?,
-                            phantom_id,
-                            config: Some(agent_config),
-                        },
+                    let agent_id = crate::__golem_bridge_runtime::create_agent(
+                        config,
+                        #agent_type_name,
+                        constructor_parameters.clone(),
+                        phantom_id,
+                        agent_config,
                     ).await?;
 
                     Ok(Self { #created_fields })
@@ -1027,6 +1101,8 @@ impl RustBridgeGenerator {
         let stream_factories = self.guest_stream_factories()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
+        let units = self.units_module();
+        let helper_types = self.guest_helper_types();
         let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
         let schema_graphs = self.schema_graphs.definitions();
 
@@ -1135,6 +1211,10 @@ impl RustBridgeGenerator {
             #languages
 
             #mimetypes
+
+            #units
+
+            #helper_types
         };
 
         Ok(tokens)
@@ -1144,17 +1224,14 @@ impl RustBridgeGenerator {
         let mut factories = Vec::new();
         let mut names = ParameterNaming::new();
         for (_, name) in self.type_naming.types() {
-            if let RustTypeName::Derived(name) = name {
-                names.reserve(name.clone());
-            }
+            names.reserve(name.0.clone());
         }
         let mut index = 0;
         while index < self.stream_items.len() {
             let item = self.stream_items[index].clone();
             let json = serde_json::to_value(&item)?;
             let label = match self.type_naming.type_name_for_type(&item) {
-                Some(RustTypeName::Derived(name)) => name.to_snake_case(),
-                Some(RustTypeName::Remapped(RustRemappedType::Uuid)) => "uuid".to_string(),
+                Some(RustTypeName(name)) => name.to_snake_case(),
                 _ => json["kind"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Missing schema kind"))?
@@ -1192,12 +1269,29 @@ impl RustBridgeGenerator {
         quote! {
             static CONFIG: std::sync::OnceLock<golem_client::bridge::Configuration> = std::sync::OnceLock::new();
 
+            /// Configures the client with the default reconnect window for streaming calls.
             pub fn configure(server: golem_client::bridge::GolemServer, app_name: &str, env_name: &str) {
+                configure_with_reconnect(
+                    server,
+                    app_name,
+                    env_name,
+                    golem_client::bridge::ReconnectPolicy::Within(golem_client::bridge::DEFAULT_RECONNECT_WINDOW),
+                );
+            }
+
+            /// Configures the client with the reconnect policy of its streaming calls.
+            pub fn configure_with_reconnect(
+                server: golem_client::bridge::GolemServer,
+                app_name: &str,
+                env_name: &str,
+                reconnect: golem_client::bridge::ReconnectPolicy,
+            ) {
                 CONFIG
                     .set(golem_client::bridge::Configuration {
                         app_name: app_name.to_string(),
                         env_name: env_name.to_string(),
                         server,
+                        reconnect,
                     })
                     .map_err(|_| ())
                     .expect("Configuration has already been set");
@@ -1207,8 +1301,13 @@ impl RustBridgeGenerator {
 
     fn external_portable_helpers(&self) -> TokenStream {
         let client_name = &self.agent_type.type_name.0;
+        let quantity = Self::external_quantity_type();
         let helper_reexports = [
             "AgentBinary",
+            "AgentText",
+            "Quantity",
+            "QuantityUnit",
+            "QuantityValue",
             "UnstructuredText",
             "UnstructuredBinary",
             "AnyLanguage",
@@ -1236,6 +1335,15 @@ impl RustBridgeGenerator {
                 pub bytes: Vec<u8>,
                 pub mime_type: Option<String>,
             }
+
+            #[derive(Debug, Clone, PartialEq, Eq)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            pub struct AgentText {
+                pub text: String,
+                pub language: Option<String>,
+            }
+
+            #quantity
 
             pub trait AllowedLanguages: std::fmt::Debug + Clone {
                 fn all() -> &'static [&'static str];
@@ -1305,6 +1413,127 @@ impl RustBridgeGenerator {
             }
 
             #(#helper_reexports)*
+        }
+    }
+
+    /// The portable counterpart of the SDK's `Quantity<U>`: the unit marker `U`
+    /// carries the accepted units, and every constructor checks the unit.
+    fn external_quantity_type() -> TokenStream {
+        quote! {
+            pub trait QuantityUnit: 'static {
+                fn base_unit() -> &'static str;
+
+                /// If empty, only the base unit is accepted.
+                fn allowed_suffixes() -> &'static [&'static str] {
+                    &[]
+                }
+            }
+
+            #[derive(Debug, Clone, PartialEq, Eq)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            pub struct QuantityValue {
+                pub mantissa: i64,
+                pub scale: i32,
+                pub unit: String,
+            }
+
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            #[cfg_attr(feature = "serde", serde(try_from = "QuantityValue", into = "QuantityValue", bound = ""))]
+            pub struct Quantity<U: QuantityUnit> {
+                value: QuantityValue,
+                _unit: std::marker::PhantomData<U>,
+            }
+
+            impl<U: QuantityUnit> Quantity<U> {
+                pub fn new(mantissa: i64, scale: i32, unit: impl Into<String>) -> Result<Self, String> {
+                    Self::from_quantity_value(QuantityValue { mantissa, scale, unit: unit.into() })
+                }
+
+                pub fn from_quantity_value(value: QuantityValue) -> Result<Self, String> {
+                    let allowed = U::allowed_suffixes();
+                    let unit_allowed = if allowed.is_empty() {
+                        value.unit == U::base_unit()
+                    } else {
+                        allowed.contains(&value.unit.as_str())
+                    };
+                    if !unit_allowed {
+                        return Err(format!("Quantity unit '{}' is not allowed", value.unit));
+                    }
+                    Ok(Self { value, _unit: std::marker::PhantomData })
+                }
+
+                pub fn as_quantity_value(&self) -> &QuantityValue {
+                    &self.value
+                }
+
+                pub fn into_quantity_value(self) -> QuantityValue {
+                    self.value
+                }
+            }
+
+            impl<U: QuantityUnit> Clone for Quantity<U> {
+                fn clone(&self) -> Self {
+                    Self { value: self.value.clone(), _unit: std::marker::PhantomData }
+                }
+            }
+
+            impl<U: QuantityUnit> std::fmt::Debug for Quantity<U> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.debug_struct("Quantity").field("value", &self.value).finish()
+                }
+            }
+
+            impl<U: QuantityUnit> PartialEq for Quantity<U> {
+                fn eq(&self, other: &Self) -> bool {
+                    self.value == other.value
+                }
+            }
+
+            impl<U: QuantityUnit> Eq for Quantity<U> {}
+
+            impl<U: QuantityUnit> TryFrom<QuantityValue> for Quantity<U> {
+                type Error = String;
+
+                fn try_from(value: QuantityValue) -> Result<Self, String> {
+                    Self::from_quantity_value(value)
+                }
+            }
+
+            impl<U: QuantityUnit> From<Quantity<U>> for QuantityValue {
+                fn from(value: Quantity<U>) -> Self {
+                    value.value
+                }
+            }
+        }
+    }
+
+    /// Bare `text` and `binary` values in guest bridges. The SDK spells them as
+    /// annotated `String` and `Vec<u8>` fields, which drop the language and the
+    /// MIME type, so the bridge carries the whole value as in external bridges.
+    fn guest_helper_types(&self) -> TokenStream {
+        let reexports = ["AgentBinary", "AgentText"]
+            .into_iter()
+            .filter(|name| !self.root_type_name_conflicts(name))
+            .map(|name| {
+                let ident = Ident::new(name, Span::call_site());
+                quote! { pub use __golem_bridge_types::#ident; }
+            });
+        quote! {
+            pub mod __golem_bridge_types {
+                #[derive(Debug, Clone, PartialEq, Eq)]
+                pub struct AgentBinary {
+                    pub bytes: Vec<u8>,
+                    pub mime_type: Option<String>,
+                }
+
+                #[derive(Debug, Clone, PartialEq, Eq)]
+                pub struct AgentText {
+                    pub text: String,
+                    pub language: Option<String>,
+                }
+            }
+
+            #(#reexports)*
         }
     }
 
@@ -1622,15 +1851,14 @@ impl RustBridgeGenerator {
                     idempotency_key: uuid::Uuid::new_v4().to_string(),
                     input_graph: __input_graph,
                     output_graph: #output_graph,
+                    reconnect: config.reconnect,
                 };
                 golem_client::invocation_session::invoke_generated(
                     request,
                     method_parameters,
                     __stream_context,
                     #decode,
-                ).await.map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                    message: __error.to_string(),
-                })
+                ).await.map_err(crate::__golem_bridge_runtime::ClientError::from)
             }
         })
     }
@@ -2759,10 +2987,7 @@ impl RustBridgeGenerator {
         let mut client_definitions = Vec::new();
         let mut codecs = Vec::new();
 
-        for (typ, name) in &types {
-            let RustTypeName::Derived(name_str) = name else {
-                continue;
-            };
+        for (typ, RustTypeName(name_str)) in &types {
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
             let streaming = contains_stream_in_graph(&self.agent_type.schema, &resolved);
@@ -2836,10 +3061,7 @@ impl RustBridgeGenerator {
             .collect();
 
         let mut defs = Vec::new();
-        for (typ, name) in &types {
-            let RustTypeName::Derived(name_str) = name else {
-                continue;
-            };
+        for (typ, RustTypeName(name_str)) in &types {
             let name_ident = Ident::new(name_str, Span::call_site());
             let resolved = self.resolve_ref_owned(typ);
 
@@ -3251,7 +3473,10 @@ impl RustBridgeGenerator {
                             });
                         }
                         None => arms.push(quote! {
-                            #idx_u32 => Ok(#name::#case_ident),
+                            #idx_u32 => match payload {
+                                None => Ok(#name::#case_ident),
+                                Some(_) => Err(format!("Unexpected payload for variant case {}", #idx_u32)),
+                            },
                         }),
                     }
                 }
@@ -3367,47 +3592,6 @@ impl RustBridgeGenerator {
         }
     }
 
-    fn remapped_type_tokens(&self, remapped: &RustRemappedType) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => self.uuid_type_tokens(),
-        }
-    }
-
-    /// The `uuid.Uuid` builtin travels as its schema record of two `u64` halves.
-    fn remapped_encode_expr(remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => quote! {{
-                let (__high, __low) = (#val).as_u64_pair();
-                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record {
-                    fields: vec![
-                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
-                        crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
-                    ],
-                })
-            }},
-        }
-    }
-
-    fn remapped_decode_expr(&self, remapped: &RustRemappedType, val: &TokenStream) -> TokenStream {
-        match remapped {
-            RustRemappedType::Uuid => {
-                let uuid = self.uuid_type_tokens();
-                quote! {
-                    match #val {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields } => match fields.as_slice() {
-                            [
-                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__high),
-                                crate::__golem_bridge_runtime::schema::SchemaValue::U64(__low),
-                            ] => Ok(#uuid::from_u64_pair(*__high, *__low)),
-                            __other => Err(format!("Expected uuid record of two u64 halves, got {:?}", __other)),
-                        },
-                        __other => Err(format!("Expected uuid record value, got {:?}", __other)),
-                    }
-                }
-            }
-        }
-    }
-
     fn emit_encode_expr_mode(
         &mut self,
         val: TokenStream,
@@ -3416,12 +3600,7 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(RustTypeName::Remapped(remapped)) =
-            self.type_naming.type_name_for_type(typ).cloned()
-        {
-            Self::remapped_encode_expr(&remapped, &val)
-        } else if let Some(RustTypeName::Derived(n)) =
-            self.type_naming.type_name_for_type(typ).cloned()
+        let inner = if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned()
         {
             let encode_fn = Ident::new(
                 &if streaming {
@@ -3483,12 +3662,7 @@ impl RustBridgeGenerator {
         depth: usize,
         streaming: bool,
     ) -> anyhow::Result<TokenStream> {
-        let inner = if let Some(RustTypeName::Remapped(remapped)) =
-            self.type_naming.type_name_for_type(typ).cloned()
-        {
-            self.remapped_decode_expr(&remapped, &val)
-        } else if let Some(RustTypeName::Derived(n)) =
-            self.type_naming.type_name_for_type(typ).cloned()
+        let inner = if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned()
         {
             let decode_fn = Ident::new(
                 &if streaming {
@@ -3716,41 +3890,62 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } => {
-                bail!(
-                    "Bare text rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text variant (type = {typ:?})"
-                )
-            }
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
-                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Binary(
-                    crate::__golem_bridge_runtime::schema::BinaryValuePayload {
-                        bytes: #val.bytes,
-                        mime_type: #val.mime_type,
+            SchemaType::Text { .. } => quote! {{
+                let __text = #val;
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Text(
+                    crate::__golem_bridge_runtime::schema::TextValuePayload {
+                        text: __text.text,
+                        language: __text.language,
                     }
                 ))
-            },
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            }},
+            SchemaType::Binary { .. } => quote! {{
+                let __binary = #val;
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Binary(
+                    crate::__golem_bridge_runtime::schema::BinaryValuePayload {
+                        bytes: __binary.bytes,
+                        mime_type: __binary.mime_type,
+                    }
+                ))
+            }},
+            SchemaType::Quantity { spec, .. } => {
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {{
+                    let __q = (#val).into_quantity_value();
+                    if #allowed {
+                        Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Quantity(
+                            crate::__golem_bridge_runtime::schema::QuantityValue {
+                                mantissa: __q.mantissa,
+                                scale: __q.scale,
+                                unit: __q.unit,
+                            }
+                        ))
+                    } else {
+                        Err(#message)
+                    }
+                }}
             }
             SchemaType::Path { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Path { path: #val }) }
             }
             SchemaType::Url { .. } => {
-                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: #val }) }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Url { url: String::from(#val) }) }
             }
             SchemaType::Uuid { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(#val)) }
             }
             SchemaType::Datetime { .. } => {
                 quote! {
-                    chrono::DateTime::parse_from_rfc3339(&#val)
-                        .map(|__dt| crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value: __dt.with_timezone(&chrono::Utc) })
-                        .map_err(|__err| format!("Invalid RFC3339 datetime: {__err}"))
+                    crate::__golem_bridge_runtime::check_datetime(&#val)
+                        .map(|__dt| crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value: __dt })
                 }
             }
             SchemaType::Duration { .. } => {
-                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Duration(crate::__golem_bridge_runtime::schema::DurationValuePayload { nanoseconds: #val })) }
+                quote! {
+                    crate::__golem_bridge_runtime::duration_nanoseconds(&#val)
+                        .map(|__nanoseconds| crate::__golem_bridge_runtime::schema::SchemaValue::Duration(crate::__golem_bridge_runtime::schema::DurationValuePayload { nanoseconds: __nanoseconds }))
+                }
             }
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 quote! { Ok(<golem_rust::secrets::GuestSecretHandle as golem_rust::IntoSchema>::to_value(&#val)) }
@@ -3772,8 +3967,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during encoding")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -4013,7 +4207,8 @@ impl RustBridgeGenerator {
                         }
                     }
                     None => quote! {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { .. }) => Ok(Ok(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: None }) => Ok(Ok(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: Some(_) }) => Err("Unexpected ok value".to_string()),
                     },
                 };
                 let err_arm = match spec.err.as_deref() {
@@ -4033,7 +4228,8 @@ impl RustBridgeGenerator {
                         }
                     }
                     None => quote! {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { .. }) => Ok(Err(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: None }) => Ok(Err(())),
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: Some(_) }) => Err("Unexpected err value".to_string()),
                     },
                 };
                 quote! {
@@ -4044,13 +4240,18 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } => {
-                bail!(
-                    "Bare text rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text variant (type = {typ:?})"
-                )
-            }
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
+            SchemaType::Text { .. } => quote! {
+                match #val {
+                    crate::__golem_bridge_runtime::schema::SchemaValue::Text(__text) => {
+                        Ok(crate::__golem_bridge_types::AgentText {
+                            text: __text.text,
+                            language: __text.language,
+                        })
+                    }
+                    __other => Err(format!("Expected text value, got {:?}", __other)),
+                }
+            },
+            SchemaType::Binary { .. } => quote! {
                 match #val {
                     crate::__golem_bridge_runtime::schema::SchemaValue::Binary(__binary) => {
                         Ok(crate::__golem_bridge_types::AgentBinary {
@@ -4061,23 +4262,37 @@ impl RustBridgeGenerator {
                     __other => Err(format!("Expected binary value, got {:?}", __other)),
                 }
             },
-            SchemaType::Binary { .. } => {
-                bail!("Bare binary rich scalars have no guest Rust bridge surface")
+            SchemaType::Quantity { spec, .. } => {
+                let ty = self.quantity_type(spec);
+                let (allowed, message) =
+                    Self::quantity_unit_check(spec, quote! { __q.unit.as_str() });
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Quantity(__q) => {
+                            if #allowed {
+                                <#ty>::new(__q.mantissa, __q.scale, __q.unit).map_err(|__error| __error.to_string())
+                            } else {
+                                Err(#message)
+                            }
+                        }
+                        __other => Err(format!("Expected quantity value, got {:?}", __other)),
+                    }
+                }
             }
             SchemaType::Path { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
             },
             SchemaType::Url { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => Ok(url), __other => Err(format!("Expected url value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Url { url } => url::Url::parse(&url).map_err(|__error| format!("Invalid url {url:?}: {__error}")), __other => Err(format!("Expected url value, got {:?}", __other)) }
             },
             SchemaType::Uuid { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Uuid(uuid) => Ok(uuid), __other => Err(format!("Expected UUID value, got {:?}", __other)) }
             },
             SchemaType::Datetime { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => Ok(value.to_rfc3339()), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => crate::__golem_bridge_runtime::check_datetime(&value), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
             },
             SchemaType::Duration { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(__p.nanoseconds), __other => Err(format!("Expected duration value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(chrono::TimeDelta::nanoseconds(__p.nanoseconds)), __other => Err(format!("Expected duration value, got {:?}", __other)) }
             },
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => quote! {
                 <golem_rust::secrets::GuestSecretHandle as golem_rust::FromSchema>::from_value(&#val)
@@ -4104,8 +4319,7 @@ impl RustBridgeGenerator {
             | SchemaType::Union { .. } => {
                 bail!("Expected a generated type name for {typ:?} during decoding")
             }
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => {
@@ -4166,11 +4380,7 @@ impl RustBridgeGenerator {
         typ: &SchemaType,
         box_recursive: bool,
     ) -> anyhow::Result<TokenStream> {
-        if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
-            let n = match name {
-                RustTypeName::Remapped(remapped) => return Ok(self.remapped_type_tokens(&remapped)),
-                RustTypeName::Derived(n) => n,
-            };
+        if let Some(RustTypeName(n)) = self.type_naming.type_name_for_type(typ).cloned() {
             let ident = Ident::new(&n, Span::call_site());
             if box_recursive && self.type_naming.is_recursive_ref(typ) {
                 return Ok(quote! { Box<#ident> });
@@ -4220,6 +4430,9 @@ impl RustBridgeGenerator {
                 let inner = self.type_reference(element, false)?;
                 Ok(quote! { Vec<#inner> })
             }
+            // A `map` value is a list of key-value pairs. The Vec keeps the pairs as they
+            // arrive, order included, works for every key kind (float keys too), and lets
+            // the caller collect into whichever map type it wants.
             SchemaType::Map { key, value, .. } => {
                 let k = self.type_reference(key, false)?;
                 let v = self.type_reference(value, false)?;
@@ -4247,22 +4460,17 @@ impl RustBridgeGenerator {
                 };
                 Ok(quote! { Result<#ok, #err> })
             }
-            SchemaType::Text { .. } => Err(anyhow!(
-                "Bare text rich scalars have no Rust bridge type; \
-                 wrap them in the unstructured text variant ({typ:?})"
-            )),
-            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => {
-                Ok(quote! { crate::__golem_bridge_types::AgentBinary })
-            }
-            SchemaType::Binary { .. } => Err(anyhow!(
-                "Bare binary rich scalars have no guest Rust bridge type; \
-                 wrap them in the unstructured binary variant ({typ:?})"
-            )),
+            SchemaType::Text { .. } => Ok(quote! { crate::__golem_bridge_types::AgentText }),
+            SchemaType::Binary { .. } => Ok(quote! { crate::__golem_bridge_types::AgentBinary }),
+            SchemaType::Quantity { spec, .. } => Ok(self.quantity_type(spec)),
+            // A `path` value is a path in the agent's file system, so a caller-side `PathBuf`
+            // would invite local file-system calls on the wrong machine; a `String` also
+            // cannot fail to encode.
             SchemaType::Path { .. } => Ok(quote! { String }),
-            SchemaType::Url { .. } => Ok(quote! { String }),
+            SchemaType::Url { .. } => Ok(quote! { url::Url }),
             SchemaType::Uuid { .. } => Ok(self.uuid_type_tokens()),
-            SchemaType::Datetime { .. } => Ok(quote! { String }),
-            SchemaType::Duration { .. } => Ok(quote! { i64 }),
+            SchemaType::Datetime { .. } => Ok(quote! { chrono::DateTime<chrono::Utc> }),
+            SchemaType::Duration { .. } => Ok(quote! { chrono::TimeDelta }),
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 Ok(quote! { golem_rust::secrets::GuestSecretHandle })
             }
@@ -4280,8 +4488,7 @@ impl RustBridgeGenerator {
             | SchemaType::Flags { .. }
             | SchemaType::Record { .. }
             | SchemaType::Union { .. } => Err(anyhow!("Missing type name for {typ:?}")),
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. } => Err(anyhow!(
@@ -4386,6 +4593,109 @@ impl RustBridgeGenerator {
         };
         let ident = Ident::new(&name, Span::call_site());
         quote! { crate::mimetypes::#ident }
+    }
+
+    fn get_quantity_unit(&mut self, spec: &QuantitySpec) -> TokenStream {
+        let key = (spec.base_unit.clone(), spec.allowed_suffixes.clone());
+        let name = if let Some((_, name)) = self
+            .generated_quantity_units
+            .iter()
+            .find(|(k, _)| *k == key)
+        {
+            name.clone()
+        } else {
+            let base = format!(
+                "Unit{}",
+                spec.base_unit
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect::<String>()
+                    .to_upper_camel_case()
+            );
+            let mut name = base.clone();
+            let mut index = 1;
+            while self
+                .generated_quantity_units
+                .iter()
+                .any(|(_, n)| *n == name)
+            {
+                name = format!("{base}{index}");
+                index += 1;
+            }
+            self.generated_quantity_units.push((key, name.clone()));
+            name
+        };
+        let ident = Ident::new(&name, Span::call_site());
+        quote! { crate::units::#ident }
+    }
+
+    fn quantity_type(&mut self, spec: &QuantitySpec) -> TokenStream {
+        let unit = self.get_quantity_unit(spec);
+        match self.mode {
+            RustBridgeMode::ExternalRest => {
+                quote! { crate::__golem_bridge_types::Quantity<#unit> }
+            }
+            RustBridgeMode::GuestWasmRpc => quote! { golem_rust::Quantity<#unit> },
+        }
+    }
+
+    /// Boolean expression telling whether `unit` (a `&str`) is one of the units
+    /// the schema accepts, and the message for a unit it does not accept.
+    fn quantity_unit_check(spec: &QuantitySpec, unit: TokenStream) -> (TokenStream, TokenStream) {
+        let allowed = if spec.allowed_suffixes.is_empty() {
+            vec![spec.base_unit.clone()]
+        } else {
+            spec.allowed_suffixes.clone()
+        };
+        let expected = allowed.join(", ");
+        (
+            quote! { [#(#allowed),*].contains(&#unit) },
+            quote! { format!("Quantity unit '{}' is not allowed; expected one of: {}", #unit, #expected) },
+        )
+    }
+
+    fn units_module(&self) -> TokenStream {
+        if self.generated_quantity_units.is_empty() {
+            return quote! {};
+        }
+        let crate_name = self.package_crate_name();
+        let markers = self
+            .generated_quantity_units
+            .iter()
+            .map(|((base, suffixes), name)| {
+                let ident = Ident::new(name, Span::call_site());
+                let doc = format!("The unit of quantities measured in `{base}`.");
+                let unit_impl = match self.mode {
+                    RustBridgeMode::ExternalRest => quote! {
+                        impl crate::__golem_bridge_types::QuantityUnit for #ident {
+                            fn base_unit() -> &'static str { #base }
+                            fn allowed_suffixes() -> &'static [&'static str] { &[#(#suffixes),*] }
+                        }
+                    },
+                    RustBridgeMode::GuestWasmRpc => {
+                        let type_id = format!("{crate_name}.units.{name}");
+                        quote! {
+                            impl golem_rust::QuantityUnit for #ident {
+                                fn type_id() -> golem_rust::schema::TypeId { golem_rust::schema::TypeId::new(#type_id) }
+                                fn base_unit() -> &'static str { #base }
+                                fn allowed_suffixes() -> &'static [&'static str] { &[#(#suffixes),*] }
+                            }
+                        }
+                    }
+                };
+                quote! {
+                    #[doc = #doc]
+                    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                    pub struct #ident;
+
+                    #unit_impl
+                }
+            });
+        quote! {
+            pub mod units {
+                #(#markers)*
+            }
+        }
     }
 
     fn languages_module(&self) -> TokenStream {
@@ -4575,44 +4885,11 @@ impl RustBridgeGenerator {
 
     fn root_type_name_conflicts(&self, name: &str) -> bool {
         self.agent_type.type_name.0 == name
-            || self.type_naming.types().any(|(_, type_name)| {
-                matches!(type_name, RustTypeName::Derived(type_name) if type_name == name)
-            })
+            || self
+                .type_naming
+                .types()
+                .any(|(_, type_name)| type_name.0 == name)
     }
-}
-
-/// A remapped name replaces the generated definition, so its codecs assume the
-/// exact schema body of the builtin it stands for.
-fn validate_remapped_types(type_naming: &TypeNaming<RustTypeName>) -> anyhow::Result<()> {
-    for (typ, name) in type_naming.types() {
-        let RustTypeName::Remapped(RustRemappedType::Uuid) = name else {
-            continue;
-        };
-        let SchemaType::Ref { id, .. } = typ else {
-            bail!("Remapped uuid type is not a reference: {typ:?}");
-        };
-        let body = type_naming
-            .graph()
-            .lookup(id)
-            .map(|def| &def.body)
-            .ok_or_else(|| anyhow!("Missing definition for {}", id.0))?;
-        let is_uuid_record = matches!(
-            body,
-            SchemaType::Record { fields, .. }
-                if fields.len() == 2
-                    && fields[0].name == "high-bits"
-                    && matches!(fields[0].body, SchemaType::U64 { .. })
-                    && fields[1].name == "low-bits"
-                    && matches!(fields[1].body, SchemaType::U64 { .. })
-        );
-        if !is_uuid_record {
-            bail!(
-                "Type {} must be a record of the u64 fields high-bits and low-bits, got {body:?}",
-                id.0
-            );
-        }
-    }
-    Ok(())
 }
 
 // TODO: use published version when available
@@ -4742,23 +5019,6 @@ mod tests {
     }
 
     #[test]
-    fn external_runtime_prelude_preserves_rest_runtime_paths() {
-        let mut generator =
-            RustBridgeGenerator::new(minimal_agent_type("AlphaAgent"), Utf8Path::new("."), true)
-                .unwrap();
-
-        let rendered = generator.generate_lib_rs_tokens().unwrap().to_string();
-
-        assert!(rendered.contains("pub use golem_client :: bridge :: ClientError"));
-        assert!(rendered.contains("pub mod __golem_bridge_runtime"));
-        assert!(rendered.contains("pub use golem_client :: bridge :: GolemServer"));
-        assert!(rendered.contains("pub use golem_common :: schema :: *"));
-        assert!(rendered.contains("pub use golem_common :: agentic :: *"));
-        assert!(rendered.contains("golem_client :: api :: AgentClient :: create_agent"));
-        assert!(rendered.contains("reqwest_middleware :: ClientWithMiddleware"));
-    }
-
-    #[test]
     fn external_generation_preserves_rest_cargo_dependencies_and_api_shape() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
@@ -4783,6 +5043,7 @@ mod tests {
             "reqwest",
             "reqwest-middleware",
             "serde_json",
+            "url",
             "uuid",
         ] {
             assert!(
@@ -4792,7 +5053,11 @@ mod tests {
         }
         assert!(cargo_toml.contains("[features]"));
         assert!(cargo_toml.contains("default = [\"client\"]"));
-        assert!(cargo_toml.contains("serde = [\"dep:serde\", \"uuid/serde\"]"));
+        assert!(
+            cargo_toml.contains(
+                "serde = [\"dep:serde\", \"chrono/serde\", \"url/serde\", \"uuid/serde\"]"
+            )
+        );
         assert!(cargo_toml.contains("uuid = \"1.18.1\""));
         assert!(cargo_toml.contains("\"uuid/v4\""));
         assert!(cargo_toml.contains("optional = true"));

@@ -3,7 +3,7 @@ use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::bindings::wasi::config::store as wasi_config;
-use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
+use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, OutgoingValue, get, set};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
@@ -12,7 +12,9 @@ use golem_rust::{
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod gc_timing;
 mod http_router;
+mod input_gc;
 
 fn encode_single_parameter<T: IntoSchema>(
     value: T,
@@ -183,6 +185,42 @@ impl ScheduledInvocationServer for ScheduledInvocationServerImpl {
     }
 }
 
+/// Schedules `inc_global_by(1)` on itself from its constructor, at `seconds` since the epoch
+#[agent_definition]
+pub trait ConstructorSelfScheduler {
+    fn new(name: String, seconds: u64) -> Self;
+    fn inc_global_by(&mut self, value: u64);
+    fn get_global_value(&self) -> u64;
+}
+
+struct ConstructorSelfSchedulerImpl {
+    global: u64,
+}
+
+#[agent_implementation]
+impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
+    fn new(name: String, seconds: u64) -> Self {
+        let mut this = ConstructorSelfSchedulerClient::get(name, seconds);
+        this.schedule_inc_global_by(
+            1,
+            Datetime {
+                seconds: seconds as i64,
+                nanoseconds: 0,
+            },
+        )
+        .expect("failed to schedule an invocation on itself from the constructor");
+        Self { global: 0 }
+    }
+
+    fn inc_global_by(&mut self, value: u64) {
+        self.global += value;
+    }
+
+    fn get_global_value(&self) -> u64 {
+        self.global
+    }
+}
+
 #[agent_definition]
 pub trait ScheduledInvocationClient {
     fn new(name: String) -> Self;
@@ -196,6 +234,20 @@ pub trait ScheduledInvocationClient {
     /// Schedule inc_global_by on self 200ms in the future
     fn test3(&mut self);
 
+    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
+    fn cancel_scheduled(&self);
+
+    /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps its cancellation token
+    fn schedule_ephemeral_at(
+        &mut self,
+        target_name: String,
+        hold_ms: u64,
+        seconds: u64,
+        nanoseconds: u32,
+    );
+    /// Constructor and `inc` effect counts of the ephemeral targets named `target_name`
+    fn read_effects(&self, target_name: String) -> (u64, u64);
+
     fn inc_global_by(&mut self, value: u64);
     fn get_global_value(&self) -> u64;
 }
@@ -203,6 +255,7 @@ pub trait ScheduledInvocationClient {
 struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
+    token: Option<golem_rust::golem_agentic::golem::agent::host::CancellationToken>,
 }
 
 #[agent_implementation]
@@ -211,6 +264,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         Self {
             _name: name,
             global: 0,
+            token: None,
         }
     }
 
@@ -239,12 +293,113 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             .expect("failed to schedule invocation");
     }
 
+    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
+        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
+        self.token = Some(
+            server
+                .schedule_cancelable_inc_global_by(
+                    17,
+                    Datetime {
+                        seconds: seconds as i64,
+                        nanoseconds,
+                    },
+                )
+                .expect("failed to schedule cancelable invocation"),
+        );
+    }
+
+    fn cancel_scheduled(&self) {
+        self.token
+            .as_ref()
+            .expect("no scheduled invocation")
+            .cancel();
+    }
+
+    fn schedule_ephemeral_at(
+        &mut self,
+        target_name: String,
+        hold_ms: u64,
+        seconds: u64,
+        nanoseconds: u32,
+    ) {
+        let target = ScheduledEphemeralTargetClient::new_phantom(target_name);
+        self.token = Some(
+            target
+                .schedule_cancelable_inc(
+                    hold_ms,
+                    Datetime {
+                        seconds: seconds as i64,
+                        nanoseconds,
+                    },
+                )
+                .expect("failed to schedule cancelable ephemeral invocation")
+                .cancellation_token,
+        );
+    }
+
+    fn read_effects(&self, target_name: String) -> (u64, u64) {
+        (
+            read_effect(&format!("constructed:{target_name}")),
+            read_effect(&format!("inc:{target_name}")),
+        )
+    }
+
     fn inc_global_by(&mut self, value: u64) {
         self.global += value;
     }
 
     fn get_global_value(&self) -> u64 {
         self.global
+    }
+}
+
+const SCHEDULED_EPHEMERAL_EFFECTS: &str = "scheduled-ephemeral-effects";
+
+fn read_effect(key: &str) -> u64 {
+    let bucket = Bucket::open_bucket(SCHEDULED_EPHEMERAL_EFFECTS).unwrap();
+    get(&bucket, key)
+        .unwrap()
+        .map(|value| {
+            String::from_utf8(value.incoming_value_consume_sync().unwrap())
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .unwrap_or(0)
+}
+
+fn record_effect(key: &str) {
+    let next = read_effect(key) + 1;
+    let bucket = Bucket::open_bucket(SCHEDULED_EPHEMERAL_EFFECTS).unwrap();
+    let value = OutgoingValue::new_outgoing_value();
+    value
+        .outgoing_value_write_body_sync(next.to_string().as_bytes())
+        .unwrap();
+    set(&bucket, key, &value).unwrap();
+}
+
+/// Counts its constructor and `inc` runs in key-value storage, which survives the agent.
+#[agent_definition(mode = "ephemeral")]
+pub trait ScheduledEphemeralTarget {
+    fn new(name: String) -> Self;
+    /// Counts the run, then waits `hold_ms` before returning
+    async fn inc(&self, hold_ms: u64);
+}
+
+struct ScheduledEphemeralTargetImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl ScheduledEphemeralTarget for ScheduledEphemeralTargetImpl {
+    fn new(name: String) -> Self {
+        record_effect(&format!("constructed:{name}"));
+        Self { name }
+    }
+
+    async fn inc(&self, hold_ms: u64) {
+        record_effect(&format!("inc:{}", self.name));
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(hold_ms * 1_000_000).await;
     }
 }
 
@@ -906,6 +1061,7 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32>;
     async fn benchmark_producer(
         &self,
         chunk_count: u32,
@@ -956,6 +1112,37 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32> {
+        let input = agent_stream(vec![2, 7, 13]);
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "EphemeralStreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = golem_rust::encode_schema_value_async(&SchemaValue::Record {
+                fields: vec![input.to_value()],
+            })
+            .await
+            .unwrap();
+            let result = rpc.invoke_and_await("transform", input, None).unwrap();
+            AgentStream::<u32>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            EphemeralStreamingRpcTargetClient::new_phantom(self.name.clone())
+                .transform(input)
+                .await
+                .value
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to collect ephemeral RPC stream")
     }
 
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
@@ -1665,6 +1852,11 @@ pub trait CancelTester {
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
+    /// Activates the RPC target with `get_value`, writes to stdout, then increments the
+    /// counter by 1 with `mode` (`await` or `invoke`), so a hint entry directly
+    /// precedes the increment's `Start`.
+    fn inc_after_stdout(&self, counter_name: String, mode: String);
+
     async fn await_counter(
         &self,
         counter_name: String,
@@ -1908,6 +2100,29 @@ impl CancelTester for CancelTesterImpl {
         let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
         rpc.invoke_and_await("inc_by", input, None).unwrap();
+    }
+
+    fn inc_after_stdout(&self, counter_name: String, mode: String) {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC input");
+        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        println!("incrementing with {mode}");
+        let input = encode_single_parameter(1u64);
+        match mode.as_str() {
+            "await" => {
+                rpc.invoke_and_await("inc_by", input, None).unwrap();
+            }
+            "invoke" => {
+                rpc.invoke("inc_by", input, None).unwrap();
+            }
+            _ => panic!("unknown RPC mode: {mode}"),
+        }
     }
 
     async fn await_counter(

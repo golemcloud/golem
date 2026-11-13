@@ -11,7 +11,7 @@ A Golem agent can act as its own scheduler by calling `schedule_` on its own cli
 
 ## Basic Pattern
 
-The agent schedules its own method to run again after a delay:
+The agent schedules its own method to run again after a delay. Import `"golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock` in `moon.pkg`. Scoped helpers and all their callers are async; the actual schedule enqueue methods are synchronous. The work helpers in these fragments must also be async if they perform async I/O:
 
 ```moonbit
 #derive.agent
@@ -24,19 +24,19 @@ fn PollerAgent::new(name : String) -> PollerAgent {
 }
 
 /// Kicks off the first poll
-pub fn PollerAgent::start(self : Self) -> Unit {
+pub async fn PollerAgent::start(self : Self) -> Unit {
   self.poll()
 }
 
 /// Does work and schedules itself to run again
-pub fn PollerAgent::poll(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   // 1. Do the recurring work
   do_work()
 
   // 2. Schedule the next run (60 seconds from now)
-  PollerAgentClient::scoped(self.name, fn(client) raise @common.AgentError {
-    let now = @wallClock.now()
-    let scheduled_at = @wallClock.Datetime::{
+  PollerAgentClient::scoped(self.name, async fn(client) {
+    let now = @systemClock.now()
+    let scheduled_at = @systemClock.Instant::{
       seconds: now.seconds + 60,
       nanoseconds: 0,
     }
@@ -46,6 +46,9 @@ pub fn PollerAgent::poll(self : Self) -> Unit {
 ```
 
 ## Exponential Backoff
+
+Call `start` only once per agent. These basic recipes do not support restart or
+repeated start: another start creates a second scheduling chain.
 
 Increase the delay on repeated failures, reset on success:
 
@@ -62,7 +65,7 @@ fn PollerAgent::new(name : String) -> PollerAgent {
   { name, consecutive_failures: 0, base_interval_secs: 60, max_interval_secs: 3600 }
 }
 
-pub fn PollerAgent::poll(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   let success = try_work()
 
   let delay = if success {
@@ -75,10 +78,10 @@ pub fn PollerAgent::poll(self : Self) -> Unit {
     if backoff > self.max_interval_secs { self.max_interval_secs } else { backoff }
   }
 
-  PollerAgentClient::scoped(self.name, fn(client) raise @common.AgentError {
-    let now = @wallClock.now()
-    client.schedule_poll(@wallClock.Datetime::{
-      seconds: now.seconds + delay.to_uint64(),
+  PollerAgentClient::scoped(self.name, async fn(client) {
+    let now = @systemClock.now()
+    client.schedule_poll(@systemClock.Instant::{
+      seconds: now.seconds + delay.to_int64(),
       nanoseconds: 0,
     })
   })
@@ -89,7 +92,7 @@ pub fn PollerAgent::poll(self : Self) -> Unit {
 
 ### Cancellation with CancellationToken
 
-Every generated client has `schedule_cancelable_{method}` variants that return a `CancellationToken`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+Durable generated clients have `schedule_cancelable_{method}` variants for methods with recursively stream-free inputs and outputs. They return a `CancellationToken`; ephemeral clients return a receipt containing the token and metadata. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
 
 ```moonbit
 #derive.agent
@@ -103,17 +106,21 @@ fn PollerAgent::new(name : String) -> PollerAgent {
   { name, cancelled: false, pending_token: None }
 }
 
-pub fn PollerAgent::poll(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   if self.cancelled {
     return
   }
   do_work()
-  PollerAgentClient::scoped(self.name, fn(client) raise @common.AgentError {
-    let now = @wallClock.now()
-    let token = client.schedule_cancelable_poll(@wallClock.Datetime::{
+  PollerAgentClient::scoped(self.name, async fn(client) {
+    let now = @systemClock.now()
+    let token = client.schedule_cancelable_poll(@systemClock.Instant::{
       seconds: now.seconds + 60,
       nanoseconds: 0,
     })
+    match self.pending_token {
+      Some(previous) => previous.drop()
+      None => ()
+    }
     self.pending_token = Some(token)
   })
 }
@@ -123,6 +130,7 @@ pub fn PollerAgent::cancel(self : Self) -> Unit {
   match self.pending_token {
     Some(token) => {
       token.cancel()
+      token.drop()
       self.pending_token = None
     }
     None => ()
@@ -130,14 +138,16 @@ pub fn PollerAgent::cancel(self : Self) -> Unit {
 }
 ```
 
-Note: If you don't cancel the token, call `.drop()` on it to release the resource.
+`cancel()` borrows the token; always drop it afterward. Drop a previous handle
+before replacing it even if its invocation has already fired. This resource-bearing
+state is not snapshot-serializable; do not include the token in a snapshot.
 
 ### Cancellation via State Flag
 
-For simpler cases, just use a boolean flag — the next scheduled `poll` checks it and exits early:
+For simpler cases, use a boolean flag — the next scheduled `poll` checks it and exits early. Cancellation is permanent: never reset the flag or restart this chain while an old tick may still be pending:
 
 ```moonbit
-pub fn PollerAgent::poll(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   if self.cancelled {
     return
   }
@@ -169,9 +179,11 @@ golem agent cancel-invocation 'PollerAgent("my-poller")' 'poll-next'
 Check an external API or queue for new work at regular intervals:
 
 ```moonbit
-pub fn PollerAgent::poll(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   let items = fetch_pending_items()
-  items.each(fn(item) { process(item) })
+  for item in items {
+    process(item)
+  }
   self.schedule_next(60)
 }
 ```
@@ -181,7 +193,7 @@ pub fn PollerAgent::poll(self : Self) -> Unit {
 Remove expired data or stale resources on a schedule:
 
 ```moonbit
-pub fn PollerAgent::cleanup(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   self.entries = self.entries.filter(fn(e) { !e.is_expired() })
   self.schedule_next(3600) // run hourly
 }
@@ -192,7 +204,7 @@ pub fn PollerAgent::cleanup(self : Self) -> Unit {
 Periodically notify an external service that the agent is alive:
 
 ```moonbit
-pub fn PollerAgent::heartbeat(self : Self) -> Unit {
+pub async fn PollerAgent::poll(self : Self) -> Unit {
   send_heartbeat(self.service_url)
   self.schedule_next(30) // every 30s
 }
@@ -203,10 +215,10 @@ pub fn PollerAgent::heartbeat(self : Self) -> Unit {
 Extract the scheduling logic into a helper to keep methods clean:
 
 ```moonbit
-fn PollerAgent::schedule_next(self : Self, delay_secs : UInt64) -> Unit {
-  PollerAgentClient::scoped(self.name, fn(client) raise @common.AgentError {
-    let now = @wallClock.now()
-    client.schedule_poll(@wallClock.Datetime::{
+async fn PollerAgent::schedule_next(self : Self, delay_secs : Int64) -> Unit {
+  PollerAgentClient::scoped(self.name, async fn(client) {
+    let now = @systemClock.now()
+    client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + delay_secs,
       nanoseconds: 0,
     })
@@ -218,7 +230,7 @@ fn PollerAgent::schedule_next(self : Self, delay_secs : UInt64) -> Unit {
 
 - The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
 - Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Each `schedule_` call is a fire-and-forget enqueue; the current invocation completes immediately
+- Each `schedule_` call is a synchronous fire-and-forget enqueue; the current invocation continues and completes when its method returns
 - Use a state flag to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
 
@@ -227,3 +239,9 @@ fn PollerAgent::schedule_next(self : Self, delay_secs : UInt64) -> Unit {
 Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
 
 **You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-moonbit`](../golem-custom-snapshot-moonbit/SKILL.md) for the `#derive.agent(snapshotting="every_n(N)")` attribute and the `Snapshottable` trait.
+
+For snapshots, use the state-flag recipe with serializable state, not the
+`pending_token` field. The cleanup and heartbeat snippets are alternative `poll`
+bodies and therefore use the same `schedule_next` helper. For restart support,
+store a serializable generation counter and pass it to every scheduled tick;
+reject ticks from an older generation before doing work or scheduling again.

@@ -75,9 +75,7 @@ impl<'a> InterruptSources<'a> {
                 tokio::select! {
                     biased;
                     interrupt = interrupt_signal => interrupt,
-                    _ = cancellation.cancelled() => {
-                        InterruptKind::Interrupt(Timestamp::now_utc())
-                    }
+                    _ = cancellation.cancelled() => InterruptKind::EntityCancellation,
                 }
             }),
             None => interrupt_signal,

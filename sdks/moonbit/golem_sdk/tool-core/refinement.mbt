@@ -64,8 +64,8 @@ fn refinement_root(
 pub fn refine_text(
   graph : @model.SchemaGraph,
   regex : String?,
-  min_length : UInt?,
-  max_length : UInt?,
+  min_length : UInt32?,
+  max_length : UInt32?,
 ) -> @model.SchemaGraph raise ToolBuildError {
   let root = refinement_root(graph, "text")
   let current : @types.TextRestrictions = match root.body {
@@ -99,7 +99,7 @@ pub fn refine_path(
   direction : @types.PathDirection?,
   kind : @types.PathKind?,
   mime_types : Array[String]?,
-  extensions? : Array[String]? = None,
+  extensions~ : Array[String]? = None,
 ) -> @model.SchemaGraph raise ToolBuildError {
   let root = refinement_root(graph, "path")
   let spec = match root.body {

@@ -36,6 +36,10 @@ impl RdbmsType for PostgresType {
     type DbColumn = types::DbColumn;
     type DbValue = types::DbValue;
 
+    fn is_builtin_text_parameter(value: &Self::DbValue) -> bool {
+        matches!(value, types::DbValue::Text(_))
+    }
+
     fn durability_connection_interface() -> &'static str {
         "rdbms::postgres::db-connection"
     }

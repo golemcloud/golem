@@ -16,13 +16,14 @@
 
 package golem.runtime.macros
 
-import golem.schema.{GolemPath, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, Url}
+import golem.schema.{GolemPath, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue}
 import golem.schema.validation.RefResolution
 import golem.tool.*
 import golem.runtime.annotations.*
 import zio.blocks.schema.Schema
 import zio.test.*
 
+import java.net.URI
 import java.time.Instant
 
 /**
@@ -337,7 +338,7 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
     def add(
       verbose: Int,
       name: String,
-      url: Url,
+      url: URI,
       track: Seq[String],
       master: Option[String],
       tags: Boolean,
@@ -361,8 +362,8 @@ object ToolDefinitionMacroSpec extends ZIOSpecDefault {
     @constraint(mutexGroups = Array(Array[Any]("add"), Array[Any]("delete")))
     def setUrl(
       name: String,
-      newurl: Url,
-      oldurl: Option[Url],
+      newurl: URI,
+      oldurl: Option[URI],
       push: Boolean,
       add: Boolean,
       delete: Boolean

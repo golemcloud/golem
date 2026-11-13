@@ -21,12 +21,12 @@ use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
-    ScopeReplayRecovery, closed_demand, deliver_demand, demand_channel,
-    reserve_access_invocation_id, reserve_invocation_id_before_await,
-    resolve_current_observational_owner,
+    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
+    reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
-    CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+    CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
+    find_durable_call_trap_context, mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -53,8 +53,8 @@ use tokio_util::sync::PollSender;
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{
-    Access, Accessor, AccessorTask, Destination, FutureConsumer, FutureReader, Resource, Source,
-    StreamConsumer, StreamProducer, StreamReader, StreamResult,
+    Access, Accessor, Destination, FutureConsumer, FutureReader, Resource, Source, StreamConsumer,
+    StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::p3::bindings::sockets::types;
 use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
@@ -780,12 +780,14 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for TcpSocketSendTask<Ctx>
+impl<Ctx> TcpSocketSendTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let TcpSocketSendTask {
             call,
             mode,
@@ -909,12 +911,14 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for TcpSocketReceiveTask<Ctx>
+impl<Ctx> TcpSocketReceiveTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let scope = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .public_state
@@ -984,8 +988,8 @@ fn fail_tcp_receive_task(
 ///   is finalized last with a marker carrying the terminal `Result<(), error>`;
 /// * every delivered chunk is persisted as a `P3SocketsTypesTcpSocketReceiveChunk`
 ///   child (`Data`) before its bytes are handed to the guest;
-/// * a final `End` child terminates the recorded stream so replay knows when to
-///   stop reading children.
+/// * a requested EOF is persisted as an `End` child. Dropping an idle reader only
+///   closes the parent; collection does not create a read demand.
 ///
 /// Each child is produced in response to exactly one producer demand, so on
 /// replay the same number of children are read back from the oplog and delivered
@@ -1026,7 +1030,12 @@ where
     {
         Ok(parent) => parent,
         Err(error) => {
-            return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
+            let trap_context = find_durable_call_trap_context(&error);
+            return fail_tcp_receive_task(
+                result_tx,
+                wasmtime::Error::from_anyhow(error),
+                trap_context,
+            );
         }
     };
 
@@ -1086,6 +1095,9 @@ where
     loop {
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = stream.next_demand(&activity).await;
+        if demand.is_none() {
+            break;
+        }
 
         let item = match stream
             .next(
@@ -1097,7 +1109,8 @@ where
         {
             Ok(item) => item,
             Err(error) => {
-                let trap_context = stream.trap_context();
+                let trap_context =
+                    find_durable_call_trap_context(&error).unwrap_or_else(|| stream.trap_context());
                 if let Some(reply_tx) = demand {
                     let _ = reply_tx.send(TcpReceiveReply::Failed {
                         message: error.to_string(),
@@ -1125,9 +1138,8 @@ where
                 (produced, delivery)
             }
             DurableDemandItem::Live(mut child) => {
-                // When the producer is already gone (guest dropped the stream) we
-                // terminate the recorded stream with an `End` child instead of reading
-                // more of the socket.
+                // An abandoned read still owns its child. Complete that demand without
+                // reading more of the socket when its reply endpoint has disappeared.
                 let producer_gone = demand
                     .as_ref()
                     .map(|reply_tx| reply_tx.is_closed())
@@ -1470,8 +1482,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             .map_err(|error| types::ErrorCode::from(error).into())
     }
 
-    fn listen(
-        mut store: Access<U, Self>,
+    async fn listen(
+        mut store: Access<'_, U, Self>,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<StreamReader<Resource<TcpSocket>>> {
         observe_function_call_store::<Ctx, U>(
@@ -1481,7 +1493,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         );
         let store =
             Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket)
+        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket).await
     }
 
     async fn send(
@@ -1514,8 +1526,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             },
             HostRequestNoInput {},
         )
-        .await
-        .map_err(wasmtime::Error::from)?;
+        .await?;
         let (result_tx, result_rx) = oneshot::channel();
 
         if call.is_live() {
@@ -1544,12 +1555,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                     .tail_work_tracker()
                     .activity();
-                store.spawn(TcpSocketSendTask::<Ctx>::live(
-                    call,
-                    socket_result_rx,
-                    result_tx,
-                    activity,
-                ));
+                let task =
+                    TcpSocketSendTask::<Ctx>::live(call, socket_result_rx, result_tx, activity);
+                store.spawn(async move |store| task.run(store).await)?;
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
         } else {
@@ -1560,9 +1568,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                     .tail_work_tracker()
                     .activity();
-                store.spawn(TcpSocketSendTask::<Ctx>::replay(
-                    call, input_rx, result_tx, activity,
-                ));
+                let task = TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
+                store.spawn(async move |store| task.run(store).await)?;
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
         }
@@ -1572,7 +1579,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
-        let invocation_id = reserve_access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
+        let invocation_id = access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
         let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
         let observational_owner = accessor.with(|mut access| {
             resolve_current_observational_owner(
@@ -1618,14 +1625,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
-            store.spawn(TcpSocketReceiveTask::<Ctx>::new(
+            let task = TcpSocketReceiveTask::<Ctx>::new(
                 socket,
                 demand_rx,
                 result_tx,
                 observational_owner,
                 invocation_id,
                 activity,
-            ));
+            );
+            store.spawn(async move |store| task.run(store).await)?;
             Ok((stream, future))
         })
     }

@@ -16,13 +16,14 @@
 
 package golem.host
 
-import golem.{HostApi, Uuid}
+import golem.HostApi
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
 import golem.schema.TypedSchemaValue
 import golem.schema.wire.SchemaWire
 
+import java.util.UUID
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
@@ -47,9 +48,23 @@ object OplogApi {
     parameters: Map[String, String]
   )
 
+  enum OwnerKind {
+    case ComponentAgent, EphemeralExternalTool, OplogProcessor
+  }
+
+  object OwnerKind {
+    private[host] def fromJs(raw: String): OwnerKind = raw match {
+      case "component-agent"         => ComponentAgent
+      case "ephemeral-external-tool" => EphemeralExternalTool
+      case "oplog-processor"         => OplogProcessor
+      case other                     => throw new IllegalArgumentException(s"Unknown owner kind: $other")
+    }
+  }
+
   final case class CreateParameters(
     timestamp: ContextApi.DateTime,
     agentId: AgentHostApi.AgentIdLiteral,
+    ownerKind: OwnerKind,
     componentRevision: BigInt,
     env: Map[String, String],
     createdBy: String,
@@ -157,7 +172,7 @@ object OplogApi {
 
   final case class PublicInvocationWalletPin(
     walletToken: PermissionsApi.WalletVersionToken,
-    scopeCardId: Option[Uuid]
+    scopeCardId: Option[UUID]
   )
 
   final case class AgentInvocationStartedParameters(
@@ -236,7 +251,8 @@ object OplogApi {
 
   final case class PendingAgentInvocationParameters(
     timestamp: ContextApi.DateTime,
-    invocation: AgentInvocation
+    invocation: AgentInvocation,
+    notBefore: Option[ContextApi.DateTime]
   )
 
   sealed trait UpdateDescription extends Product with Serializable
@@ -476,6 +492,13 @@ object OplogApi {
     final case class SnapshotConfirmed(ts: ContextApi.DateTime, filesystemSnapshot: String) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
+    final case class SpanClosed(
+      ts: ContextApi.DateTime,
+      resourceStartIndex: Option[OplogIndex],
+      spanFinished: SpanFinished
+    ) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class OplogProcessorCheckpoint(params: OplogProcessorCheckpointParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -584,6 +607,13 @@ object OplogApi {
         case "snapshot-confirmed" =>
           val sc = v.asInstanceOf[JsSnapshotConfirmedParameters]
           SnapshotConfirmed(ts = parseDateTime(sc.timestamp), filesystemSnapshot = sc.filesystemSnapshot)
+        case "span-closed" =>
+          val sc = v.asInstanceOf[JsSpanClosedParameters]
+          SpanClosed(
+            ts = parseDateTime(sc.timestamp),
+            resourceStartIndex = sc.resourceStartIndex.toOption.map(index => BigInt(index.toString)),
+            spanFinished = parseSpanFinished(sc.spanFinished)
+          )
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
           OplogProcessorCheckpoint(
@@ -632,6 +662,7 @@ object OplogApi {
     CreateParameters(
       timestamp = parseDateTime(raw.timestamp),
       agentId = parseAgentId(raw.agentId),
+      ownerKind = OwnerKind.fromJs(raw.ownerKind),
       componentRevision = BigInt(raw.componentRevision.toString),
       env = raw.env.toSeq.map(t => t._1 -> t._2).toMap,
       createdBy = raw.createdBy.toString,
@@ -754,9 +785,7 @@ object OplogApi {
         walletIdHash = raw.walletToken.walletIdHash.toArray.iterator.map(_.toByte).toVector,
         generation = BigInt(raw.walletToken.generation.toString)
       ),
-      scopeCardId = raw.scopeCardId.toOption.map(cardId =>
-        Uuid(BigInt(cardId.uuid.highBits.toString), BigInt(cardId.uuid.lowBits.toString))
-      )
+      scopeCardId = raw.scopeCardId.toOption.map(cardId => JsUuid.toUuid(cardId.uuid))
     )
 
   private def parseAgentInvocationStartedParameters(
@@ -940,7 +969,11 @@ object OplogApi {
       case other =>
         throw new IllegalArgumentException(s"Unknown AgentInvocation tag: $other")
     }
-    PendingAgentInvocationParameters(timestamp = parseDateTime(raw.timestamp), invocation = agentInv)
+    PendingAgentInvocationParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      invocation = agentInv,
+      notBefore = raw.notBefore.toOption.map(parseDateTime)
+    )
   }
 
   private def parsePendingUpdateParameters(raw: JsPendingUpdateParameters): PendingUpdateParameters = {

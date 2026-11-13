@@ -53,11 +53,14 @@ impl TrappedLeafObserver for TrappedLeafObserverImpl {
             )
             .expect("admit detached middleware invocation");
 
-        let (mut bytes, _received) = socket.receive();
+        let (mut bytes, received) = socket.receive();
         let result = bytes.read(Vec::with_capacity(1)).await;
-        panic!(
-            "silent primary receive unexpectedly returned: {:?}",
-            result.0
-        );
+        assert!(matches!(
+            result.0,
+            golem_rust::wasip3::wit_bindgen::StreamResult::Complete(1)
+        ));
+        assert_eq!(result.1, vec![1]);
+        drop(bytes);
+        received.await.expect("primary socket receive completes");
     }
 }

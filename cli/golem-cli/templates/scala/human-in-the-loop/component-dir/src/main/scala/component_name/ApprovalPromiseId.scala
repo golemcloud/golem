@@ -1,22 +1,20 @@
 package component_name
 
-import golem.{HostApi, Uuid}
+import golem.HostApi
 import golem.host.js.{JsAgentId, JsComponentId, JsPromiseId, JsUuid}
 import zio.blocks.schema.Schema
 
+import java.util.UUID
 import scala.scalajs.js
 
 final case class ApprovalPromiseId(
-  componentId: Uuid,
+  componentId: UUID,
   agentId: String,
   oplogIdx: String
 ) {
   def toHost: HostApi.PromiseId =
     JsPromiseId(
-      JsAgentId(
-        JsComponentId(JsUuid(js.BigInt(componentId.highBits.toString), js.BigInt(componentId.lowBits.toString))),
-        agentId
-      ),
+      JsAgentId(JsComponentId(JsUuid.fromUuid(componentId)), agentId),
       js.BigInt(oplogIdx)
     )
 }
@@ -26,7 +24,7 @@ object ApprovalPromiseId {
 
   def fromHost(id: HostApi.PromiseId): ApprovalPromiseId =
     ApprovalPromiseId(
-      Uuid(BigInt(id.agentId.componentId.uuid.highBits.toString), BigInt(id.agentId.componentId.uuid.lowBits.toString)),
+      JsUuid.toUuid(id.agentId.componentId.uuid),
       id.agentId.agentId,
       id.oplogIdx.toString
     )

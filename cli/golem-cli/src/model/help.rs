@@ -24,7 +24,7 @@ use crate::model::text_format::{
 use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
 use golem_common::model::component::ComponentName;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::{SchemaGraph, SchemaType};
@@ -226,7 +226,7 @@ pub struct AvailableFunctionNamesHelp {
 impl AvailableFunctionNamesHelp {
     pub fn new_agent(
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         agent_type: &AgentTypeSchema,
     ) -> Self {
         AvailableFunctionNamesHelp {
@@ -304,7 +304,9 @@ impl AvailableAgentConstructorsHelp {
         component: &ComponentDto,
         target_agent_type: Option<&AgentTypeName>,
     ) -> Self {
-        let agent_types = component.metadata.agent_types();
+        let metadata: golem_common::model::component_metadata::ComponentMetadata =
+            component.metadata.clone().into();
+        let agent_types = metadata.agent_types();
         let constructors = if let Some(target_agent_type) = target_agent_type {
             agent_types
                 .iter()

@@ -33,15 +33,25 @@ pub fn as_bool(v : SchemaValue) -> Bool raise {
 ///|
 pub fn as_s8(v : SchemaValue) -> Int raise {
   match v {
-    S8Value(x) => x
+    S8Value(x) => {
+      if x < -128 || x > 127 {
+        raise BridgeError("s8 value out of range: \{x}")
+      }
+      x
+    }
     o => mismatch("s8", o)
   }
 }
 
 ///|
-pub fn as_s16(v : SchemaValue) -> Int raise {
+pub fn as_s16(v : SchemaValue) -> Int16 raise {
   match v {
-    S16Value(x) => x
+    S16Value(x) => {
+      if x < -32768 || x > 32767 {
+        raise BridgeError("s16 value out of range: \{x}")
+      }
+      Int16::from_int(x)
+    }
     o => mismatch("s16", o)
   }
 }
@@ -71,9 +81,14 @@ pub fn as_u8(v : SchemaValue) -> Byte raise {
 }
 
 ///|
-pub fn as_u16(v : SchemaValue) -> Int raise {
+pub fn as_u16(v : SchemaValue) -> UInt16 raise {
   match v {
-    U16Value(x) => x
+    U16Value(x) => {
+      if x < 0 || x > 65535 {
+        raise BridgeError("u16 value out of range: \{x}")
+      }
+      x.to_uint16()
+    }
     o => mismatch("u16", o)
   }
 }
@@ -127,33 +142,33 @@ pub fn as_string(v : SchemaValue) -> String raise {
 }
 
 ///|
-pub fn as_path(v : SchemaValue) -> String raise {
+pub fn as_path(v : SchemaValue) -> Path raise {
   match v {
-    PathValue(x) => x
+    PathValue(x) => Path::new(x)
     o => mismatch("path", o)
   }
 }
 
 ///|
-pub fn as_url(v : SchemaValue) -> String raise {
+pub fn as_url(v : SchemaValue) -> Url raise {
   match v {
-    UrlValue(x) => x
+    UrlValue(x) => Url::new(x)
     o => mismatch("url", o)
   }
 }
 
 ///|
-pub fn as_datetime(v : SchemaValue) -> String raise {
+pub fn as_datetime(v : SchemaValue) -> Datetime raise {
   match v {
-    DatetimeValue(x) => x
+    DatetimeValue(x) => Datetime::parse(x)
     o => mismatch("datetime", o)
   }
 }
 
 ///|
-pub fn as_duration(v : SchemaValue) -> Int64 raise {
+pub fn as_duration(v : SchemaValue) -> Duration raise {
   match v {
-    DurationValue(x) => x
+    DurationValue(x) => Duration::new(x)
     o => mismatch("duration", o)
   }
 }

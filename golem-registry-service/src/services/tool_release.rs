@@ -32,7 +32,9 @@ use golem_common::model::card::{
 };
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
-use golem_common::model::tool::{RegisteredTool, TOOL_METADATA_WIT_VERSION, ToolName, ToolSource};
+use golem_common::model::tool::{
+    TOOL_METADATA_WIT_VERSION, ToolName, ToolRegistration, ToolSource,
+};
 use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
     ToolPublicationPlanEntry, ToolRelease, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
@@ -115,7 +117,7 @@ impl ToolReleaseService {
     pub fn prepare_publications(
         &self,
         environment: &Environment,
-        registered_tools: &BTreeMap<ToolName, RegisteredTool>,
+        registered_tools: &BTreeMap<ToolName, ToolRegistration>,
         publish_tools: &[ToolName],
         auth: &AuthCtx,
     ) -> Result<Vec<ToolReleaseRecord>, ToolReleaseError> {

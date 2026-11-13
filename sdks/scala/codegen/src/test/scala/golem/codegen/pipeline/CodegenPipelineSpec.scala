@@ -1887,6 +1887,123 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(!content.contains("caller: Principal"), s"principal param should be filtered:\n$content")
   }
 
+  private def rpcClient(source: String): String = {
+    val result =
+      CodegenPipeline.run(discover(SourceDiscovery.SourceInput("Agent.scala", source)), None, rpcEnabled = true)
+    assertEquals(result.rpc.files.size, 1)
+    result.rpc.files.head.content
+  }
+
+  test("rpc client carries an explicit import of a type used in a signature") {
+    val content = rpcClient(
+      """|package example
+         |
+         |import java.util.UUID
+         |import scala.concurrent.Future
+         |
+         |@agentDefinition()
+         |trait Users {
+         |  class Id(val tenant: UUID)
+         |  def find(id: UUID): Future[Option[UUID]]
+         |}
+         |""".stripMargin
+    )
+
+    assert(
+      content.startsWith("package example\n\nimport java.util.UUID\nimport scala.concurrent.Future\n\n"),
+      content
+    )
+    assert(content.contains("def apply(id: UUID): _root_.scala.concurrent.Future[Option[UUID]]"), content)
+    assert(content.contains("def get(tenant: UUID): UsersRemote"), content)
+    assert(content.contains("_root_.golem.AgentCompanionBase[_root_.example.Users]"), content)
+  }
+
+  test("rpc client carries wildcard, given and renamed imports verbatim") {
+    val content = rpcClient(
+      """|package example
+         |
+         |import golem.schema.*
+         |import codecs.given
+         |import java.util.{UUID => Key, List as JList}
+         |import scala.collection.immutable._
+         |
+         |@agentDefinition()
+         |trait Store {
+         |  class Id(val name: String)
+         |  def put(key: Key, amount: Quantity): Unit
+         |}
+         |""".stripMargin
+    )
+
+    assert(
+      content.contains(
+        "import golem.schema.*\nimport codecs.given\nimport java.util.{UUID => Key, List as JList}\n" +
+          "import scala.collection.immutable._\n"
+      ),
+      content
+    )
+    assert(content.contains("def apply(key: Key, amount: Quantity)"), content)
+  }
+
+  test("rpc client keeps package-level imports at their package clause") {
+    val content = rpcClient(
+      """|package com.example
+         |
+         |import java.util.UUID
+         |
+         |package agents {
+         |  import golem.schema.Quantity
+         |
+         |  object Helper {
+         |    import scala.collection.mutable.Buffer
+         |  }
+         |
+         |  @agentDefinition()
+         |  trait Ledger {
+         |    import scala.util.Try
+         |    class Id(val owner: UUID)
+         |    def add(amount: Quantity): Unit
+         |  }
+         |
+         |  import scala.util.Either
+         |}
+         |""".stripMargin
+    )
+
+    assertEquals(
+      content.linesIterator.takeWhile(!_.startsWith("/**")).mkString("\n"),
+      """|package com.example
+         |
+         |import java.util.UUID
+         |
+         |package agents {
+         |
+         |import golem.schema.Quantity
+         |""".stripMargin
+    )
+    assert(content.trim.endsWith("}\n}"), content)
+    assert(content.contains("_root_.golem.AgentCompanionBase[_root_.com.example.agents.Ledger]"), content)
+    assert(!content.contains("Buffer"), content)
+    assert(!content.contains("scala.util.Try"), content)
+    assert(!content.contains("scala.util.Either"), content)
+  }
+
+  test("rpc client of a trait in a file without imports has only the package clause") {
+    val content = rpcClient(
+      """|package a
+         |package b
+         |
+         |@agentDefinition()
+         |trait Plain {
+         |  class Id()
+         |  def ping(): Int
+         |}
+         |""".stripMargin
+    )
+
+    assert(content.startsWith("package a\n\npackage b\n\n/**"), content)
+  }
+
   test("pipeline converts mode to IR") {
     val source = SourceDiscovery.SourceInput(
       "Eph.scala",

@@ -318,8 +318,9 @@ Entity bodies (tool sidecars, middleware chains) run in their own Wasmtime `Stor
 oplog of their own**. `durable_host/entity.rs` is the "durable owner-oplog boundary for transient
 entity bodies": `EntityInvocationDurability` wraps a `DurableCallSession<GolemEntityInvoke,
 LeaveIncompleteOnDrop>` in the owner's oplog, and its `Start` index *is* the entity invocation ID.
-Its terminal is an ordinary `End` (success) or `Cancelled` (cancellation); a trap leaves the
-`Start` incomplete. Every host call the body makes records its own `Start` in the owner oplog
+Its terminal is an ordinary `End` or `Cancelled` (cancellation). An allowlisted permanent guest
+instruction trap records `End` with `body_execution: Trapped` and `RemoteInternalError`; other
+trap paths retain owner recovery. Every host call the body makes records its own `Start` in the owner oplog
 with `parent_start_index` pointing at its enclosing scope — normally that entity `Start`
 (`durable_host/concurrent/call.rs`).
 
@@ -366,31 +367,87 @@ a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `E
 completion, not full descendant settlement. A forward-only parent may record its `End` first to
 release nested filesystem work; its resources and admitted children remain retained.
 
+### Owned operation state and settlement
+
+The owner state is `Open`, `Unloading`, or `Failed { winner, cleanup }`. `Unloading` fences physical admission without selecting a logical failure. An independent failure can still win during unload, but a tool's `select_trap` refuses closed admission. The first selected owner failure remains authoritative. These transitions use the existing owner state lock and notifications; there is no new coordinator or lock.
+
+Per-operation body progress, terminal winner and `LaneOwnership` remain distinct. Private state transitions own paired mutations and watch publication, so callers cannot update one half and publish the other later. Explicit `SettledWithoutBody` is legal from either `Staging` or `Ready`, with deferred-cohort coordination; it is not evidence that a body started.
+
+Checked matches produce borrowed `ReadyBody`, `StartingAcquisition`, `AcquiringBody` and `OpenTerminal` capabilities. Their queue, install, grant-install and ordinary-reservation methods consume those capabilities. Each capability borrows the operation state under the owner mutex and cannot outlive that access. There is no automatic `Drop` rollback. These type-level rules replace transition assertions, not the existing lock-poisoning convention or unrelated error handling; they do not make the whole executor panic-free.
+
+Ordinary or cancelled terminal selection is reserved before terminal persistence. After commit, the winner publishes before parent preparation, while the lane stays held. Successful preparation detaches and drains the lane; failed preparation leaves it for owner cleanup. Cancellation rollback retains any lane grant already held by the acquisition task. The acquisition drain guard releases its permit before notifying waiters that it drained. Registry removal ends operation ownership: a surviving cloned handle observes the result but does not keep the operation registered.
+
+Shared terminal resolution returns an error for invalid state or inactive registration instead of panicking. A mismatched resolution never replaces the selected winner. Settling an active nonterminal operation returns an error without unregistering it. Settling an already-removed operation is an idempotent `Ok(())`, including through a surviving clone: removal is authoritative. Valid settlement of an active terminal operation removes the registration and notifies waiters before draining the detached lane; preparation failure still leaves the lane for owner cleanup.
+
 At the finished-body handoff, a separate executor-tracked retained task owns the Store/context
 and slot registration. Completion resources carry commands and a destruction join, never the
 Store. Normal preparation runs before terminal resolution; permit release precedes descendant
 settlement. Fencing cancels retained work both while idle and inside preparation or consuming
 settlement. Observer loss and executor shutdown also reclaim it. Cancellation drops the callback
-future first, then the Store/context, then the registration; registration destruction is the sole
-slot-removal event. Slot drainage therefore waits for physical destruction, not body completion.
-Explicit failure release completes the permit, requests disposal and joins destruction before
-group drainage; it never runs normal settlement on the disposed Store. This starts at the
-existing finished-body handoff and does not change body abort or pre-failure arbitration. It
-records no entity terminal or EOF and does not turn a stuck synchronous destructor into success.
+future first, then the Store/context. Retained cleanup then closes the invocation's filesystem
+admission and joins its admitted calls and descriptor closes before dropping the registration.
+Abandoned writes and late opens retain invocation leases through completion and close; draining
+one invocation does not seal its siblings. Registration destruction is the sole slot-removal event.
+Explicit failure release requests disposal and joins cleanup before completing its permit. If
+the observer drops the completion resources, retained cleanup owns that permit until drainage
+finishes. A canceled destruction join keeps its handle; a completed join removes it even on error.
+Normal settlement never runs on the disposed Store. Executor shutdown and a retained callback's
+Rust panic can bypass asynchronous drainage. Isolated permanent guest traps destroy the physical
+Wasmtime Store but retain its original `Ctx` for cleanup.
+The invocation-local trap-disposal marker transfers unfinished non-cancellable host calls and
+pre-terminal guards to durable cancellation cleanup. Accepted initiation tasks remain owned until
+their `Start` and cancellation settle. An already-submitted terminal keeps its selected outcome.
+Open database transaction resources close through their typed transaction `Drop` path before
+the original resource table is cleared. The context-owned filesystem preopen is released too;
+it retains an invocation lease outside the table. Filesystem calls and descriptor closes drain
+before the trapped result releases the lane. This is resource cleanup, not rollback of completed effects.
+Disposal records no entity terminal or EOF and does not turn a stuck synchronous destructor into
+success.
 
-The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
-Destroying a healthy ancestor Store may drop its result observer but cannot drop the global
-settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained
-result. Ordinary cleanup errors still wait for the other operations before waking the primary;
-they prevent generation reuse without replacing the selected trap. A cleanup panic retains a
-failed join but does not authorize primary completion. Wakeups use the original execution's
-channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
-cannot miss completion. None of this invents entity terminals or changes oplog recovery.
+Before component construction starts, the invocation task owns the body's filesystem scope.
+Canceling construction or an active body drops its context or Store before closing admission and
+joining admitted calls and descriptor closes. Native construction/setup failures and active
+cancellation follow the same order. The task retains its registration and lane permit throughout
+drainage. A body abort cancels a child token without tearing the drain task; lifecycle fencing
+cancels its parent and therefore both body and retained Store. A late body abort leaves completed
+resources available for preparation and settlement. Queued cancellation withdraws lane acquisition
+without waiting for a grant. Cancellation preserves an already-selected trapped terminal.
+Once a body result is observed, `EntityBodyFinalization` prevents local reconstruction abort from
+discarding pending settlement, cleanup or failure election. Owner lifecycle cancellation remains
+separate and is not shielded by that handoff.
+
+The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task. Its explicit states are:
+
+- `Unassigned`: no cleanup owner has been assigned.
+- `AwaitingClaim(owner)`: cleanup is assigned and awaits that owner's claim.
+- `Claimed(owner)`: the owner has claimed cleanup but has not started it.
+- `Running(owner, retained join)`: cleanup has started. This includes waiting for other operations after the cleanup callback returns.
+- `SettledSuccessfully(retained join)`: cleanup and the required operation settlement succeeded.
+- `SettledWithError(retained join)`: the failed join remains available to repeat observers.
+- `Aborted(owner, retained join)`: panic or abort retains both the owner and failed join.
+
+The consuming `OwnerFailureCleanupToken` binds the issuing `Arc<OwnerToolOperations>` to a private per-claim identity and carries that claim's exact failure winner. `token.start(cleanup, wake)` consumes the token and creates the only `RunningCleanup` capability; completion consumes that capability. Shared joins only observe the retained result: they cannot start or complete cleanup. Every completion follows the spawned cleanup path, including tests; there is no direct-completion receipt. `CleanupOutcome::Settled(Result)` distinguishes an ordinary success or error after operation settlement from `CleanupOutcome::Aborted(error)`. It replaces the result/settled-boolean pair, so invalid combinations cannot be passed to completion.
+
+The token's `#[must_use]` warns about an ignored token; it does not guarantee that cleanup runs or prevent explicit discard. Dropping an unstarted token leaves cleanup `Claimed`, with no task or failed join. If no operations or tracked failure continuations remain, the owner can still begin a new generation. Discard does not run cleanup, roll back the claim, or add a reset fence.
+
+Once `PRIMARY` cleanup starts, it remains interruptible, including after panic or abort. Tool-origin `Running` and `Aborted` cleanup is not interruptible. Error and abort joins remain repeatable and prevent generation reuse; neither replaces the selected failure nor authorizes successful primary completion. Ordinary cleanup errors still wait for other operations before waking the primary.
+
+Destroying a healthy ancestor Store may drop its result observer but cannot drop the global settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained result. Wakeups use the original execution's channel, and host waits subscribe before checking the settled-failure latch so a late subscriber cannot miss completion. Store-liveness rules, entity terminals and oplog recovery stay unchanged.
 
 Trap selection retains a host-classified `TrapType::Interrupt` with its exact interruption kind.
 The native host adapter still reports that trap to the operation owner. A previously selected
 lifecycle failure wins instead; a later lifecycle candidate cannot overwrite the selected trap.
 Closing admission during ordinary unload alone elects neither candidate.
+
+Resident unload waits for the current `OwnerToolOperations` registry to become empty only after
+primary runtime destruction, filesystem drainage, final metering and scheduler-permit release,
+and before filesystem deletion and successful unload. This is registry settlement, not a join of
+every supervisor; entity and lane barriers still own physical drainage. `begin_generation` remains
+strict and rejects active operations. `EntityFence::drain` must not wait for the registry because
+its caller can itself hold an operation. The unload deadline observer can report `CleanupFailed`
+while module-owned cleanup continues, and early metering errors can report before the registry
+wait; neither permits successful reconstruction. Startup cleanup without a resident owner has no
+registry barrier.
 
 ### Native bodies
 
@@ -426,18 +483,18 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
 - `ReplayingCompleted` — `invoke_tool_sidecar` (`tool/mod.rs`) still calls the sidecar's guest
   export (`guest.call_invoke`) so the body re-executes from recorded inputs; its durable host
   calls are replayed from the owner oplog, so no completed external effect is performed again.
-  `drive_access` (`entity.rs`) releases the recorded terminal only after that reconstruction
+  `drive_owned` (`entity.rs`) releases the recorded terminal only after that reconstruction
   validates against the claim (`StartClaim::tool_invocation` in
   `durable_host/replay_state/claims.rs` matches the accepted `GolemEntityInvoke` or a recorded
   `GolemToolInvocationRejected` by `parent_start_index` and the invocation id of the dispatching
   guest import). The
   test oracle is "no repeated external effect", not "no second guest call". One exception:
-  `execute_accepted_tool_call_inner` first checks `recorded_terminal_access`; a terminal whose
+  `execute_accepted_tool_call_inner` first checks `recorded_terminal_owned`; a terminal whose
   `body_execution` is `Skipped` (admission was rejected before the body ran, e.g. an attachment
   upgrade hitting `ResourceExhausted`) is returned by `execute_recorded_skipped_tool_call` with no
   guest call at all (`tests/tool_streaming.rs::incomplete_tool_replay_persists_attachment_upgrade_rejection`).
 - `ReplayingIncomplete` — a `Start` without terminal switches the body to live and completes it
-  under the *original* `Start` index; `enter_incomplete_live_repair_before_body_access` avoids
+  under the *original* `Start` index; `enter_incomplete_live_repair_before_body_owned` avoids
   deadlocking the primary's own transition. For a filesystem-incapable asynchronous invocation,
   startup with recorded scope descendants does not return its execution handle until the
   reconstructed body has started or the operation has settled without a body. A completed parent
@@ -470,18 +527,25 @@ Input tasks capture the session binding, read ordinal and observation class befo
 recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
 on the operation's existing watch channel without retaining the Store or cursor.
 
-Historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later
-cancellation from replacing the refusal but still lets a reconstructing child elect an independent
-owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught
-admission error from an unrelated body or cleanup failure; a caught error cannot turn refused
-admission into success. Refusal does not wait for the complete output subtree before returning:
-the body may need to catch the error and continue to regenerate that subtree.
+Live admission refusal preselects the ordinary terminal before persistence. Recorded refusal does not: historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later cancellation from replacing the refusal but still lets a reconstructing child elect an independent owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught admission error from an unrelated body or cleanup failure; a caught error cannot turn refused admission into success. Refusal does not wait for the complete output subtree before returning: the body may need to catch the error and continue to regenerate that subtree.
+
+Empty attachment admission does not latch live; it leaves the later attachment admission decision open.
 
 Explicit attachment constructors register owner-relative identities in the shared replay state.
 Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,
 not byte bodies. `AttachmentInputProducer` records consumed payloads through
 `PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
+A durable owner's guest read observation is append-only, like a `CompletionDelivered` marker: the
+next commit of the owner oplog persists it as part of the prefix, and invocation settlement commits
+any remainder. No later entry can become durable without it, and a crash before that commit leaves
+no record, so recovery reads the chunk again. Ephemeral owners still commit each guest read
+observation immediately. Attachment writes and terminals are `WriteLocal` calls and follow the
+ordinary commit rule: their `End` is appended before the bytes or terminal are published, and it
+becomes durable with the next owner-oplog commit (the operation threshold, a host read, a remote
+effect, or invocation settlement). Because every reader's observation follows that `End` in the same
+oplog, no durable prefix holds a read without the write it observed; a crash before the commit loses
+both, and the body regenerates the write.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
 The stdin of an external call has no attachment when the body is a component: the body reads the
@@ -497,20 +561,20 @@ consumers, guest stdin-closure watchers and pending regeneration block a cut tha
 history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
 
 Semantic writer abandonment and rejection enqueue an owned terminal receipt through the existing
-cleanup queue. Live selection is synchronous; publication follows commit. Generic Rust destruction
-and runtime teardown record nothing. Retained terminal effects restore at their crossed replay
-boundary even if their host-call waiter no longer exists. Missing-terminal repair waits outside
-cleanup drains so reconstruction can still make progress, and retries if the replay target grows.
-The context registers these admission jobs synchronously in a separate owned task set, reusing
-`NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful completion drains
-cleanup, joins admissions, then drains their handoffs before publishing its terminal. The primary
-does not join before consuming a historical Finished; successful replay exit also drains pending
-disposals. A failed entity body closes and aborts admission jobs, but still joins already accepted
-terminal publications and native accepted-write reconstruction. Later destructors and unaccepted
-queued disposals cannot start repair in that failed context. Context destruction transfers abort
-and join ownership to the existing worker task scope.
-An exact recorded disposal refusal takes precedence over a later owner-finalization terminal:
-that terminal does not prove the requested disposal succeeded. Other retained disposals stay no-ops.
+cleanup queue. Live selection is synchronous; publication follows the terminal's append. Generic
+Rust destruction and runtime teardown record nothing. Retained terminal effects restore at their
+crossed replay boundary even if their host-call waiter no longer exists. Missing-terminal repair
+waits outside cleanup drains so reconstruction can still make progress, and retries if the replay
+target grows. The context registers these admission jobs synchronously in a separate owned task set,
+reusing `NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful
+completion drains cleanup, joins admissions, then drains their handoffs before publishing its
+terminal. The primary does not join before consuming a historical Finished; successful replay exit
+also drains pending disposals. A failed entity body closes and aborts admission jobs, but still
+joins already accepted terminal publications and native accepted-write reconstruction. Later
+destructors and unaccepted queued disposals cannot start repair in that failed context. Context
+destruction transfers abort and join ownership to the existing worker task scope. An exact recorded
+disposal refusal takes precedence over a later owner-finalization terminal: that terminal does not
+prove the requested disposal succeeded. Other retained disposals stay no-ops.
 
 `HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
 ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
@@ -588,10 +652,18 @@ execution"; `OwnerLane` (`worker/owner_lane.rs`) "serializes filesystem-capable 
 causal invocation boundaries" while filesystem-incapable invocations get an immediate off-lane
 permit. A synchronous call from a body back into its blocked owner must pass
 `OwnerLane::ensure_synchronous_owner_call` and is otherwise rejected with `WouldDeadlock` instead
-of hanging; asynchronous owner calls are allowed. A body trap fails the owner invocation and
-drains the owner group without inventing entity terminals
-(`guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group`,
-`detached_and_fire_and_forget_traps_fail_the_owner_without_entity_terminals`).
+of hanging; asynchronous owner calls are allowed. `permanent_tool_guest_trap` in
+`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist. Typed quotas,
+policy exhaustion, `WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner
+recovery even when the retry decision is exhausted. Supervisors independent of the caller Store
+cancel a failed parent's descendants, preserving selected outcomes and unrelated siblings.
+
+Replay re-executes trapped bodies and recorded host calls, rebuilding shared filesystem effects
+and partial stdout before validating the exact terminal and descendants. Completed external
+effects are not repeated. Stream completion is independent of the structured result: an
+already-completed stream stays completed. Allocation-dependent `memory.grow` backing refusal
+returning -1 and leading to panic is a separate preexisting nondeterminism limitation. This is
+not a universal isolation guarantee and introduces no fork or snapshot recovery.
 
 An asynchronous incapable admission does not transfer the filesystem lane. An actual result await
 temporarily connects its caller to the awaited subtree, including children retained after a body
@@ -603,6 +675,11 @@ capable call after its caller resumes.
 Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.
 This also prevents a pending producer from recording a false EOF while its Store is discarded.
+An attachment write or terminal that the owner fence rejects abandons its call
+(`abandon_if_owner_fenced` in `durable_host/tool/durability.rs`): the fence's `Cancelled` is not
+the call's outcome, so the next generation repairs the `Start` in place. The same holds for a
+`tool-stdin-closed` wait that the fence wakes: it abandons its call instead of recording the
+`Cancelled` terminal, so the recovered caller keeps writing to the open stdin.
 
 Typed stream projection requests read admission from its owning Store before receiving durable
 items. Recorded observations replay from the consumer journal; opening a source waits for the

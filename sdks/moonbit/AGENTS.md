@@ -40,8 +40,9 @@ share a layered architecture:
 sdks/moonbit/
 ├── AGENTS.md                          # This file
 ├── release.sh                         # Release/dev mode toggle script
+├── moon.work                          # Local SDK, tools and example module directories
 ├── golem_sdk/                         # The SDK library (published as golemcloud/golem_sdk)
-│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk (preferred-target: wasm)
+│   ├── moon.mod                       # Module: golemcloud/golem_sdk (preferred_target = "wasm")
 │   ├── moon.pkg                       # Root package
 │   ├── README.mbt.md                  # User-facing readme (also the published readme)
 │   ├── scripts/
@@ -80,11 +81,12 @@ sdks/moonbit/
 │   │   └── validation_test.mbt
 │   ├── schema/                        # Serialization traits + primitive/compound impls
 │   │   ├── schema.mbt                 # IntoSchema / FromSchema traits, TypeTag, helpers
-│   │   ├── primitives.mbt            # Impls for String, Bool, Int, UInt, Int64, UInt64, Float, Double, Byte, Char, Unit
+│   │   ├── primitives.mbt            # Impls for String, Bool, Int, Int16, UInt16, UInt, Int64, UInt64, Float, Double, Byte, Char, Unit
 │   │   ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T,E], Map[K,V], Bytes
 │   │   ├── tuples.mbt                # Impls for tuples (arity 2–8)
 │   │   ├── records.mbt              # record/enum/variant helpers used by generated code
-│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid, Datetime
+│   │   ├── rich_types.mbt           # Path, Url, Text[S], Duration, Quantity[U], Uuid
+│   │   ├── datetime.mbt             # Datetime (RFC 3339 parse/print)
 │   │   ├── unstructured.mbt         # UnstructuredText[L] / UnstructuredBinary[M] (role-marked inline/url variants)
 │   │   ├── schema_test.mbt
 │   │   └── records_test.mbt
@@ -111,8 +113,8 @@ sdks/moonbit/
 │   │   └── scope_card/                # Raw scope-card borrowing for the RPC clients
 │   ├── filesystem/                    # Filesystem helpers
 │   └── ffi/                           # Shared FFI helpers
-├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
-│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk_tools (deps: moonbitlang/x, /parser, /formatter)
+├── golem_sdk_tools/                   # Code generation CLI (local moon run or published moonx)
+│   ├── moon.mod                       # Module: golemcloud/golem_sdk_tools (imports: moonbitlang/x, /parser, /lexer)
 │   ├── lib/                           # Library package
 │   │   ├── mbti.mbt                   # Parser for .mbt source files (extracts pub fn signatures)
 │   │   ├── reexports.mbt             # AST construction: generates reexport wrapper functions
@@ -130,13 +132,13 @@ sdks/moonbit/
 │   └── cmd/
 │       └── main.mbt                   # `reexports` and `agents` subcommands
 └── golem_sdk_example1/                # Example consumer project (also the user template)
-    ├── moon.mod.json                  # Module: golemcloud/golem_sdk_example1 (deps on local golem_sdk)
+    ├── moon.mod                       # Module: golemcloud/golem_sdk_example1 (SDK resolved through moon.work)
     ├── golem.yaml                     # Golem application manifest with the codegen+build pipeline
     ├── README.mbt.md
     ├── wit/                           # Example world (core/types@2.0.0, agent/guest@2.0.0)
     └── golem_moonbit_examples/        # The component package (8 example agents)
-        ├── moon.pkg                   # is-main, WASM export link config (auto-managed by tools)
-        ├── counter.mbt               # Counter (state, snapshotting, fn main {})
+        ├── moon.pkg                   # foreign_library, WASM export link config (auto-managed by tools)
+        ├── counter.mbt               # Counter (state and snapshotting; no fn main)
         ├── task_manager.mbt          # TaskManager + Priority/TaskInfo (#derive.golem_schema)
         ├── config_agent.mbt          # ConfiguredAgent + #derive.config + @config.Secret
         ├── http_agent.mbt            # WeatherAgent (HTTP mount + endpoints)
@@ -157,20 +159,27 @@ sdks/moonbit/
 All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
 hand-maintained `moon.pkg`, `stub.mbt`, test, and `stream_transfer.mbt` files) is generated on demand
 by `wit-bindgen moonbit` and is not tracked by Git. Do NOT edit generated files. Install the
-generator from the Golem fork's `wit-bindgen-golem-1.6` branch:
+generator from the pinned revision of Golem's `wit-bindgen-golem-2.0` fork branch:
 
 ```sh
 cd golem_sdk
 ./scripts/install-wit-bindgen.sh
 ```
 
-The branch incorporates Bytecode Alliance's draft
-[MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
+The branch builds on released wit-bindgen 0.63.0's MoonBit component-model async runtime
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
 emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
 for types used across exported interfaces.
-Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
-exports required by this SDK.
+The SDK requires these Golem-specific generator changes, not the stock release.
+The installer pins a Git revision of that branch, including MoonBit-specific generator fixes.
+Use MoonBit 0.10.18 or newer. Current-task cancellation is a signal that bypasses
+ordinary `catch` clauses; put resource cleanup in `defer` or `errdefer`. A waiter
+observes another task's cancellation as the ordinary `TaskCancelled` error.
+`protect_from_cancel` shields cleanup but does not deliver pending cancellation
+when it returns; use `check_cancellation` after a shield when normal execution resumes.
+
+`CARGO_INSTALL_ROOT` can isolate the installation;
+add its `bin` directory to `PATH` for installation and regeneration.
 
 ```sh
 cd golem_sdk
@@ -179,7 +188,7 @@ cd golem_sdk
 
 The script (`scripts/regen-bindings.sh`):
 1. Refuses to run unless the generator version matches the Golem fork build recorded by
-   `scripts/install-wit-bindgen.sh` from the `wit-bindgen-golem-1.6` branch.
+   `scripts/install-wit-bindgen.sh` from the pinned fork revision.
 2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
@@ -275,11 +284,23 @@ pub(open) trait FromSchema {
 - `type_id()` defaults to the package-qualified MoonBit type name (bare name at module root); a
   `named` override is reserved for intentional cross-SDK identity. Exact cross-SDK string identity is
   *not* required.
-- Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64), `UInt64`
-  (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`, `Option[T]`, `Array[T]`,
+- Implemented for: `Unit`, `String`, `Bool`, `Int` (S32), `Int16` (S16), `UInt16` (U16), `UInt`
+  (U32), `Int64` (S64), `UInt64` (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`, `Bytes`,
+  `Option[T]`, `Array[T]` (a `list`; there is no fixed-list type, because MoonBit types cannot carry
+  the length; generated bridges map `fixed-list` to `FixedArray[T]`),
   `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
-  `Duration`, `Quantity[U]`, `@types.Uuid`, and `@types.Datetime`; and `UnstructuredText[L]` /
+  `Duration`, `Quantity[U]`, `Uuid`, and `Datetime`; and `UnstructuredText[L]` /
   `UnstructuredBinary[M]` (see below).
+- `Uuid` is the SDK's UUID type, used by every user-facing API (phantom ids, idempotency keys,
+  permission holders). It has `parse` (hyphenated, case-insensitive), `Show` (lowercase
+  hyphenated), `Eq`/`Compare`/`Hash`, `random` (version 4 from `wasi:random/random`, which Golem
+  records durably), and `from_wit`/`to_wit`. The raw `@types.Uuid` record appears only at WIT
+  boundaries and in `@model.SchemaValue::Uuid`.
+- `Datetime` is the SDK's point in time (seconds since the Unix epoch plus nanoseconds, UTC year
+  `0000..9999`). It has `new`, `parse` (RFC 3339 with any offset, converted to UTC), `Show`
+  (canonical UTC `Z` form with up to nine fraction digits), `Eq`/`Compare`/`Hash`, and
+  `from_wit`/`to_wit`. The raw `@types.Datetime` record appears only at WIT boundaries and in
+  `@model.SchemaValue::Datetime`.
 
 **Helpers** (in `schema.mbt`):
 - `type_tag[T]() -> TypeTag[T]` — a zero-sized handle to ask for a type's schema without a value
@@ -341,8 +362,9 @@ other SDKs and the host (`golem-schema/src/schema/unstructured.rs`):
   argument implements `AllowedLanguages` / `AllowedMimeTypes`, and a non-empty list becomes the
   `languages` / `mime-types` restriction of the inline case. `AnyLanguage` / `AnyMimeType` produce
   no restriction. There are no `#derive.text_languages` / `#derive.mime_types` annotations.
-- Decoding (`FromWire` and `FromSchema`) accepts the wrapper variant or a bare text/binary value,
-  and rejects an inline language or MIME type outside a non-empty restriction list. The
+- Decoding (`FromWire` and `FromSchema`) accepts only the wrapper variant, rejects a bare
+  text/binary value, and rejects an inline language or MIME type outside a non-empty restriction
+  list. The host wraps a raw HTTP body in the `inline` case before it reaches the agent. The
   constructors (`::inline`, `::url`, and the enum cases) do not validate.
 - `Eq` and `Debug` are implemented without constraints on the phantom argument.
 
@@ -461,8 +483,11 @@ pub(all) struct TaskInfo {
 }
 ```
 
-An empty `fn main {}` must exist in the main package. Multiple agents can coexist in one package —
-each is registered in the single generated `fn init {}`.
+Component packages use `pkgtype(kind: "foreign_library")` and must not contain `fn main`.
+The compiler runs generated `fn init` registration through the Wasm start section at
+instantiation. There is no `_start` export to call. This matches wit-bindgen's MoonBit
+link target and avoids the executable target's Preview1 imports. Multiple agents can
+coexist in one package; each is registered in the single generated `fn init {}`.
 
 ### Permission cards (`permissions`)
 
@@ -595,11 +620,11 @@ moon run cmd -- agents <project-root> --component-dir <component-dir>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
-moon build --target wasm --release
+moon build --target wasm --release --target-dir _build
 # Component link (release):
-wasm-tools component embed wit \
-  _build/wasm/release/build/golem_moonbit_examples/golem_moonbit_examples.wasm \
-  --encoding utf16 --output _build/wasm/release/golem_moonbit_examples.embed.wasm
+wasm-tools component embed ../golem_sdk/wit \
+  _build/wasm/release/build/golemcloud/golem_sdk_example1/golem_moonbit_examples/golem_moonbit_examples.wasm \
+  --world agent-guest --encoding utf16 --output _build/wasm/release/golem_moonbit_examples.embed.wasm
 wasm-tools component new \
   _build/wasm/release/golem_moonbit_examples.embed.wasm \
   --output _build/wasm/release/golem_moonbit_examples.agent.wasm
@@ -613,8 +638,8 @@ The example's `golem.yaml` drives the same pipeline (codegen → `moon build` �
 ## Release Script
 
 `sdks/moonbit/release.sh` toggles `golem_sdk_example1` between **development mode** (the local SDK
-selected through `moon.work`, relative tool paths) and **release/template mode** (versioned mooncakes deps; tools run from
-`.mooncakes/`).
+selected through `moon.work`, relative tool paths) and **release/template mode** (versioned
+mooncakes imports; tools run through a pinned `moonx` package).
 
 ```sh
 ./release.sh 0.1.0              # same version for SDK and tools
@@ -622,10 +647,15 @@ selected through `moon.work`, relative tool paths) and **release/template mode**
 ./release.sh --dev             # revert to the local workspace SDK for in-repo development
 ```
 
-Release mode rewrites the example's `moon.mod.json` (workspace SDK version → release version; adds `bin-deps` with
-`golemcloud/golem_sdk_tools`) and the tool/SDK paths in `golem.yaml`, producing a standalone template
-that depends only on mooncakes. Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be
-published to mooncakes.io for the release template to work.
+Release mode rewrites the SDK import in the example's `moon.mod` and the tool/SDK paths in
+`golem.yaml`. It changes tool commands to `moonx golemcloud/golem_sdk_tools/cmd@<version> --` and
+uses standalone artifact paths for a copied example outside this workspace. It does not publish
+anything. Both modules must be published to mooncakes.io, and the tools release must include the
+prebuilt Wasm asset required by `moonx`. Do not add `bin-deps` or run no-argument `moon install`.
+
+CLI-generated applications include their own `moon.work` and use workspace artifact paths. Keep
+local SDK and bridge module directories in that workspace, with module imports in `moon.mod` and
+package imports in `moon.pkg`. Golem prepares sources with `moon tree --package --target wasm`.
 
 ## Coding Conventions
 
@@ -642,7 +672,7 @@ published to mooncakes.io for the release template to work.
 
 ## Important Technical Notes
 
-- The SDK library targets **WASM only** (`preferred-target: wasm` in `moon.mod.json`).
+- The SDK library targets **WASM only** (`preferred_target = "wasm"` in `moon.mod`).
 - String encoding is **UTF-16** (passed to `wasm-tools component embed --encoding utf16`).
 - Memory management uses `mbt_ffi_malloc`/`mbt_ffi_free` for WASM linear memory; MoonBit's GC manages
   MoonBit objects. `mbt_ffi_cabi_realloc` in `gen/ffi.mbt` is the Component Model canonical ABI
@@ -655,17 +685,17 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — Golem's fork on the `wit-bindgen-golem-1.6` branch. It combines draft upstream PR #1659's MoonBit
+- **wit-bindgen** — Golem's `wit-bindgen-golem-2.0` branch. It combines released 0.63.0's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
   lifting and lowering, and
   deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which checks the expected release line and applies the s8/s16
-  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install it from the
-  branch used by Golem's Cargo dependencies.
+  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install
+  the pinned Git revision.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.
-- **moonbitlang/parser** (0.3.18) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
-- **moonbitlang/lexer** (0.3.15) — lexer primitives used by the parser integration.
+- **moonbitlang/parser** (0.4.6) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
+- **moonbitlang/lexer** (0.4.4) — lexer primitives used by the parser integration.
 - **moonbitlang/x** (0.5.1) — filesystem + env args for `golem_sdk_tools`.

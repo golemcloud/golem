@@ -5,11 +5,17 @@ pub(all) suberror WireError {
 } derive(Debug, Eq)
 
 ///|
+pub extend WireError with Debug::{to_repr}
+
+///|
+pub extend WireError with Eq::{equal, not_equal}
+
+///|
 pub(all) struct WireEncoder {
   nodes : Array[@types.SchemaValueNode]
   priv checks : Array[() -> Bool]
   priv transfers : Array[() -> Unit]
-  priv streams : Array[(Int, @model.GuestSchemaValueStreamHandle)]
+  priv streams : Array[(Int32, @model.GuestSchemaValueStreamHandle)]
 }
 
 ///|
@@ -21,7 +27,7 @@ pub fn WireEncoder::new() -> WireEncoder {
 pub fn WireEncoder::push(
   self : WireEncoder,
   node : @types.SchemaValueNode,
-) -> Int {
+) -> Int32 {
   let index = self.nodes.length()
   self.nodes.push(node)
   index
@@ -29,8 +35,8 @@ pub fn WireEncoder::push(
 
 ///|
 pub(open) trait IntoWire {
-  fn append_wire(Self, WireEncoder) -> Int raise WireError
-  fn append_result_payload(Self, WireEncoder) -> Int? raise WireError = _
+  fn append_wire(Self, WireEncoder) -> Int32 raise WireError
+  fn append_result_payload(Self, WireEncoder) -> Int32? raise WireError = _
   fn release_wire(Self, WireReleaser) -> Unit = _
 }
 
@@ -78,8 +84,8 @@ pub fn[T : IntoWire] release_wire(value : T) -> Unit {
 
 ///|
 pub(open) trait FromWire {
-  fn read_wire(WireReader, Int) -> Self raise WireError
-  fn read_result_payload(WireReader, Int?) -> Self raise WireError = _
+  fn read_wire(WireReader, Int32) -> Self raise WireError
+  fn read_result_payload(WireReader, Int32?) -> Self raise WireError = _
 }
 
 ///|
@@ -93,7 +99,7 @@ impl FromWire with fn read_result_payload(reader, index) {
 }
 
 ///|
-pub fn wire_payload(index : Int?) -> Int raise WireError {
+pub fn wire_payload(index : Int32?) -> Int32 raise WireError {
   match index {
     Some(index) => index
     None => raise WireError::Invalid("missing required payload")
@@ -101,18 +107,41 @@ pub fn wire_payload(index : Int?) -> Int raise WireError {
 }
 
 ///|
-pub fn wire_no_payload(index : Int?) -> Unit raise WireError {
+/// Rejects a string that holds an unpaired surrogate, because it is not valid
+/// Unicode text.
+fn wire_text(value : String, what : String) -> String raise WireError {
+  guard @model.is_unicode_text(value) else {
+    raise WireError::Invalid("\{what} value contains an unpaired surrogate")
+  }
+  value
+}
+
+///|
+fn wire_optional_text(
+  value : String?,
+  what : String,
+) -> String? raise WireError {
+  match value {
+    Some(value) => Some(wire_text(value, what))
+    None => None
+  }
+}
+
+///|
+pub fn wire_no_payload(index : Int32?) -> Unit raise WireError {
   guard index is None else { raise WireError::Invalid("unexpected payload") }
 }
 
 ///|
 /// A decode transaction owns the entire carrier until every field has been
 /// decoded and finish succeeds. Abort invalidates lifted holders before
-/// dropping each distinct raw capability, including unreachable ones.
+/// dropping each distinct raw capability, including unreachable ones. Finish
+/// drops the capabilities of discarded subtrees.
 pub struct WireReader {
   tree : @types.SchemaValueTree
   visited : Array[Bool]
   resources : Array[@types.SchemaValueNode]
+  discarded : Array[@types.SchemaValueNode]
   rollback : Array[() -> Unit]
   drop_resource : (@types.SchemaValueNode) -> Unit
   mut settled : Bool
@@ -143,12 +172,13 @@ fn drop_wire_resource(node : @types.SchemaValueNode) -> Unit {
 ///|
 pub fn WireReader::new(
   tree : @types.SchemaValueTree,
-  drop_resource? : (@types.SchemaValueNode) -> Unit = drop_wire_resource,
+  drop_resource~ : (@types.SchemaValueNode) -> Unit = drop_wire_resource,
 ) -> WireReader {
   {
     tree,
     visited: Array::make(tree.value_nodes.length(), false),
     resources: [],
+    discarded: [],
     rollback: [],
     drop_resource,
     settled: false,
@@ -187,6 +217,10 @@ pub fn WireReader::finish(self : WireReader) -> Unit raise WireError {
   }
   self.settled = true
   self.rollback.clear()
+  for node in self.discarded {
+    (self.drop_resource)(node)
+  }
+  self.discarded.clear()
 }
 
 ///|
@@ -276,7 +310,7 @@ fn release_wire_values(
 ///|
 async fn WireEncoder::finish_async(
   encoder : WireEncoder,
-  root : Int,
+  root : Int32,
 ) -> @types.SchemaValueTree {
   encoder.preflight()
   for entry in encoder.streams {
@@ -288,7 +322,7 @@ async fn WireEncoder::finish_async(
 
 ///|
 fn WireEncoder::preflight(encoder : WireEncoder) -> Unit raise WireError {
-  let resources : Map[(Int, Int), Bool] = Map([])
+  let resources : Map[(Int32, Int32), Bool] = Map([])
   for node in encoder.nodes {
     let identity = match node {
       @types.SecretValue(@types.Secret::Secret(raw)) => Some((0, raw))
@@ -314,7 +348,7 @@ fn WireEncoder::preflight(encoder : WireEncoder) -> Unit raise WireError {
       raise WireError::Invalid("resource has already been transferred")
     }
   }
-  let wrapped_streams : Map[Int, Bool] = Map([])
+  let wrapped_streams : Map[Int32, Bool] = Map([])
   for i, entry in encoder.streams {
     let (_, stream) = entry
     guard stream.is_present() else {
@@ -336,8 +370,8 @@ fn WireEncoder::preflight(encoder : WireEncoder) -> Unit raise WireError {
 /// Native readers expose endpoint equality but no resource identity key. Keep
 /// the pairwise loop separate from hash-backed preflight for Wasm optimization.
 fn preflight_native_stream(
-  streams : Array[(Int, @model.GuestSchemaValueStreamHandle)],
-  before : Int,
+  streams : Array[(Int32, @model.GuestSchemaValueStreamHandle)],
+  before : Int32,
   stream : @model.GuestSchemaValueStreamHandle,
 ) -> Unit raise WireError {
   for j in 0..<before {
@@ -350,7 +384,7 @@ fn preflight_native_stream(
 ///|
 fn WireEncoder::finish(
   encoder : WireEncoder,
-  root : Int,
+  root : Int32,
 ) -> @types.SchemaValueTree raise WireError {
   for entry in encoder.streams {
     let (index, stream) = entry
@@ -384,7 +418,7 @@ pub fn[T : FromWire] from_wire(
 ///|
 pub fn wire_node(
   tree : WireReader,
-  index : Int,
+  index : Int32,
 ) -> @types.SchemaValueNode raise WireError {
   guard !tree.settled else {
     raise WireError::Invalid("wire reader has already settled")
@@ -411,12 +445,50 @@ pub fn wire_node(
 }
 
 ///|
+/// Claims the subtree at `index` without decoding it. Its owned resources are
+/// dropped by finish, or by abort like every other resource of the carrier.
+fn WireReader::discard(
+  self : WireReader,
+  index : Int32,
+) -> Unit raise WireError {
+  let node = wire_node(self, index)
+  if wire_is_resource(node) {
+    self.discarded.push(node)
+  }
+  match node {
+    @types.SchemaValueNode::RecordValue(children)
+    | @types.SchemaValueNode::TupleValue(children)
+    | @types.SchemaValueNode::ListValue(children)
+    | @types.SchemaValueNode::FixedListValue(children) =>
+      for child in children {
+        self.discard(child)
+      }
+    @types.SchemaValueNode::MapValue(entries) =>
+      for entry in entries {
+        self.discard(entry.key)
+        self.discard(entry.value)
+      }
+    @types.SchemaValueNode::VariantValue({ payload: Some(child), .. })
+    | @types.SchemaValueNode::OptionValue(Some(child))
+    | @types.SchemaValueNode::ResultValue(
+      @types.ResultValuePayload::OkValue(Some(child))
+    )
+    | @types.SchemaValueNode::ResultValue(
+      @types.ResultValuePayload::ErrValue(Some(child))
+    )
+    | @types.SchemaValueNode::UnionValue({ body: child, .. }) =>
+      self.discard(child)
+    _ => ()
+  }
+}
+
+///|
 pub fn wire_record(
   tree : WireReader,
-  index : Int,
-  arity : Int,
+  index : Int32,
+  arity : Int32,
   context : String,
-) -> Array[Int] raise WireError {
+) -> Array[Int32] raise WireError {
   match wire_node(tree, index) {
     @types.SchemaValueNode::RecordValue(fields) if fields.length() == arity =>
       fields
@@ -431,8 +503,8 @@ pub fn wire_record(
 ///|
 pub fn wire_variant(
   tree : WireReader,
-  index : Int,
-  cases : Int,
+  index : Int32,
+  cases : Int32,
   context : String,
 ) -> @types.VariantValuePayload raise WireError {
   match wire_node(tree, index) {
@@ -448,7 +520,7 @@ pub fn wire_variant(
 
 ///|
 pub impl IntoWire for String with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::StringValue(self))
+  encoder.push(@types.SchemaValueNode::StringValue(wire_text(self, "string")))
 }
 
 ///|
@@ -473,15 +545,29 @@ pub impl FromWire for Bool with fn read_wire(tree, index) {
 }
 
 ///|
-pub impl IntoWire for Int with fn append_wire(self, encoder) {
+pub impl IntoWire for Int32 with fn append_wire(self, encoder) {
   encoder.push(@types.SchemaValueNode::S32Value(self))
 }
 
 ///|
-pub impl FromWire for Int with fn read_wire(tree, index) {
+pub impl FromWire for Int32 with fn read_wire(tree, index) {
   match wire_node(tree, index) {
     @types.SchemaValueNode::S32Value(value) => value
     _ => raise WireError::Invalid("expected s32 value")
+  }
+}
+
+///|
+pub impl IntoWire for Int16 with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::S16Value(self.to_int()))
+}
+
+///|
+pub impl FromWire for Int16 with fn read_wire(tree, index) {
+  match wire_node(tree, index) {
+    @types.SchemaValueNode::S16Value(value) if value >= -32768 && value <= 32767 =>
+      Int16::from_int(value)
+    _ => raise WireError::Invalid("expected s16 value")
   }
 }
 
@@ -500,12 +586,12 @@ pub impl FromWire for UInt16 with fn read_wire(tree, index) {
 }
 
 ///|
-pub impl IntoWire for UInt with fn append_wire(self, encoder) {
+pub impl IntoWire for UInt32 with fn append_wire(self, encoder) {
   encoder.push(@types.SchemaValueNode::U32Value(self))
 }
 
 ///|
-pub impl FromWire for UInt with fn read_wire(tree, index) {
+pub impl FromWire for UInt32 with fn read_wire(tree, index) {
   match wire_node(tree, index) {
     @types.SchemaValueNode::U32Value(value) => value
     _ => raise WireError::Invalid("expected u32 value")
@@ -579,6 +665,11 @@ pub impl FromWire for Byte with fn read_wire(tree, index) {
 
 ///|
 pub impl IntoWire for Char with fn append_wire(self, encoder) {
+  guard @model.is_unicode_scalar(self) else {
+    raise WireError::Invalid(
+      "char value is not a Unicode scalar value: \{self.to_int()}",
+    )
+  }
   encoder.push(@types.SchemaValueNode::CharValue(self))
 }
 
@@ -601,11 +692,8 @@ pub impl IntoWire for Unit with fn append_result_payload(_self, _encoder) {
 }
 
 ///|
-pub impl FromWire for Unit with fn read_result_payload(reader, index) {
-  match index {
-    None => ()
-    Some(index) => FromWire::read_wire(reader, index)
-  }
+pub impl FromWire for Unit with fn read_result_payload(_reader, index) {
+  wire_no_payload(index)
 }
 
 ///|
@@ -700,19 +788,30 @@ pub impl[K : IntoWire, V : IntoWire] IntoWire for Map[K, V] with fn append_wire(
 }
 
 ///|
+/// A repeated key keeps the value of its last entry at the position of its
+/// first entry; the values of earlier entries are not decoded.
 pub impl[K : FromWire + Hash + Eq, V : FromWire] FromWire for Map[K, V] with fn read_wire(
   reader,
   index,
 ) {
   match wire_node(reader, index) {
     @types.SchemaValueNode::MapValue(entries) => {
-      let result : Map[K, V] = Map([])
-      for entry in entries {
+      let keys : Array[K] = []
+      let last : Map[K, Int32] = Map([])
+      for i, entry in entries {
         let key : K = FromWire::read_wire(reader, entry.key)
-        guard !result.contains(key) else {
-          raise WireError::Invalid("duplicate map key")
+        keys.push(key)
+        last[key] = i
+      }
+      let result : Map[K, V] = Map([])
+      for i, key in keys {
+        guard last.get(key) is Some(winner) else { continue }
+        if !result.contains(key) {
+          result[key] = V::read_wire(reader, entries[winner].value)
         }
-        result[key] = V::read_wire(reader, entry.value)
+        if winner != i {
+          reader.discard(entries[i].value)
+        }
       }
       result
     }
@@ -740,34 +839,21 @@ pub impl FromWire for Bytes with fn read_wire(tree, index) {
 }
 
 ///|
-pub impl IntoWire for @types.Uuid with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::UuidValue(self))
+pub impl IntoWire for Uuid with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::UuidValue(self.to_wit()))
 }
 
 ///|
-pub impl FromWire for @types.Uuid with fn read_wire(tree, index) {
+pub impl FromWire for Uuid with fn read_wire(tree, index) {
   match wire_node(tree, index) {
-    @types.SchemaValueNode::UuidValue(value) => value
+    @types.SchemaValueNode::UuidValue(value) => Uuid::from_wit(value)
     _ => raise WireError::Invalid("expected uuid value")
   }
 }
 
 ///|
-pub impl IntoWire for @types.Datetime with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::DatetimeValue(self))
-}
-
-///|
-pub impl FromWire for @types.Datetime with fn read_wire(tree, index) {
-  match wire_node(tree, index) {
-    @types.SchemaValueNode::DatetimeValue(value) => value
-    _ => raise WireError::Invalid("expected datetime value")
-  }
-}
-
-///|
 pub impl IntoWire for Path with fn append_wire(self, encoder) {
-  encoder.push(@types.SchemaValueNode::PathValue(self.value))
+  encoder.push(@types.SchemaValueNode::PathValue(wire_text(self.value, "path")))
 }
 
 ///|

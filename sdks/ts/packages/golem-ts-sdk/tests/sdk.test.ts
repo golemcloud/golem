@@ -192,7 +192,7 @@ describe('Zod walker', () => {
     expect(n.fromValue({ tag: 'f64', value: 8 })).toBe(8);
 
     expect(compileSchema(z.boolean()).graph.root.body).toMatchObject({ tag: 'bool' });
-    expect(compileSchema(z.bigint()).graph.root.body).toMatchObject({ tag: 'u64' });
+    expect(compileSchema(z.bigint()).graph.root.body).toMatchObject({ tag: 's64' });
   });
 
   it('maps optional/nullable to option and unwraps default', () => {
@@ -562,6 +562,12 @@ describe('defineAgent', () => {
 });
 
 describe('numeric restrictions', () => {
+  const f64 = (x: number) => {
+    const view = new DataView(new ArrayBuffer(8));
+    view.setFloat64(0, x);
+    return { tag: 'float-bits', val: view.getBigUint64(0) };
+  };
+
   it('s.u8({ min, max }) carries unsigned restrictions and round-trips', () => {
     const c = compileSchema(s.u8({ min: 1, max: 200 }));
     const body = c.graph.root.body as {
@@ -598,6 +604,29 @@ describe('numeric restrictions', () => {
     expect(body.restrictions?.min?.tag).toBe('float-bits');
     expect(body.restrictions?.max?.tag).toBe('float-bits');
     expect(c.fromValue(c.toValue(5))).toBe(5);
+  });
+
+  it('z.number() exclusive gt/lt bounds are not published', () => {
+    for (const schema of [z.number().gt(0), z.number().lt(10), z.number().positive()]) {
+      const body = compileSchema(schema).graph.root.body as { restrictions?: unknown };
+      expect(body.restrictions).toBeUndefined();
+    }
+  });
+
+  it('z.number() publishes only the inclusive bounds next to exclusive ones', () => {
+    const body = compileSchema(z.number().gte(1).gt(5).lt(8).lte(9)).graph.root.body as {
+      restrictions?: { min?: unknown; max?: unknown };
+    };
+    expect(body.restrictions?.min).toEqual(f64(1));
+    expect(body.restrictions?.max).toEqual(f64(9));
+  });
+
+  it('z.number() publishes the tightest inclusive bounds', () => {
+    const body = compileSchema(z.number().min(5).min(2).max(3).max(9)).graph.root.body as {
+      restrictions?: { min?: unknown; max?: unknown };
+    };
+    expect(body.restrictions?.min).toEqual(f64(5));
+    expect(body.restrictions?.max).toEqual(f64(3));
   });
 
   it('plain z.number() has no restrictions', () => {

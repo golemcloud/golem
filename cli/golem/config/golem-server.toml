@@ -118,6 +118,12 @@ type = "Unrestricted"
 
 [registry_service.domain_registration.available_domains.config]
 
+[registry_service.durable_stream_routes]
+default_append_requests_per_second_per_stream = 100
+default_concurrent_readers_per_stream = 16
+max_append_requests_per_second_per_stream = 1000
+max_concurrent_readers_per_stream = 16
+
 [registry_service.grpc.tls]
 type = "Disabled"
 
@@ -545,6 +551,7 @@ indexed_storage_layers = 2
 max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
+max_retained_auto_commit_batches = 32
 oplog_rate_limit_enabled = false
 plugin_max_commit_count = 3
 plugin_max_elapsed_time = "5s"
@@ -1076,6 +1083,12 @@ type = "Disabled"
 #
 # [registry_service.domain_registration.available_domains.config]
 #
+# [registry_service.durable_stream_routes]
+# default_append_requests_per_second_per_stream = 100
+# default_concurrent_readers_per_stream = 16
+# max_append_requests_per_second_per_stream = 1000
+# max_concurrent_readers_per_stream = 16
+#
 # [registry_service.grpc.tls]
 # type = "Disabled"
 #
@@ -1538,6 +1551,7 @@ type = "Disabled"
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# max_retained_auto_commit_batches = 32
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"

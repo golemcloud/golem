@@ -61,7 +61,7 @@ impl CursorTx<'_> {
     /// On the first non-drainable entry (a non-terminal, or an `End`/`Cancelled` nobody awaits):
     /// - if `condition` matches, it is committed and returned;
     /// - if it is a durable-call `Start` nobody has claimed, it is committed past and **retained**
-    ///   for its owner's later identity-validated claim (see [`CursorState::retained_starts`]),
+    ///   for its owner's later identity-validated claim (see [`CursorState::starts`]),
     ///   and the drain continues. The reader is never handed another operation's `Start`, and it
     ///   never parks on one either: the owner of that `Start` may need the Store this reader holds
     ///   before it can claim it;
@@ -153,7 +153,7 @@ impl CursorTx<'_> {
             self.st.skip_hints_after_delivery = false;
         }
         loop {
-            if self.cursor.is_live() {
+            if self.cursor.at_replay_tail() {
                 // No further entries to read: nothing to drain, condition cannot match.
                 return Ok(None);
             }
@@ -166,8 +166,9 @@ impl CursorTx<'_> {
                 // before the guest can observe the read; reserving an import is not enough.
                 let unreached_guest_call = guest_order.is_some_and(|order| {
                     self.st
-                        .retained_starts
-                        .range(..read_idx)
+                        .starts
+                        .retained_iter()
+                        .take_while(|(index, _)| **index < read_idx)
                         .any(|(_, retained)| {
                             matches!(&retained.entry, OplogEntry::Start {
                             invocation_id: Some(id), ..
@@ -224,7 +225,7 @@ impl CursorTx<'_> {
                     self.skip_forward().await?;
                     continue;
                 }
-                if abandoned.is_some() && self.st.retained_starts.contains_key(start_index) {
+                if abandoned.is_some() && self.st.starts.get_retained(start_index).is_some() {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "AgentInvocationFinished",
                         format!(
@@ -260,12 +261,12 @@ impl CursorTx<'_> {
                 continue;
             }
 
-            if self.st.claimed_starts.contains(&read_idx) {
+            if self.st.starts.is_claimed_ahead(&read_idx) {
                 // A `Start` already claimed out-of-position by an identity-keyed scan-ahead claim
-                // (`claim_owned_start`): its owner registered a resolver awaiter at claim time, so
-                // just consume it here and keep draining — it must never be handed to a positional
-                // reader.
-                self.st.claimed_starts.remove(&read_idx);
+                // stays reserved even if registration failed or was explicitly removed. Consume
+                // its position without changing any remaining terminal obligation; it must never
+                // be handed to a positional reader.
+                self.st.starts.consume_claimed_start(&read_idx);
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
             }
@@ -392,7 +393,7 @@ impl CursorTx<'_> {
         &self,
         reader: PositionalReader,
     ) -> Result<(), WorkerExecutorError> {
-        if self.blocked_on_completion_delivery || self.cursor.is_live() {
+        if self.blocked_on_completion_delivery || self.cursor.at_replay_tail() {
             return Ok(());
         }
         let Some((head_idx, head)) = self.st.replay_buffer.front() else {
@@ -413,8 +414,8 @@ impl CursorTx<'_> {
             }
             (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
         };
-        let owner_can_consume = self.st.retained_starts.contains_key(&owner)
-            || self.st.claimed_starts.contains(&owner)
+        let owner_can_consume = self.st.starts.get_retained(&owner).is_some()
+            || self.st.starts.is_claimed_ahead(&owner)
             || self.cursor.reconstruction_claims.is_body_active(owner)
             || self
                 .future_entity_start_can_be_claimed(*head_idx, owner)
@@ -433,18 +434,70 @@ impl CursorTx<'_> {
 }
 
 impl CursorState {
+    pub(super) async fn disposal_admission_refusal(
+        &self,
+        cursor: &ReplayCursor,
+        operation: &OwnerToolOperation,
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
+        let Some((refusal, terminal)) = operation.expected_disposal_refusal() else {
+            return Ok(None);
+        };
+        if cursor.delivery_in_progress.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if let Some(failure) = cursor.delivery_failure.lock().unwrap().clone() {
+            return Err(failure);
+        }
+        let Some(owner) = operation.invocation_id().map(|id| id.start_index()) else {
+            return Ok(None);
+        };
+        if terminal > cursor.replay_target() {
+            return Ok(None);
+        }
+        // Collection is not a guest demand. Its recorded refusal terminates this owner only
+        // after every earlier real call and guest observation has been reconstructed.
+        let boundary = self.entity_replay_progress.completed.get(&owner)
+            .filter(|boundary| boundary.terminal_index == terminal
+                && terminal > owner
+                && self.entity_replay_horizon >= cursor.replay_target()
+                && !self.skipped_regions.is_in_deleted_region(owner)
+                && !self.skipped_regions.is_in_deleted_region(terminal)
+                && boundary.last_required.is_none_or(|index| index > owner && index < terminal
+                    && !self.skipped_regions.is_in_deleted_region(index)))
+            .ok_or_else(|| WorkerExecutorError::unexpected_oplog_entry(
+                "folded entity replay boundary matching the disposal terminal and replay horizon",
+                format!("entity {owner}, terminal {terminal}, horizon {}", cursor.replay_target()),
+            ))?;
+        if boundary
+            .last_required
+            .is_some_and(|index| index > cursor.last_replayed_index())
+        {
+            return Ok(None);
+        }
+        if self.starts.retained_summary().entities.contains_key(&owner) {
+            return Ok(None);
+        }
+        if let Some(failure) = cursor.delivery_failure.lock().unwrap().clone() {
+            return Err(failure);
+        }
+        Ok(Some(refusal))
+    }
+
     async fn positional_admission_refusal(
         &self,
         cursor: &ReplayCursor,
         scope: Option<OplogIndex>,
         admission: Option<&PositionalAdmission>,
-    ) -> Result<Option<SerializableToolAdmissionRefusal>, UnreadableOplog> {
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
         let Some((operation, request)) = admission else {
             return Ok(None);
         };
         let Some(owner) = scope else {
             return Ok(None);
         };
+        if let Some(refusal) = self.disposal_admission_refusal(cursor, operation).await? {
+            return Ok(Some(refusal));
+        }
         let Some((expected, terminal_index)) = operation.expected_admission_refusal() else {
             return Ok(None);
         };
@@ -477,6 +530,49 @@ impl CursorState {
 }
 
 impl ReplayState {
+    pub(crate) async fn disposal_admission_refusal(
+        &self,
+        operation: &OwnerToolOperation,
+    ) -> Result<Option<SerializableToolAdmissionRefusal>, WorkerExecutorError> {
+        if operation.expected_disposal_refusal().is_none() {
+            return Ok(None);
+        }
+        let operation = operation.clone();
+        self.run_owned_cursor_op(move |replay| async move {
+            let state = replay.cursor.state.lock().await;
+            state
+                .disposal_admission_refusal(&replay.cursor, &operation)
+                .await
+        })
+        .await
+    }
+
+    /// A recorded collection refusal is an owner terminal, not a demand to collect again.
+    /// This observer never consumes records: real calls and reads must advance replay first.
+    pub(crate) async fn await_disposal_admission_refusal(
+        &self,
+        operation: OwnerToolOperation,
+    ) -> WorkerExecutorError {
+        if operation.expected_disposal_refusal().is_none() {
+            return std::future::pending().await;
+        }
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let ready = self.disposal_admission_refusal(&operation).await;
+            match ready {
+                Ok(Some(refusal)) => {
+                    let error = operation.reproduce_admission_refusal(refusal).await;
+                    self.cursor.progress.notify_waiters();
+                    return error;
+                }
+                Err(error) => return error,
+                Ok(None) => progress.await,
+            }
+        }
+    }
+
     /// The error returned when a positional oplog reader expects a next entry but the cursor is
     /// at end-of-replay.
     fn end_of_replay_error(&self) -> WorkerExecutorError {
@@ -690,9 +786,9 @@ impl ReplayState {
                         {
                             return Ok(None);
                         }
-                        if terminal_start_index(&entry).is_some_and(|start_index| {
-                            st.concurrent_resolver.owns_terminal(start_index, index)
-                        }) || custom_subtree_entry_is_drainable(&st, &entry)
+                        if terminal_start_index(&entry)
+                            .is_some_and(|start_index| st.starts.owns_terminal(start_index, index))
+                            || custom_subtree_entry_is_drainable(&st, &entry)
                         {
                             return Ok(None);
                         }
@@ -712,17 +808,14 @@ impl ReplayState {
                             return Ok(None);
                         }
                         if matches!(entry, OplogEntry::Start { .. })
-                            && st.claimed_starts.contains(&index)
+                            && st.starts.is_claimed_ahead(&index)
                         {
                             return Ok(None);
                         }
-                        if owner.is_some_and(|owner| {
-                            owner != root && st.concurrent_resolver.is_awaited(owner)
-                        }) {
+                        if owner.is_some_and(|owner| owner != root && st.starts.is_awaited(owner)) {
                             return Ok(None);
                         }
-                        if terminal_start_index(&entry) == Some(root)
-                            && st.concurrent_resolver.is_awaited(root)
+                        if terminal_start_index(&entry) == Some(root) && st.starts.is_awaited(root)
                         {
                             return Ok(None);
                         }
@@ -738,7 +831,7 @@ impl ReplayState {
 
     /// Returns the earliest retained, still unclaimed durable-call `Start` in `root`'s call tree
     /// that is not owned by a still running reconstructed entity body (see
-    /// [`CursorState::retained_starts`]).
+    /// [`CursorState::starts`]).
     ///
     /// The cursor steps over unclaimed `Start`s instead of parking on them, so a body that
     /// returned without re-issuing one of its recorded calls no longer stalls the cursor. Callers
@@ -755,7 +848,7 @@ impl ReplayState {
         self.run_owned_cursor_op(move |state| async move {
             let cursor = &*state.cursor;
             let st = cursor.state.lock().await;
-            let Some(last_retained) = st.retained_starts.keys().next_back().copied() else {
+            let Some(last_retained) = st.starts.retained_keys().next_back().copied() else {
                 return Ok(None);
             };
             if last_retained <= root {
@@ -787,7 +880,7 @@ impl ReplayState {
                 next = last_read.next();
             }
 
-            for index in st.retained_starts.keys().copied() {
+            for index in st.starts.retained_keys().copied() {
                 if index <= root {
                     continue;
                 }
@@ -859,7 +952,7 @@ impl ReplayState {
             {
                 return Ok(entry);
             }
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Err(self.end_of_replay_error());
             }
             // An unconditional reader returns `None` during replay only at a reserved
@@ -889,7 +982,7 @@ impl ReplayState {
                 changed.as_mut().enable();
                 let st = self.cursor.state.lock().await;
                 if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
-                    return Err(WorkerExecutorError::runtime(failure));
+                    return Err(failure);
                 }
                 let refusal = st
                     .positional_admission_refusal(&self.cursor, scope, admission.as_ref())
@@ -932,7 +1025,7 @@ impl ReplayState {
                     .await?;
                 Ok(match entry {
                     Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
-                    None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
+                    None if tx.cursor.at_replay_tail() => Some(PositionalRead::ReplayEnded),
                     None => {
                         tx.check_parked_positional_read(PositionalReader::Ordinary)
                             .await?;
@@ -1015,7 +1108,7 @@ impl ReplayState {
         &self,
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
-            if self.is_replay() {
+            if self.has_replay_remaining() {
                 let (oplog_index, oplog_entry) = self.get_oplog_entry(None).await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
@@ -1081,7 +1174,7 @@ impl ReplayState {
         // reproduce.
         let mut abandoned = AbandonedStarts::default();
         loop {
-            if self.is_replay() {
+            if self.has_replay_remaining() {
                 let Some((_, oplog_entry)) = self
                     .get_oplog_entry_at_invocation_boundary(&mut abandoned)
                     .await?
@@ -1148,7 +1241,7 @@ impl ReplayState {
             {
                 return Ok(Some(entry));
             }
-            if self.is_live() {
+            if self.at_replay_tail() {
                 // An acknowledged guest boundary defers hint skipping until this read. Those
                 // hints can exhaust an incomplete invocation's tail without a Finished entry.
                 return Ok(None);

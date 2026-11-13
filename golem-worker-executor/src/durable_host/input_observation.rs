@@ -119,10 +119,11 @@ impl InputObservationDelivery {
             Box::new(move |consumption| {
                 let _ownership = (self.activity, self.live_call_permit, settled);
                 if consumption == TerminalConsumption::NotDelivered {
+                    let error = self.replay.fail_stream_observation(recorded_index.unwrap());
                     barrier.fail(
                         "cancelled native stream read cannot retain its recorded guest delivery",
                     );
-                    return Err(self.replay.fail_stream_observation(recorded_index.unwrap()));
+                    return Err(error);
                 }
                 barrier.acknowledge();
                 if let Some(completed) = completed {

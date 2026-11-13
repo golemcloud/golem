@@ -21,8 +21,11 @@ use sqlx::migrate::MigrationSource;
 use sqlx::postgres::{PgArguments, PgPoolOptions, PgQueryResult, PgRow};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Connection, Error, Executor, FromRow, IntoArguments, PgConnection, Postgres};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
+
+/// How long a pooled connection may sit idle before it is pinged on acquire.
+const IDLE_CONNECTION_PING_THRESHOLD: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct PostgresPool {
@@ -41,7 +44,22 @@ impl PostgresPool {
             config.host, config.port, config.database, schema
         );
 
-        let mut options = PgPoolOptions::new().max_connections(config.max_connections);
+        // sqlx pings every connection before handing it out by default, which adds a full
+        // round trip to each query. sqlx also pings every connection when it returns to the pool,
+        // and `idle_for` counts from the end of that successful ping. A connection that skips the
+        // acquire ping was therefore verified alive less than the threshold ago; it can still
+        // break in that interval, as it could between an acquire ping and the query.
+        let mut options = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .test_before_acquire(false)
+            .before_acquire(|conn, meta| {
+                Box::pin(async move {
+                    if meta.idle_for >= IDLE_CONNECTION_PING_THRESHOLD {
+                        conn.ping().await?;
+                    }
+                    Ok(true)
+                })
+            });
         // Left at sqlx's own default when unset; see `DbPostgresConfig::acquire_timeout`.
         if let Some(acquire_timeout) = config.acquire_timeout {
             options = options.acquire_timeout(acquire_timeout);

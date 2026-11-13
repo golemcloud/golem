@@ -27,11 +27,8 @@ async fn moonbit_http_router(_tracing: &Tracing) {
     assert!(output.success_or_dump());
     fs::write_str(
         ctx.cwd_path_join("counter.mbt"),
-        concat!(
-            include_str!(
-                "../../../../sdks/moonbit/golem_sdk_example1/golem_moonbit_examples/http_router.mbt"
-            ),
-            "\nfn main {}\n",
+        include_str!(
+            "../../../../sdks/moonbit/golem_sdk_example1/golem_moonbit_examples/http_router.mbt"
         ),
     )
     .unwrap();
@@ -195,6 +192,12 @@ async fn moonbit_http_router(_tracing: &Tracing) {
 
     // Separate durable identities own separate constructor-created live files.
     for owner in ["alice", "bob"] {
+        let agent = format!("FileOwner(\"{owner}\")");
+        assert!(
+            ctx.cli([cmd::AGENT, cmd::NEW, agent.as_str()])
+                .await
+                .success_or_dump()
+        );
         let response = client
             .get(format!("{base}/files/{owner}/value"))
             .send()

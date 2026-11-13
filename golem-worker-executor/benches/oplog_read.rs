@@ -85,6 +85,9 @@ fn metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_id,
         env: Vec::new(),
@@ -98,6 +101,12 @@ fn metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -136,6 +145,7 @@ async fn build_service(
             ENTRY_COUNT + 1,
             ENTRY_COUNT + 1,
             1024 * 1024,
+            32,
             RetryConfig::default(),
         )
         .await,

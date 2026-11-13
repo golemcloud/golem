@@ -16,6 +16,7 @@ use crate::app::{Output, TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
 use chrono::{DateTime, Utc};
 use golem_cli::fs;
+use golem_cli::versions::sdk::MANIFEST as MANIFEST_VERSION;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_client::model::{DeploymentCreation, TokenCreation};
 use golem_client::{Context, Security};
@@ -294,7 +295,7 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
 
     let yaml_string = |value: &str| serde_json::to_string(value).unwrap();
     let consumer_manifest = format!(
-        r#"manifestVersion: 1.6.0
+        r#"manifestVersion: {MANIFEST_VERSION}
 app: {application}
 
 tools:
@@ -470,7 +471,7 @@ bridge:
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         format!(
-            r#"manifestVersion: 1.6.0
+            r#"manifestVersion: {MANIFEST_VERSION}
 app: {application}
 
 environments:
@@ -622,7 +623,7 @@ async fn default_tool_uses_its_grant_pinned_by_release_id_in_read_only_runs(
     // `tools` is the top-level tools section of the manifest, or nothing.
     let manifest = |tools: &str| {
         format!(
-            r#"manifestVersion: 1.6.0
+            r#"manifestVersion: {MANIFEST_VERSION}
 app: {application}
 {tools}
 environments:
@@ -795,7 +796,7 @@ async fn remote_middleware_release_is_pinned_across_accounts(
         .expect("publisher deployment must create audit@1.2.0");
 
     let consumer_manifest = format!(
-        r#"manifestVersion: 1.6.0
+        r#"manifestVersion: {MANIFEST_VERSION}
 app: {application}
 
 tools:

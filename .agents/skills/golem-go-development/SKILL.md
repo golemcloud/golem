@@ -120,7 +120,7 @@ running the executor suite:
 
 ```shell
 cd test-components && ./build-components.sh go
-cargo test -p golem-worker-executor --test integration -- --skip diag_ agent_sdk_go
+cargo test -p golem-worker-executor-tests --test integration -- --skip diag_ agent_sdk_go
 ```
 
 Lint with `golangci-lint` per module; each has its own `.golangci.yml`. The version

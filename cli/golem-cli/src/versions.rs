@@ -13,18 +13,18 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "3.0.0";
-    pub const TS: &str = "2.0.0";
-    pub const EFFECT_GOLEM: &str = "2.0.0";
-    pub const SCALA: &str = "2.0.0";
-    pub const MOONBIT: &str = "0.6.0";
-    pub const GO: &str = "0.1.0";
-    pub const MANIFEST: &str = "1.6.0";
+    pub const RUST: &str = "3.0.2";
+    pub const TS: &str = "2.0.2";
+    pub const EFFECT_GOLEM: &str = "2.0.2";
+    pub const SCALA: &str = "2.0.2";
+    pub const MOONBIT: &str = "0.6.2";
+    pub const GO: &str = "0.1.2";
+    pub const MANIFEST: &str = "2.0.0";
 
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.6.0"
+            "2.0.0-dev.1"
         };
     }
 }
@@ -130,6 +130,9 @@ pub mod rust_dep {
     pub const LOG: &str = "0.4.29";
     pub const SERDE: &str = "1";
     pub const SERDE_JSON: &str = "1";
+    pub const WIT_BINDGEN_GIT: &str = env!("GOLEM_RUST_WIT_BINDGEN_GIT");
+    pub const WIT_BINDGEN_REV: &str = env!("GOLEM_RUST_WIT_BINDGEN_REV");
+    pub const WIT_BINDGEN_VERSION: &str = env!("GOLEM_RUST_WIT_BINDGEN_VERSION");
 }
 
 pub mod scala_dep {
@@ -146,6 +149,6 @@ pub mod moonbit_dep {
 }
 
 pub mod ai {
-    pub const VERSION: &str = "v0.5.2";
+    pub const VERSION: &str = "v0.5.5";
     pub const SUFFIX: &str = ".wasm";
 }

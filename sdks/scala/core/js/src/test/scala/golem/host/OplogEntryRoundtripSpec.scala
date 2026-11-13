@@ -258,7 +258,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.walletPin.walletToken.walletIdHash.toSeq == Seq[Byte](1, 2, -1),
         parsed.walletPin.walletToken.generation == BigInt(7),
-        parsed.walletPin.scopeCardId.contains(golem.Uuid(BigInt(10), BigInt(20)))
+        parsed.walletPin.scopeCardId.contains(new java.util.UUID(10L, 20L))
       )
     },
     test("SetRetryPolicy from dynamic") {
@@ -764,6 +764,43 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.SnapshotConfirmed]
       assertTrue(parsed.filesystemSnapshot == "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
     },
+    test("SpanClosed from dynamic") {
+      val raw = wrapEntry(
+        "span-closed",
+        js.Dynamic.literal(
+          timestamp = ts(1700000007, 700),
+          resourceStartIndex = js.BigInt("14"),
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-3",
+            finishedAt = ts(1700000008, 800),
+            outcome = "completed"
+          )
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.SpanClosed]
+      assertTrue(
+        parsed.timestamp == ContextApi.DateTime(BigInt(1700000007), 700),
+        parsed.resourceStartIndex.contains(BigInt(14)),
+        parsed.spanFinished ==
+          SpanFinished("span-3", ContextApi.DateTime(BigInt(1700000008), 800), SpanOutcome.Completed)
+      )
+    },
+    test("SpanClosed without resource start index from dynamic") {
+      val raw = wrapEntry(
+        "span-closed",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          resourceStartIndex = js.undefined,
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-4",
+            finishedAt = ts(),
+            outcome = "failed"
+          )
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.SpanClosed]
+      assertTrue(parsed.resourceStartIndex.isEmpty, parsed.spanFinished.outcome == SpanOutcome.Failed)
+    },
     test("SuccessfulUpdate from dynamic") {
       val raw = wrapEntry(
         "successful-update",
@@ -796,6 +833,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "pending-agent-invocation",
         js.Dynamic.literal(
           timestamp = ts(),
+          notBefore = ts(1800000000, 123),
           invocation = js.Dynamic.literal(
             tag = "exported-function",
             `val` = js.Dynamic.literal(
@@ -813,6 +851,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val inv    = parsed.asInstanceOf[OplogEntry.PendingAgentInvocation].params.invocation
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingAgentInvocation],
+        parsed
+          .asInstanceOf[OplogEntry.PendingAgentInvocation]
+          .params
+          .notBefore
+          .contains(
+            ContextApi.DateTime(BigInt(1800000000), 123)
+          ),
         inv.isInstanceOf[AgentInvocation.ExportedFunction],
         inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment",
         inv

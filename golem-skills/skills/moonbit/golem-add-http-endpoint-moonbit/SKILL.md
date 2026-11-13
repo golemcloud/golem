@@ -48,8 +48,8 @@ fn TaskAgent::new(task_name : String) -> TaskAgent {
 
 Rules:
 - Path must start with `/`
-- Every constructor parameter must appear as a `{variable}` in the mount path (using the parameter name)
-- Every `{variable}` must match a constructor parameter name
+- Every user-supplied identity parameter must appear as a `{variable}` in the mount path (using the parameter name)
+- Every `{variable}` must match a user-supplied identity parameter. Host-injected `Principal` and `@config.Config[T]` parameters are excluded; do not bind them in the mount path.
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
 ## Endpoint Annotation
@@ -95,9 +95,6 @@ For a method with stream inputs or outputs, add one `#derive.durable_stream_slot
   content_type = "application/vnd.example.events",
 )
 #derive.durable_streams(
-  allow_external_writes = true,
-  allow_stream_delete = false,
-  allow_invocation_delete = false,
   max_concurrent_readers_per_stream = 8,
   max_append_requests_per_second_per_stream = 25,
 )
@@ -112,8 +109,7 @@ pub fn MyAgent::events(
 - `input` or `output` selects a canonical top-level stream slot. `$result` is the only implicit result selector.
 - `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
 - `content_type` is allowed only for a direct `@schema.AgentStream[Byte]` slot and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `@schema.AgentStream[String]`. SSE still uses `text/event-stream` and base64 data.
-- The three `allow_*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
-- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Reader and append limits must be positive and no greater than the installation maximums. Omitted values use the registry installation defaults.
 - Limits are maintained per route and worker-service node, not as a cluster-wide quota.
 
 ## Query Parameters
@@ -343,7 +339,7 @@ httpApi:
 ## Key Constraints
 
 - `#derive.mount("/path")` is required on the agent struct before any `#derive.endpoint(...)` annotations can be used
-- All constructor parameters must be provided via mount path variables
+- All user-supplied identity parameters must be provided via mount path variables; host-injected Principal and Config parameters must not be bound
 - Path/query/header variable names must exactly match method parameter names
 - The endpoint path must start with `/`
 - Exactly one HTTP method must be specified per `#derive.endpoint(...)` annotation

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::StreamCancelReason;
 use super::{
     Accessor, Arc, AsContextMut, AttachmentConsumer, AttachmentController, AttachmentMemory,
     AttachmentObserver, AttachmentStreamProducer, ByteStreamFailure, Cancellable,
@@ -27,12 +28,9 @@ use super::{
     authorize_live_permissions_at_serialized_access, discard_producer, durability, input, mpsc,
     oneshot, secret_hold_targets_for_value,
 };
-use super::{AccessorTask, StreamCancelReason};
 
-impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
-    for ToolStdinStreamPumpTask<Ctx>
-{
-    async fn run(
+impl<Ctx: WorkerCtx> ToolStdinStreamPumpTask<Ctx> {
+    pub(super) async fn run<U: Send + 'static>(
         mut self,
         _accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
@@ -311,6 +309,7 @@ pub(super) fn native_output_handles(
 pub(super) async fn admit_tool_response_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
+    invocation_id: crate::durable_host::concurrent::InvocationIdSource,
 ) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
@@ -343,11 +342,15 @@ where
         targets: targets.clone(),
     };
     let admission =
-        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access_with_options(
             accessor,
             accessor.getter(),
             request,
             DurableFunctionType::ReadLocal,
+            crate::durable_host::concurrent::AccessClaimOptions {
+                invocation_id,
+                ..Default::default()
+            },
             async || {
                 Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
                     admitted: authorize_live_permissions_at_serialized_access(
@@ -491,12 +494,13 @@ where
                 || Ok(()),
             ));
         }
-        access.spawn(ToolStdinStreamPumpTask::<Ctx> {
+        let task = ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
             source_cancel: None,
             _ctx: std::marker::PhantomData,
-        });
+        };
+        access.spawn(async move |access| task.run(access).await)?;
         Ok(stdin)
     })
 }
@@ -547,12 +551,13 @@ where
                 || Ok(()),
             ));
         }
-        access.spawn(ToolStdinStreamPumpTask::<Ctx> {
+        let task = ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
             source_cancel: Some(source_cancel),
             _ctx: std::marker::PhantomData,
-        });
+        };
+        access.spawn(async move |access| task.run(access).await)?;
         Ok(stdin)
     })
 }

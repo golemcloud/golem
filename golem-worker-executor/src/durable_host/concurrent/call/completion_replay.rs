@@ -36,10 +36,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         access: &mut impl DurableContext<Ctx>,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError> {
         self.reproduce_refusal_for_claimed_start(access).await?;
-        let replay = self
-            .replay
-            .take()
-            .expect("replay() called on a live handle");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let (replay_state, oplog) = access.with_ctx(|ctx| {
             if let Some(hook) = ctx.replay_admission_hook() {
                 hook.before_direct_replay_wait(Pair::FQFN, self.start_idx);
@@ -50,7 +47,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
                 if let ReplayDeliveryDisposition::AtMarker(marker_idx) = disposition {
-                    self.finished = true;
+                    self.state = pending_call.accept_terminal().into_session();
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "a completion-delivery marker for an accessor durable call",
                         format!(
@@ -63,9 +60,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 // path's guest task is synchronously blocked inside the host call, so delivery
                 // coincides with the host return and has no pre-delivery divergence window.
                 //
-                // Terminal: mark finished up front so a decode / scope-close failure below does not
-                // drop the (replay) handle as "unfinished".
-                self.finished = true;
+                // Release Drop responsibility before the fallible decode and scope close.
+                self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
                     payload,
@@ -73,20 +69,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
                 .await?;
                 access
-                    .finish_scope(self.retry.function_type().clone(), self.begin_index())
+                    .finish_scope(self.retry.function_type().clone())
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ReplayedResolution::Undelivered(terminal) => {
                 // Replay divergence: undelivered terminals cannot legally occur on the direct
                 // path (see [`UndeliveredTerminal::direct_divergence_error`]).
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                self.prepare_incomplete_live_repair_at(access).await?;
+                self.prepare_incomplete_live_repair_at(access, pending_call)
+                    .await?;
                 if let Err(error) = access.publish_direct_replay_tail(self.start_idx).await {
-                    self.finished = true;
+                    self.state.fail();
                     return Err(error);
                 }
                 if let Some((response, span_finished)) =
@@ -123,8 +120,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false)
+        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false, None)
             .await
+    }
+
+    /// Replays an effectful destructor from a background task. Its End is host-internal;
+    /// cancellation or a guest delivery marker is a divergence. Missing terminals repair only
+    /// after the natural replay tail, never by moving past intervening guest history.
+    pub(crate) async fn replay_drop_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        activity: &crate::durable_host::tail_work::TailActivity,
+    ) -> Result<CallReplayOutcome<Pair, P>, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        self.replay_access_to(
+            store,
+            get_ctx,
+            AccessResultDestination::Host,
+            false,
+            Some(activity),
+        )
+        .await
+        .map_err(|source| TerminalCallError::new(source, context))
     }
 
     pub(super) async fn replay_access_to<T, D, Ctx>(
@@ -133,6 +156,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         destination: AccessResultDestination,
         require_completed: bool,
+        drop_activity: Option<&crate::durable_host::tail_work::TailActivity>,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -143,7 +167,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.reproduce_refusal_for_claimed_start(&mut AccessorContext::new(store, get_ctx))
             .await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -154,18 +177,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .for_store(ctx.runtime_suspension.clone()),
             )
         });
-        let replay = self
-            .replay
-            .take()
-            .expect("replay_access() called on a live handle");
-        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
+        let outcome = replay_state
+            .await_resolution_outcome_for_drop(replay, drop_activity)
+            .await?;
+        if drop_activity.is_some()
+            && matches!(
+                outcome,
+                ResolutionOutcome::Resolved(Resolution::Cancelled { .. })
+            )
+        {
+            self.state = pending_call.accept_terminal().into_session();
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End for an effectful resource drop",
+                format!("Cancelled for Start {}", self.start_idx),
+            ));
+        }
         if require_completed
             && !matches!(
                 outcome,
                 ResolutionOutcome::Resolved(Resolution::Completed { .. })
             )
         {
-            self.finished = true;
+            self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "completed host-internal child",
                 "completed parent has an unfinished host-internal child",
@@ -182,7 +216,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
             )
         {
-            self.finished = true;
+            self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "host-internal terminal without a guest delivery marker",
                 format!("delivery marker for host-internal Start {}", self.start_idx),
@@ -190,15 +224,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 if destination == AccessResultDestination::Guest {
                     CompletionDelivery::replay_delivered(
                         disposition,
@@ -227,10 +260,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 // `CloseDurableScope` event. Awaiting `end_durable_function_access` *here*,
                 // before the park, would open a cancellation window: for scope-opening calls
                 // it takes the scope's replay handle before its first await, so the guest
-                // dropping this future mid-close would strand the open scope (with `finished`
-                // already set, `Drop` would not clean it up either).
+                // dropping this future mid-close would strand the open scope after releasing
+                // the session's Drop responsibility.
                 terminal.log_parking();
-                self.parked_undelivered_replay = true;
+                let _parked_call = pending_call.park_undelivered();
                 // Release the terminal before suspending: a discarded completion carries the
                 // persisted response payload, which must not be kept alive for as long as the
                 // guest keeps this parked future around.
@@ -238,17 +271,52 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                self.prepare_incomplete_live_repair_at(&mut AccessorContext::new(store, get_ctx))
-                    .await?;
-                let transition = publish_incomplete_replay_tail_at(
+                if let Some(activity) = drop_activity {
+                    if store.with(|mut access| {
+                        get_ctx(access.data_mut()).rejects_live_continuation_at_replay_tail()
+                    }) {
+                        self.state = pending_call.accept_terminal().into_session();
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "End for an effectful resource drop",
+                            format!(
+                                "incomplete Start {} during completed entity replay",
+                                self.start_idx
+                            ),
+                        ));
+                    }
+                    // Do not acquire a live-call permit while later invocations must still
+                    // replay; that permit would hold their settlement open.
+                    replay_state.await_natural_tail_end(Some(activity)).await?;
+                }
+                self.prepare_incomplete_live_repair_at(
                     &mut AccessorContext::new(store, get_ctx),
-                    Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
-                        index: self.start_idx.into(),
-                    }),
+                    pending_call,
                 )
-                .await;
-                if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
-                    self.finished = true;
+                .await?;
+                let transition = if let Some(activity) = drop_activity {
+                    continue_live_at_natural_tail_end_access(
+                        store,
+                        get_ctx,
+                        &replay_state,
+                        activity,
+                        "effectful resource drop",
+                        Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                            index: self.start_idx.into(),
+                        }),
+                    )
+                    .await
+                } else {
+                    publish_incomplete_replay_tail_at(
+                        &mut AccessorContext::new(store, get_ctx),
+                        Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                            index: self.start_idx.into(),
+                        }),
+                    )
+                    .await
+                    .and_then(FinishReplayToLive::require_live)
+                };
+                if let Err(error) = transition {
+                    self.state.fail();
                     return Err(error);
                 }
                 let synchronization = if self.requires_agent_authority {
@@ -310,7 +378,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         self.ensure_accessor_terminal_supported("replay_reconstruction_access")?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
@@ -321,14 +388,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .for_store(ctx.runtime_suspension.clone()),
             )
         });
-        let replay = self
-            .replay
-            .take()
-            .expect("replay_reconstruction_access() called on a live handle");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
@@ -336,8 +400,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 CompletionDelivery::replay_delivered(
                     disposition,
                     self.start_idx,
@@ -357,21 +420,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {
                 cancelled_idx,
             }) => {
-                self.finished = true;
-                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
-                    .await?;
+                self.state = pending_call.accept_terminal().into_session();
+                end_durable_function_access(store, get_ctx, function_type, false).await?;
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     "entity cancellation with partial terminal provenance",
                     format!("Cancelled without partial at {cancelled_idx}"),
                 ))
             }
             ReplayedResolution::Undelivered(terminal) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                self.prepare_incomplete_live_repair_at(&mut AccessorContext::new(store, get_ctx))
-                    .await?;
+                self.prepare_incomplete_live_repair_at(
+                    &mut AccessorContext::new(store, get_ctx),
+                    pending_call,
+                )
+                .await?;
                 let transition = match publish_incomplete_replay_tail_access(
                     store,
                     get_ctx,
@@ -383,7 +448,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 {
                     Ok(transition) => transition,
                     Err(error) => {
-                        self.finished = true;
+                        self.state.fail();
                         return Err(error);
                     }
                 };
@@ -399,23 +464,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
-    pub(in crate::durable_host) async fn resolve_completed_reconstruction(
+    async fn resolve_completed_reconstruction_to(
         mut self,
         replay_state: ReplayState,
         oplog: Arc<dyn Oplog>,
-        completion_marker_recorder: CompletionMarkerRecorder,
-    ) -> Result<(Pair::Resp, ResolvedReconstructionTerminal), WorkerExecutorError> {
+    ) -> Result<(Pair::Resp, bool), WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("resolve_completed_reconstruction")?;
-        let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
-        let replay = self
-            .replay
-            .take()
-            .expect("resolve_completed_reconstruction() called on a live handle");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
@@ -423,30 +482,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                let delivery = CompletionDelivery::replay_delivered(
-                    disposition,
-                    self.start_idx,
-                    completion_marker_recorder,
-                    self.trap_context(),
-                    self.cleanup_sink.clone(),
-                    self.teardown_probe(),
-                );
-                Ok((
-                    response,
-                    ResolvedReconstructionTerminal {
-                        function_type,
-                        begin_index,
-                        delivery,
-                        cancelled,
-                    },
-                ))
+                if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "internal entity terminal without delivery marker",
+                        "CompletionDelivered for internal entity invocation",
+                    ));
+                }
+                Ok((response, cancelled))
             }
             ReplayedResolution::Undelivered(terminal) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     "completed entity invocation terminal",
                     format!(
@@ -488,7 +537,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         self.reproduce_refusal_for_claimed_start(access).await?;
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
         let (replay_state, oplog, completion_marker_recorder) = access.with_ctx(|ctx| {
             (
                 ctx.state.replay_state.clone(),
@@ -498,21 +546,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .for_store(ctx.runtime_suspension.clone()),
             )
         });
-        let replay = self
-            .replay
-            .take()
-            .expect("replay_access_deferred() called on a live handle");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // The delivery token is constructed only after the fallible decode / scope close
                 // succeeded: a token dropped on the error path would log a spurious
                 // unconsumed-token warning.
@@ -543,14 +588,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                      by the guest (marker at {marker_idx}); replaying its post-End \
                      continuation before parking at the delivery boundary"
                 );
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
                     ReplayedPayload::Completed(response),
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                access.finish_scope(function_type, begin_index).await?;
+                access.finish_scope(function_type).await?;
                 // As above, the token is constructed only after the fallible operations.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
@@ -566,11 +611,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 // deferred to this handle's `Drop`. See [`Self::replay_access`] for why the
                 // scope close must not happen before the park.
                 terminal.log_parking();
-                self.parked_undelivered_replay = true;
+                let _parked_call = pending_call.park_undelivered();
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                self.prepare_incomplete_live_repair_at(access).await?;
+                self.prepare_incomplete_live_repair_at(access, pending_call)
+                    .await?;
                 let transition = publish_incomplete_replay_tail_at(
                     access,
                     Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
@@ -579,7 +625,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
                 .await;
                 if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
-                    self.finished = true;
+                    self.state.fail();
                     return Err(error);
                 }
                 let synchronization = if self.requires_agent_authority {
@@ -732,10 +778,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         failure: Pair::Resp,
     ) -> Result<Pair::Resp, WorkerExecutorError> {
         self.reproduce_refusal_for_claimed_start(ctx).await?;
-        let replay = self
-            .replay
-            .take()
-            .expect("response-only repair requires replay");
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
         let outcome = ctx
             .state
             .replay_state
@@ -743,7 +786,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await?;
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "a direct host-return terminal",
@@ -756,18 +799,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
-                ctx.finish_scope(self.retry.function_type().clone(), self.begin_index())
-                    .await?;
+                ctx.finish_scope(self.retry.function_type().clone()).await?;
                 Ok(response)
             }
             ReplayedResolution::Undelivered(terminal) => {
-                self.finished = true;
+                self.state = pending_call.accept_terminal().into_session();
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                self.prepare_incomplete_live_repair_at(ctx).await?;
+                self.prepare_incomplete_live_repair_at(ctx, pending_call)
+                    .await?;
                 if let Err(error) = ctx.publish_direct_replay_tail(self.start_idx).await {
-                    self.finished = true;
+                    self.state.fail();
                     return Err(error);
                 }
                 if let Some((response, span_finished)) = self.recorded_denied_response(ctx).await? {
@@ -842,13 +885,154 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 }
 
+impl
+    DurableCallSession<
+        golem_common::model::oplog::host_functions::GolemEntityInvoke,
+        LeaveIncompleteOnDrop,
+    >
+{
+    pub(crate) fn accept_entity_execution_ownership(&mut self) {
+        self.entity_admission = false;
+    }
+
+    fn ensure_owned_entity_scope(&self) -> Result<(), WorkerExecutorError> {
+        // Entity sessions are WriteLocal. Non-forced scope finish is therefore a no-op, just
+        // as in end_durable_function_access; owned settlement must never commit a remote scope.
+        if self.retry.function_type() != &DurableFunctionType::WriteLocal {
+            return Err(WorkerExecutorError::runtime(
+                "owned entity settlement requires WriteLocal",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn complete_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        response: golem_common::model::oplog::HostResponseEntityInvocation,
+        span: golem_common::model::oplog::SpanFinished,
+    ) -> Result<golem_common::model::oplog::HostResponseEntityInvocation, WorkerExecutorError> {
+        self.ensure_owned_entity_scope()?;
+        if !self.is_live() {
+            return Err(WorkerExecutorError::runtime(
+                "owned completion requires a live entity session",
+            ));
+        }
+        let (response, mut guard) = self
+            .persist_guarded_terminal(context.oplog.clone(), None, response, Some(span))
+            .await?;
+        guard.disarm();
+        Ok(response)
+    }
+
+    pub(crate) async fn cancel_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        response: golem_common::model::oplog::HostResponseEntityInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        self.ensure_owned_entity_scope()?;
+        if !self.is_live() {
+            return Err(WorkerExecutorError::runtime(
+                "owned cancellation requires a live entity session",
+            ));
+        }
+        let mut guard = self.terminal_guard()?;
+        let result = if self.state.is_recorded_execution() {
+            Self::persist_cancellation(context.oplog.clone(), &mut guard, Some(response)).await
+        } else {
+            Ok(())
+        };
+        guard.disarm();
+        result
+    }
+
+    pub(crate) async fn replay_entity_owned<Ctx: WorkerCtx>(
+        mut self,
+        context: &EntitySettlementContext<Ctx>,
+        completed: bool,
+    ) -> Result<
+        ReconstructionReplayOutcome<
+            golem_common::model::oplog::host_functions::GolemEntityInvoke,
+            LeaveIncompleteOnDrop,
+        >,
+        WorkerExecutorError,
+    > {
+        self.ensure_owned_entity_scope()?;
+        if completed {
+            let (response, cancelled) = self
+                .resolve_completed_reconstruction_to(context.replay.clone(), context.oplog.clone())
+                .await?;
+            return Ok(if cancelled {
+                ReconstructionReplayOutcome::Cancelled(response)
+            } else {
+                ReconstructionReplayOutcome::Replayed(response)
+            });
+        }
+        let (replay, pending_call) = self.take_replay_call()?.begin_resolution();
+        let outcome = context.replay.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.state = pending_call.accept_terminal().into_session();
+                if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "internal entity terminal without delivery marker",
+                        "CompletionDelivered for internal entity invocation",
+                    ));
+                }
+                let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
+                let response = decode_replayed_payload::<
+                    golem_common::model::oplog::host_functions::GolemEntityInvoke,
+                >(
+                    &context.oplog,
+                    payload,
+                    self.execution_scope.trap_retry_point(),
+                )
+                .await?;
+                Ok(if cancelled {
+                    ReconstructionReplayOutcome::Cancelled(response)
+                } else {
+                    ReconstructionReplayOutcome::Replayed(response)
+                })
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.state = pending_call.accept_terminal().into_session();
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                if let Err(error) = self
+                    .prepare_incomplete_live_repair(pending_call, || context.counter.clone())
+                    .await
+                {
+                    context.replay.abandon_replay_for_failure().await?;
+                    context.authoritative_failure.store(true, Ordering::Release);
+                    return Err(error);
+                }
+                let transition = match context.publish_live(self.start_idx).await {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        self.abandon_for_trap();
+                        return Err(error);
+                    }
+                };
+                Ok(match transition {
+                    FinishReplayToLive::Cancelled => {
+                        ReconstructionReplayOutcome::LiveAdmissionCancelled(self)
+                    }
+                    FinishReplayToLive::Live | FinishReplayToLive::AttachmentAdmissionRejected => {
+                        ReconstructionReplayOutcome::Incomplete(self)
+                    }
+                })
+            }
+        }
+    }
+}
+
 /// Parks a replaying call forever, after the caller marked its replay as undelivered: the
 /// recorded run never delivered this terminal to the guest, which will therefore drop this
 /// future at the same point it did live. This future never completes; the return type exists
 /// only so a `match` arm can produce whatever type its siblings do.
 async fn park_undelivered_forever<T>() -> T {
-    let never: std::convert::Infallible = std::future::pending().await;
-    match never {}
+    match std::future::pending::<std::convert::Infallible>().await {}
 }
 
 impl UndeliveredTerminal {
@@ -1037,24 +1221,5 @@ pub(super) fn expect_cancelled_resolution(
             WorkerExecutorError::unexpected_oplog_entry("Cancelled", format!("End at {end_idx}")),
         ),
         Resolution::Cancelled { .. } => Ok(()),
-    }
-}
-
-impl ResolvedReconstructionTerminal {
-    pub(in crate::durable_host) async fn finish_access<T, D, Ctx>(
-        self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<bool, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
-        let cancelled = self.cancelled();
-        end_durable_function_access(store, get_ctx, self.function_type, self.begin_index, false)
-            .await?;
-        self.delivery.deliver_at_accessor_terminal(store).await?;
-        Ok(cancelled)
     }
 }

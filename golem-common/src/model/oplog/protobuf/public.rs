@@ -57,10 +57,13 @@ use crate::model::oplog::public_oplog_entry::{
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
-use crate::model::oplog::raw_types::{CreateParameters, DurableStreamEventSummary};
+use crate::model::oplog::raw_types::{
+    CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
+};
 use crate::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
@@ -266,6 +269,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                    not_before: pending_worker_invocation.not_before.map(Into::into),
                     timestamp: pending_worker_invocation
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -521,6 +525,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     filesystem_snapshot: value.filesystem_snapshot,
                 }),
             ),
+            oplog_entry::Entry::SpanClosed(value) => {
+                Ok(PublicOplogEntry::SpanClosed(SpanClosedParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    resource_start_index: value
+                        .resource_start_index
+                        .map(crate::base_model::OplogIndex::from_u64),
+                    span_finished: public_span_finished_from_proto(
+                        value.span_finished.ok_or("Missing span_finished field")?,
+                    )?,
+                }))
+            }
             oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -938,6 +953,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
                         golem_api_grpc::proto::golem::worker::PendingAgentInvocationParameters {
+                            not_before: pending_worker_invocation.not_before.map(Into::into),
                             timestamp: Some(pending_worker_invocation.timestamp.into()),
                             invocation: Some(pending_worker_invocation.invocation.try_into()?),
                         },
@@ -1229,6 +1245,21 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::SnapshotConfirmedParameters {
                             timestamp: Some(params.timestamp.into()),
                             filesystem_snapshot: params.filesystem_snapshot,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::SpanClosed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SpanClosed(
+                        golem_api_grpc::proto::golem::worker::SpanClosedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            resource_start_index: params
+                                .resource_start_index
+                                .map(|index| index.as_u64()),
+                            span_finished: Some(public_span_finished_to_proto(
+                                params.span_finished,
+                            )),
                         },
                     )),
                 }
@@ -1820,19 +1851,19 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState> for PublicR
     }
 }
 
-/// Convert a `PublicOplogEntry` to a domain `OplogEntry`.
+/// Convert supplied public observations without establishing Create ownership.
 ///
 /// Some entry types (e.g. `AgentInvocationStarted`) cannot be losslessly
 /// round-tripped because the public representation discards internal detail.
 /// For those cases this conversion returns an error.
-impl TryFrom<PublicOplogEntry> for OplogEntry {
+impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
     type Error = String;
 
     fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
         match value {
-            PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
+            PublicOplogEntry::Create(create) => return Ok(Self::CreateProjection {
                 timestamp: create.timestamp,
-                parameters: Box::new(CreateParameters {
+                parameters: Box::new(CreateProjectionParameters {
                     agent_id: create.agent_id,
                     owner_kind: create.owner_kind,
                     agent_mode: create.agent_mode,
@@ -2156,6 +2187,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: p.timestamp,
                 filesystem_snapshot: p.filesystem_snapshot.parse()?,
             }),
+            PublicOplogEntry::SpanClosed(p) => Ok(OplogEntry::SpanClosed {
+                timestamp: p.timestamp,
+                entity_parent_start_index: None,
+                resource_start_index: p.resource_start_index,
+                span_finished: public_span_finished_to_raw(p.span_finished),
+            }),
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
@@ -2303,6 +2340,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     record: OplogPayload::Inline(Box::new(record)),
                 })
             }
-        }
+        }.map(Self::Other)
     }
 }

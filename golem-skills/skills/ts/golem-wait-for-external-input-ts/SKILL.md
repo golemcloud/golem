@@ -7,7 +7,7 @@ description: "Waiting for external input using Golem promises in a TypeScript Go
 
 ## Overview
 
-A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, passes the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. The Golem runtime durably suspends the agent — consuming no resources — until the promise is fulfilled.
+A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, passes the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. Creation does not suspend the agent. For durable agents awaiting a pending promise, suspension can occur after the suspension policy delay when all active work permits it. Suspension frees guest execution resources; persisted state and other resources remain.
 
 ## API
 
@@ -34,7 +34,7 @@ import type { PromiseId } from '@golemcloud/golem-ts-sdk';
 const promiseId = createPromise();
 // Pass promiseId to an external system...
 
-// Agent is durably suspended here until the promise is completed
+// Awaiting can suspend the durable agent after the suspension policy delay
 const resultBytes = await awaitPromise(promiseId);
 const result = new TextDecoder().decode(resultBytes);
 ```
@@ -88,7 +88,7 @@ export const WorkflowAgentImpl = WorkflowAgent.implement({
       const promiseId = createPromise();
 
       // 2. Pass promiseId.oplogIdx to an external system.
-      // The agent is now durably suspended.
+      // Creation does not suspend the agent; awaiting can suspend it after the policy delay.
 
       // 3. Wait for external completion
       const bytes = await awaitPromise(promiseId);

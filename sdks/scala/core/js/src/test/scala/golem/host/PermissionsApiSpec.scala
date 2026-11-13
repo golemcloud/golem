@@ -29,6 +29,12 @@ import scala.util.Try
 
 object PermissionsApiSpec extends ZIOSpecDefault {
 
+  @golem.runtime.annotations.agentDefinition("persistent-card-agent")
+  trait PersistentCardAgent extends golem.BaseAgent {
+    class Id()
+    def keep(card: PersistentCard): PersistentCard
+  }
+
   @js.native
   @JSImport("fs", JSImport.Namespace)
   private object Fs extends js.Object {
@@ -248,9 +254,9 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       val revoking  = template(host.rawCard("revoking"))
       val revoked   = revoking.revoke()
       val installed = template(host.rawCard("installed"))
-      val result    = installed.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val result    = installed.install(Holder.App(new java.util.UUID(1L, 2L)))
       val denied    = template(host.rawCard("install-denied"))
-      val refused   = denied.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val refused   = denied.install(Holder.App(new java.util.UUID(1L, 2L)))
       val released  = template(host.rawCard("released"))
       released.release()
       released.release()
@@ -358,6 +364,30 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         implicitly[FromSchema[PersistentCard]].fromValue(SchemaValue.VariantValue(2, None)).isLeft
       )
     },
+    test("generated code uses the hand-written persistent card codec that the static metadata describes") {
+      val host     = new FakeHost
+      val derived  = ConcreteCodec.derived[PersistentCard]
+      val metadata = golem.runtime.macros.AgentMacros.agentMetadata[PersistentCardAgent].methods.head
+      val handle   = GuestPermissionCardHandle.fromRaw(host.rawCard("derived"))
+      val decoded  = derived.decode(
+        golem.schema.wire.WitSchemaValueTree(
+          Vector(
+            WitSchemaValueNode.PermissionCardHandle(handle),
+            WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(1, Some(0)))
+          ),
+          1
+        )
+      )
+      val template = decoded.isInstanceOf[PersistentCard.Template]
+      decoded.release()
+      val graph = golem.schema.wire.SchemaWire.schemaGraphFromWit(derived.graph)
+      assertTrue(
+        derived.graph == PersistentCard.concreteCodec.graph,
+        metadata.input.userSupplied.head.graph == graph,
+        metadata.output.asInstanceOf[golem.runtime.OutputMetadata.Single].graph == graph,
+        template
+      )
+    },
     test("an expected host error becomes Left and an unknown thrown value is rethrown") {
       val host = new FakeHost
       host
@@ -417,7 +447,7 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       val agentResult = agentCard.install(Holder.agent(componentId, "Target(\"b\")"))
       val agentArgs   = host.args("installCard")
       val appCard     = card(host.rawCard("b"))
-      val appResult   = appCard.install(Holder.App(golem.Uuid(BigInt(5), BigInt(6))))
+      val appResult   = appCard.install(Holder.App(new java.util.UUID(5L, 6L)))
       val appArgs     = host.args("installCard")
       val holder      = agentArgs(1).asInstanceOf[js.Dynamic]
       assertTrue(

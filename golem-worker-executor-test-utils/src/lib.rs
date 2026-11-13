@@ -14,7 +14,7 @@
 
 // `store_component_with` in `dsl_impl.rs` is an instrumented async fn whose
 // layout needs more depth than rustc's default of 128. On rustc 1.98 the
-// observed minimum is 129; 256 matches `golem-worker-executor/tests/lib.rs`.
+// observed minimum is 129; 256 matches `golem-worker-executor-tests/tests/lib.rs`.
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
@@ -37,7 +37,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, ResolvedOwnerContext};
+use golem_common::model::agent::{
+    AgentMode, AgentTarget, ParsedAgentKey, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
@@ -212,6 +214,8 @@ use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
 test_r::enable!();
+
+mod executor_release;
 
 /// A handle to either an owned `TempDir` (parent process) or a borrowed
 /// on-disk path (worker process).
@@ -727,7 +731,13 @@ impl TestWorkerExecutor {
         )
         .await
         .map_err(|_| anyhow!("executor tasks did not retire within 10s"))?
-        .map_err(anyhow::Error::msg)
+        .map_err(anyhow::Error::msg)?;
+        let grace = golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
+        anyhow::ensure!(
+            self._run_details.shutdown.wait_for_tracked(grace).await,
+            "executor shutdown cleanup did not finish within {grace:?}"
+        );
+        Ok(())
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -895,13 +905,14 @@ impl TestWorkerExecutor {
     }
 
     /// Removes the agents from the cache of the executor, drops the executor, and waits until
-    /// its service graph is released, for at most 30 seconds. A cached agent refers to the graph,
-    /// and a drop only asks the tasks of the executor to stop, so without this a start that
-    /// follows in the same process can find what the old graph still holds, such as the
-    /// exclusive lock of a managed XFS root. A test calls this before the next start.
+    /// its service graph and tracked shutdown cleanup are released, for at most 30 seconds.
+    /// Cached agents retain the graph. Dropping the executor only asks its tasks to stop.
+    /// A test calls this before a replacement starts so that the old executor cannot retain
+    /// the exclusive lock of a managed XFS root or remove the replacement's directories.
     pub async fn release(self) -> anyhow::Result<()> {
-        use futures::StreamExt as _;
         let released = self.leak_detector();
+        let shutdown = self._run_details.shutdown.clone();
+        let invocation_loops = self._run_details.invocation_loops.clone();
         if let Some(services) = &self.services {
             remove_cached_agents(&services.active_agents()).await?;
         }
@@ -909,13 +920,7 @@ impl TestWorkerExecutor {
             remove_cached_agents(active_agents).await?;
         }
         drop(self);
-        let gone = futures::stream::repeat(())
-            .then(|()| tokio::time::sleep(Duration::from_millis(10)))
-            .filter(|()| std::future::ready(released.upgrade().is_none()));
-        tokio::time::timeout(Duration::from_secs(30), std::pin::pin!(gone).next())
-            .await
-            .map(drop)
-            .map_err(|_| anyhow::anyhow!("the executor was not released within 30 seconds"))
+        executor_release::wait_for_release(&shutdown, &invocation_loops, released).await
     }
 
     pub fn auth_ctx(&self) -> AuthCtx {
@@ -1508,6 +1513,31 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Pauses the next reconstruction of the agent after `prepare_instance` returns, before the
+    /// invocation loop takes a queued interrupt. Dropping the release sender also unblocks it.
+    pub fn gate_next_prepared_instance(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps
@@ -1556,6 +1586,22 @@ impl TestWorkerExecutor {
         Ok(golem_worker_executor::services::HasEvents::events(
             worker.as_ref(),
         ))
+    }
+
+    /// Adds an entry to the loaded worker's oplog and commits it through the worker, so the
+    /// status owner folds it as it folds the entries of production producers.
+    pub async fn add_and_commit_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        entry: OplogEntry,
+    ) -> anyhow::Result<OplogIndex> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(worker.add_and_commit_oplog(entry).await?)
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -1901,6 +1947,25 @@ impl TestWorkerExecutor {
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
         handle
+    }
+
+    /// Holds the next queued source-transfer payload append before it changes storage.
+    pub async fn gate_next_source_transfer_queued_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(
+                    entry,
+                    OplogEntry::CardEventQueued { event, .. }
+                        if matches!(
+                            event.as_ref(),
+                            golem_common::base_model::oplog::QueuedCardEvent::TransferStarted(_)
+                        )
+                )
+            })
+            .await
     }
 
     /// Holds the real invocation Started append before it changes storage.
@@ -2476,7 +2541,8 @@ impl TestContext {
             let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
                 .map_err(|_| anyhow!(
-                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage ({})",
+                    loops.describe_pending_exit()
                 ))?;
             result.map_err(anyhow::Error::msg)?;
             drained.push(loops.clone());
@@ -3367,8 +3433,8 @@ impl wasmtime_wasi::WasiView for TestWorkerCtx {
     }
 }
 
-impl wasmtime_wasi_http::p3::WasiHttpView for TestWorkerCtx {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+impl wasmtime_wasi_http::WasiHttpView for TestWorkerCtx {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view_p3()
     }
 }
@@ -3456,21 +3522,25 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn resume_replay(
-        store: &mut Store<TestWorkerCtx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance, refresh_replay_target)
-            .await
-    }
-
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
         store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
+        let result =
+            DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await;
+        let gate = store
+            .data()
+            .additional_test_deps
+            .prepared_instance_gates
+            .lock()
+            .unwrap()
+            .remove(agent_id);
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
+        result
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -3532,7 +3602,7 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
@@ -3687,12 +3757,14 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
-        let entity_name = self
-            .durable_ctx
-            .entity_invocation_scope()
-            .map(|scope| scope.activation().entity().name().to_string());
-        self.additional_test_deps
-            .entity_invocation_body_hook(self.agent_id.clone(), entity_name)
+        let scope = self.durable_ctx.entity_invocation_scope();
+        let entity_name = scope.map(|scope| scope.activation().entity().name().to_string());
+        let start_index = scope.map(|scope| scope.invocation_id().start_index());
+        self.additional_test_deps.entity_invocation_body_hook(
+            self.agent_id.clone(),
+            entity_name,
+            start_index,
+        )
     }
 
     fn worker_deletion_hook(extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
@@ -3868,7 +3940,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -4159,6 +4231,14 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn wrap_oplog_service(&self, service: Arc<dyn OplogService>) -> Arc<dyn OplogService> {
+        Arc::new(oplog_fixture::OplogFixtureService::new(
+            service,
+            self.additional_test_deps.clone(),
+            false,
+        ))
+    }
+
     fn capture_services(&self, services: &golem_worker_executor::services::All<TestWorkerCtx>) {
         *self.services.lock().unwrap() = Some(services.clone());
     }
@@ -4498,6 +4578,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         Arc::new(oplog_fixture::OplogFixtureService::new(
             service,
             self.test_oplog_deps.clone(),
+            true,
         ))
     }
 
@@ -7042,6 +7123,7 @@ pub struct AdditionalTestDeps {
     runtime_card_audit_gates:
         Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
+    prepared_instance_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -7127,6 +7209,7 @@ impl AdditionalTestDeps {
             oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            prepared_instance_gates: Arc::default(),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
@@ -7206,6 +7289,7 @@ impl AdditionalTestDeps {
             release: tokio::sync::Semaphore::new(0),
             execution_mode: Some(execution_mode),
             entity_name,
+            start_index: AtomicU64::new(0),
         });
         self.entity_reconstruction_body_gates
             .lock()
@@ -7257,6 +7341,7 @@ impl AdditionalTestDeps {
             release: tokio::sync::Semaphore::new(0),
             execution_mode: None,
             entity_name: None,
+            start_index: AtomicU64::new(0),
         });
         self.entity_body_start_gates
             .lock()
@@ -7276,6 +7361,7 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
         entity_name: Option<String>,
+        start_index: Option<OplogIndex>,
     ) -> Option<Arc<dyn EntityInvocationBodyHook>> {
         let gated = self
             .entity_reconstruction_body_gates
@@ -7296,6 +7382,7 @@ impl AdditionalTestDeps {
             Arc::new(TestEntityInvocationBodyHook {
                 agent_id,
                 entity_name,
+                start_index,
                 gates: self.entity_reconstruction_body_gates.clone(),
                 start_gates: self.entity_body_start_gates.clone(),
                 divergences: self.divergent_entity_reconstructions.clone(),
@@ -7960,6 +8047,8 @@ struct EntityReconstructionBodyGate {
     release: tokio::sync::Semaphore,
     execution_mode: Option<InvocationExecutionMode>,
     entity_name: Option<String>,
+    /// The durable `Start` of the only body this gate holds; zero admits any matching body.
+    start_index: AtomicU64,
 }
 
 struct AgentInvocationSuccessGate {
@@ -8084,6 +8173,14 @@ impl EntityReconstructionBodyGateHandle {
     pub fn release(&self) {
         self.gate.release.add_permits(1);
     }
+
+    /// Restricts this gate to the body whose durable `Start` is `start_index`. Other bodies of
+    /// the same entity then complete without entering it.
+    pub fn restrict_to_start(&self, start_index: OplogIndex) {
+        self.gate
+            .start_index
+            .store(u64::from(start_index), Ordering::Release);
+    }
 }
 
 impl Drop for EntityReconstructionBodyGateHandle {
@@ -8095,6 +8192,7 @@ impl Drop for EntityReconstructionBodyGateHandle {
 struct TestEntityInvocationBodyHook {
     agent_id: AgentId,
     entity_name: Option<String>,
+    start_index: Option<OplogIndex>,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     start_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -8247,6 +8345,55 @@ impl TestReplayAdmissionHook {
 }
 
 #[cfg(test)]
+mod entity_body_completion_gate_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn indexed_body_completion_gate_lets_same_named_sibling_complete() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "body-gate-test".to_string(),
+        };
+        let deps = AdditionalTestDeps::default();
+        let cancelled = OplogIndex::from_u64(7);
+        let sibling = OplogIndex::from_u64(11);
+        let mut gate = deps.gate_next_live_entity_body_completion(
+            agent_id.clone(),
+            "middleware-probe".to_string(),
+        );
+        gate.restrict_to_start(cancelled);
+        let hook = |start_index| {
+            deps.entity_invocation_body_hook(
+                agent_id.clone(),
+                Some("middleware-probe".to_string()),
+                Some(start_index),
+            )
+            .expect("an installed gate supplies a body hook")
+        };
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            hook(sibling).before_completion(InvocationExecutionMode::Live),
+        )
+        .await
+        .expect("a same-named sibling must not enter the cancelled body's gate");
+
+        let cancelled_hook = hook(cancelled);
+        let completion = cancelled_hook.before_completion(InvocationExecutionMode::Live);
+        tokio::pin!(completion);
+        tokio::select! {
+            biased;
+            () = &mut completion => panic!("the gated body completed before release"),
+            () = gate.entered() => {}
+        }
+        gate.release();
+        completion.await;
+    }
+}
+
+#[cfg(test)]
 mod replay_admission_gate_tests {
     use super::*;
     use golem_worker_executor::workerctx::ReplayAdmissionHook;
@@ -8332,11 +8479,14 @@ impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
         let gate = {
             let mut gates = self.gates.lock().unwrap();
             let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                let start_index = gate.start_index.load(Ordering::Acquire);
                 gate.execution_mode == Some(execution_mode)
                     && gate
                         .entity_name
                         .as_ref()
                         .is_none_or(|expected| self.entity_name.as_ref() == Some(expected))
+                    && (start_index == 0
+                        || self.start_index == Some(OplogIndex::from_u64(start_index)))
             });
             matches.then(|| gates.remove(&self.agent_id)).flatten()
         };
@@ -9327,9 +9477,42 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn create_demand(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9337,10 +9520,13 @@ impl Rpc for RecordingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
-                owned_agent_id,
+                target,
+                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9348,13 +9534,16 @@ impl Rpc for RecordingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9372,7 +9561,8 @@ impl Rpc for RecordingRpc {
         }
         self.inner
             .invoke_and_await(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,
@@ -9390,7 +9580,8 @@ impl Rpc for RecordingRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9404,7 +9595,8 @@ impl Rpc for RecordingRpc {
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,
@@ -9422,9 +9614,42 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn create_demand(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9432,10 +9657,13 @@ impl Rpc for FailingRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
-                owned_agent_id,
+                target,
+                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9443,13 +9671,16 @@ impl Rpc for FailingRpc {
                 self_stack,
                 config,
                 auth_ctx,
+                idempotency_key,
+                freshness_disposition,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9473,7 +9704,8 @@ impl Rpc for FailingRpc {
         } else {
             self.inner
                 .invoke_and_await(
-                    owned_agent_id,
+                    target,
+                    environment_id,
                     idempotency_key,
                     freshness_disposition,
                     method_name,
@@ -9492,7 +9724,8 @@ impl Rpc for FailingRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         method_name: String,
@@ -9506,7 +9739,8 @@ impl Rpc for FailingRpc {
     ) -> Result<(), ServiceRpcError> {
         self.inner
             .invoke(
-                owned_agent_id,
+                target,
+                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 method_name,

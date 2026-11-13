@@ -29,7 +29,7 @@ describe('direct flat-wire schema codecs', () => {
       [z.literal('fixed'), { tag: 'string', value: 'wrong' }],
       [z.literal(17), { tag: 'f64', value: 31 }],
       [z.literal(true), { tag: 'bool', value: false }],
-      [z.literal(17n), { tag: 'u64', value: 31n }],
+      [z.literal(17n), { tag: 's64', value: 31n }],
     ] as const;
     for (const [schema, value] of cases) {
       const codec = compileSchema(z.tuple([schema]));
@@ -335,6 +335,53 @@ describe('direct flat-wire schema codecs', () => {
         root: 1,
       }),
     ).toThrow(/aliased/);
+  });
+
+  describe('datetime year range', () => {
+    const datetime = compileSchema(s.datetime());
+    const tree = (value: { seconds: bigint; nanoseconds: number }) => ({
+      valueNodes: [{ tag: 'datetime-value' as const, val: value }],
+      root: 0,
+    });
+
+    it.each([
+      ['0000-01-01T00:00:00Z', { seconds: -62_167_219_200n, nanoseconds: 0 }],
+      ['9999-12-31T23:59:59.999999999Z', { seconds: 253_402_300_799n, nanoseconds: 999_999_999 }],
+    ])('accepts %s on the ordinary, direct and invocation-direct paths', (_, value) => {
+      expect(schemaValueFromWit(schemaValueToWit(datetime.toValue(value)))).toEqual({
+        tag: 'datetime',
+        value,
+      });
+      expect(directSchemaValueFromWit(datetime, directSchemaValueToWit(datetime, value))).toEqual(
+        value,
+      );
+      const writer = new SchemaValueWriter();
+      const root = datetime.invocationDirect!.write(value, writer)!;
+      const written = { valueNodes: writer.valueNodes, root };
+      expect(datetime.invocationDirect!.read(invocationSchemaValueReader(written), root)).toEqual(
+        value,
+      );
+    });
+
+    it.each([
+      [
+        'one nanosecond before 0000-01-01T00:00:00Z',
+        { seconds: -62_167_219_201n, nanoseconds: 999_999_999 },
+      ],
+      ['10000-01-01T00:00:00Z', { seconds: 253_402_300_800n, nanoseconds: 0 }],
+    ])('rejects %s on the ordinary, direct and invocation-direct paths', (_, value) => {
+      const outside = /outside the years 0000\.\.9999/;
+      expect(() => schemaValueToWit(datetime.toValue(value))).toThrow(outside);
+      expect(() => schemaValueFromWit(tree(value))).toThrow(outside);
+      expect(() => directSchemaValueToWit(datetime, value)).toThrow(outside);
+      expect(() => directSchemaValueFromWit(datetime, tree(value))).toThrow(outside);
+      expect(() => datetime.invocationDirect!.write(value, new SchemaValueWriter())).toThrow(
+        outside,
+      );
+      expect(() =>
+        datetime.invocationDirect!.read(invocationSchemaValueReader(tree(value)), 0),
+      ).toThrow(outside);
+    });
   });
 
   it('matches invocation conversion rather than canonical application identity', () => {

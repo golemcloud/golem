@@ -23,8 +23,10 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::agent::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{
+    AgentCreationRequest, AgentMetadataDto, AgentTarget, RevertWorkerTarget,
+};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -126,7 +128,7 @@ impl WorkerApi {
         let (component_revision, _created_at) = self
             .worker_service
             .create_with_component(
-                &agent_id,
+                &AgentTarget::Current(agent_id.clone()),
                 component,
                 env,
                 request.config,
@@ -1042,6 +1044,7 @@ impl WorkerApi {
                 &agent_id,
                 &request.target_agent_id,
                 request.oplog_index_cutoff,
+                None,
                 auth,
             )
             .await?;
@@ -1224,9 +1227,9 @@ fn normalize_agent_name_with_latest_component(
 ) -> Result<AgentId> {
     if latest_component.metadata.is_agent()
         && let Ok((parsed_agent_id, agent_type)) =
-            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+            ParsedAgentKey::parse_and_resolve_type(agent_id, &latest_component.metadata)
     {
-        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
+        let normalized_agent_id = ParsedAgentKey::new_auto_phantom(
             parsed_agent_id.agent_type,
             parsed_agent_id.parameters,
             parsed_agent_id.phantom_id,
@@ -1330,8 +1333,6 @@ mod tests {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![test_agent_type(mode)],
                 std::collections::BTreeMap::new(),
             ),

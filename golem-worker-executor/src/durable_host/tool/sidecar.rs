@@ -13,19 +13,46 @@
 // limitations under the License.
 
 use super::{
-    Accessor, AsContextMut, AttachmentController, DurableToolStdinProducer,
-    EntityCancellationEpochTask, EntityInvocationBody, GuestCallSettlementError,
-    HostResponseEntityInvocation, InvokeResult, SerializableToolInvocationResult, Store,
-    StreamReader, ToolBodyStdin, ToolInvokeResponse, ToolOutputContract, ToolOutputWriterEntry,
-    ToolSidecarBody, ToolSidecarInvocation, UnderlyingToolEntry, UnderlyingToolRevocationGuard,
-    WitTool, WorkerCtx, WorkerExecutorError, decode_guest_tool_error, decode_typed_tool_value,
-    durability, encode_tool_operation_terminal, encode_typed_tool_value,
-    finish_invocation_and_get_fuel_consumption, first_output_limit_error,
-    guest_body_accepts_admission_rejection, guest_trap_output_failure, input, oneshot, operation,
-    prepare_guest_call, prepare_tool_parent_end, rollback_live_attachment_admission_rejection,
-    run_guest_call_settled, streams, tool_guest_exports, tool_middleware_guest_exports,
-    validate_declared_tool_error, validate_declared_tool_result,
+    Accessor, AsContextMut, AttachmentController, ByteStreamFailure, DurableToolStdinProducer,
+    EntityBodyOutcome, EntityCancellationEpochTask, EntityInvocationBody, GuestCallSettlementError,
+    HostResponseEntityInvocation, InterruptKind, InvokeResult, SerializableEntityBodyExecution,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal, SerializableToolRpcError,
+    Store, StreamReader, ToolBodyStdin, ToolInvokeResponse, ToolOutputContract,
+    ToolOutputWriterEntry, ToolSidecarBody, ToolSidecarInvocation, UnderlyingToolEntry,
+    UnderlyingToolRevocationGuard, WitTool, WorkerCtx, WorkerExecutorError,
+    decode_guest_tool_error, decode_typed_tool_value, durability, encode_tool_operation_terminal,
+    encode_tool_terminal, encode_typed_tool_value, finish_invocation_and_get_fuel_consumption,
+    first_output_limit_error, guest_body_accepts_admission_rejection, guest_trap_output_failure,
+    input, oneshot, operation, permanent_tool_guest_trap, prepare_guest_call,
+    prepare_tool_parent_end, rollback_live_attachment_admission_rejection, run_guest_call_settled,
+    streams, tool_guest_exports, tool_middleware_guest_exports, validate_declared_tool_error,
+    validate_declared_tool_result,
 };
+
+async fn replay_disposal_termination<T>(
+    replay: crate::durable_host::replay_state::ReplayState,
+    operation: operation::OwnerToolOperation,
+    body: impl Future<Output = wasmtime::Result<T>>,
+) -> wasmtime::Result<T> {
+    let result = tokio::select! {
+        biased;
+        error = replay.await_disposal_admission_refusal(operation.clone()) => {
+            return Err(wasmtime::Error::from_anyhow(error.into()));
+        }
+        result = body => result,
+    };
+    if result.is_ok()
+        && let Some(refusal) = replay
+            .disposal_admission_refusal(&operation)
+            .await
+            .map_err(|error| wasmtime::Error::from_anyhow(error.into()))?
+    {
+        return Err(wasmtime::Error::from_anyhow(
+            operation.reproduce_admission_refusal(refusal).await.into(),
+        ));
+    }
+    result
+}
 
 impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for ToolSidecarBody {
     fn invoke<'a>(
@@ -35,7 +62,10 @@ impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<HostResponseEntityInvocation, WorkerExecutorError>,
+                    Output = Result<
+                        EntityBodyOutcome<HostResponseEntityInvocation>,
+                        WorkerExecutorError,
+                    >,
                 > + Send
                 + 'a,
         >,
@@ -49,6 +79,7 @@ impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for
                 self.cancellation,
             )
             .await;
+            store.data().durable_ctx().entity_body_finalization.begin();
             if result.is_err() {
                 durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
             }
@@ -119,14 +150,15 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         let ctx = access.data_mut().durable_ctx_mut();
         let activity = ctx.tail_work_tracker().activity();
         let revision = ctx.component_metadata().revision;
-        access.spawn(streams::MaterializeResponse {
+        let task = streams::MaterializeResponse {
             streams: result_streams.clone(),
             revision,
             response,
             completed,
             activity,
-        });
-    });
+        };
+        access.spawn(async move |access| task.run(access).await)
+    })?;
     completion
         .await
         .map_err(|_| wasmtime::Error::msg("tool result materialization task stopped"))?
@@ -139,7 +171,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     invocation: ToolSidecarInvocation,
     operation: operation::OwnerToolOperation,
     cancellation: Option<tokio_util::sync::CancellationToken>,
-) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
+) -> Result<EntityBodyOutcome<HostResponseEntityInvocation>, WorkerExecutorError> {
     let ToolSidecarInvocation {
         tool_name,
         position,
@@ -157,7 +189,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .data_mut()
         .durable_ctx_mut()
         .set_entity_tool_operation(operation.clone())?;
-    let cancellation_for_arbitration = cancellation.clone();
     let cancellation_epoch = if let Some(cancellation) = cancellation {
         store
             .data_mut()
@@ -237,15 +268,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .durable_ctx_mut()
         .set_invocation_principal(Some(principal.clone()));
     let principal = principal.into();
-    let replaying_completed = store
-        .data()
-        .durable_ctx()
-        .entity_invocation_scope()
-        .is_some_and(|scope| {
-            scope.mode() == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-        });
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
+    let replay = store.data().durable_ctx().state.replay_state.clone();
+    let replay_operation = operation.clone();
     let result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
             let indices =
@@ -260,8 +286,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke(
+                let result = replay_disposal_termination(
+                    replay,
+                    replay_operation,
+                    guest.call_invoke(
                         accessor,
                         tool_name,
                         command_path,
@@ -270,8 +298,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdout,
                         stderr,
                         principal,
-                    )
-                    .await?;
+                    ),
+                )
+                .await?;
                 materialize_guest_tool_response(
                     accessor,
                     result,
@@ -321,8 +350,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ))
             })?;
             run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke_tool_middleware(
+                let result = replay_disposal_termination(
+                    replay,
+                    replay_operation,
+                    guest.call_invoke_tool_middleware(
                         accessor,
                         middleware_name,
                         tool_name,
@@ -335,8 +366,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stderr,
                         principal,
                         wrapped,
-                    )
-                    .await;
+                    ),
+                )
+                .await;
                 revoke.revoke();
                 materialize_guest_tool_response(
                     accessor,
@@ -350,6 +382,68 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .await
         }
     };
+    store.data().durable_ctx().entity_body_finalization.begin();
+    let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
+    let locally_cancelled = match &result {
+        Ok(Err(error))
+        | Err(GuestCallSettlementError::Interrupted(error))
+        | Err(GuestCallSettlementError::Trap(error)) => {
+            crate::worker::invocation::interrupt_kind_in(error)
+                == Some(InterruptKind::EntityCancellation)
+        }
+        _ => false,
+    };
+    if locally_cancelled && !operation.has_pending_live_admission_rejection().await {
+        finish?;
+        operation.claim_local_cancellation_interruption();
+        drop(cancellation_epoch);
+        return Ok(EntityBodyOutcome::Cancelled);
+    }
+    let permanent_trap = match &result {
+        Ok(Err(error)) | Err(GuestCallSettlementError::Trap(error)) => {
+            permanent_tool_guest_trap(error)
+        }
+        _ => None,
+    };
+    if let Some(details) = permanent_trap
+        && store
+            .data()
+            .durable_ctx()
+            .owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+            .is_none()
+        && !operation.has_pending_live_admission_rejection().await
+    {
+        finish?;
+        // A successful encoded body terminal requests Store destruction in the entity runner.
+        // Its original host context, not the poisoned guest scheduler, drains admitted work.
+        let response = encode_tool_terminal(
+            SerializableToolOperationTerminal {
+                body_execution: SerializableEntityBodyExecution::Trapped,
+                admission_refusal: None,
+                result: Err(SerializableToolRpcError::RemoteInternalError(
+                    details.clone(),
+                )),
+            },
+            "failed to encode trapped tool terminal",
+        )
+        .await?;
+        store
+            .data()
+            .durable_ctx()
+            .owner_execution
+            .tool_operations()
+            .cancel_children(&parent);
+        for output in [stdout_controller.as_ref(), stderr_controller.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            output.reserve_owner_terminal(ByteStreamFailure::Failed(details.clone()));
+        }
+        drop(cancellation_epoch);
+        return Ok(EntityBodyOutcome::Completed(response));
+    }
     store
         .data_mut()
         .durable_ctx_mut()
@@ -357,8 +451,9 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     if !matches!(&result, Ok(Ok(_))) {
         durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
     }
-    let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
-    let mut parent_end = prepare_tool_parent_end(&mut store, parent).await;
+    let errors = prepare_tool_parent_end(&mut store, parent).await;
+    let mut parent_end =
+        durability::native_finalization_failures(store.data().durable_ctx(), errors).await;
     if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
         parent_end = store
             .as_context_mut()
@@ -374,6 +469,15 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     }
     drop(cancellation_epoch);
+    if let Err(
+        error @ (WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        }
+        | WorkerExecutorError::OplogFenced { .. }),
+    ) = &parent_end
+    {
+        return Err(error.clone());
+    }
     if operation.has_pending_live_admission_rejection().await {
         for error in [finish.as_ref().err(), parent_end.as_ref().err()]
             .into_iter()
@@ -386,31 +490,32 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         if guest_body_accepts_admission_rejection(&result) {
             return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
         }
-        rollback_live_attachment_admission_rejection(&operation).await;
+        rollback_live_attachment_admission_rejection(&operation).await?;
     }
     finish?;
-    if let Err(error) = parent_end
-        && matches!(&result, Ok(Ok(_)))
-    {
-        return Err(error);
+    if matches!(&result, Ok(Ok(_))) || locally_cancelled {
+        parent_end?;
     }
-    let local_cancellation_selected = cancellation_for_arbitration
-        .is_some_and(|cancellation| cancellation.is_cancelled())
-        && operation.claim_local_cancellation_interruption();
 
     match result {
         Ok(Ok(result)) => {
             if let Some(error) =
                 first_output_limit_error(stdout_observer.as_ref(), stderr_observer.as_ref())
             {
-                return encode_tool_operation_terminal(Err(error)).await;
+                return encode_tool_operation_terminal(Err(error))
+                    .await
+                    .map(EntityBodyOutcome::Completed);
             }
-            Ok(result)
+            Ok(EntityBodyOutcome::Completed(result))
         }
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
         | Err(GuestCallSettlementError::Trap(error)) => {
             let error: anyhow::Error = error.into();
+            if durability::is_entity_cancellation(&error) {
+                operation.claim_local_cancellation_interruption();
+                return Ok(EntityBodyOutcome::Cancelled);
+            }
             let trap = InvokeResult::from_error::<Ctx>(
                 0,
                 &error,
@@ -419,21 +524,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             )
             .as_trap_type::<Ctx>()
             .expect("a failed tool guest call must classify as a trap");
-            if let crate::model::TrapType::Interrupt(kind) = &trap
-                && !replaying_completed
-                && !local_cancellation_selected
-            {
-                let _ = operation
-                    .select_failure(operation::OwnerFailureWinner::Lifecycle(*kind))
-                    .await;
-            }
-            let output_failure = guest_trap_output_failure(
-                &operation,
-                trap.clone(),
-                replaying_completed,
-                local_cancellation_selected,
-            )
-            .await;
+            let output_failure = guest_trap_output_failure(&operation, trap.clone()).await;
             if let Some(stdout) = stdout_controller {
                 let _ = stdout.host_fail(output_failure.clone());
             }

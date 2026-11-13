@@ -17,7 +17,7 @@
 package golem
 
 import golem.host.RetryApi
-import golem.host.js.JsPredicateValue
+import golem.host.js.{JsPredicateValue, JsUuid}
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
@@ -142,11 +142,9 @@ object Transactions {
               ) ++ name.toList.map(value => "transaction-name" -> JsPredicateValue.text(value))
               val decision = try {
                 val id        = HostApi.getSelfMetadata().agentId
-                val uuid      = id.componentId.uuid
-                val component =
-                  Uuid.toStandardString(Uuid(BigInt(uuid.highBits.toString), BigInt(uuid.lowBits.toString)))
-                val noun   = s"urn:worker:$component/${id.agentId}"
-                val policy = RetryApi.resolveRetryPolicy("saga", noun, properties)
+                val component = JsUuid.toUuid(id.componentId.uuid).toString
+                val noun      = s"urn:worker:$component/${id.agentId}"
+                val policy    = RetryApi.resolveRetryPolicy("saga", noun, properties)
                 RetryApi.nextRetryDelay(
                   policy,
                   state,

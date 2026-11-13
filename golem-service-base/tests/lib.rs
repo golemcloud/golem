@@ -15,5 +15,6 @@
 pub mod grpc_client;
 pub mod registry;
 pub mod shard_manager_leader;
+pub mod tls_reload;
 
 test_r::enable!();

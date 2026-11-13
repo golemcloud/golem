@@ -26,16 +26,15 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{OwnerKind, Principal};
+use golem_common::model::agent::OwnerKind;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey,
-    RetryConfig, ShardEpoch, ShardLeaseRevision, Timestamp,
+    AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, RetryConfig, ShardEpoch,
+    ShardLeaseRevision, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -78,6 +77,9 @@ fn agent(name: &str, component_id: ComponentId) -> AgentId {
 fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: OwnerKind::ComponentAgent,
         agent_mode: AgentMode::Ephemeral,
         component_revision: ComponentRevision::new(1).unwrap(),
@@ -91,6 +93,12 @@ fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 
@@ -448,6 +456,7 @@ fn counting_layers() -> (Layers, Arc<FixedPages>) {
                 100,
                 100,
                 1024,
+                32,
                 RetryConfig::default(),
             ))),
             nev![compressed.clone(), blob.clone()],
@@ -482,6 +491,7 @@ fn layers() -> Layers {
                 100,
                 100,
                 1024,
+                32,
                 RetryConfig::default(),
             ))),
             nev![compressed.clone(), blob.clone()],
@@ -826,6 +836,7 @@ fn deep_layers(compressed_levels: usize) -> Layers {
                 100,
                 100,
                 1024,
+                32,
                 RetryConfig::default(),
             ))),
             stack,
@@ -840,6 +851,9 @@ fn deep_layers(compressed_levels: usize) -> Layers {
 fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
     AgentMetadata {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
@@ -852,6 +866,12 @@ fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata 
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Ephemeral,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -932,8 +952,6 @@ impl ComponentService for FixedEnvironment {
             metadata: ComponentMetadata::from_parts(
                 Default::default(),
                 vec![],
-                None,
-                None,
                 vec![],
                 BTreeMap::new(),
             ),
@@ -1060,34 +1078,12 @@ impl SchedulerWorkerAccess for DirectAccess {
         })
     }
 
-    async fn enqueue_invocation(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _worker_env: Option<Vec<(String, String)>>,
-        _worker_agent_config: Vec<AgentConfigEntryDto>,
-        _component_revision: Option<ComponentRevision>,
-        _worker_parent: Option<AgentId>,
-        _worker_creation_principal: Principal,
-    ) -> Result<(), WorkerExecutorError> {
-        unreachable!("the sweep never enqueues invocations")
-    }
-
     async fn enqueue_exact_existing(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
-        _invocation: AgentInvocation,
+        _delivery: crate::services::worker_activator::ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
-        unreachable!("the sweep never enqueues invocations")
-    }
-
-    async fn enqueue_ephemeral_external_tool(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _invocation: AgentInvocation,
-        _component_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
         unreachable!("the sweep never enqueues invocations")
     }
 }
@@ -2839,6 +2835,7 @@ async fn a_layer_that_keeps_reporting_more_work_is_stopped_at_the_step_bound() {
                 100,
                 100,
                 1024,
+                32,
                 RetryConfig::default(),
             ))),
             nev![sticky.clone(), sink.clone(), blob.clone()],

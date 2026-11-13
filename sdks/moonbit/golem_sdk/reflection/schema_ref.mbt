@@ -14,7 +14,7 @@ pub struct SchemaRef {
 ///|
 fn SchemaRef::new(
   graph : @model.SchemaGraph,
-  root_defaults? : Map[String, @model.SchemaValue] = Map([]),
+  root_defaults~ : Map[String, @model.SchemaValue] = Map([]),
 ) -> SchemaRef {
   { root: graph.root, graph, root_defaults, }
 }
@@ -761,7 +761,7 @@ fn binary_from_json(encoded : String) -> FixedArray[Byte] raise ReflectError {
 }
 
 ///|
-fn find_string_index(values : Array[String], expected : String) -> Int? {
+fn find_string_index(values : Array[String], expected : String) -> Int32? {
   for index in 0..<values.length() {
     if values[index] == expected {
       return Some(index)
@@ -774,7 +774,7 @@ fn find_string_index(values : Array[String], expected : String) -> Int? {
 fn find_variant_index(
   values : Array[@model.VariantCaseType],
   expected : String,
-) -> Int? {
+) -> Int32? {
   for index in 0..<values.length() {
     if values[index].name == expected {
       return Some(index)

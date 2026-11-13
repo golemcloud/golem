@@ -6,8 +6,10 @@ description: "Using golem:rdbms/ignite2 from a TypeScript Golem agent. Use when 
 # Using Apache Ignite from a TypeScript Agent
 
 The TypeScript SDK ships a typed Apache Ignite 2 helper built on the
-`golem:rdbms/ignite2@1.5.0` host interface. Every operation returns a `Promise`
-and throws a typed `IgniteError` on failure.
+`golem:rdbms/ignite2@1.5.0` host interface. Connection queries and transaction
+commit/rollback return promises. Transaction `query`, `queryValues`, `execute`,
+and `run` are synchronous. Connection `close()` is currently a synchronous no-op;
+resources are GC-managed, not deterministically released by `close()`. Failures throw a typed `IgniteError`.
 
 ## Imports
 
@@ -34,9 +36,11 @@ Ignite placeholders use `?`. Plain JS values are encoded automatically
 `{ columnName: value }` records.
 
 ```ts
-const result = await conn.query("SELECT ? AS message", ["hello"]);
+const result = await conn.query('SELECT ? AS "message"', ["hello"]);
 const message = result.rows[0]?.message as string;
 ```
+
+Quote aliases to preserve their case; Ignite uppercases unquoted identifiers.
 
 ## Execute Statements
 
@@ -51,21 +55,15 @@ await conn.execute(
 );
 ```
 
-## Transactions
+## SQL Transaction Limits
 
-Run a block inside a transaction — it commits on success and rolls back if the
-callback throws:
+The SDK exposes `transaction`, `begin`, `commit`, and `rollback`, but these do not
+guarantee SQL atomicity on Ignite 2.17. Verify commit and rollback behavior for the
+deployed server version, cache configuration, and thin-client path before relying
+on a SQL transaction.
 
-```ts
-await conn.transaction(async (tx) => {
-  tx.execute("INSERT INTO notes (id, body) VALUES (?, ?)", [1, "hello"]);
-});
-```
-
-Or drive it manually with `begin()` / `commit()` / `rollback()`:
-
-```ts
-const tx = await conn.begin();
-tx.execute("INSERT INTO notes (id, body) VALUES (?, ?)", [1, "hello"]);
-await tx.commit();
-```
+The test framework enables `IGNITE_ALLOW_DML_INSIDE_TRANSACTION` for DML inside
+transactions over `TRANSACTIONAL` caches; neither alone guarantees SQL rollback.
+The table above does not configure that cache mode. The upstream
+[JDBC documentation](https://ignite.apache.org/docs/ignite2/2.17.0/SQL/JDBC/jdbc-driver)
+describes a different client path, not this thin-client API.

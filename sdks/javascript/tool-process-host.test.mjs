@@ -1,0 +1,749 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createToolProcessBackend } from "./tool-process-backend.js";
+import { createToolProcessHost } from "./tool-process-host.js";
+
+function fixture() {
+  const calls = [];
+  const prepared = {};
+  let close;
+  const closed = new Promise((resolve) => {
+    close = resolve;
+  });
+  const terminal = {
+    result: { tag: "ok", rendered: { exitCode: 7, stdout: [], stderr: [] } },
+    stdout: { bytes: [0, 255] },
+    stderr: { bytes: [128] },
+  };
+  const native = {
+    prepareCommand(name, args, variables) {
+      calls.push(["prepare", name, args, variables]);
+      return {
+        tag: "invoke",
+        val: {
+          commandPath: ["run"],
+          input: prepared,
+          stdin: true,
+          stdout: true,
+          stderr: true,
+        },
+      };
+    },
+    createInput(bytes) {
+      calls.push(["input", bytes]);
+      return { kind: "input" };
+    },
+    createOutput(max) {
+      calls.push(["output", max]);
+      return {
+        kind: "output",
+        max,
+        channel:
+          calls.filter(([name]) => name === "output").length === 1
+            ? "stdout"
+            : "stderr",
+      };
+    },
+    async readOutput(output) {
+      if (output.done) return undefined;
+      output.done = true;
+      return new Uint8Array(terminal[output.channel].bytes);
+    },
+    invoke(...args) {
+      calls.push(["invoke", ...args]);
+      return { kind: "process" };
+    },
+    collectSync(process, timeout) {
+      calls.push(["sync", process, timeout]);
+      return terminal;
+    },
+    async collectAsync(process) {
+      calls.push(["async", process]);
+      await closed;
+      return terminal;
+    },
+    async write(input, bytes) {
+      calls.push(["write", input, [...bytes]]);
+    },
+    async finish(input, failed) {
+      calls.push(["finish", input, failed]);
+      close();
+    },
+    waitInputClosed: () => closed,
+    cancel(process) {
+      calls.push(["cancel", process]);
+      close();
+    },
+    disposeInput(input, part) {
+      calls.push(["dispose-input", input, part]);
+      if (part === "source") close();
+    },
+    disposeOutput(output, target) {
+      calls.push(["dispose-output", output, target]);
+    },
+    disposeProcess(process) {
+      calls.push(["dispose-process", process]);
+    },
+  };
+  const host = createToolProcessHost(native);
+  const backend = createToolProcessBackend(host, {
+    env: {},
+    cwd: () => "/workspace",
+  });
+  return { native, host, backend, calls, prepared, terminal };
+}
+
+test("native facade registration is lazy and forwards canonical preparation", () => {
+  const f = fixture();
+  assert.deepEqual(f.calls, []);
+  const result = f.backend.spawnSync("streaming", ["run", "echo"], {
+    input: new Uint8Array([0, 128, 255]),
+    timeout: 12,
+    maxBuffer: 19,
+  });
+  assert.equal(result.status, 7);
+  assert.deepEqual([...result.stdout], [0, 255]);
+  assert.deepEqual([...result.stderr], [128]);
+  assert.equal(f.calls.find(([name]) => name === "invoke")[1], f.prepared);
+  assert.deepEqual(
+    [...f.calls.find(([name]) => name === "input")[1]],
+    [0, 128, 255],
+  );
+  assert.deepEqual(
+    f.calls.filter(([name]) => name === "output").map((call) => call[1]),
+    [19, 19],
+  );
+  assert.equal(f.calls.find(([name]) => name === "sync")[2], 12);
+  assert.equal(
+    f.calls.filter(([name]) => name === "dispose-process").length,
+    1,
+  );
+});
+
+test("ignored outputs use native discard drains, not zero-sized collectors", () => {
+  const f = fixture();
+  const result = f.backend.spawnSync("streaming", [], {
+    stdio: "ignore",
+    maxBuffer: 0,
+  });
+  assert.equal(result.status, 7);
+  assert.deepEqual(
+    f.calls.filter(([name]) => name === "output").map((call) => call[1]),
+    [undefined, undefined],
+  );
+});
+
+test("synchronous inherited chunks reach the parent before collection finishes without limiting the piped channel differently", () => {
+  const f = fixture();
+  const chunk = Buffer.alloc(32 * 1024, 0xab);
+  let received = 0;
+  const backend = createToolProcessBackend(f.host, {
+    env: {},
+    cwd: () => "/workspace",
+    stdout: {
+      write(bytes) {
+        assert.deepEqual(bytes, chunk);
+        received += bytes.length;
+        return true;
+      },
+    },
+  });
+  f.native.collectSync = (_process, _timeout, stdout) => {
+    for (let i = 0; i < 65; i++) {
+      assert.equal(stdout(chunk), true);
+      assert.equal(received, (i + 1) * chunk.length);
+    }
+    return { ...f.terminal, stdout: { bytes: [] } };
+  };
+  const result = backend.spawnSync("streaming", [], {
+    stdio: ["ignore", "inherit", "pipe"],
+    maxBuffer: 1,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout, null);
+  assert.deepEqual([...result.stderr], [128]);
+  assert.equal(received, 65 * chunk.length);
+});
+
+test("sync inherit preserves split UTF-8 and raw bytes on both channels, including EOF tails", () => {
+  const inputs = [
+    Buffer.from("A¢€😀Z"),
+    Buffer.from([0xff, 0xc0, 0x80, 0xe0, 0x80, 0xf5, 0x80, 0x00, 0xe2, 0x82]),
+  ];
+  for (const input of inputs) {
+    // Every two-chunk split, plus one byte at a time (including multi-chunk
+    // code points). Expected decoding comes from Node over the whole input.
+    const partitions = Array.from({ length: input.length + 1 }, (_, index) => [
+      input.subarray(0, index),
+      input.subarray(index),
+    ]);
+    partitions.push([...input].map((byte) => Buffer.from([byte])));
+    for (const chunks of partitions) {
+      const f = fixture();
+      const raw = { stdout: [], stderr: [] };
+      const text = { stdout: [], stderr: [] };
+      const runtime = { env: {}, cwd: () => "/workspace" };
+      for (const channel of ["stdout", "stderr"]) {
+        runtime[channel] = {
+          write(bytes) {
+            raw[channel].push(Buffer.from(bytes));
+            // The released runtime's default stdio sink coerces each write.
+            text[channel].push(String(bytes));
+            return true;
+          },
+        };
+      }
+      f.native.collectSync = (_process, _timeout, stdout, stderr) => {
+        let delivered = 0;
+        for (const chunk of chunks) {
+          delivered += chunk.length;
+          assert.equal(stdout(chunk), true);
+          assert.equal(stderr(chunk), true);
+          for (const channel of ["stdout", "stderr"]) {
+            const received = Buffer.concat(raw[channel]).length;
+            assert.ok(
+              delivered - received <= 3,
+              "only an incomplete UTF-8 suffix may be held",
+            );
+          }
+        }
+        return { ...f.terminal, stdout: { bytes: [] }, stderr: { bytes: [] } };
+      };
+      const result = createToolProcessBackend(f.host, runtime).spawnSync(
+        "streaming",
+        [],
+        {
+          stdio: ["ignore", "inherit", "inherit"],
+          maxBuffer: 0,
+        },
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 7);
+      for (const channel of ["stdout", "stderr"]) {
+        assert.deepEqual(Buffer.concat(raw[channel]), input);
+        assert.equal(text[channel].join(""), input.toString("utf8"));
+      }
+    }
+  }
+});
+
+test("async inherit preserves split UTF-8 and joins both EOF writes before close", async () => {
+  const inputs = {
+    stdout: Buffer.concat([Buffer.from("A¢€😀Z"), Buffer.from([0xff, 0xe2])]),
+    stderr: Buffer.concat([
+      Buffer.from("Bé🦀Y"),
+      Buffer.from([0xc0, 0xf0, 0x9f]),
+    ]),
+  };
+  const splits = [
+    ...Array(
+      Math.max(...Object.values(inputs).map((b) => b.length)) + 1,
+    ).keys(),
+    "bytes",
+  ];
+  for (const split of splits) {
+    const f = fixture();
+    const chunks = {};
+    const raw = { stdout: [], stderr: [] };
+    const text = { stdout: "", stderr: "" };
+    const runtime = { env: {}, cwd: () => "/workspace" };
+    for (const channel of ["stdout", "stderr"]) {
+      const bytes = inputs[channel];
+      chunks[channel] =
+        split === "bytes"
+          ? [...bytes].map((byte) => Buffer.from([byte]))
+          : [bytes.subarray(0, split), bytes.subarray(split)];
+      f.terminal[channel].bytes = [];
+      runtime[channel] = {
+        write(bytes, callback) {
+          setImmediate(() => {
+            raw[channel].push(Buffer.from(bytes));
+            text[channel] += String(bytes);
+            callback();
+          });
+          return false;
+        },
+      };
+    }
+    f.native.readOutput = async (output) => chunks[output.channel].shift();
+    const child = createToolProcessBackend(f.host, runtime).spawn(
+      "streaming",
+      [],
+      {
+        stdio: ["pipe", "inherit", "inherit"],
+      },
+    );
+    const done = once(child, "close");
+    child.stdin.end();
+    assert.deepEqual(await done, [7, null]);
+    for (const channel of ["stdout", "stderr"]) {
+      assert.deepEqual(Buffer.concat(raw[channel]), inputs[channel]);
+      assert.equal(text[channel], inputs[channel].toString("utf8"));
+    }
+  }
+});
+
+test("synchronous inherited output refuses asynchronous backpressure, including at EOF", () => {
+  for (const byte of [7, 0xe2]) {
+    const f = fixture();
+    let writes = 0;
+    const backend = createToolProcessBackend(f.host, {
+      env: {},
+      cwd: () => "/workspace",
+      stdout: {
+        write() {
+          writes++;
+          return false;
+        },
+      },
+    });
+    f.native.collectSync = (_process, _timeout, stdout) => {
+      const accepted = stdout(Uint8Array.of(byte));
+      assert.equal(accepted, byte === 0xe2);
+      return {
+        ...f.terminal,
+        stdout: {
+          bytes: [],
+          failure: accepted ? undefined : { tag: "failed" },
+        },
+      };
+    };
+    const result = backend.spawnSync("streaming", [], {
+      stdio: ["ignore", "inherit", "pipe"],
+    });
+    assert.equal(result.error.code, "ENOTSUP");
+    assert.equal(result.status, null);
+    assert.deepEqual([...result.stderr], [128]);
+    assert.equal(writes, 1);
+  }
+});
+
+test("native async collection and stdin writes make independent progress", async () => {
+  const f = fixture();
+  const child = f.backend.spawn("streaming", ["run", "echo"]);
+  const output = [];
+  child.stdout.on("data", (bytes) => output.push(...bytes));
+  const done = once(child, "close");
+  child.stdin.end(new Uint8Array([0, 255, 128]));
+  assert.deepEqual(await done, [7, null]);
+  assert.deepEqual(output, [0, 255]);
+  assert.deepEqual(
+    f.calls.find(([name]) => name === "write")[2],
+    [0, 255, 128],
+  );
+  assert.equal(
+    f.calls.filter(([name]) => name === "dispose-process").length,
+    1,
+  );
+  assert.deepEqual(
+    f.calls
+      .filter(([name]) => name === "dispose-input")
+      .map((call) => call[2])
+      .sort(),
+    ["closed", "writer"],
+  );
+});
+
+test("spawn precedes already-ready native output", async () => {
+  const f = fixture();
+  const child = f.backend.spawn("streaming", []);
+  const events = [];
+  child.on("spawn", () => events.push("spawn"));
+  child.stdout.on("data", () => events.push("stdout"));
+  child.stderr.on("data", () => events.push("stderr"));
+  const done = once(child, "close");
+  child.stdin.end();
+  await done;
+  assert.equal(events[0], "spawn");
+  assert.ok(events.includes("stdout"));
+  assert.ok(events.includes("stderr"));
+});
+
+test("spawn uses the nextTick queue before already queued Promise work", async () => {
+  const events = [];
+  await new Promise((resolve, reject) => {
+    setImmediate(() => {
+      Promise.resolve().then(() => events.push("promise"));
+      const f = fixture();
+      const child = f.backend.spawn("streaming", []);
+      child.on("spawn", () => events.push("spawn"));
+      child.stdout.resume();
+      child.stderr.resume();
+      child.on("error", reject);
+      child.once("close", resolve);
+      child.stdin.end();
+    });
+  });
+  assert.deepEqual(events, ["spawn", "promise"]);
+});
+
+test(
+  "a child can read live output before it supplies stdin",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    const child = f.backend.spawn("streaming", ["run", "echo"]);
+    const done = once(child, "close");
+    child.stdout.once("data", () =>
+      child.stdin.end(new Uint8Array([9, 0, 255])),
+    );
+    assert.deepEqual(await done, [7, null]);
+    assert.deepEqual(
+      f.calls.find(([name]) => name === "write")[2],
+      [9, 0, 255],
+    );
+  },
+);
+
+test(
+  "kill releases an async collector blocked by output backpressure",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    f.terminal.result = {
+      tag: "err",
+      val: { tag: "cancelled" },
+      rendered: { exitCode: 130, stdout: [], stderr: [] },
+    };
+    f.terminal.stdout.bytes = Buffer.alloc(256 * 1024, 65);
+    const child = f.backend.spawn("streaming", []);
+    const done = once(child, "close");
+    await once(child.stdout, "readable");
+    assert.equal(child.kill(), true);
+    assert.deepEqual(await done, [null, "SIGTERM"]);
+    assert.equal(
+      f.calls.filter(([name]) => name === "dispose-process").length,
+      1,
+    );
+  },
+);
+
+test(
+  "spawn forwards all output; buffered results share one channel limit",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    f.terminal.result.rendered.stderr = [7, 8];
+    // exec and execFile apply maxBuffer to the output they collect from spawn.
+    const child = f.backend.spawn("streaming", [], { maxBuffer: 2 });
+    const bytes = [];
+    const errors = [];
+    child.stderr.on("data", (chunk) => bytes.push(...chunk));
+    child.on("error", (error) => errors.push(error));
+    const done = new Promise((resolve) => child.once("close", resolve));
+    child.stdin.end();
+    await done;
+    assert.deepEqual(bytes, [128, 7, 8]);
+    assert.deepEqual(errors, []);
+
+    const sync = fixture();
+    sync.terminal.result.rendered.stderr = [7, 8];
+    const result = sync.backend.spawnSync("streaming", [], { maxBuffer: 2 });
+    assert.deepEqual([...result.stderr], [128, 7]);
+    assert.equal(result.error?.code, "ENOBUFS");
+  },
+);
+
+test(
+  "close joins admitted output writes after kill",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    f.terminal.result = {
+      tag: "err",
+      val: { tag: "cancelled" },
+      rendered: { exitCode: 130, stdout: [], stderr: [] },
+    };
+    f.terminal.stdout.bytes = Buffer.alloc(256 * 1024, 65);
+    const child = f.backend.spawn("streaming", []);
+    const write = child.stdout.write.bind(child.stdout);
+    let completed = false;
+    child.stdout.write = (bytes, callback) =>
+      write(bytes, (error) => {
+        completed = true;
+        callback(error);
+      });
+    const done = once(child, "close");
+    await once(child.stdout, "readable");
+    assert.equal(child.kill(), true);
+    assert.deepEqual(await done, [null, "SIGTERM"]);
+    assert.equal(completed, true, "close preceded the admitted write callback");
+  },
+);
+
+test("terminal cleanup waits for stdin closure instead of failing it again", async () => {
+  const f = fixture();
+  let terminalReady;
+  const terminal = new Promise((resolve) => {
+    terminalReady = resolve;
+  });
+  let peerClosed;
+  const closed = new Promise((resolve) => {
+    peerClosed = resolve;
+  });
+  f.terminal.result = {
+    tag: "err",
+    val: { tag: "cancelled" },
+    rendered: { exitCode: 130, stdout: [], stderr: [] },
+  };
+  f.native.collectAsync = async () => {
+    await terminal;
+    return f.terminal;
+  };
+  f.native.waitInputClosed = () => closed;
+  f.native.cancel = () => {
+    terminalReady();
+    setImmediate(peerClosed);
+  };
+  const child = f.backend.spawn("streaming", []);
+  child.stdout.resume();
+  child.stderr.resume();
+  const done = once(child, "close");
+  await once(child, "spawn");
+  child.kill();
+  assert.deepEqual(await done, [null, "SIGTERM"]);
+  assert.equal(
+    f.calls.some(([operation, , failed]) => operation === "finish" && failed),
+    false,
+    "cleanup issued a second stdin terminal before observing peer closure",
+  );
+});
+
+test(
+  "close waits for owned output finalization",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    const child = f.backend.spawn("streaming", []);
+    let finalized = false;
+    child.stdout._final = (callback) =>
+      setImmediate(() => {
+        finalized = true;
+        callback();
+      });
+    child.stdout.resume();
+    child.stderr.resume();
+    const done = once(child, "close");
+    child.stdin.end();
+    assert.deepEqual(await done, [7, null]);
+    assert.equal(finalized, true, "close preceded output finalization");
+    assert.equal(child.stdout.readableEnded, true);
+    assert.equal(child.stderr.readableEnded, true);
+  },
+);
+
+test(
+  "owned output is forwarded under back-pressure, as from a Node child",
+  { timeout: 1000 },
+  async () => {
+    const f = fixture();
+    f.terminal.stdout.bytes = Buffer.alloc(256 * 1024, 65);
+    const child = f.backend.spawn("streaming", []);
+    let exited = false;
+    child.once("exit", () => {
+      exited = true;
+    });
+    const done = once(child, "close");
+    child.stdin.end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(exited, false, "exit did not wait for the unread pipe");
+    const output = [];
+    child.stdout.on("data", (chunk) => output.push(Buffer.from(chunk)));
+    assert.deepEqual(await done, [7, null]);
+    assert.equal(exited, true);
+    assert.deepEqual(Buffer.concat(output), f.terminal.stdout.bytes);
+  },
+);
+
+test("native collection failures cancel the call and release its resources", () => {
+  const f = fixture();
+  f.native.collectSync = () => {
+    throw new Error("read failed");
+  };
+  assert.equal(f.backend.spawnSync("streaming", [], {}).error.code, "EIO");
+  assert.deepEqual(
+    f.calls.slice(-2).map((call) => call[0]),
+    ["cancel", "dispose-process"],
+  );
+});
+
+for (const asynchronous of [false, true]) {
+  test(`native dispatch failure releases transferred attachments (${asynchronous ? "async" : "sync"})`, async () => {
+    const f = fixture();
+    f.native.invoke = () => {
+      throw new Error("dispatch failed");
+    };
+    if (asynchronous) {
+      const child = f.backend.spawn("streaming", []);
+      const errors = [];
+      child.on("error", (error) => errors.push(error));
+      await new Promise((resolve) => child.once("close", resolve));
+      assert.equal(errors[0]?.code, "EIO");
+    } else {
+      assert.equal(f.backend.spawnSync("streaming", []).error.code, "EIO");
+    }
+    assert.equal(
+      f.calls.filter(
+        ([name, , part]) => name === "dispose-input" && part === "source",
+      ).length,
+      1,
+    );
+    assert.equal(
+      f.calls.filter(
+        ([name, , target]) => name === "dispose-output" && target === true,
+      ).length,
+      2,
+    );
+    assert.equal(
+      f.calls.filter(
+        ([name, , target]) => name === "dispose-output" && target === false,
+      ).length,
+      2,
+    );
+    assert.equal(
+      f.calls.some(([name]) => name === "dispose-process"),
+      false,
+    );
+  });
+}
+
+test("help and missing bindings perform no native dispatch or attachment creation", () => {
+  const f = fixture();
+  f.native.prepareCommand = () => ({
+    tag: "output",
+    val: { exitCode: 0, stdout: [104], stderr: [] },
+  });
+  assert.equal(
+    f.backend.spawnSync("streaming", ["--help"]).stdout.toString(),
+    "h",
+  );
+  f.native.prepareCommand = () => undefined;
+  assert.equal(f.backend.spawnSync("unbound", []), undefined);
+  assert.deepEqual(f.calls, []);
+});
+
+test("a denied call keeps its exit code although the host failed its outputs", async () => {
+  const denied = {
+    tag: "err",
+    val: { tag: "denied" },
+    rendered: { exitCode: 3, stdout: [], stderr: [...Buffer.from("denied\n")] },
+  };
+  const sync = fixture();
+  sync.terminal.result = denied;
+  sync.terminal.stdout = { bytes: [], failure: { tag: "failed" } };
+  sync.terminal.stderr = { bytes: [], failure: { tag: "failed" } };
+  const result = sync.backend.spawnSync("streaming", [], {});
+  assert.equal(result.status, 3);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stderr.toString(), "denied\n");
+
+  const f = fixture();
+  f.terminal.result = denied;
+  f.native.readOutput = async () => {
+    throw { tag: "failed" };
+  };
+  const child = f.backend.spawn("streaming", []);
+  const errors = [];
+  child.on("error", (error) => errors.push(error));
+  child.stdout.resume();
+  child.stderr.resume();
+  child.stdin.end();
+  assert.deepEqual(await once(child, "close"), [3, null]);
+  assert.deepEqual(errors, []);
+});
+
+test("a tool that closes its stdin early keeps the status with EPIPE", () => {
+  const f = fixture();
+  f.terminal.stdin = { failure: { tag: "closed" } };
+  const result = f.backend.spawnSync("streaming", [], { input: "unread" });
+  assert.equal(result.status, 7);
+  assert.equal(result.error.code, "EPIPE");
+
+  const failed = fixture();
+  failed.terminal.stdin = { failure: { tag: "failed" } };
+  const broken = failed.backend.spawnSync("streaming", [], { input: "x" });
+  assert.equal(broken.status, null);
+  assert.equal(broken.error.code, "EIO");
+});
+
+test("a binding that disappeared before invoke completes with its exit code", async () => {
+  const rejected = {
+    rendered: { exitCode: 127, stdout: [], stderr: [...Buffer.from("gone\n")] },
+  };
+  const sync = fixture();
+  sync.native.invoke = () => {
+    throw rejected;
+  };
+  const result = sync.backend.spawnSync("streaming", [], {});
+  assert.equal(result.status, 127);
+  assert.equal(result.stderr.toString(), "gone\n");
+
+  const f = fixture();
+  f.native.invoke = () => {
+    throw rejected;
+  };
+  const child = f.backend.spawn("streaming", []);
+  const events = [];
+  child.on("spawn", () => events.push("spawn"));
+  child.on("exit", (code) => events.push(["exit", code]));
+  child.stderr.resume();
+  assert.deepEqual(await once(child, "close"), [127, null]);
+  assert.deepEqual(events, ["spawn", ["exit", 127]]);
+});
+
+test(
+  "a throwing live data listener does not strand later output or close",
+  { timeout: 5000 },
+  async () => {
+    const uncaught = [];
+    const listener = (error) => uncaught.push(error.message);
+    const originals = process.listeners("uncaughtException");
+    for (const l of originals) process.removeListener("uncaughtException", l);
+    process.on("uncaughtException", listener);
+    try {
+      const f = fixture();
+      f.terminal.result = {
+        tag: "ok",
+        rendered: { exitCode: 0, stdout: [], stderr: [] },
+      };
+      f.native.prepareCommand = () => ({
+        tag: "invoke",
+        val: {
+          commandPath: ["run"],
+          input: {},
+          stdin: false,
+          stdout: true,
+          stderr: false,
+        },
+      });
+      let reads = 0;
+      f.native.readOutput = async () =>
+        reads++ < 2 ? Buffer.from(`chunk${reads}\n`) : undefined;
+      // Completes once both chunks were read, or after a bounded wait, so a
+      // stranded write fails the assertions instead of hanging the test.
+      f.native.collectAsync = async () => {
+        for (let turn = 0; reads <= 2 && turn < 1000; turn++) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return f.terminal;
+      };
+      const child = f.backend.spawn("streaming", ["run"]);
+      const chunks = [];
+      child.stdout.on("data", (chunk) => {
+        chunks.push(chunk.toString());
+        if (chunks.length === 1) throw new Error("data listener");
+      });
+      const exited = once(child, "exit");
+      assert.deepEqual(await once(child, "close"), [0, null]);
+      assert.deepEqual(await exited, [0, null]);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(chunks, ["chunk1\n", "chunk2\n"]);
+      assert.deepEqual(uncaught, ["data listener"]);
+    } finally {
+      process.removeListener("uncaughtException", listener);
+      for (const l of originals) process.on("uncaughtException", l);
+    }
+  },
+);

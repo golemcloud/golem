@@ -15,4 +15,17 @@
 ///|
 /// Error raised by the generated bridge client and its runtime on a wire-shape
 /// mismatch, a failed HTTP request, or a protocol decoding failure.
-pub(all) suberror BridgeError { BridgeError(String) } derive(Debug, Eq)
+/// `Unreachable` is a streaming call that could not reach the server within
+/// its reconnect window: `endpoint` is the WebSocket URL, `window_ms` the
+/// window, and `last_cause` the last failure, such as the HTTP status of a
+/// refused upgrade, a retryable rejection, or a connection error.
+pub(all) suberror BridgeError {
+  BridgeError(String)
+  Unreachable(endpoint~ : String, window_ms~ : Int32, last_cause~ : String)
+} derive(Debug, Eq)
+
+///|
+pub extend BridgeError with Debug::{to_repr}
+
+///|
+pub extend BridgeError with Eq::{equal, not_equal}

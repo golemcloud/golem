@@ -78,6 +78,8 @@ pub trait Fixture {
     /// Prefix a streamed input and return it on stdout.
     async fn transfer(&self, prefix: String, stdin: InputStream, stdout: OutputStream);
     async fn emit(&self, bytes: u32, stdout: OutputStream);
+    /// Write `bytes` bytes of `y` to stdout, then panic.
+    async fn crash(&self, bytes: u32, stdout: OutputStream);
     fn write(&self, path: String, text: String) -> Result<String, FixtureError>;
     fn read(&self, path: String) -> Result<String, FixtureError>;
     fn fail(&self) -> Result<(), FixtureError>;
@@ -115,6 +117,11 @@ impl Fixture for FixtureImpl {
             }
             remaining -= count;
         }
+    }
+
+    async fn crash(&self, bytes: u32, mut stdout: OutputStream) {
+        stdout.write(vec![b'y'; bytes as usize]).await.unwrap();
+        panic!("fixture crash after {bytes} bytes");
     }
 
     fn write(&self, path: String, text: String) -> Result<String, FixtureError> {

@@ -299,6 +299,7 @@ oplog_entry! {
         wit_raw_type: "raw-pending-agent-invocation-parameters"
         wit_public_type: "pending-agent-invocation-parameters"
         raw {
+            not_before: Option<Timestamp>,
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
@@ -306,7 +307,8 @@ oplog_entry! {
             invocation_context: Vec<SpanData>,
         }
         public {
-            invocation: PublicAgentInvocation
+            invocation: PublicAgentInvocation,
+            not_before: Option<Timestamp>,
         }
     },
     /// An update request arrived and will be applied as soon the worker restarts
@@ -714,6 +716,8 @@ oplog_entry! {
             entity_parent_start_index: Option<OplogIndex>,
             card: Box<StoredCard>,
             wallet_generation: u64,
+            /// The transfer that derived the card as the installed child of a polymorphic source.
+            transfer_id: Option<Uuid>,
         }
         public {
             card_id: CardId,
@@ -1008,6 +1012,25 @@ oplog_entry! {
         }
         public {
             filesystem_snapshot: String,
+        }
+    },
+    /// Records that the guest released a host resource whose only durable content is its
+    /// span, and that the span closed. The release itself is not a durable call: replay neither
+    /// claims nor requires this entry, so a guest may release the resource at another point
+    /// when it replays.
+    SpanClosed {
+        hint: true
+        wit_raw_type: "raw-span-closed-parameters"
+        wit_public_type: "span-closed-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            /// The `Start` of the durable call that opened the span.
+            resource_start_index: Option<OplogIndex>,
+            span_finished: SpanFinished,
+        }
+        public {
+            resource_start_index: Option<OplogIndex>,
+            span_finished: PublicSpanFinished,
         }
     }
 }

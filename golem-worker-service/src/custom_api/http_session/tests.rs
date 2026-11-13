@@ -1466,6 +1466,7 @@ fn body_bytes_are_absent_from_session_trace_logs() {
     );
     let subscriber = tracing_subscriber::fmt()
         .without_time()
+        .with_ansi(false)
         .with_max_level(tracing::Level::TRACE)
         .with_writer(move || LogWriter(writer.clone()))
         .finish();
@@ -1518,17 +1519,91 @@ fn body_bytes_are_absent_from_session_trace_logs() {
             let output = event(&mut session).await;
             tracing::debug!(?output, "HTTP body diagnostic probe");
             assert_eq!(event_bytes(output).unwrap(), b"private-response-sentinel");
-            send(&h.response_txs[0], output_end(1, 1)).await;
-            let _ = event(&mut session).await;
-            send(&h.response_txs[0], finished()).await;
+            send(
+                &h.response_txs[0],
+                response(invocation_response::Response::OutputError(
+                    golem_api_grpc::proto::golem::worker::OutputStreamError {
+                        transport_stream_id: 9,
+                        producer_sequence: 1,
+                        details: "value-node index out of range: 3".into(),
+                        durable_stream_id: Some(uuid(109)),
+                        durable_offset: offset(1),
+                        epoch: 1,
+                    },
+                )),
+            )
+            .await;
+            let HttpSessionEvent::OutputError(error) = event(&mut session).await else {
+                panic!("expected the producer error to reach the HTTP adapter");
+            };
+            assert_eq!(error.details, "value-node index out of range: 3");
+            let mut completion = failed();
+            let Some(invocation_response::Response::Finished(finished)) = &mut completion.response
+            else {
+                panic!("expected a failed completion");
+            };
+            let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                &mut finished.outcome
+            else {
+                panic!("expected an invocation failure");
+            };
+            failure.code = "invalid-output".into();
+            failure.message = "response producer trapped".into();
+            send(&h.response_txs[0], completion).await;
+            let HttpSessionEvent::Finished(finished) = event(&mut session).await else {
+                panic!("expected the failed completion to reach the HTTP adapter");
+            };
+            let Some(invocation_session_completion::Outcome::Failure(failure)) = finished.outcome
+            else {
+                panic!("expected the original invocation failure");
+            };
+            assert_eq!(failure.message, "response producer trapped");
+
+            let mut h = harness(1);
+            let mut session = h.start_session();
+            let _ = call(&mut h.calls).await;
+            send(
+                &h.response_txs[0],
+                rejected(InvocationRejectionReason::InvalidAttachmentState),
+            )
+            .await;
             assert!(matches!(
                 event(&mut session).await,
-                HttpSessionEvent::Finished(_)
+                HttpSessionEvent::Error(HttpSessionError::Rejected)
             ));
         });
     let rendered = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
     assert!(rendered.contains("HTTP session terminated"));
     assert!(rendered.contains("HTTP body diagnostic probe"));
+    let diagnostic = rendered
+        .lines()
+        .find(|line| line.contains("HTTP response stream producer failed"))
+        .expect("the producer error must be visible in server logs");
+    assert!(diagnostic.contains("WARN"));
+    assert!(diagnostic.contains("value-node index out of range: 3"));
+    assert!(diagnostic.contains("transport_stream_id=9"));
+    assert!(diagnostic.contains("http_invocation_session"));
+    assert!(diagnostic.contains("private-final-key"));
+    for (message, cause) in [
+        (
+            "HTTP invocation session was rejected",
+            "InvalidAttachmentState",
+        ),
+        (
+            "HTTP invocation session finished with failure",
+            "response producer trapped",
+        ),
+    ] {
+        let diagnostic = rendered
+            .lines()
+            .find(|line| line.contains(message))
+            .expect("the invocation failure must be visible in server logs");
+        assert!(diagnostic.contains("WARN"));
+        assert!(diagnostic.contains(cause));
+        assert!(diagnostic.contains("http_invocation_session"));
+        assert!(diagnostic.contains("private-final-key"));
+    }
+    assert!(rendered.contains("code=invalid-output"));
     for sentinel in ["private-request-sentinel", "private-response-sentinel"] {
         assert!(
             !rendered.contains(sentinel),

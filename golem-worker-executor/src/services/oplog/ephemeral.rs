@@ -1202,7 +1202,9 @@ impl Oplog for EphemeralOplog {
                 })
                 .await
             }
-            CommitLevel::DurableOnly => Ok(BTreeMap::new()),
+            // Ephemeral agents fold their status at the explicit commit that ends each
+            // invocation, so the oplog reports nothing between explicit commits.
+            CommitLevel::DurableOnly | CommitLevel::ReportOnly => Ok(BTreeMap::new()),
         }
     }
 

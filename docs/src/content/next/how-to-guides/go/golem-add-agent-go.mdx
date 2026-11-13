@@ -27,7 +27,7 @@ package counter
 import "github.com/golemcloud/golem/sdks/go/golem"
 
 // ID holds the constructor parameters, and is the type-level identity used by
-// cross-agent calls. Two agents with the same ID are the same agent.
+// cross-agent calls. Without a phantom UUID, the same ID names the same durable agent.
 type ID struct{ Name string }
 
 // AddIn is a method's parameter list: one WIT parameter per exported field.
@@ -135,8 +135,11 @@ type SummarizeIn struct {
 }
 
 doc := golem.UnstructuredText[EnOrDe]{Text: "hallo", Language: "de"}       // inline
-ref := golem.UnstructuredBinary[golem.AnyMimeType]{URL: "https://…/a.png"} // by URL
-media := golem.Multimodal{golem.TextModality{Value: …}, golem.BinaryModality{Value: …}}
+ref := golem.UnstructuredBinary[golem.AnyMimeType]{URL: "https://example.com/a.png"} // by URL
+media := golem.Multimodal{
+	golem.TextModality{Value: golem.UnstructuredText[golem.AnyLanguage]{Text: "hello", Language: "en"}},
+	golem.BinaryModality{Value: ref},
+}
 ```
 
 - A non-empty `URL` refers to the content; otherwise `Text` or `Data` carries it inline.
@@ -171,17 +174,24 @@ Handlers return only their output value. Signal failure two ways:
 - **Domain errors** the caller should observe as a value — model them in the method's output type with `golem.Result[Ok, Err]`:
 
 ```go
-// definition
-var Record = Agent.Method[RecordIn, golem.Result[int64, string]]("record")
+// Add to agents/counter/counter.go (package counter).
+type RecordIn struct{ Amount int64 }
 
-// handler
-agent.Handle(Record, func(ctx *golem.Context[state], in RecordIn) golem.Result[int64, string] {
-	if in.Amount < 0 {
-		return golem.Err[int64, string]("cannot record a negative amount")
-	}
-	ctx.State.total += in.Amount
-	return golem.Ok[int64, string](ctx.State.total)
-})
+var Record = Agent.Method[RecordIn, golem.Result[int64, string]]("record")
+```
+
+In `agents/counter/impl/impl.go`, using the `counter` import, `agent` and `state` defined above, register the handler in `init`:
+
+```go
+func init() {
+	agent.Handle(counter.Record, func(ctx *golem.Context[state], in counter.RecordIn) golem.Result[int64, string] {
+		if in.Amount < 0 {
+			return golem.Err[int64, string]("cannot record a negative amount")
+		}
+		ctx.State.value += in.Amount
+		return golem.Ok[int64, string](ctx.State.value)
+	})
+}
 ```
 
 Returning `golem.Err(...)` completes the invocation successfully — the caller receives the error as a value (and can unwrap with `.MustOk()`). Panicking instead fails the whole agent.
@@ -190,8 +200,8 @@ Returning `golem.Err(...)` completes the invocation successfully — the caller 
 
 - Method parameters/results are passed by value; wrap the parameter list in a struct (one field per WIT parameter).
 - A `golem.Principal` field in a method's input struct (or the `ID`) is filled by the host with the invocation's principal and is not a parameter callers pass; `ctx.Principal()` is the principal the agent was initialized with (see [`golem-add-http-auth-go`](/next/how-to-guides/go/golem-add-http-auth-go)).
-- `ID` must be a struct; its fields are the agent identity. Agents are created implicitly on first invocation. An `ID` with no fields (`type ID struct{}`) is a **singleton** — exactly one instance of the agent.
-- Invocations run **sequentially in a single thread** — no concurrency within one agent, no locks needed.
+- `ID` must be a struct; its fields plus an optional phantom UUID define identity. Durable agents are created implicitly on first invocation. An empty `ID` (`type ID struct{}`) is a **singleton** only for non-phantom durable addressing. `NewPhantom` adds a fresh UUID without changing the mode; ephemeral targets require phantom addressing. Use a new `NewPhantom` target for each independent ephemeral call; do not reuse a completed ephemeral target (see [`golem-multi-instance-agent-go`](/next/how-to-guides/go/golem-multi-instance-agent-go)).
+- An agent admits invocations **sequentially**, but goroutines within one invocation can interleave at yield points (for example, while waiting for RPC, HTTP, streams or promises). This is cooperative concurrency, not a promise of CPU-thread parallelism. Synchronize shared mutable state when goroutines can interleave; sequential invocation admission does not remove that need.
 - Method descriptors must be **package-level vars** in the definition package (the same value is used by the schema, the binding, and callers).
 - State lives only in the impl package (unexported) — callers never see it.
 - Target is **WASM only**: no raw sockets; outgoing HTTP goes through the SDK's WASI transport (see [`golem-make-http-request-go`](/next/how-to-guides/go/golem-make-http-request-go)).

@@ -130,6 +130,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         1,
         1,
         1,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -160,6 +161,9 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             stage_id,
             AgentMetadata {
                 agent_id: target.agent_id.clone(),
+                component_id: target.agent_id.component_id,
+                agent_type_name: None,
+                canonical_key: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 env: vec![],
                 environment_id: target.environment_id,
@@ -172,6 +176,13 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
                 original_phantom_id: None,
                 fingerprint,
                 agent_mode: AgentMode::Durable,
+                create_request: golem_common::model::oplog::CreateRequest::new(
+                    golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                    None,
+                    golem_common::model::agent::Principal::anonymous(),
+                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
+                    ),
+                ),
             },
         )
         .await
@@ -180,6 +191,9 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         .add(OplogEntry::create(Box::new(
             golem_common::model::oplog::CreateParameters {
                 agent_id: target.agent_id.clone(),
+                component_id: target.agent_id.component_id,
+                agent_type_name: None,
+                canonical_key: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 agent_mode: AgentMode::Durable,
                 component_revision: ComponentRevision::INITIAL,
@@ -193,6 +207,13 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
                 local_agent_config: vec![],
                 original_phantom_id: None,
                 instance_id: fingerprint.0,
+                create_request: golem_common::model::oplog::CreateRequest::new(
+                    golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                    None,
+                    golem_common::model::agent::Principal::anonymous(),
+                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
+                    ),
+                ),
             },
         )))
         .await

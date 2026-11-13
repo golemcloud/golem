@@ -23,7 +23,7 @@ import golem.runtime.{AgentMetadata, WireAgentMetadata}
 import golem.runtime.SnapshotRestoreContext
 import golem.runtime.SnapshotHandlers
 import golem.runtime.SnapshotData
-import golem.Uuid
+import java.util.UUID
 
 import scala.scalajs.js
 
@@ -66,7 +66,7 @@ final class AgentDefinition[Instance](
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (SnapshotData, String, JsSchemaValueTree, Option[Uuid], Principal) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, String, JsSchemaValueTree, Option[UUID], Principal) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
 
@@ -100,7 +100,7 @@ final class AgentDefinition[Instance](
     bytes: SnapshotData,
     agentId: String,
     identity: JsSchemaValueTree,
-    phantomId: Option[Uuid],
+    phantomId: Option[UUID],
     principal: Principal
   ): js.Promise[RestoredInstance[Any]] =
     restoreInstance match {

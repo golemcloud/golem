@@ -33,7 +33,7 @@ use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetada
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
@@ -57,6 +57,7 @@ use golem_common::model::environment::{
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
@@ -94,6 +95,26 @@ fn default_tool_deployment_configs(
                     environment_binding: None,
                     component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn default_tool_middleware_provision_configs(
+    middlewares: &[golem_common::schema::tool::ToolMiddleware],
+) -> anyhow::Result<BTreeMap<ToolMiddlewareName, ToolProvisionConfigCreation>> {
+    middlewares
+        .iter()
+        .map(|middleware| {
+            Ok((
+                ToolMiddlewareName::try_from(middleware.name.as_str())
+                    .map_err(anyhow::Error::msg)?,
+                ToolProvisionConfigCreation {
+                    config: serde_json::json!({}).into(),
+                    env: BTreeMap::new(),
+                    plugin_installations: Vec::new(),
+                    files: BTreeMap::new(),
                 },
             ))
         })
@@ -293,6 +314,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
+        let tool_middleware_provision_configs =
+            default_tool_middleware_provision_configs(&tool_middlewares)?;
         for agent_type in &agent_types {
             agent_type_provision_configs
                 .entry(agent_type.type_name.clone())
@@ -333,7 +356,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     tool_deployment_configs,
                     tools,
                     tool_middlewares,
-                    tool_middleware_provision_configs: BTreeMap::new(),
+                    tool_middleware_provision_configs,
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -400,7 +423,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             for agent_type in &metadata.agent_types {
                 if !previous_component
                     .metadata
-                    .agent_type_provision_configs()
+                    .agent_type_provision_configs
                     .contains_key(&agent_type.type_name)
                 {
                     let update = updates.entry(agent_type.type_name.clone()).or_default();
@@ -470,7 +493,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
@@ -496,7 +519,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: TypedSchemaValue,
@@ -547,7 +570,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,

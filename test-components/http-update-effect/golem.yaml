@@ -1,0 +1,26 @@
+manifestVersion: 2.0.0
+app: http-update-effect
+includes:
+  - ../golem-test-components-common.yaml
+componentTemplates:
+  effect-test-component:
+    guestLanguage: effect
+    presets:
+      optimized:
+        customCommands:
+          copy:
+            - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+      quick:
+        customCommands:
+          copy:
+            - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+components:
+  golem-it:http-update-effect-baseline:
+    dir: baseline
+    templates: effect, effect-test-component
+  golem-it:http-update-effect-timeout:
+    dir: timeout
+    templates: effect, effect-test-component
+environments:
+  local:
+    server: local

@@ -222,7 +222,27 @@ impl PrimaryOplogState {
     /// threshold-commit failure into the job that triggered it.
     pub(super) async fn maybe_commit(&mut self) -> Result<(), OplogError> {
         if self.over_commit_threshold() {
-            self.commit(CommitLevel::Always).await?;
+            self.auto_commit().await?;
+        }
+        Ok(())
+    }
+
+    /// Commits the buffer outside an explicit commit: on the commit threshold or for a replica
+    /// wait. While a listener collects the entries with [`CommitLevel::ReportOnly`], they stay in
+    /// memory for that report, up to the latest `max_retained_auto_commit_batches` commits. Beyond
+    /// it the oldest batch is dropped: the report stays complete, because it reads every
+    /// unreported entry before the retained ones back from storage.
+    pub(super) async fn auto_commit(&mut self) -> Result<(), OplogError> {
+        let committed = self.commit(CommitLevel::Always).await?;
+        if committed.is_empty() {
+            return Ok(());
+        }
+        self.retained_auto_commits.push_back(committed);
+        while self.retained_auto_commits.len() > self.max_retained_auto_commit_batches {
+            self.retained_auto_commits.pop_front();
+        }
+        if !self.auto_commit_listener.notify() {
+            self.retained_auto_commits.clear();
         }
         Ok(())
     }
@@ -285,16 +305,23 @@ impl PrimaryOplogState {
         mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         let committed_through = self.last_committed_idx;
-        let mut entries = if self.last_reported_commit_idx < previously_committed_through {
+        let mut retained: BTreeMap<_, _> = std::mem::take(&mut self.retained_auto_commits)
+            .into_iter()
+            .flatten()
+            .collect();
+        let read_through = retained
+            .first_key_value()
+            .map_or(previously_committed_through, |(first, _)| first.previous());
+        let mut entries = if self.last_reported_commit_idx < read_through {
             let start = self.last_reported_commit_idx.next();
-            let count =
-                u64::from(previously_committed_through) - u64::from(self.last_reported_commit_idx);
+            let count = u64::from(read_through) - u64::from(self.last_reported_commit_idx);
             let entries = self.reader().read_source(start, count).await;
             exact_from_source(OplogReadSource::Primary, start, count, entries)
                 .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
         } else {
             BTreeMap::new()
         };
+        entries.append(&mut retained);
         entries.append(&mut newly_committed);
         self.last_reported_commit_idx = committed_through;
         entries

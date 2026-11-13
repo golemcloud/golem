@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::{AgentMode, OwnedAgentId, PendingInvocationRef};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::TypedAgentConfigEntry;
-use crate::model::card::{CardId, ReceivedCardTransferIndex};
+use crate::model::card::{CardId, ReceivedCardTransferIndex, SourceCardTransferIndex};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -42,6 +42,9 @@ use crate::model::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
+    pub component_id: crate::model::component::ComponentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub canonical_key: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
@@ -55,11 +58,27 @@ pub struct AgentMetadata {
     pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
+    pub create_request: oplog::CreateRequest,
 }
 
 impl AgentMetadata {
     pub fn owned_agent_id(&self) -> OwnedAgentId {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
+    }
+
+    /// Resolves the persisted type and decodes constructor parameters from the current-format ID.
+    pub fn parse_agent_id(
+        &self,
+        metadata: &crate::model::component_metadata::ComponentMetadata,
+    ) -> Result<super::ParsedAgentKey, String> {
+        let name = self
+            .agent_type_name
+            .as_ref()
+            .ok_or_else(|| "Owner has no agent type".to_string())?;
+        let agent_type = metadata
+            .find_agent_type_by_name_ref(name)
+            .ok_or_else(|| format!("Agent type not found: {name}"))?;
+        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
     }
 }
 
@@ -556,9 +575,15 @@ pub struct AgentStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
+    pub source_card_transfers: SourceCardTransferIndex,
+    pub entity_replay_progress: EntityReplayProgress,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
+    /// Set by the first `Restart` entry. An ephemeral agent appends and commits `Restart` before
+    /// any of its guest code runs, so a set bit means the agent may have executed and must never
+    /// be started again.
+    pub ephemeral_execution_begun: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
@@ -622,9 +647,12 @@ impl Default for AgentStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
+            source_card_transfers: SourceCardTransferIndex::default(),
+            entity_replay_progress: EntityReplayProgress::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
+            ephemeral_execution_begun: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
@@ -645,6 +673,82 @@ impl Default for AgentStatusRecord {
             previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
         }
+    }
+}
+
+/// Replay prerequisites strictly before an entity's terminal. Parentage follows durable call
+/// nesting, never observational ownership. Later descendants cannot change a frozen boundary.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct EntityReplayBoundary {
+    pub terminal_index: OplogIndex,
+    pub last_required: Option<OplogIndex>,
+    pub parent_entity: Option<OplogIndex>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct OpenEntityReplayScope {
+    pub last_required: Option<OplogIndex>,
+    pub parent_entity: Option<OplogIndex>,
+}
+
+/// Incremental replay evidence at the enclosing status record's `oplog_idx`.
+/// Routes include completed protocol parents while an enclosing entity is still open.
+/// Persistent maps make status snapshots share unchanged history.
+/// `completed` grows with the number of visible entity completions in the folded history,
+/// not just the number of open entities. These frozen boundaries remain replay evidence after
+/// scope retirement and must not be trimmed by age or invocation completion. Changes to skipped
+/// or deleted regions invalidate affected fold baselines and require refolding visible history;
+/// removing entries from `completed` alone cannot repair boundaries derived from hidden work.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EntityReplayProgress {
+    pub completed: OrdMap<OplogIndex, EntityReplayBoundary>,
+    pub open: OrdMap<OplogIndex, OpenEntityReplayScope>,
+    pub routes: OrdMap<OplogIndex, OplogIndex>,
+    /// Exact inverse of `routes`: `(enclosing entity, Start)`.
+    pub route_members: OrdMap<(OplogIndex, OplogIndex), ()>,
+    /// Retained entity-tree edges `(parent, child)`. Retirement removes an edge before
+    /// visiting the child and stops at open children, which then own their own retirement.
+    pub entity_children: OrdMap<(OplogIndex, OplogIndex), ()>,
+}
+
+impl BinarySerializer for EntityReplayProgress {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::serialize_iterator(&mut self.completed.iter(), context)?;
+        desert_rust::serialize_iterator(&mut self.open.iter(), context)?;
+        desert_rust::serialize_iterator(&mut self.routes.iter(), context)?;
+        desert_rust::serialize_iterator(&mut self.route_members.iter(), context)?;
+        desert_rust::serialize_iterator(&mut self.entity_children.iter(), context)
+    }
+}
+
+impl BinaryDeserializer for EntityReplayProgress {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        Ok(Self {
+            completed: desert_rust::deserialize_iterator::<(OplogIndex, EntityReplayBoundary)>(
+                context,
+            )
+            .0
+            .collect::<desert_rust::Result<_>>()?,
+            open: desert_rust::deserialize_iterator::<(OplogIndex, OpenEntityReplayScope)>(context)
+                .0
+                .collect::<desert_rust::Result<_>>()?,
+            routes: desert_rust::deserialize_iterator::<(OplogIndex, OplogIndex)>(context)
+                .0
+                .collect::<desert_rust::Result<_>>()?,
+            route_members: desert_rust::deserialize_iterator::<((OplogIndex, OplogIndex), ())>(
+                context,
+            )
+            .0
+            .collect::<desert_rust::Result<_>>()?,
+            entity_children: desert_rust::deserialize_iterator::<((OplogIndex, OplogIndex), ())>(
+                context,
+            )
+            .0
+            .collect::<desert_rust::Result<_>>()?,
+        })
     }
 }
 
@@ -1180,8 +1284,11 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
-    pub fn has_pending_work(&self) -> bool {
-        !self.pending_invocations.is_empty() || !self.pending_updates.is_empty()
+    pub fn has_pending_work(&self, now: Timestamp) -> bool {
+        self.pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(now))
+            || !self.pending_updates.is_empty()
     }
 }
 

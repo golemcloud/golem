@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
@@ -79,6 +80,7 @@ message RawOplogEntry {
     RawSnapshotConfirmedParameters snapshot_confirmed = 66;
     RawToolAttachmentReadParameters tool_attachment_read = 67;
     RawToolAttachmentControlParameters tool_attachment_control = 68;
+    RawSpanClosedParameters span_closed = 69;
   }
 }
 
@@ -174,6 +176,26 @@ message RawCreateParameters {
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
   OwnerKind owner_kind = 14;
+  golem.component.ComponentId component_id = 15;
+  optional string agent_type_name = 16;
+  optional string canonical_key = 17;
+  RawCreateRequest create_request = 18;
+}
+
+enum RawCreateRequestKind {
+  RAW_CREATE_REQUEST_KIND_GET_OR_CREATE = 0;
+  RAW_CREATE_REQUEST_KIND_EXCLUSIVE = 1;
+  RAW_CREATE_REQUEST_KIND_PHANTOM = 2;
+  RAW_CREATE_REQUEST_KIND_FORK = 3;
+}
+
+message RawCreateRequest {
+  RawCreateRequestKind kind = 1;
+  optional IdempotencyKey idempotency_key = 2;
+  golem.component.Principal principal = 3;
+  string trace_id = 4;
+  repeated string trace_states = 5;
+  repeated RawSpanData invocation_context = 6;
 }
 
 message RawStartParameters {
@@ -298,6 +320,7 @@ message RawPendingAgentInvocationParameters {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
+  google.protobuf.Timestamp not_before = 6;
 }
 
 message RawPendingUpdateParameters {
@@ -407,6 +430,11 @@ message RawSnapshotConfirmedParameters {
   string filesystem_snapshot = 1;
 }
 
+message RawSpanClosedParameters {
+  optional uint64 resource_start_index = 1;
+  RawSpanFinished span_finished = 2;
+}
+
 message RawOplogProcessorCheckpointParameters {
   golem.component.EnvironmentPluginGrantId plugin_grant_id = 1;
   AgentId target_agent_id = 2;
@@ -499,6 +527,8 @@ message RawCardDerivedParameters {
   google.protobuf.Timestamp timestamp = 1;
   bytes card = 2;
   uint64 wallet_generation = 3;
+  // Set when a transfer derived the card as the installed child of a polymorphic source.
+  golem.common.UUID transfer_id = 4;
 }
 
 // Source-agent durable transfer intent. source_wallet_generation belongs only to

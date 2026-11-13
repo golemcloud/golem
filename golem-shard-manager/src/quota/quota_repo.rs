@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::sharding::error::ShardManagerError;
+use crate::sharding::etcd_clients::RequestClient;
 use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_while_unsent};
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
@@ -21,7 +22,7 @@ use chrono::{DateTime, Utc};
 use conditional_trait_gen::trait_gen;
 use desert_rust::BinaryCodec;
 use etcd_client::{
-    Client, Compare, CompareOp, DeleteOptions, GetOptions, KeyValue, Txn, TxnOp, TxnResponse,
+    Compare, CompareOp, DeleteOptions, GetOptions, KeyValue, Txn, TxnOp, TxnResponse,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -744,7 +745,8 @@ fn etcd_error(err: etcd_client::Error) -> QuotaRepoError {
 /// Every write also carries the [`LeaderFence`], so a replica that lost the leadership cannot
 /// overwrite what its successor restored.
 pub struct EtcdQuotaRepo {
-    client: Client,
+    /// The handle: each request takes the current client, which follows renewed TLS files.
+    client: RequestClient,
     fence: LeaderFence,
     /// How a read of the quota state retries transient failures.
     read_retry: ReadRetry,
@@ -765,7 +767,7 @@ enum PageError {
 }
 
 impl EtcdQuotaRepo {
-    pub fn new(client: Client, fence: LeaderFence, read_retry: ReadRetry) -> Self {
+    pub fn new(client: RequestClient, fence: LeaderFence, read_retry: ReadRetry) -> Self {
         Self {
             client,
             fence,
@@ -788,7 +790,7 @@ impl EtcdQuotaRepo {
     }
 
     pub fn logged(
-        client: Client,
+        client: RequestClient,
         fence: LeaderFence,
         read_retry: ReadRetry,
     ) -> LoggedQuotaRepo<Self> {
@@ -883,7 +885,7 @@ impl EtcdQuotaRepo {
         send_again_while_unsent(
             what,
             || {
-                let mut kv = self.client.kv_client();
+                let mut kv = self.client.current().kv_client();
                 let txn = txn.clone();
                 async move { kv.txn(txn).await }
             },
@@ -1071,7 +1073,7 @@ impl EtcdQuotaRepo {
         retry_retriable_until(
             "reading the quota state",
             || {
-                let mut kv = self.client.kv_client();
+                let mut kv = self.client.current().kv_client();
                 let key = key.to_vec();
                 let options = options.clone();
                 async move { Ok::<_, ShardManagerError>(kv.get(key, Some(options)).await?) }

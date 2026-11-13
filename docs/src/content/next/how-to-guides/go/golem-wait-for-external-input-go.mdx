@@ -2,7 +2,7 @@
 
 ## Overview
 
-A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, hands the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. The Golem runtime **durably suspends** the invocation — consuming no resources, surviving restarts, exactly-once via oplog replay — until the promise is fulfilled.
+A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, hands the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. Creation does not suspend the agent. A durable agent awaiting a pending promise can suspend after the suspension policy delay, freeing guest execution resources while persisted state and other resources remain. The wait survives restarts via oplog replay.
 
 In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is decoded as `T` via JSON (or passed through unchanged when `T` is `[]byte`).
 
@@ -10,7 +10,7 @@ In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is 
 
 1. **Create a promise** inside a handler with `golem.NewPromise[T]()`.
 2. **Persist its ID** (`p.ID()`) in the agent's state, and/or hand it to the outside world so someone can complete it later.
-3. **Await it** with `golem.PromiseByID[T](id).MustAwait()` (or `p.MustAwait()` in the same invocation) — the invocation durably suspends here.
+3. **Await it** with `golem.PromiseByID[T](id).MustAwait()` (or `p.MustAwait()` in the same invocation) — a durable invocation can suspend after the suspension policy delay.
 4. **Complete it** from another agent with `golem.CompletePromise(id, value)`, or from off-platform via the worker REST endpoint / a minted `WebhookURL()`.
 
 ## API (from `promise.go`)

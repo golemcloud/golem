@@ -12,9 +12,9 @@ Golem agents can implement custom `save_snapshot` and `load_snapshot` functions 
 Snapshotting solves two distinct problems:
 
 1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
-2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting (`every(N)` or `periodic(...)`), recovery starts from the latest snapshot and replays only the entries after it.
+2. **Fast recovery and reduced replay work** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting (`every(N)` or `periodic(...)`), recovery starts from the latest snapshot and replays only the entries after it.
 
-> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
+> **You cannot opt out of oplog writes for a durable agent.** Snapshots reduce recovery replay work; they do not reduce oplog writes or stored oplog volume. Do *not* try to skip persistence.
 
 ## Enabling Snapshotting
 

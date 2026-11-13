@@ -21,9 +21,9 @@ use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     encode_recursive_stream_value_with_schema,
 };
-use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
+use crate::grpc::invocation::from_proto_invocation_context;
 use crate::services::oplog::OplogError;
-use crate::services::{HasAll, HasComponentService, HasSchedulerService, UsesAllDeps};
+use crate::services::{HasAll, HasComponentService, UsesAllDeps};
 use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
@@ -46,7 +46,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
@@ -60,7 +60,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus, ScheduledAction,
+    InvocationStatus,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
@@ -167,8 +167,8 @@ use request::{
 
 mod response;
 use response::{
-    persisted_invocation_result, pre_acceptance_rejection_reason, rejection_worker_error,
-    send_attachment_revocation, send_protocol_failure, send_rejection,
+    persisted_invocation_result, persisted_result_and_finished, pre_acceptance_rejection_reason,
+    rejection_worker_error, send_attachment_revocation, send_protocol_failure, send_rejection,
     send_rejection_with_worker_error, send_resumed_finished, send_unvalidated_rejection,
     send_worker_failure,
 };

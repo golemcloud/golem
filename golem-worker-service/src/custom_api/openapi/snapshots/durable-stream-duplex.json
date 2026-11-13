@@ -197,9 +197,10 @@
           }
         },
         "security": [],
-        "summary": "create-session"
+        "summary": "create-session",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams"
+      "x-golem-route-mode": "durableStreams"
     },
     "/stream/forks/{fork}/invocations/{session}": {
       "get": {
@@ -275,7 +276,8 @@
           }
         },
         "security": [],
-        "summary": "get-fork"
+        "summary": "get-fork",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d",
@@ -357,9 +359,10 @@
           }
         },
         "security": [],
-        "summary": "head-fork"
+        "summary": "head-fork",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams"
+      "x-golem-route-mode": "durableStreams"
     },
     "/stream/forks/{fork}/invocations/{session}/streams/%24result": {
       "delete": {
@@ -414,7 +417,8 @@
           }
         },
         "security": [],
-        "summary": "delete-$result"
+        "summary": "delete-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "get": {
         "operationId": "TestAgent-test_method-get-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
@@ -713,7 +717,8 @@
           }
         },
         "security": [],
-        "summary": "read-$result"
+        "summary": "read-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
@@ -822,7 +827,8 @@
           }
         },
         "security": [],
-        "summary": "head-$result"
+        "summary": "head-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "put": {
         "description": "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be application/json.",
@@ -1103,9 +1109,10 @@
           }
         },
         "security": [],
-        "summary": "fork-$result"
+        "summary": "fork-$result",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams",
+      "x-golem-route-mode": "durableStreams",
       "x-golem-stream-slot": {
         "content-type": "application/json",
         "direction": "output",
@@ -1167,7 +1174,8 @@
           }
         },
         "security": [],
-        "summary": "delete-input"
+        "summary": "delete-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "get": {
         "operationId": "TestAgent-test_method-get-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -1466,7 +1474,8 @@
           }
         },
         "security": [],
-        "summary": "read-input"
+        "summary": "read-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -1575,7 +1584,8 @@
           }
         },
         "security": [],
-        "summary": "head-input"
+        "summary": "head-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "post": {
         "operationId": "TestAgent-test_method-post-2f73747265616d2f666f726b732f7b666f726b7d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -1882,7 +1892,8 @@
           }
         },
         "security": [],
-        "summary": "append-input"
+        "summary": "append-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "put": {
         "description": "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be application/json.",
@@ -2163,9 +2174,10 @@
           }
         },
         "security": [],
-        "summary": "fork-input"
+        "summary": "fork-input",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams",
+      "x-golem-route-mode": "durableStreams",
       "x-golem-stream-slot": {
         "content-type": "application/json",
         "direction": "input",
@@ -2213,7 +2225,8 @@
           }
         },
         "security": [],
-        "summary": "cancel-session"
+        "summary": "cancel-session",
+        "x-golem-route-mode": "durableStreams"
       },
       "get": {
         "operationId": "TestAgent-test_method-get-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d",
@@ -2277,7 +2290,8 @@
           }
         },
         "security": [],
-        "summary": "get-session"
+        "summary": "get-session",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d",
@@ -2348,7 +2362,8 @@
           }
         },
         "security": [],
-        "summary": "head-session"
+        "summary": "head-session",
+        "x-golem-route-mode": "durableStreams"
       },
       "put": {
         "operationId": "TestAgent-test_method-put-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d",
@@ -2420,9 +2435,10 @@
           }
         },
         "security": [],
-        "summary": "ensure-session"
+        "summary": "ensure-session",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams"
+      "x-golem-route-mode": "durableStreams"
     },
     "/stream/invocations/{session}/streams/%24result": {
       "delete": {
@@ -2466,7 +2482,8 @@
           }
         },
         "security": [],
-        "summary": "delete-$result"
+        "summary": "delete-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "get": {
         "operationId": "TestAgent-test_method-get-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
@@ -2754,7 +2771,8 @@
           }
         },
         "security": [],
-        "summary": "read-$result"
+        "summary": "read-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f253234726573756c74",
@@ -2852,7 +2870,8 @@
           }
         },
         "security": [],
-        "summary": "head-$result"
+        "summary": "head-$result",
+        "x-golem-route-mode": "durableStreams"
       },
       "put": {
         "description": "Body must be empty. Content-Type is optional; when supplied it must be application/json.",
@@ -3035,9 +3054,10 @@
           }
         },
         "security": [],
-        "summary": "ensure-$result"
+        "summary": "ensure-$result",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams",
+      "x-golem-route-mode": "durableStreams",
       "x-golem-stream-slot": {
         "content-type": "application/json",
         "direction": "output",
@@ -3088,7 +3108,8 @@
           }
         },
         "security": [],
-        "summary": "delete-input"
+        "summary": "delete-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "get": {
         "operationId": "TestAgent-test_method-get-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -3376,7 +3397,8 @@
           }
         },
         "security": [],
-        "summary": "read-input"
+        "summary": "read-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "head": {
         "operationId": "TestAgent-test_method-head-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -3474,7 +3496,8 @@
           }
         },
         "security": [],
-        "summary": "head-input"
+        "summary": "head-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "post": {
         "operationId": "TestAgent-test_method-post-2f73747265616d2f696e766f636174696f6e732f7b73657373696f6e7d2f73747265616d732f696e707574",
@@ -3770,7 +3793,8 @@
           }
         },
         "security": [],
-        "summary": "append-input"
+        "summary": "append-input",
+        "x-golem-route-mode": "durableStreams"
       },
       "put": {
         "description": "Body must be empty. Content-Type is optional; when supplied it must be application/json.",
@@ -3953,9 +3977,10 @@
           }
         },
         "security": [],
-        "summary": "ensure-input"
+        "summary": "ensure-input",
+        "x-golem-route-mode": "durableStreams"
       },
-      "x-golem-route-mode": "durable-streams",
+      "x-golem-route-mode": "durableStreams",
       "x-golem-stream-slot": {
         "content-type": "application/json",
         "direction": "input",

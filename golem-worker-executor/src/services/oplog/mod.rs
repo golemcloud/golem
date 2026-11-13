@@ -424,6 +424,37 @@ pub enum CommitLevel {
     Deferred,
     /// Only commit immediately if the worker is durable
     DurableOnly,
+    /// Commit nothing: only report the entries the oplog committed by itself since the last
+    /// report, on its commit threshold or a replica wait. Buffered entries stay buffered. Only the
+    /// primary oplog of a durable agent reports entries; an ephemeral oplog reports nothing.
+    ReportOnly,
+}
+
+/// The callback an oplog calls after it committed entries by itself, so that their owner can
+/// collect them with [`CommitLevel::ReportOnly`]. The oplog holds it weakly and does not call it
+/// after its owner dropped it.
+pub(crate) type AutoCommitCallback = dyn Fn() + Send + Sync;
+
+#[derive(Clone, Default)]
+pub(crate) struct AutoCommitListener(Arc<std::sync::Mutex<Option<Weak<AutoCommitCallback>>>>);
+
+impl AutoCommitListener {
+    fn set(&self, listener: Weak<AutoCommitCallback>) {
+        *self.0.lock().unwrap() = Some(listener);
+    }
+
+    /// Calls the listener. Returns false when there is no live listener, so nobody will collect
+    /// the entries of the commit with [`CommitLevel::ReportOnly`] soon.
+    fn notify(&self) -> bool {
+        let listener = self.0.lock().unwrap().as_ref().and_then(Weak::upgrade);
+        match listener {
+            Some(listener) => {
+                listener();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Why an oplog write was refused by the storage: the shard epoch this executor asserted is
@@ -748,6 +779,15 @@ pub trait Oplog: Any + Debug + Send + Sync {
         &self,
         level: CommitLevel,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>;
+
+    /// Registers the callback that the leaf oplog calls after it committed entries by itself.
+    /// The owner then collects the entries with [`CommitLevel::ReportOnly`]. A new registration
+    /// replaces the earlier one.
+    fn set_auto_commit_listener(&self, listener: Weak<AutoCommitCallback>) {
+        if let Some(inner) = self.inner() {
+            inner.set_auto_commit_listener(listener);
+        }
+    }
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;

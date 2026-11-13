@@ -16,9 +16,9 @@ use golem_rust::quota::QuotaToken;
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::schema::wit::wire::ToolError as WireToolError;
 use golem_rust::{
-    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire,
-    SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition,
-    agent_implementation, decode_typed_schema_value_owned, encode_schema_value, read_only,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
+    SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
+    decode_typed_schema_value_owned, encode_schema_value, read_only,
 };
 use matrix_core_tool_guest_client::{
     MatrixCoreArtifactInspectError, MatrixCoreClient, MatrixDimensions, MatrixRequest,
@@ -648,6 +648,19 @@ pub trait ToolStreamingCaller {
     async fn probe_bounded_wasi_stream(&self) -> Vec<u64>;
     async fn filesystem_limit_roundtrip(&self) -> Vec<u64>;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
+    async fn yielding_tool_result_observation(&self, yields: u32) -> bool;
+    fn produce_tool_results(
+        &self,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> AgentStream<String>;
+    async fn collect_tool_results(
+        &self,
+        target: String,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> Vec<String>;
+    fn produce_terminal(&self, mode: String, gate: golem_rust::PromiseId) -> AgentStream<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
     async fn benchmark_producer(
@@ -681,6 +694,7 @@ pub trait ToolStreamingCaller {
     async fn raw_modes_and_handles(&self) -> Vec<String>;
     async fn middleware_probe_modes(&self, value: String) -> Vec<String>;
     async fn middleware_probe_once(&self, value: String) -> String;
+    async fn nested_trap_probe(&self, value: String) -> String;
     async fn dynamic_mcp_probe(&self, value: String) -> String;
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
@@ -747,6 +761,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence;
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
+    async fn permanent_tool_trap_isolation(&self) -> Vec<String>;
     async fn clean_stdout_then_trap(&self);
     async fn trap_with_blocked_sibling(&self);
     async fn trap_with_sibling_lifecycle(&self, lifecycle: String);
@@ -1375,6 +1390,90 @@ async fn wait_at_promise_checkpoint(name: &str) {
 
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
+    fn produce_tool_results(
+        &self,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            // The first write cannot finish until the returned stream is being drained.
+            writer.write_one("before-tool".to_string()).await.unwrap();
+            for input in [b"first".to_vec(), b"second".to_vec()] {
+                let output = if capable {
+                    let collected = CapableStreamingClient::default()
+                        .run_capable(
+                            format!(
+                                "order:{}:/stream-tool-results",
+                                String::from_utf8(input.clone()).unwrap()
+                            ),
+                            input_stream(vec![input]),
+                        )
+                        .await
+                        .expect("start capable tool from output producer")
+                        .collect()
+                        .await;
+                    collected
+                        .result
+                        .expect("capable tool result from output producer");
+                    collected.stdout.unwrap().unwrap()
+                } else {
+                    let collected = StreamingClient::default()
+                        .run("echo".to_string(), input_stream(vec![input]))
+                        .await
+                        .expect("start tool from output producer")
+                        .collect()
+                        .await;
+                    collected.result.expect("tool result from output producer");
+                    collected.stdout.unwrap().unwrap()
+                };
+                writer
+                    .write_one(String::from_utf8(output).unwrap())
+                    .await
+                    .unwrap();
+                if let Some(gate) = &gate {
+                    golem_rust::await_promise(gate).await;
+                }
+            }
+        });
+        stream
+    }
+
+    async fn collect_tool_results(
+        &self,
+        target: String,
+        capable: bool,
+        gate: Option<golem_rust::PromiseId>,
+    ) -> Vec<String> {
+        ToolStreamingCallerClient::get(target)
+            .produce_tool_results(capable, gate)
+            .await
+            .collect()
+            .await
+            .expect("collect tool results from output producer")
+    }
+
+    fn produce_terminal(&self, mode: String, gate: golem_rust::PromiseId) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one("before-terminal".to_string())
+                .await
+                .unwrap();
+            golem_rust::await_promise(&gate).await;
+            match mode.as_str() {
+                "trap" => panic!("producer failed after returning its stream"),
+                "deadline" => {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(60_000_000_000).await;
+                }
+                "complete" => {}
+                _ => panic!("unknown producer mode"),
+            }
+            writer.write_one("completed".to_string()).await.unwrap();
+        });
+        stream
+    }
+
     fn new(_name: String, #[agent_config] _config: Config<ToolStreamingCallerConfig>) -> Self {
         assert!(
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
@@ -1535,6 +1634,39 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             assert!(pages < 10, "bounded grep pagination did not converge");
         }
         vec![first_next_byte, first_next_line, pages, diagnostics]
+    }
+
+    /// Starts a short tool call and then only yields, without any host call. Returns whether the
+    /// tool result reached the guest before it blocked again.
+    async fn yielding_tool_result_observation(&self, yields: u32) -> bool {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let invocation = rpc.async_invoke_and_await(
+            &["no-stream".to_string()],
+            raw_no_stream_input("ok"),
+            None,
+            None,
+            None,
+        );
+        // A delivery consumes every guest block before it. This wait blocks the guest before its
+        // timer completes, so no earlier block is left for the tool result.
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(10_000_000).await;
+        let mut result = Box::pin(raw_result(&invocation));
+        let mut observed_while_yielding = false;
+        for _ in 0..yields {
+            let ready = std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(result.as_mut().poll(cx).is_ready())
+            })
+            .await;
+            if ready {
+                observed_while_yielding = true;
+                break;
+            }
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        if !observed_while_yielding {
+            result.await.expect("no-stream command");
+        }
+        observed_while_yielding
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
@@ -2196,10 +2328,31 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence {
+        let checkpointed =
+            mode == "large" && std::env::var("CALLER_PROMISE_CHECKPOINT_PORT").is_ok();
         let invocation = StreamingClient::default()
             .run(mode, input_stream(chunks(input, fragment_size)))
             .await
             .expect("start streaming tool");
+        if checkpointed {
+            let result = invocation.result();
+            let mut stdout = invocation.stdout.expect("streaming tool has stdout");
+            let read = async move {
+                let mut output = Vec::new();
+                let mut chunks = 0;
+                while let Some(chunk) = stdout.next().await {
+                    output.extend(chunk.expect("large output chunk"));
+                    chunks += 1;
+                    if [16, 128, 320].contains(&chunks) {
+                        wait_at_promise_checkpoint(&format!("large-output-consumed-{chunks}"))
+                            .await;
+                    }
+                }
+                output
+            };
+            let (result, output) = (result, read).join().await;
+            return evidence(result, output);
+        }
         let collected = invocation.collect().await;
         match collected.stderr {
             Ok(None) => {}
@@ -2712,6 +2865,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             "fire-and-forget-admitted".to_string(),
             decode_middleware_probe_result(asynchronous),
         ]
+    }
+
+    async fn nested_trap_probe(&self, value: String) -> String {
+        let result = ToolRpc::create("middleware-probe")
+            .expect("tool RPC creation failed")
+            .invoke_and_await(
+                vec!["apply".to_string()],
+                raw_middleware_probe_input(&value),
+                None,
+                None,
+                None,
+            )
+            .await;
+        if value == "parent-trap" {
+            let failure = result.expect_err("middleware must trap");
+            let tool_host::ToolRpcError::RemoteInternalError(_) = failure else {
+                panic!("expected remote internal error, got {failure:?}");
+            };
+            "parent-trap-handled".to_string()
+        } else if value.starts_with("cascade(") {
+            let failure = result.expect_err("middleware forwards the child failure");
+            let ToolRpcError::RemoteToolError(WireToolError::InvalidResult(details)) = failure
+            else {
+                panic!("expected forwarded middleware error, got {failure:?}");
+            };
+            details
+        } else {
+            decode_middleware_probe_result(result.expect("middleware handles child trap"))
+        }
     }
 
     async fn middleware_probe_once(&self, value: String) -> String {
@@ -4535,6 +4717,43 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         ]
     }
 
+    async fn permanent_tool_trap_isolation(&self) -> Vec<String> {
+        let path = if std::env::var("TOOL_TRAP_ALLOCATION").is_ok() {
+            "allocation-permanent-trap:/allocation-permanent-trap-state"
+        } else {
+            "permanent-trap:/permanent-trap-state"
+        };
+        let mut trapped = CapableStreamingClient::default()
+            .run_capable(
+                path.to_string(),
+                input_stream(vec![b"partial-state".to_vec()]),
+            )
+            .await
+            .expect("start permanently trapping tool");
+        let mut output = Vec::new();
+        let stdout = trapped.stdout.as_mut().expect("trapping tool stdout");
+        let stream_error = loop {
+            match stdout.next().await {
+                Some(Ok(chunk)) => output.extend(chunk),
+                Some(Err(error)) => break format!("{error:?}"),
+                None => panic!("trapped stdout must not report successful EOF"),
+            }
+        };
+        let failure = trapped.result().await.expect_err("tool must trap");
+        let healthy = self
+            .collect_capable("/healthy-after-trap".to_string(), b"healthy".to_vec())
+            .await;
+        assert_eq!(healthy.completion, "ok");
+        vec![
+            String::from_utf8(output).unwrap(),
+            stream_error,
+            format!("{failure:?}"),
+            std::fs::read_to_string(path.split_once(':').unwrap().1)
+                .expect("failed body state remains"),
+            String::from_utf8(healthy.output).unwrap(),
+        ]
+    }
+
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence {
         let invocation = CapableStreamingClient::default()
             .run_capable(path.clone(), input_stream(vec![input.clone()]))
@@ -4623,7 +4842,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         wait_at_crash_checkpoint("caller-observed-clean-stdout").await;
         raw_result(&result)
             .await
-            .expect("owner trap must abort this result observation");
+            .expect_err("clean stdout does not turn a trapped result into success");
     }
 
     async fn trap_with_blocked_sibling(&self) {
@@ -4649,12 +4868,15 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .await,
             Some(Err(ByteStreamFailure::Failed(_)))
         ));
-        let _keep_blocked_source_open = blocked_source;
-        let _keep_blocked_invocation_alive = blocked;
         trapped
             .result()
             .await
-            .expect("owner trap must abort the primary while its sibling remains blocked");
+            .expect_err("trapping tool returns an isolated failure");
+        drop(blocked_source);
+        blocked
+            .result()
+            .await
+            .expect("same-tool sibling survives the trap");
     }
 
     async fn trap_with_sibling_lifecycle(&self, lifecycle: String) {
@@ -4676,7 +4898,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 trapped
                     .result()
                     .await
-                    .expect("owner trap must abort the blocked attachment");
+                    .expect_err("trapping tool returns an isolated failure");
+                drop(blocked_source);
+                blocked.result().await.expect("blocked sibling survives");
             }
             "detached-child" => {
                 drop(blocked);
@@ -4686,7 +4910,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .expect("start trapping tool")
                     .result()
                     .await
-                    .expect("owner trap must abort after detaching the child observer");
+                    .expect_err("trapping tool returns an isolated failure");
+                drop(blocked_source);
             }
             "observed-future" => {
                 let observed = blocked.result();
@@ -4694,14 +4919,15 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .run("trap".to_string(), input_stream(Vec::new()))
                     .await
                     .expect("start trapping tool");
-                let (blocked, trapped) = (observed, trapped.result()).join().await;
-                blocked.expect("owner trap must wake the observed sibling future");
-                trapped.expect("owner trap must abort the trapping future");
+                let release = async move {
+                    trapped.result().await.expect_err("isolated trap");
+                    drop(blocked_source);
+                };
+                let (blocked, ()) = (observed, release).join().await;
+                blocked.expect("observed same-tool sibling survives");
             }
             other => panic!("unknown sibling lifecycle {other}"),
         }
-
-        let _keep_blocked_source_open = blocked_source;
     }
 
     async fn drop_trapping_result(&self) {
@@ -5146,7 +5372,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let tool = async {
             raw_result(&result)
                 .await
-                .expect("completed reconstruction result before custom effect");
+                .expect("completed reconstruction result after custom effect");
         };
         let incomplete_custom = async {
             wait_at_unscoped_crash_checkpoint("before-reconstruction-custom-effect").await;
@@ -5167,7 +5393,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             })
             .await;
         };
-        (tool, incomplete_custom).join().await;
+        // The guest receives the tool result only after the custom effect, so history records the
+        // completed entity terminal before an incomplete custom call the guest has not passed.
+        incomplete_custom.await;
+        tool.await;
     }
 
     async fn hold_completed_reconstruction_overlapping_custom(&self) {
@@ -5190,7 +5419,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let tool = async {
             raw_result(&result)
                 .await
-                .expect("completed reconstruction result before custom effect");
+                .expect("completed reconstruction result after custom effect");
         };
         let incomplete_custom = async {
             wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
@@ -5211,7 +5440,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             })
             .await;
         };
-        (tool, incomplete_custom).join().await;
+        // The guest receives the tool result only after the custom effect, so history records the
+        // completed entity terminal before an incomplete custom call the guest has not passed.
+        incomplete_custom.await;
+        tool.await;
     }
 
     async fn single_store_http_atomic_probe(&self) {

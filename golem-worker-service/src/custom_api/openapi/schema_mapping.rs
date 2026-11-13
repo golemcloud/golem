@@ -17,11 +17,14 @@
 //! bundle into the inline root schema and document-wide `components/schemas`
 //! entries, and provides the handful of fixed JSON schemas the emitter needs.
 
+use golem_common::model::error::ErrorsBody;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_schema::schema::render::{
     to_external_input_openapi_components, to_external_output_openapi_components,
 };
+use poem_openapi::registry::Registry;
+use poem_openapi::types::Type;
 use serde_json::{Map, Value, json};
 
 /// Render a schema for an untrusted external request. Host-managed capability
@@ -42,6 +45,19 @@ pub fn render_output_schema(
     components: &mut Map<String, Value>,
 ) -> Result<Value, String> {
     merge_bundle(to_external_output_openapi_components(graph, ty), components)
+}
+
+pub fn request_validation_error_schema(
+    components: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    let mut registry = Registry::new();
+    ErrorsBody::register(&mut registry);
+    let root = serde_json::to_value(ErrorsBody::schema_ref()).map_err(|err| err.to_string())?;
+    let schemas = serde_json::to_value(registry.schemas).map_err(|err| err.to_string())?;
+    merge_bundle(
+        json!({ "root": root, "components": { "schemas": schemas } }),
+        components,
+    )
 }
 
 fn merge_bundle(bundle: Value, components: &mut Map<String, Value>) -> Result<Value, String> {

@@ -1,4 +1,0 @@
-{
-  "native-stub": ["native_stub.c"],
-  "test-import": ["moonbitlang/x/sys"]
-}

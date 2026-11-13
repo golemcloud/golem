@@ -168,6 +168,7 @@ impl ShardManagement {
             state_write_timeout,
             initial_health_check_timeout,
             number_of_shards,
+            false,
         )
         .await?
         .start(join_set))
@@ -204,6 +205,10 @@ impl ShardManagement {
     /// Everything [`Self::new_with_timeouts`] does before it spawns the worker: reads the state,
     /// health checks the executors and restarts their leases.
     ///
+    /// With `discard_stored_executors`, removes all stored executors instead: an embedded
+    /// executor cannot survive the server process that owned it. The reset is persisted before
+    /// this returns, preserving shard epoch history and storage revision fencing.
+    ///
     /// Split from [`PreparedShardManagement::start`] so that a caller can await this under its own
     /// supervision, which it cannot do while this holds the task set.
     #[allow(clippy::too_many_arguments)]
@@ -217,6 +222,7 @@ impl ShardManagement {
         state_write_timeout: Duration,
         initial_health_check_timeout: Duration,
         number_of_shards: usize,
+        discard_stored_executors: bool,
     ) -> Result<PreparedShardManagement, ShardManagerError> {
         let (shard_state, external_revision) =
             match timeout(state_read_timeout, persistence_service.read()).await {
@@ -239,7 +245,9 @@ impl ShardManagement {
         // executors' own renewals and the periodic check would not tell it, so it serves at once.
         // After a longer outage the check decides which leases are restarted below, and which
         // executors are dropped.
-        let unhealthy_executors = if !shard_state.has_expired_lease(Utc::now()) {
+        let unhealthy_executors = if discard_stored_executors {
+            HashSet::new()
+        } else if !shard_state.has_expired_lease(Utc::now()) {
             info!(
                 executors = executors.len(),
                 "Every stored shard lease is still valid; skipping the initial health check"
@@ -273,7 +281,7 @@ impl ShardManagement {
         let healthy_executors: HashSet<ExecutorId> = executors
             .iter()
             .map(|(id, _, _)| *id)
-            .filter(|id| !unhealthy_executors.contains(id))
+            .filter(|id| !discard_stored_executors && !unhealthy_executors.contains(id))
             .collect();
 
         let shard_management = ShardManagement {
@@ -290,11 +298,24 @@ impl ShardManagement {
             fatal: Arc::new(Mutex::new(None)),
         };
 
-        // Lease expiries are persisted and absolute, so after any outage longer than one lease
-        // every stored expiry is in the past and the first pass's housekeeping would evict the
-        // whole cluster. The executors counted healthy above (all of them when the health check was
-        // skipped) have their lease clock restarted here - in one write, before the loop can run.
-        if !healthy_executors.is_empty() {
+        if discard_stored_executors && !executors.is_empty() {
+            let discarded = executors.len();
+            shard_management
+                .mutate_and_persist(move |shard_state| {
+                    for (executor_id, _, _) in executors {
+                        shard_state.remove_executor(executor_id);
+                    }
+                })
+                .await?;
+            info!(
+                executors = discarded,
+                "Discarded the shard leases of the previous embedded executors"
+            );
+        } else if !healthy_executors.is_empty() {
+            // Lease expiries are persisted and absolute, so after any outage longer than one lease
+            // every stored expiry is in the past and the first pass's housekeeping would evict the
+            // whole cluster. The executors counted healthy above (all of them when the health check
+            // was skipped) have their lease clock restarted before the loop can run.
             let now = Utc::now();
             let regranted = shard_management
                 .mutate_and_persist(move |shard_state| {

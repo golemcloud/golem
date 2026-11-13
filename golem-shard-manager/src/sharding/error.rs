@@ -300,7 +300,8 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::RepoError(_) => false,
             // A refused certificate is retried like a network fault while the replica runs:
             // etcd's certificate can be fixed on etcd's side. Before the campaign it becomes
-            // `TlsHandshakeFailed` instead, and a watch stops a replica whose files changed.
+            // `TlsHandshakeFailed` instead, because the files were just read. A running replica
+            // reads renewed files on its own: see `EtcdClients`.
             ShardManagerError::EtcdError(err) => match err {
                 etcd_client::Error::GRpcStatus(status) if is_denied_by_election(status) => false,
                 // `CANCELLED` is otherwise final: the caller gave the request up.
@@ -640,8 +641,9 @@ mod tests {
     }
 
     #[test]
-    // While the replica runs, etcd's certificate can be fixed on etcd's side, so a refusal is
-    // retried; before the campaign the startup turns it into `TlsHandshakeFailed` and stops.
+    // While the replica runs, etcd's certificate can be fixed on etcd's side, or a renewed file
+    // reloaded, so a refusal is retried; before the campaign the startup turns it into
+    // `TlsHandshakeFailed` and stops.
     fn a_refused_certificate_is_retried_at_run_time_but_stops_the_startup() {
         let refused = || {
             connect_failure(tls(rustls::Error::InvalidCertificate(

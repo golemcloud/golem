@@ -52,12 +52,12 @@ GOLEM__TRACING__OTLP__PORT=4318 \
 GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
 GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
-cargo test -p golem-worker-executor --test integration -- <test_name> --report-time --nocapture
+cargo test -p golem-worker-executor-tests --test integration -- <test_name> --report-time --nocapture
 ```
 
 ### How it works
 
-The test `lib.rs` at `golem-worker-executor/tests/lib.rs` initializes tracing via:
+The test `lib.rs` at `golem-worker-executor-tests/tests/lib.rs` initializes tracing via:
 ```rust
 TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides()
 ```
@@ -206,7 +206,7 @@ rather than broken. The rule, rather than a list that goes stale: any span built
 off. For example the invocation hand-off (`invocation_queue_pickup`), the retry tasks
 (`rpc_invoke_retry`, `http_request_retry`), the oplog transfer and flush spans, and every
 worker phase span (`create_instance`, `recover_instance_state`, `suspend_worker`,
-`resume_replay`, and the admission waits). Check the link, not the parent.
+and the admission waits). Check the link, not the parent.
 
 What this is good for is spotting a span that is *neither* a linked root *nor* connected
 — that is a genuine propagation gap.

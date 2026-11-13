@@ -1,0 +1,13 @@
+[package]
+name = "release-tooling-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Keep release workflow fixtures independent of the platform and CLI builds.
+[workspace]
+
+[dev-dependencies]
+serde_json = "1.0"
+serde_yaml = "0.9.34"
+tempfile = "3.18.0"

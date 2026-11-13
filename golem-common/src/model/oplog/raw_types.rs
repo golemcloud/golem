@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, OwnerKind, Principal};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::base_model::{AgentId, OplogIndex};
+use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::agent::UntypedAgentConfigEntry;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
-use crate::model::oplog::OplogPayload;
+use crate::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
+use crate::model::oplog::{OplogEntry, OplogPayload};
 use crate::model::quota::ResourceName;
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -37,6 +39,11 @@ use uuid::Uuid;
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct CreateParameters {
+    pub component_id: crate::model::component::ComponentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    /// Full structural type and parameter text, without a phantom suffix.
+    /// Phantom, ephemeral, fork and component-baseline owners have no canonical key.
+    pub canonical_key: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: OwnerKind,
     pub agent_mode: AgentMode,
@@ -51,6 +58,145 @@ pub struct CreateParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
+    pub create_request: CreateRequest,
+}
+
+/// The request that created an owner: its kind, its idempotency key, and the principal and
+/// invocation context of its caller.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateRequest {
+    pub kind: CreateRequestKind,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub principal: Principal,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<SpanData>,
+}
+
+impl CreateRequest {
+    pub fn new(
+        kind: CreateRequestKind,
+        idempotency_key: Option<IdempotencyKey>,
+        principal: Principal,
+        invocation_context: &InvocationContextStack,
+    ) -> Self {
+        Self {
+            kind,
+            idempotency_key,
+            principal,
+            trace_id: invocation_context.trace_id.clone(),
+            trace_states: invocation_context.trace_states.clone(),
+            invocation_context: invocation_context.to_oplog_data(),
+        }
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        InvocationContextStack::from_oplog_data(
+            self.trace_id.clone(),
+            self.trace_states.clone(),
+            self.invocation_context.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum CreateRequestKind {
+    /// Creates the owner unless it exists, and otherwise joins it.
+    GetOrCreate,
+    /// Creates the owner only if it does not exist yet.
+    Exclusive,
+    /// Creates an owner whose ID carries a phantom ID.
+    Phantom,
+    /// Copies another owner's history.
+    Fork,
+}
+
+/// Supplied oplog observations do not establish ownership of a canonical key.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum OplogEnrichmentEntry {
+    CreateProjection {
+        timestamp: Timestamp,
+        parameters: Box<CreateProjectionParameters>,
+    },
+    Other(OplogEntry),
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateProjectionParameters {
+    pub agent_id: AgentId,
+    pub owner_kind: OwnerKind,
+    pub agent_mode: AgentMode,
+    pub component_revision: ComponentRevision,
+    pub env: Vec<(String, String)>,
+    pub environment_id: EnvironmentId,
+    pub created_by: AccountId,
+    pub parent: Option<AgentId>,
+    pub component_size: u64,
+    pub initial_total_linear_memory_size: u64,
+    pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
+    pub local_agent_config: Vec<UntypedAgentConfigEntry>,
+    pub original_phantom_id: Option<Uuid>,
+    pub instance_id: Uuid,
+}
+
+impl From<CreateParameters> for CreateProjectionParameters {
+    fn from(value: CreateParameters) -> Self {
+        let CreateParameters {
+            component_id: _,
+            agent_type_name: _,
+            canonical_key: _,
+            agent_id,
+            owner_kind,
+            agent_mode,
+            component_revision,
+            env,
+            environment_id,
+            created_by,
+            parent,
+            component_size,
+            initial_total_linear_memory_size,
+            initial_active_plugins,
+            local_agent_config,
+            original_phantom_id,
+            instance_id,
+            create_request: _,
+        } = value;
+        Self {
+            agent_id,
+            owner_kind,
+            agent_mode,
+            component_revision,
+            env,
+            environment_id,
+            created_by,
+            parent,
+            component_size,
+            initial_total_linear_memory_size,
+            initial_active_plugins,
+            local_agent_config,
+            original_phantom_id,
+            instance_id,
+        }
+    }
+}
+
+impl From<OplogEntry> for OplogEnrichmentEntry {
+    fn from(value: OplogEntry) -> Self {
+        match value {
+            OplogEntry::Create {
+                timestamp,
+                parameters,
+            } => Self::CreateProjection {
+                timestamp,
+                parameters: Box::new((*parameters).into()),
+            },
+            other => Self::Other(other),
+        }
+    }
 }
 
 /// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`

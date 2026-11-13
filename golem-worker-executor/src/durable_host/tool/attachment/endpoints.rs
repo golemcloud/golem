@@ -407,6 +407,10 @@ impl AttachmentObserver {
         self.attachment.wait_terminal().await
     }
 
+    pub(crate) fn owner_fenced(&self) -> bool {
+        self.attachment.state.lock().unwrap().owner_fenced
+    }
+
     #[cfg(test)]
     pub(crate) fn terminal(&self) -> Option<ByteStreamCloseCause> {
         let state = self.attachment.state.lock().unwrap();
@@ -447,6 +451,10 @@ impl AttachmentController {
     pub(crate) fn has_open_endpoints(&self) -> bool {
         let state = self.attachment.state.lock().unwrap();
         state.producer_active || state.consumer_active || state.guest_watchers != 0
+    }
+
+    pub(crate) fn owner_fenced(&self) -> bool {
+        self.attachment.state.lock().unwrap().owner_fenced
     }
 
     pub(crate) fn restore_control(

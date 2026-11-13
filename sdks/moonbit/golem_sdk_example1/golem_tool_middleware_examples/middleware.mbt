@@ -86,8 +86,3 @@ pub async fn FileAdapter::read(
 ) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   underlying.fetch("files/" + path)
 }
-
-///|
-fn main {
-
-}

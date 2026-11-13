@@ -150,6 +150,26 @@ object Bridge {
     outputCodec: Option[PublicValueCodec.Codec],
     configCodecs: List[(List[String], PublicValueCodec.Codec)]
   ): Future[AgentInvocationResult] =
+    invokeStreamingAgentCancelable(
+      resolved,
+      methodName,
+      methodParameters,
+      constructorCodec,
+      inputCodec,
+      outputCodec,
+      configCodecs
+    )._1
+
+  /** Like [[invokeStreamingAgent]], with a token that cancels the invocation. */
+  def invokeStreamingAgentCancelable(
+    resolved: ResolvedAgent,
+    methodName: String,
+    methodParameters: () => SchemaValue,
+    constructorCodec: PublicValueCodec.Codec,
+    inputCodec: PublicValueCodec.Codec,
+    outputCodec: Option[PublicValueCodec.Codec],
+    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+  ): (Future[AgentInvocationResult], CancellationToken) =
     Try(
       StreamSession.invoke(
         resolved,
@@ -160,5 +180,5 @@ object Bridge {
         outputCodec,
         configCodecs
       )
-    ).fold(Future.failed, future => future)
+    ).fold(error => (Future.failed(error), new CancellationToken(() => ())), identity)
 }

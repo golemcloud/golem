@@ -202,8 +202,13 @@ impl ForwardingOplog {
                                     {
                                         state.last_committed_idx = *max_idx;
                                     }
-                                    state.commit_count += 1;
-                                    if state.commit_count >= max_commit_count {
+                                    // A report commits nothing, so it neither counts nor starts
+                                    // the plugin flush, which commits the buffer of the worker.
+                                    let reports_only = level == CommitLevel::ReportOnly;
+                                    if !reports_only {
+                                        state.commit_count += 1;
+                                    }
+                                    if !reports_only && state.commit_count >= max_commit_count {
                                         // Spanned inside the threshold check, not around the
                                         // commit: this arm runs per oplog commit, the flush only
                                         // every `max_commit_count` of them. The actor has no
@@ -353,7 +358,9 @@ impl ForwardingOplog {
 
 impl Debug for ForwardingOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForwardingOplog").finish()
+        f.debug_struct("ForwardingOplog")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 

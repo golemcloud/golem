@@ -62,34 +62,32 @@ When auth is enabled, read the authenticated user's `Principal` either from the 
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, http, Principal } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
 export const ApiAgent = defineAgent({
   name: 'ApiAgent',
   id: { name: z.string() },
   http: http.mount('/api/{name}', { auth: true }),
   methods: {
-    whoAmI: method({ input: {}, returns: z.unknown(), http: http.get('/whoami') }),
-    getData: method({ input: { id: z.string() }, returns: Data, http: http.get('/data/{id}') }),
+    whoAmI: method({ input: { caller: s.principal() }, returns: z.object({ kind: z.string() }), http: http.get('/whoami') }),
+    getData: method({ input: { id: z.string(), caller: s.principal() }, returns: Data, http: http.get('/data/{id}') }),
   },
 });
 
 export const ApiAgentImpl = ApiAgent.implement({
   init: () => ({}),
   methods: {
-    whoAmI() {
-      const principal: Principal = this.getPrincipal();
-      return { value: principal };
+    whoAmI({ caller }) {
+      return { kind: caller.tag };
     },
-    getData({ id }) {
-      const principal = this.getPrincipal();
-      // ... use principal + id ...
+    getData({ id, caller }) {
+      // ... authorize caller and return Data for id ...
     },
   },
 });
 ```
 
-`this.getPrincipal()` (and `this.getId()`, `this.getPhantomId()`) are available on every handler's `this`. The same `principal` is also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`.
+`this.getPrincipal()` returns the initialization principal, also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`. It is not necessarily the caller of a later invocation. To authorize each call, declare a bare `s.principal()` method input; the host injects the current invocation principal without a caller wire field. See [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts). `this.getId()` and `this.getPhantomId()` are also available on every handler's `this`.
 
 ## Deployment Configuration
 

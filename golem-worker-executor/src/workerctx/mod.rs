@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -70,7 +70,7 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::p3::WasiHttpView;
+use wasmtime_wasi_http::WasiHttpView;
 
 /// Executable identity used to construct a worker context.
 ///
@@ -324,7 +324,7 @@ pub trait WorkerCtx:
     fn owned_agent_id(&self) -> &OwnedAgentId;
 
     /// Get the agent-id resolved from the worker name
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey>;
 
     /// Authoritative persisted execution-owner identity. Authorization and component-scoped
     /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
@@ -492,11 +492,12 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
-    /// Called when a worker is about to be invoked
+    /// Called when a worker is about to be invoked. Returns false if the pending invocation
+    /// was removed before it could start; the caller must skip execution and result persistence.
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> Result<bool, WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
     async fn on_agent_invocation_finished(&mut self);
@@ -591,15 +592,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError>;
-
-    /// Resume the replay of a worker instance. Note that if the previous replay
-    /// hasn't reached the end of the replay (which is usually last index in oplog)
-    /// resume_replay will ensure to start replay from the last replayed index.
-    async fn resume_replay(
-        store: &mut Store<Ctx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker, but by general it can be no-op.

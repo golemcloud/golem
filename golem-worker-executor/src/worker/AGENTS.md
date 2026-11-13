@@ -25,9 +25,12 @@ rewinding a cursor.
   storage. Ephemeral agents use `CommitLevel::Deferred`: the ordered writer handoff and receipt
   precede notification, without waiting for storage or the queued status fold (bounded writer
   backpressure may still wait). Do not weaken `Always` elsewhere; `DurableOnly` remains a no-op
-  for ephemeral agents. No positional durable-call `Start`/`End` may be appended for an invocation
-  after its `Finished` entry (`tail_work.rs` enforces this); hint entries such as streaming-session
-  completion legitimately follow it.
+  for ephemeral agents. Active durable-call work must settle before that invocation's `Finished`
+  entry (`tail_work.rs` enforces this). A retained resource can span invocations; its deferred
+  destructor may wait passively across historical finishes, then repair under its original Start
+  when a later invocation drives the Store after replay becomes live. That repair stays active
+  until its terminal is recorded. Hint entries such as streaming-session completion can follow
+  `Finished` without another invocation.
 - Reads that require the completion's fresh status must use the state actor's FIFO status read; it
   waits behind the queued fold. The separately persisted status cache remains asynchronous.
 - Status (`status.rs`) is folded from the oplog; caches and checkpoints are baselines, never a
@@ -42,8 +45,23 @@ invocation, retry-budget charge or new idempotency key.
 
 ## Ephemeral agents
 
-Ephemeral agents are fail-stop. `reconstructed_ephemeral` exists for observation and invocation
-result lookup; the instance must never be started again (`INACTIVE_EPHEMERAL_AGENT_ERROR`).
+Ephemeral agents are fail-stop. Before an ephemeral instance runs guest code,
+`Worker::begin_ephemeral_execution` commits a `Restart` entry under the instance mutex; the status
+fold sets `ephemeral_execution_begun` permanently. Once it is set, `reconstructed_ephemeral` exists
+only for observation and invocation result lookup, and the instance must never be started again
+(`INACTIVE_EPHEMERAL_AGENT_ERROR`). The one exception is an agent that never began and still holds
+its constructor reservation (`never_started_ephemeral_admission`): it may accept one method when it
+has none yet, as when a schedule repair finds the target its first attempt created, and it may run
+one accepted scheduled method cold. A scheduled ephemeral target is created at schedule time with
+its `PendingAgentInvocation` committed. Before the deadline its start is `NotDue`; after token
+cancellation withdrew its work it is `Withdrawn`. Neither runs guest code, and both fail queued
+inspection requests instead of keeping them for a later start. An inspection (filesystem or wallet)
+is refused, not started, on an unloaded ephemeral agent that has not begun and has no due method
+(`ephemeral_inspection_may_start`): it must not use up a target whose schedule is still being
+repaired. An outside caller that knows the target's ID can still start it in that window (create
+with wait, resume, update); the scheduling caller then traps with
+`INACTIVE_EPHEMERAL_AGENT_ERROR`. A start that arrives while a `NotRunnable` start stops is
+restarted after the stop if the work became due.
 
 ## Entity scheduling
 

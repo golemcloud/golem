@@ -211,7 +211,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
-            false,
+            StopOrigin::External,
             None,
             UnloadRequest::ordinary(unload_reason),
             FinalWorkerState::Unloaded {
@@ -220,7 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             PendingLiveInvocationDisposition::Fail,
         )
         .await;
-        if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
+        if let WorkerInstance::CleanupFailed(error) = self.instance.lock().await.state() {
             return Err(error.clone());
         }
         self.owner_execution
@@ -280,6 +280,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
         let entry = match pending.kind {
+            InterruptKind::EntityCancellation => {
+                unreachable!("entity cancellation cannot interrupt the owner")
+            }
             InterruptKind::Suspend(_) => OplogEntry::suspend(),
             InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
             InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => {

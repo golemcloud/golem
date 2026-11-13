@@ -79,7 +79,7 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
     )
 }
 
-fn context() -> OwnerToolOperationContext {
+pub(crate) fn context() -> OwnerToolOperationContext {
     context_with_filesystem(FilesystemCapability::Incapable)
 }
 
@@ -133,7 +133,7 @@ fn context_for(
     }
 }
 
-fn accept_provisional(
+pub(crate) fn accept_provisional(
     provisional: ProvisionalOwnerToolOperation,
     start: u64,
 ) -> OwnerToolOperation {
@@ -201,11 +201,11 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
-            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),
         cancel: tokio_util::sync::CancellationToken::new(),
+        producer: None,
     })
 }
 
@@ -230,19 +230,22 @@ async fn dropping_a_provisional_operation_unregisters_it_and_wakes_parent_waiter
 #[timeout("10s")]
 async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_task_errors() {
     use wasmtime::AsContextMut;
-    use wasmtime::component::{Accessor, AccessorTask, HasSelf};
+    use wasmtime::component::{Accessor, HasSelf};
 
     struct CancelTask(OwnerToolOperation, Arc<Notify>);
-    impl AccessorTask<(), HasSelf<()>> for CancelTask {
+    impl CancelTask {
         async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
             self.1.notified().await;
-            self.0.resolve_cancel(true).await;
-            self.0.settle().await;
+            self.0
+                .resolve_cancel(TerminalResolution::Committed)
+                .await
+                .unwrap();
+            self.0.settle().await.unwrap();
             Ok(())
         }
     }
     struct JumpTask;
-    impl AccessorTask<(), HasSelf<()>> for JumpTask {
+    impl JumpTask {
         async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 InterruptKind::Jump,
@@ -260,8 +263,13 @@ async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_tas
     let mut store = wasmtime::Store::new(&engine, ());
     store
         .run_concurrent(async |accessor| {
-            accessor.spawn(CancelTask(operation, release.clone()));
-            accessor.spawn(JumpTask);
+            let task = CancelTask(operation, release.clone());
+            accessor
+                .spawn(async move |accessor| task.run(accessor).await)
+                .unwrap();
+            accessor
+                .spawn(async move |accessor| JumpTask.run(accessor).await)
+                .unwrap();
         })
         .await
         .unwrap();
@@ -350,7 +358,10 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
             ),
         ),
     });
-    operation.resolve_ordinary(terminal, true).await;
+    operation
+        .resolve_ordinary(terminal, TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(owner_failure.await.unwrap());
     assert!(matches!(
         operation.winner_if_active(),
@@ -360,7 +371,7 @@ async fn attachment_admission_rejection_preselects_ordinary_terminal() {
         stdout.metadata().terminal,
         Some(super::super::attachment::ToolAttachmentTerminalMetadata::ResourceExhausted)
     );
-    operation.settle().await;
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -434,6 +445,114 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
 
 #[test]
 #[timeout("30s")]
+async fn attachment_disposal_refusal_requires_its_recorded_identity_and_terminal() {
+    use golem_common::model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId, ToolAttachmentSlot,
+        ToolAttachmentTerminal,
+    };
+
+    let attachment = ToolAttachmentId {
+        creation_start: OplogIndex::from_u64(7),
+        slot: ToolAttachmentSlot::Stdout,
+    };
+    let expected = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment,
+        terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Abandoned,
+        )),
+    };
+    let original_owner = OwnerToolOperations::new();
+    let original = accept_provisional(original_owner.create(capable_context()), 2);
+    let (original_stdout, _original_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |_| async { None }),
+    );
+    original_stdout.write(vec![1, 2, 3]).await.unwrap();
+    assert!(original.attach(None, Some(original_stdout.controller()), None));
+    assert_eq!(
+        original
+            .activate_live_attachment_memory_accounting_at(Some(expected.clone()))
+            .await,
+        ToolLiveAdmissionOutcome::ResourceExhausted
+    );
+    assert_eq!(
+        original.observed_admission_refusal(),
+        Some(expected.clone())
+    );
+
+    let control_owner = OwnerToolOperations::new();
+    let control = accept_provisional(control_owner.create(capable_context()), 2);
+    let (control_stdout, _control_consumer, _) = attachment_pair(
+        8,
+        AttachmentMemory::with_test_reservation(false, |bytes| async move {
+            Some(MemoryGrant::inert(bytes))
+        }),
+    );
+    control_stdout.write(vec![1, 2, 3]).await.unwrap();
+    assert!(control.attach(None, Some(control_stdout.controller()), None));
+    assert_eq!(
+        control.activate_live_attachment_memory_accounting().await,
+        ToolLiveAdmissionOutcome::Admitted
+    );
+    let wrong_terminal = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment,
+        terminal: ToolAttachmentTerminal::HostResourceExhausted,
+    };
+    let wrong_attachment = SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId {
+            slot: ToolAttachmentSlot::Stderr,
+            ..attachment
+        },
+        terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Abandoned,
+        )),
+    };
+    for mismatch in [wrong_terminal, wrong_attachment] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdout, _consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        stdout.write(vec![1, 2, 3]).await.unwrap();
+        assert!(operation.attach(None, Some(stdout.controller()), None));
+        operation.install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
+        let waiting = operation.reject_missing_replay_admission(&mismatch);
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        assert_eq!(operation.observed_admission_refusal(), None);
+        let exact = operation.reject_missing_replay_admission(&expected);
+        tokio::pin!(exact);
+        assert!(futures::poll!(&mut exact).is_pending());
+        assert_eq!(operation.observed_admission_refusal(), None);
+        operation
+            .reproduce_admission_refusal(expected.clone())
+            .await;
+        let exact = exact.await.unwrap_err();
+        assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&exact));
+        assert_eq!(
+            operation.observed_admission_refusal(),
+            Some(expected.clone())
+        );
+        let other = waiting.await.unwrap_err();
+        assert_eq!(other.to_string(), exact.to_string());
+        // Repeated collection cannot substitute a different boundary after the refusal won.
+        let repeated = operation
+            .reject_missing_replay_admission(&mismatch)
+            .await
+            .unwrap_err();
+        assert_eq!(repeated.to_string(), exact.to_string());
+        assert_eq!(
+            operation.observed_admission_refusal(),
+            Some(expected.clone())
+        );
+    }
+}
+
+#[test]
+#[timeout("30s")]
 async fn historical_admission_refusal_does_not_block_child_validation() {
     use golem_common::model::oplog::payload::types::SerializableEntityBodyExecution;
 
@@ -460,7 +579,9 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
             .await
             .expect("parent reconstruction must not hold a terminal reservation over its child");
             assert!(selected);
-            super::super::rollback_live_attachment_admission_rejection(&parent).await;
+            super::super::rollback_live_attachment_admission_rejection(&parent)
+                .await
+                .unwrap();
             assert!(matches!(owner.selected_owner_failure(),
                 Some(OwnerFailureWinner::Infrastructure(error))
                     if error.to_string().contains("different child result")));
@@ -470,15 +591,21 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
                 SerializableEntityBodyExecution::Executed,
             ));
             assert!(child.begin_ordinary());
-            child.resolve_ordinary(terminal.clone(), true).await;
+            child
+                .resolve_ordinary(terminal.clone(), TerminalResolution::Committed)
+                .await
+                .unwrap();
             let rejection = parent
                 .take_live_attachment_admission_rejection()
                 .await
                 .unwrap();
-            assert!(!rejection.preselected);
+            assert!(!rejection.ordinary_reserved());
             assert!(!parent.begin_cancel());
             assert!(parent.begin_ordinary());
-            parent.resolve_ordinary(terminal, true).await;
+            parent
+                .resolve_ordinary(terminal, TerminalResolution::Committed)
+                .await
+                .unwrap();
             assert!(owner.selected_owner_failure().is_none());
             assert_eq!(parent.observed_admission_refusal(), Some(refusal));
             assert!(matches!(
@@ -523,7 +650,9 @@ async fn independent_failure_rolls_back_attachment_admission_selection() {
     ));
     tokio::pin!(failure);
     assert!(futures::poll!(&mut failure).is_pending());
-    super::super::rollback_live_attachment_admission_rejection(&operation).await;
+    super::super::rollback_live_attachment_admission_rejection(&operation)
+        .await
+        .unwrap();
     assert!(failure.await);
     assert!(matches!(owner.selected_owner_failure(),
         Some(OwnerFailureWinner::Infrastructure(error))
@@ -532,7 +661,7 @@ async fn independent_failure_rolls_back_attachment_admission_selection() {
         operation.winner_if_active(),
         Some(ToolOperationWinner::Ordinary { .. })
     ));
-    operation.settle().await;
+    operation.settle().await.unwrap();
     assert_eq!(owner.operation_count(), 0);
 }
 
@@ -626,8 +755,11 @@ async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
     );
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
-    operation.settle().await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -674,9 +806,9 @@ async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
                 ),
             ),
         }),
-        true,
-    ).await;
-    operation.settle().await;
+        TerminalResolution::Committed,
+    ).await.unwrap();
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -745,7 +877,7 @@ async fn owner_failure_during_capable_attachment_activation_rolls_back_the_batch
     assert!(stdout_controller.metadata().owner_fenced);
 
     owner.drain_owner_failure_lanes().await;
-    operation.settle().await;
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -788,17 +920,20 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
     ));
 
     let local_live_tail = Arc::new(AtomicBool::new(false));
+    let crate::durable_host::StoreReplayState::IncompleteEntityReplay(continuation) =
+        crate::durable_host::StoreReplayState::incomplete_entity_for_test(local_live_tail.clone())
+    else {
+        unreachable!()
+    };
     let activation = tokio::spawn({
         let operation = operation.clone();
-        let local_live_tail = local_live_tail.clone();
         async move {
             crate::durable_host::PendingReplayToLive {
                 replay_target: OplogIndex::from_u64(9),
-                role: crate::durable_host::replay_state::ReplayToLiveRole::NonPrimary,
-                replaying_incomplete_entity: true,
-                tool_entity: true,
-                tool_operation: Some(operation),
-                local_live_tail,
+                finalization: crate::durable_host::LiveFinalization::IncompleteTool {
+                    continuation,
+                    operation,
+                },
                 linear_memory: crate::durable_host::tests::replay_usage_tracker(),
             }
             .finish_at(None)
@@ -825,8 +960,11 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
         stdout_controller.live_memory_accounting_state(),
         (false, false)
     );
-    operation.resolve_cancel(true).await;
-    operation.settle().await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -889,8 +1027,11 @@ async fn cancellation_during_failed_attachment_activation_rolls_back_the_batch()
         (false, false)
     );
     assert!(owner.owner_winner().is_none());
-    operation.resolve_cancel(true).await;
-    operation.settle().await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -943,7 +1084,10 @@ async fn concurrent_final_handle_drops_remove_once_and_wake_parent_waiters() {
     let second = first.clone();
     let lease = first.lease.clone();
     assert!(first.begin_cancel());
-    first.resolve_cancel(true).await;
+    first
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
 
     let waiting_owner = owner.clone();
     let waiting = tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
@@ -1014,7 +1158,7 @@ async fn metadata_exposes_mode_backpressure_and_sanitized_owner_failure() {
     assert!(!stdout_metadata.backpressured);
 
     owner.drain_owner_failure_lanes().await;
-    operation.settle().await;
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -1041,7 +1185,7 @@ async fn attaching_to_a_fenced_operation_fences_and_clears_local_attachments() {
     assert_eq!(metadata.charged_bytes, 0);
 
     owner.drain_owner_failure_lanes().await;
-    operation.settle().await;
+    operation.settle().await.unwrap();
 }
 
 #[test]
@@ -1062,7 +1206,7 @@ async fn accepted_operation_gates_parent_settlement_until_owner_settlement() {
     );
     owner.drain_owner_failure_lanes().await;
     assert!(!waiting.is_finished());
-    operation.settle().await;
+    operation.settle().await.unwrap();
 
     waiting.await.unwrap();
     assert_eq!(owner.operation_count(), 0);
@@ -1096,10 +1240,10 @@ async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
     assert_eq!(owner.operation_count(), 2);
     assert!(owner.interruptible_owner_failure().is_none());
 
-    operation.settle().await;
-    sibling.settle().await;
+    operation.settle().await.unwrap();
+    sibling.settle().await.unwrap();
     owner.wait_owner_settled().await;
-    owner.complete_owner_failure_cleanup(cleanup);
+    cleanup.start(async { Ok(()) }, || {}).await.unwrap();
 
     waiting.await.unwrap();
     assert_eq!(owner.operation_count(), 0);
@@ -1112,6 +1256,57 @@ async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
 
 #[test]
 #[timeout("30s")]
+async fn stale_primary_cleanup_token_cannot_replace_a_new_generation_claim() {
+    let owner = OwnerToolOperations::new();
+    let stale = owner
+        .select_primary_infrastructure(WorkerExecutorError::runtime("old primary failure"))
+        .await
+        .unwrap();
+    owner.begin_generation().unwrap();
+    let fresh_error = WorkerExecutorError::runtime("new primary failure");
+    let fresh = owner
+        .select_primary_infrastructure(fresh_error.clone())
+        .await
+        .unwrap();
+    let stale_cleanup_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stale_wake_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cleanup_ran = stale_cleanup_ran.clone();
+    let wake_ran = stale_wake_ran.clone();
+    assert!(
+        stale
+            .start(
+                async move {
+                    cleanup_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+                move || wake_ran.store(true, Ordering::SeqCst),
+            )
+            .await
+            .is_err()
+    );
+    assert!(!stale_cleanup_ran.load(Ordering::SeqCst));
+    assert!(!stale_wake_ran.load(Ordering::SeqCst));
+    assert!(matches!(
+        owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Infrastructure(error)) if error == fresh_error
+    ));
+    assert!(owner.interruptible_owner_failure().is_none());
+
+    let (wake, woken) = tokio::sync::oneshot::channel();
+    fresh
+        .start(async { Ok(()) }, move || wake.send(()).unwrap())
+        .await
+        .unwrap();
+    woken.await.unwrap();
+    for _ in 0..2 {
+        owner.join_owner_failure_cleanup().await.unwrap();
+    }
+    owner.begin_generation().unwrap();
+    assert!(owner.selected_owner_failure().is_none());
+}
+
+#[test]
+#[timeout("30s")]
 async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_reset() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
@@ -1120,10 +1315,9 @@ async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_res
     let token = operation.claim_owner_failure_cleanup().unwrap();
     let (settled, settled_rx) = tokio::sync::oneshot::channel();
     let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
-    let observer = owner.start_owner_failure_cleanup(
-        token,
+    let observer = token.start(
         async move {
-            operation.settle().await;
+            operation.settle().await.unwrap();
             settled.send(()).unwrap();
             Ok(())
         },
@@ -1139,7 +1333,7 @@ async fn owner_failure_cleanup_outlives_observer_and_joins_before_generation_res
         wake_rx.try_recv(),
         Err(tokio::sync::oneshot::error::TryRecvError::Empty)
     ));
-    ancestor.settle().await;
+    ancestor.settle().await.unwrap();
     owner.join_owner_failure_cleanup().await.unwrap();
     wake_rx.await.unwrap();
     assert!(matches!(
@@ -1161,10 +1355,9 @@ async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap(
         let token = operation.claim_owner_failure_cleanup().unwrap();
         let (wake, mut wake_rx) = tokio::sync::oneshot::channel();
         let (settled, settled_rx) = tokio::sync::oneshot::channel();
-        drop(owner.start_owner_failure_cleanup(
-            token,
+        drop(token.start(
             async move {
-                operation.settle().await;
+                operation.settle().await.unwrap();
                 settled.send(()).unwrap();
                 assert!(!panic, "injected cleanup panic");
                 Err(WorkerExecutorError::runtime("injected settlement failure"))
@@ -1182,7 +1375,7 @@ async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap(
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty)
             ));
         }
-        ancestor.settle().await;
+        ancestor.settle().await.unwrap();
         for _ in 0..2 {
             assert!(owner.join_owner_failure_cleanup().await.is_err());
         }
@@ -1196,13 +1389,49 @@ async fn owner_failure_cleanup_retains_errors_and_panics_without_replacing_trap(
             wake_rx.await.unwrap();
             assert!(owner.interruptible_owner_failure().is_some());
         }
-        assert!(!owner.state.lock().unwrap().owner_failure_cleanup_complete);
         assert!(owner.begin_generation().is_err());
         assert!(matches!(
             owner.selected_owner_failure(),
             Some(OwnerFailureWinner::Trap(TrapType::Exit))
         ));
     }
+}
+
+#[test]
+#[timeout("30s")]
+async fn primary_cleanup_panic_preserves_interruption_and_retains_failed_join() {
+    let owner = OwnerToolOperations::new();
+    let token = owner
+        .select_primary_infrastructure(WorkerExecutorError::runtime("primary failure"))
+        .await
+        .unwrap();
+    assert!(owner.interruptible_owner_failure().is_none());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let (wake, wake_rx) = tokio::sync::oneshot::channel();
+    drop(token.start(
+        async move {
+            released.await.unwrap();
+            panic!("injected primary cleanup panic");
+        },
+        move || {
+            let _ = wake.send(());
+        },
+    ));
+    assert!(
+        matches!(owner.interruptible_owner_failure(), Some(OwnerFailureWinner::Infrastructure(error)) if error == WorkerExecutorError::runtime("primary failure"))
+    );
+    release.send(()).unwrap();
+    for _ in 0..2 {
+        assert!(owner.join_owner_failure_cleanup().await.is_err());
+        assert!(
+            matches!(owner.interruptible_owner_failure(), Some(OwnerFailureWinner::Infrastructure(error)) if error == WorkerExecutorError::runtime("primary failure"))
+        );
+        assert!(owner.begin_generation().is_err());
+    }
+    assert!(
+        wake_rx.await.is_err(),
+        "panicked cleanup must not authorize completion"
+    );
 }
 
 #[test]
@@ -1223,9 +1452,9 @@ async fn owner_failure_seals_operation_creation_through_cleanup_completion() {
     assert!(during_cleanup.is_rejected());
     assert_eq!(owner.operation_count(), 1);
 
-    operation.settle().await;
+    operation.settle().await.unwrap();
     owner.wait_owner_settled().await;
-    owner.complete_owner_failure_cleanup(cleanup);
+    cleanup.start(async { Ok(()) }, || {}).await.unwrap();
 
     let after_cleanup = owner.create(context());
     assert!(after_cleanup.is_rejected());
@@ -1244,11 +1473,13 @@ async fn settlement_wakes_parent_waiters_before_cancellable_lane_drain() {
     let acquisition = tokio::spawn(std::future::pending::<()>());
     {
         let mut state = owner.state.lock().unwrap();
-        state.operations.get_mut(&operation.id).unwrap().lane =
-            LaneOwnership::Acquiring(AcquisitionControl {
+        state.operations.get_mut(&operation.id).unwrap().state = OperationState::acquiring_for_test(
+            operation._winner.clone(),
+            AcquisitionControl {
                 abort: acquisition.abort_handle(),
                 drained: Arc::new(AcquisitionDrain::default()),
-            });
+            },
+        );
     }
     assert!(
         owner
@@ -1296,7 +1527,10 @@ async fn owner_failure_waits_for_non_interleavable_terminal_selection() {
     tokio::task::yield_now().await;
     assert!(!failure.is_finished());
 
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(failure.await.unwrap());
     assert!(matches!(
         operation.winner_if_active(),
@@ -1330,7 +1564,10 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
     tokio::task::yield_now().await;
     assert!(!lifecycle.is_finished());
 
-    cancelled.resolve_cancel(true).await;
+    cancelled
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(lifecycle.await.unwrap());
 
     assert!(matches!(
@@ -1398,7 +1635,7 @@ async fn nonterminal_unload_fences_operations_without_electing_a_terminal_cause(
     assert!(
         matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Lifecycle(kind)) if kind == accepted)
     );
-    operation.settle().await;
+    operation.settle().await.unwrap();
     owner.begin_generation().unwrap();
     assert!(owner.commit_if_owner_open(|| {}));
     assert!(owner.selected_owner_failure().is_none());
@@ -1424,7 +1661,7 @@ async fn nonterminal_unload_preserves_independent_owner_failures() {
                 .await
         );
         owner.drain_owner_failure_lanes().await;
-        operation.settle().await;
+        operation.settle().await.unwrap();
     }
 }
 
@@ -1441,13 +1678,8 @@ async fn host_interruption_preserves_exact_owner_trap() {
     ] {
         let owner = OwnerToolOperations::new();
         let operation = accept_provisional(owner.create(context()), 2);
-        let failure = super::super::guest_trap_output_failure(
-            &operation,
-            TrapType::Interrupt(kind),
-            false,
-            false,
-        )
-        .await;
+        let failure =
+            super::super::guest_trap_output_failure(&operation, TrapType::Interrupt(kind)).await;
         assert!(matches!(
             failure,
             ByteStreamFailure::Failed(details) if details == "tool sidecar trapped"
@@ -1469,7 +1701,7 @@ async fn host_interruption_preserves_exact_owner_trap() {
             owner.selected_owner_failure(),
             Some(OwnerFailureWinner::Trap(TrapType::Interrupt(selected))) if selected == kind
         ));
-        operation.settle().await;
+        operation.settle().await.unwrap();
     }
 }
 
@@ -1486,8 +1718,7 @@ async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
             .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
             .await
     );
-    let failure =
-        super::super::guest_trap_output_failure(&operation, TrapType::Exit, false, false).await;
+    let failure = super::super::guest_trap_output_failure(&operation, TrapType::Exit).await;
     assert!(matches!(failure, ByteStreamFailure::Cancelled));
     let _ = stdout.host_fail(failure);
     assert!(matches!(
@@ -1550,7 +1781,10 @@ async fn cancel_trap_and_lifecycle_race_selects_one_owner_failure() {
     assert!(!trapping.is_finished());
     assert!(!lifecycle.is_finished());
 
-    cancelled.resolve_cancel(true).await;
+    cancelled
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     let trap_selected = trapping.await.unwrap();
     let lifecycle_selected = lifecycle.await.unwrap();
     assert_ne!(trap_selected, lifecycle_selected);
@@ -1645,7 +1879,7 @@ async fn guest_trap_drains_a_sibling_blocked_on_lane_acquisition() {
     };
     let trapped = accept(2);
     let sibling = accept(3);
-    assert!(sibling.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(sibling.mark_body_ready());
     assert!(sibling.register_body(&lane).unwrap());
     let acquiring_sibling = sibling.clone();
     let acquiring = tokio::spawn(async move { acquiring_sibling.acquire_registered_body().await });
@@ -1658,8 +1892,8 @@ async fn guest_trap_drains_a_sibling_blocked_on_lane_acquisition() {
 
     assert!(!acquiring.await.unwrap().unwrap());
     assert_eq!(lane.holder(), Some(parent()));
-    trapped.settle().await;
-    sibling.settle().await;
+    trapped.settle().await.unwrap();
+    sibling.settle().await.unwrap();
     primary.complete();
 }
 
@@ -1681,9 +1915,15 @@ async fn later_trap_preserves_committed_sibling_terminals() {
     });
 
     assert!(ordinary.begin_ordinary());
-    ordinary.resolve_ordinary(terminal.clone(), true).await;
+    ordinary
+        .resolve_ordinary(terminal.clone(), TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(cancelled.begin_cancel());
-    cancelled.resolve_cancel(true).await;
+    cancelled
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
 
     assert!(trapped.select_trap(TrapType::Exit).await);
     assert!(matches!(
@@ -1712,11 +1952,14 @@ async fn cancellation_before_registration_owns_no_lane_value() {
         },
     ));
     let (_operations, operation, _) = accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     assert!(matches!(
         operation.winner_if_active(),
@@ -1741,12 +1984,15 @@ async fn cancellation_drops_a_queued_lane_ticket_without_starting_the_body() {
         .unwrap();
     let (_operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
     assert_eq!(operation.owns_lane_value_if_active(), Some(true));
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     assert_eq!(lane.holder(), Some(parent()));
     assert_eq!(lane.metadata().active_invocation_count, 1);
@@ -1774,7 +2020,7 @@ async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() 
         .unwrap();
     let (_operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
     let wait = lane
         .await_invocations(
@@ -1790,7 +2036,10 @@ async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() 
     );
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     wait.wait().await;
     assert_eq!(lane.holder(), Some(parent()));
@@ -1798,6 +2047,7 @@ async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() 
 }
 
 #[test]
+#[timeout("10s")]
 async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
@@ -1821,7 +2071,7 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     stdout.write(b"staged".to_vec()).await.unwrap();
     stdout.finish().unwrap();
 
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
     let wait = lane
         .await_invocations(
@@ -1850,8 +2100,25 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
             ),
         ),
     });
+    let sibling = accept_provisional(_operations.create(context()), 3);
+    assert!(sibling.begin_ordinary());
     assert!(operation.begin_ordinary());
-    operation.resolve_ordinary(terminal, true).await;
+    operation
+        .resolve_ordinary_with_cleanup(terminal.clone(), async {
+            assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+            assert_ne!(lane.holder(), Some(parent()));
+            // A committed operation cannot elect a trap, even while a sibling is
+            // selecting. Waiting for that sibling could depend on releasing this lane.
+            assert!(!operation.select_trap(TrapType::Exit).await);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    sibling
+        .resolve_ordinary(terminal, TerminalResolution::Committed)
+        .await
+        .unwrap();
+    sibling.settle().await.unwrap();
     wait.wait().await;
 
     assert!(matches!(
@@ -1865,13 +2132,88 @@ async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     );
     assert_eq!(stdout_controller.metadata().delivered_bytes, 0);
 
-    operation.settle().await;
+    operation.settle().await.unwrap();
     assert!(stdout_controller.publish_completion());
     assert_eq!(
         stdout_controller.metadata().mode,
         ToolAttachmentModeMetadata::CompletionPublished
     );
     primary.complete();
+}
+
+#[test]
+#[timeout("10s")]
+async fn committed_terminal_cleanup_failure_retains_lane_until_owner_drain() {
+    for cancelled in [false, true] {
+        let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Agent(owner)".to_string(),
+            },
+        ));
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let (operations, operation, invocation_id) =
+            accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
+        assert!(operation.mark_body_ready());
+        assert!(operation.register_body(&lane).unwrap());
+        let wait = lane
+            .await_invocations(
+                &parent(),
+                [OwnerInvocationId::Entity(invocation_id.clone())],
+            )
+            .unwrap();
+        assert!(operation.acquire_registered_body().await.unwrap());
+        let cleanup = async {
+            assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+            assert!(!operation.select_trap(TrapType::Exit).await);
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            })
+        };
+        let result = if cancelled {
+            assert!(operation.begin_cancel());
+            operation.resolve_cancel_with_cleanup(cleanup).await
+        } else {
+            assert!(operation.begin_ordinary());
+            operation.resolve_ordinary_with_cleanup(Arc::new(SerializableToolOperationTerminal {
+                admission_refusal: None,
+                body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+            }), cleanup).await
+        };
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            })
+        ));
+        assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+        assert_eq!(
+            lane.holder(),
+            Some(OwnerInvocationId::Entity(invocation_id))
+        );
+        assert!(
+            operation
+                .select_failure(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
+                .await
+        );
+        assert!(matches!(
+            operations.selected_owner_failure(),
+            Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
+        ));
+        assert_eq!(operation.owns_lane_value_if_active(), Some(true));
+        operations.drain_owner_failure_lanes().await;
+        wait.wait().await;
+        assert_eq!(lane.holder(), Some(parent()));
+        operation.settle().await.unwrap();
+        primary.complete();
+    }
 }
 
 #[test]
@@ -1891,7 +2233,7 @@ async fn owner_fence_keeps_granted_lane_until_sidecar_drain() {
         .unwrap();
     let (operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
     let wait = lane
         .await_invocations(
@@ -1940,7 +2282,7 @@ async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
         .unwrap();
     let (_operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
 
     let acquiring_operation = operation.clone();
@@ -1951,7 +2293,10 @@ async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
     }
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(!acquiring.await.unwrap().unwrap());
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     assert_eq!(lane.metadata().active_invocation_count, 1);
@@ -1980,7 +2325,7 @@ async fn rolled_back_cancellation_preserves_a_permit_granted_during_selection() 
         .unwrap();
     let (_operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     assert!(operation.register_body(&lane).unwrap());
 
     let acquiring_operation = operation.clone();
@@ -1999,7 +2344,10 @@ async fn rolled_back_cancellation_preserves_a_permit_granted_during_selection() 
     tokio::task::yield_now().await;
     assert!(!acquiring.is_finished());
 
-    operation.resolve_cancel(false).await;
+    operation
+        .resolve_cancel(TerminalResolution::RolledBack)
+        .await
+        .unwrap();
     assert!(acquiring.await.unwrap().unwrap());
     assert_eq!(operation.owns_lane_value_if_active(), Some(true));
     assert_eq!(
@@ -2012,7 +2360,10 @@ async fn rolled_back_cancellation_preserves_a_permit_granted_during_selection() 
     );
 
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     wait.wait().await;
     assert_eq!(lane.holder(), Some(parent()));
     primary.complete();
@@ -2032,10 +2383,54 @@ async fn cancellation_selection_is_idempotent_until_its_terminal_commits() {
 
     assert!(operation.begin_cancel());
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(!operation.begin_cancel());
-    operation.clone().settle().await;
+    operation.clone().settle().await.unwrap();
     assert!(!operation.begin_cancel());
+}
+
+#[test]
+async fn ancestor_cancellation_preserves_selected_descendants_but_cancels_their_children() {
+    let owner = OwnerToolOperations::new();
+    let root = accept_provisional(owner.create(context()), 2);
+    let mut child_context = context();
+    child_context.parent = OwnerInvocationId::Entity(root.invocation_id().unwrap());
+    let child = accept_provisional(owner.create(child_context), 3);
+    let mut selected_context = context();
+    selected_context.parent = OwnerInvocationId::Entity(child.invocation_id().unwrap());
+    let selected = accept_provisional(owner.create(selected_context), 4);
+    let mut pending_context = context();
+    pending_context.parent = OwnerInvocationId::Entity(selected.invocation_id().unwrap());
+    let pending = accept_provisional(owner.create(pending_context), 5);
+    let sibling = accept_provisional(owner.create(context()), 6);
+    let executions = [&child, &selected, &pending, &sibling]
+        .map(|operation| ToolExecution::new(operation.clone(), true, None));
+    for execution in &executions {
+        execution
+            .operation
+            .register_execution(Arc::downgrade(execution))
+            .unwrap();
+    }
+    assert!(selected.begin_ordinary());
+    owner.cancel_children(&OwnerInvocationId::Entity(root.invocation_id().unwrap()));
+    assert!(executions[0].is_cancelled());
+    assert!(!executions[1].is_cancelled());
+    assert!(executions[2].is_cancelled());
+    assert!(!executions[3].is_cancelled());
+    assert!(matches!(
+        selected.winner_if_active(),
+        Some(ToolOperationWinner::SelectingOrdinary)
+    ));
+    // An explicit cancellation must use the same arbitration, not token inheritance.
+    executions[1].cancel();
+    assert!(!executions[1].is_cancelled());
+    assert!(matches!(
+        sibling.winner_if_active(),
+        Some(ToolOperationWinner::Open)
+    ));
 }
 
 #[test]
@@ -2062,12 +2457,15 @@ async fn cancellation_selection_closes_attached_streams() {
             )
         ));
     }
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
 }
 
 #[test]
 #[timeout("30s")]
-async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
+async fn cancellation_does_not_mask_trap_election_waiting_on_a_sibling() {
     let owner = OwnerToolOperations::new();
     let sibling = accept_provisional(owner.create(context()), 2);
     let operation = accept_provisional(owner.create(context()), 3);
@@ -2093,13 +2491,148 @@ async fn cancellation_wakes_trap_election_waiting_on_a_sibling() {
     });
     ready.await.unwrap();
     assert!(operation.begin_cancel());
-    assert!(!election.await.unwrap());
-    assert!(owner.owner_winner().is_none());
+    assert!(!election.is_finished());
     assert!(matches!(
         sibling.winner_if_active(),
         Some(ToolOperationWinner::SelectingOrdinary)
     ));
-    operation.resolve_cancel(true).await;
+    sibling.resolve_ordinary(Arc::new(SerializableToolOperationTerminal {
+        admission_refusal: None,
+        body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+        result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+    }), TerminalResolution::Committed).await.unwrap();
+    assert!(election.await.unwrap());
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Trap)
+    ));
+    assert!(matches!(
+        sibling.winner_if_active(),
+        Some(ToolOperationWinner::Ordinary { .. })
+    ));
+}
+
+#[test]
+#[timeout("5s")]
+async fn concurrent_cancelled_traps_elect_one_owner_failure() {
+    let owner = OwnerToolOperations::new();
+    let first = accept_provisional(owner.create(context()), 2);
+    let second = accept_provisional(owner.create(context()), 3);
+    assert!(first.begin_cancel());
+    assert!(second.begin_cancel());
+
+    let (first_won, second_won) = tokio::join!(
+        first.select_trap(TrapType::Exit),
+        second.select_trap(TrapType::Exit),
+    );
+
+    assert_ne!(first_won, second_won);
+    assert!(matches!(
+        owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    for (operation, won) in [(&first, first_won), (&second, second_won)] {
+        assert!(
+            matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::Trap)
+            ) == won
+        );
+        assert!(
+            matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::FencedByOwner)
+            ) != won
+        );
+        assert_eq!(operation.claim_owner_failure_cleanup().is_some(), won);
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn concurrent_cancelled_infrastructure_failures_elect_one_owner_failure() {
+    let owner = OwnerToolOperations::new();
+    let first = accept_provisional(owner.create(context()), 2);
+    let second = accept_provisional(owner.create(context()), 3);
+    assert!(first.begin_cancel());
+    assert!(second.begin_cancel());
+    let first_error =
+        WorkerExecutorError::recovery_required_from("first failure", OplogIndex::from_u64(19));
+    let second_error =
+        WorkerExecutorError::recovery_required_from("second failure", OplogIndex::from_u64(23));
+
+    let (first_won, second_won) = tokio::join!(
+        first.select_infrastructure(first_error.clone()),
+        second.select_infrastructure(second_error.clone()),
+    );
+
+    assert_ne!(first_won, second_won);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Infrastructure(error)) if error == if first_won { first_error } else { second_error })
+    );
+    for (operation, won) in [(&first, first_won), (&second, second_won)] {
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::FencedByOwner)
+        ));
+        assert_eq!(operation.claim_owner_failure_cleanup().is_some(), won);
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn owner_failure_supersedes_its_own_uncommitted_cancellation() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let cancelled = accept_provisional(owner.create(context()), 3);
+    assert!(cancelled.begin_cancel());
+    cancelled
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
+    assert!(operation.begin_cancel());
+    let trap = TrapType::Error {
+        error: golem_common::model::oplog::AgentError::OutOfMemory,
+        retry_from: OplogIndex::from_u64(19),
+        semantic_trap_retry_override: Some(
+            crate::durable_host::durability::SemanticTrapRetryOverride {
+                retry_from: OplogIndex::from_u64(17),
+                policy_name: "selected-host-policy".into(),
+                verdict: crate::durable_host::durability::SemanticTrapRetryVerdict::GiveUp,
+                retry_policy_state: golem_common::model::RetryPolicyState::Counter(3),
+            },
+        ),
+    };
+    assert!(operation.select_trap(trap).await);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Trap(
+        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic) }
+    )) if retry_from == OplogIndex::from_u64(19)
+        && semantic.retry_from == OplogIndex::from_u64(17)
+        && semantic.policy_name == "selected-host-policy"
+        && semantic.verdict == crate::durable_host::durability::SemanticTrapRetryVerdict::GiveUp
+        && semantic.retry_policy_state == golem_common::model::RetryPolicyState::Counter(3))
+    );
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Trap)
+    ));
+    assert!(matches!(
+        cancelled.winner_if_active(),
+        Some(ToolOperationWinner::Cancelled)
+    ));
+
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.begin_cancel());
+    let error = WorkerExecutorError::recovery_required_from(
+        "storage unavailable",
+        OplogIndex::from_u64(23),
+    );
+    assert!(operation.select_infrastructure(error.clone()).await);
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Infrastructure(selected)) if selected == error)
+    );
 }
 
 #[test]
@@ -2115,13 +2648,145 @@ async fn local_cancellation_interruption_does_not_enter_trap_election() {
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
 
     assert!(operation.claim_local_cancellation_interruption());
-    operation.resolve_cancel(true).await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
 
     assert!(operations.owner_winner().is_none());
     assert!(matches!(
         operation.winner_if_active(),
         Some(ToolOperationWinner::Cancelled)
     ));
+}
+
+#[test]
+async fn wrong_terminal_kind_and_duplicate_resolution_preserve_the_winner() {
+    for cancelled in [false, true] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let terminal = Arc::new(SerializableToolOperationTerminal {
+            admission_refusal: None,
+            body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+            result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+        });
+        if cancelled {
+            assert!(operation.begin_cancel());
+        } else {
+            assert!(operation.begin_ordinary());
+        }
+        let mut observer = operation.subscribe();
+        observer.borrow_and_update();
+        for resolution in [
+            TerminalResolution::Committed,
+            TerminalResolution::RolledBack,
+        ] {
+            let result = if cancelled {
+                operation
+                    .resolve_ordinary(terminal.clone(), resolution)
+                    .await
+            } else {
+                operation.resolve_cancel(resolution).await
+            };
+            assert!(result.is_err());
+            assert!(!observer.has_changed().unwrap());
+            assert_eq!(
+                matches!(
+                    operation.winner_if_active(),
+                    Some(ToolOperationWinner::SelectingCancelled)
+                ),
+                cancelled
+            );
+            assert_eq!(
+                matches!(
+                    operation.winner_if_active(),
+                    Some(ToolOperationWinner::SelectingOrdinary)
+                ),
+                !cancelled
+            );
+            assert_eq!(owner.operation_count(), 1);
+            assert_eq!(owner.operation_removal_count(), 0);
+        }
+        if cancelled {
+            operation
+                .resolve_cancel(TerminalResolution::Committed)
+                .await
+                .unwrap();
+        } else {
+            operation
+                .resolve_ordinary(terminal.clone(), TerminalResolution::Committed)
+                .await
+                .unwrap();
+        }
+        observer.borrow_and_update();
+        for resolution in [
+            TerminalResolution::Committed,
+            TerminalResolution::RolledBack,
+        ] {
+            assert!(operation.resolve_cancel(resolution).await.is_err());
+            assert!(
+                operation
+                    .resolve_ordinary(terminal.clone(), resolution)
+                    .await
+                    .is_err()
+            );
+            assert!(!observer.has_changed().unwrap());
+            match operation.winner_if_active().unwrap() {
+                ToolOperationWinner::Cancelled => assert!(cancelled),
+                ToolOperationWinner::Ordinary { _terminal } => {
+                    assert!(!cancelled);
+                    assert!(Arc::ptr_eq(&_terminal, &terminal));
+                }
+                _ => panic!("invalid resolution changed the winner"),
+            }
+        }
+        operation.settle().await.unwrap();
+        assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 1);
+    }
+}
+
+#[test]
+async fn nonterminal_settlement_preserves_registration_and_allows_later_resolution() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let mut observer = operation.subscribe();
+    observer.borrow_and_update();
+    assert!(operation.clone().settle().await.is_err());
+    assert!(!observer.has_changed().unwrap());
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::Open)
+    ));
+    assert_eq!(owner.operation_count(), 1);
+    assert_eq!(owner.operation_removal_count(), 0);
+    for cancelled in [false, true] {
+        if cancelled {
+            assert!(operation.begin_cancel());
+        } else {
+            assert!(operation.begin_ordinary());
+        }
+        observer.borrow_and_update();
+        assert!(operation.clone().settle().await.is_err());
+        assert!(!observer.has_changed().unwrap());
+        assert_eq!(owner.operation_count(), 1);
+        assert_eq!(owner.operation_removal_count(), 0);
+        if cancelled {
+            operation
+                .resolve_cancel(TerminalResolution::Committed)
+                .await
+                .unwrap();
+        } else {
+            operation.resolve_ordinary(Arc::new(SerializableToolOperationTerminal {
+                admission_refusal: None,
+                body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Executed,
+                result: Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled),
+            }), TerminalResolution::RolledBack).await.unwrap();
+        }
+    }
+    operation.settle().await.unwrap();
+    assert_eq!(owner.operation_count(), 0);
+    assert_eq!(owner.operation_removal_count(), 1);
 }
 
 #[test]
@@ -2136,9 +2801,14 @@ async fn retained_clone_has_only_optional_state_after_settlement() {
     let (_operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
     let retained = operation.clone();
+    let invocation_id = operation.invocation_id().unwrap();
+    let observer = retained.subscribe();
     assert!(operation.begin_cancel());
-    operation.resolve_cancel(true).await;
-    operation.settle().await;
+    operation
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
+    operation.settle().await.unwrap();
 
     assert_eq!(retained.invocation_id(), None);
     assert_eq!(retained.admission_if_active(), None);
@@ -2147,7 +2817,23 @@ async fn retained_clone_has_only_optional_state_after_settlement() {
     assert_eq!(retained.owns_lane_value_if_active(), None);
     assert_eq!(retained.is_acquiring_lane_if_active(), None);
     let _ = retained.context();
-    let _ = retained.subscribe();
+    assert!(matches!(*observer.borrow(), ToolOperationWinner::Cancelled));
+    assert!(matches!(
+        *retained.subscribe().borrow(),
+        ToolOperationWinner::Cancelled
+    ));
+    assert!(!retained.accept(invocation_id));
+    assert!(!retained.begin_ordinary());
+    assert!(!retained.begin_cancel());
+    assert!(!retained.select_trap(TrapType::Exit).await);
+    assert!(
+        retained
+            .resolve_cancel(TerminalResolution::Committed)
+            .await
+            .is_err()
+    );
+    retained.clone().settle().await.unwrap();
+    retained.settle().await.unwrap();
 }
 
 #[test]
@@ -2209,6 +2895,7 @@ fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
 }
 
 #[test]
+#[timeout("30s")]
 async fn result_await_batch_promotes_before_parent_end_in_start_order() {
     let owner_id = golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
@@ -2244,10 +2931,37 @@ async fn result_await_batch_promotes_before_parent_end_in_start_order() {
             invocation_id,
         )
     };
-    let (earlier, earlier_id) = accept(2);
-    let (later, later_id) = accept(3);
-    assert!(later.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
-    assert!(earlier.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    let (earlier, earlier_id) = accept(7);
+    let (later, later_id) = accept(19);
+    assert!(later.mark_body_ready());
+    assert!(earlier.mark_body_ready());
+
+    assert!(
+        operations
+            .register_ready_bodies(
+                &lane,
+                &[
+                    OplogIndex::from_u64(19),
+                    OplogIndex::from_u64(7),
+                    OplogIndex::from_u64(19),
+                ],
+                Some(&parent()),
+            )
+            .is_err()
+    );
+    for operation in [&earlier, &later] {
+        assert_eq!(
+            operation.admission_if_active(),
+            Some(BodyAdmissionState::Ready)
+        );
+        assert_eq!(operation.owns_lane_value_if_active(), Some(false));
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::Open)
+        ));
+    }
+    assert_eq!(lane.holder(), Some(parent()));
+    assert_eq!(lane.metadata().active_invocation_count, 1);
 
     let registration_operation = earlier.clone();
     let registration_waiter = registration_operation.wait_until_registered();
@@ -2256,7 +2970,7 @@ async fn result_await_batch_promotes_before_parent_end_in_start_order() {
     let (registered, wait) = operations
         .register_ready_bodies(
             &lane,
-            &[OplogIndex::from_u64(3), OplogIndex::from_u64(2)],
+            &[OplogIndex::from_u64(19), OplogIndex::from_u64(7)],
             Some(&parent()),
         )
         .unwrap();
@@ -2280,20 +2994,52 @@ async fn result_await_batch_promotes_before_parent_end_in_start_order() {
     let later_acquire =
         tokio::spawn(async move { later_for_acquire.acquire_registered_body().await });
     assert!(earlier_acquire.await.unwrap().unwrap());
-    assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(earlier_id)));
+    assert_eq!(
+        lane.holder(),
+        Some(OwnerInvocationId::Entity(earlier_id.clone()))
+    );
     assert!(!later_acquire.is_finished());
+    while later.is_acquiring_lane_if_active() != Some(true) {
+        tokio::task::yield_now().await;
+    }
+    for _ in 0..2 {
+        assert!(later.acquire_registered_body().await.is_err());
+        assert_eq!(
+            later.admission_if_active(),
+            Some(BodyAdmissionState::Registered)
+        );
+        assert_eq!(later.is_acquiring_lane_if_active(), Some(true));
+        assert_eq!(later.owns_lane_value_if_active(), Some(true));
+        assert!(!earlier.acquire_registered_body().await.unwrap());
+        assert_eq!(
+            earlier.admission_if_active(),
+            Some(BodyAdmissionState::Running)
+        );
+        assert_eq!(earlier.owns_lane_value_if_active(), Some(true));
+        assert_eq!(
+            lane.holder(),
+            Some(OwnerInvocationId::Entity(earlier_id.clone()))
+        );
+        assert_eq!(lane.metadata().active_invocation_count, 3);
+    }
 
     assert!(earlier.begin_cancel());
-    earlier.resolve_cancel(true).await;
+    earlier
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     assert!(later_acquire.await.unwrap().unwrap());
     assert_eq!(lane.holder(), Some(OwnerInvocationId::Entity(later_id)));
     assert!(later.begin_cancel());
-    later.resolve_cancel(true).await;
+    later
+        .resolve_cancel(TerminalResolution::Committed)
+        .await
+        .unwrap();
     wait.wait().await;
     assert_eq!(lane.holder(), Some(parent()));
 
-    earlier.settle().await;
-    later.settle().await;
+    earlier.settle().await.unwrap();
+    later.settle().await.unwrap();
     primary.complete();
 }
 
@@ -2410,7 +3156,7 @@ fn cohort_claim_holds_parent_close_lock_through_lane_registration() {
     let _primary = lane.enter_primary(OplogIndex::from_u64(1)).unwrap();
     let (operations, operation, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(operation.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(operation.mark_body_ready());
     let table = Arc::new(DeferredAdmissionTable::default());
     let parent = parent();
     let start = OplogIndex::from_u64(2);
@@ -2474,7 +3220,7 @@ fn ready_cancellation_and_lane_registration_have_one_winner() {
 
     let (cancelled_operations, cancelled, _) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
-    assert!(cancelled.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready));
+    assert!(cancelled.mark_body_ready());
     let cancelled_table = DeferredAdmissionTable::default();
     assert!(cancelled_table.insert(parent.clone(), start));
     assert!(cancelled_table.settle_staging(&parent, start, DeferredAdmissionReadiness::Ready));
@@ -2502,9 +3248,7 @@ fn ready_cancellation_and_lane_registration_have_one_winner() {
     let (registered_operations, registered, invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 3);
     let registered_start = OplogIndex::from_u64(3);
-    assert!(
-        registered.transition_admission(BodyAdmissionState::Staging, BodyAdmissionState::Ready)
-    );
+    assert!(registered.mark_body_ready());
     let registered_table = DeferredAdmissionTable::default();
     assert!(registered_table.insert(parent.clone(), registered_start));
     assert!(registered_table.settle_staging(
@@ -2640,6 +3384,12 @@ struct ProbedRetainedStore {
 }
 
 impl crate::worker::entity_invocation::RetainedEntityStore for ProbedRetainedStore {
+    fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        None
+    }
+
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
@@ -2737,7 +3487,7 @@ fn probed_entity_invocation(
         move |_, _, _| {
             Box::pin(async move {
                 (
-                    Ok(()),
+                    Ok(crate::worker::entity_invocation::EntityBodyOutcome::Completed(())),
                     Some(Box::new(store) as Box<dyn RetainedEntityStore>),
                 )
             })
@@ -2873,12 +3623,11 @@ async fn owner_cleanup_notification_follows_retained_store_destruction() {
     assert!(operation.select_trap(TrapType::Exit).await);
     let token = operation.claim_owner_failure_cleanup().unwrap();
     let (wake, notification) = tokio::sync::oneshot::channel();
-    drop(owner.start_owner_failure_cleanup(
-        token,
+    drop(token.start(
         async move {
             slot.fence();
             slot.wait_drained().await;
-            operation.settle().await;
+            operation.settle().await.unwrap();
             Ok(())
         },
         move || {
@@ -2899,11 +3648,28 @@ async fn owner_cleanup_notification_follows_retained_store_destruction() {
 
 #[test]
 #[timeout("30s")]
+async fn body_abort_after_completion_keeps_retained_preparation_and_settlement_alive() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    let abort = handle.abort_handle();
+    let completion = handle.join_completion().await.unwrap();
+    let (result, mut resources) = completion.into_parts();
+    result.unwrap();
+    abort.abort();
+    resources.prepare_parent_end().await.unwrap();
+    assert!(destroyed.try_recv().is_err());
+    resources.settle_after_parent_end().await.unwrap();
+    destroyed.await.unwrap();
+    assert_eq!(slot.active_invocation_count(), 0);
+}
+
+#[test]
+#[timeout("30s")]
 async fn shutdown_reclaims_unpolled_entity_completion_output() {
     let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
     let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
     // Direct polling of the production task handle establishes completion without taking output.
-    while !handle.abort_handle().is_finished() {
+    while !handle.is_finished() {
         tokio::task::yield_now().await;
     }
     assert!(destroyed.try_recv().is_err());

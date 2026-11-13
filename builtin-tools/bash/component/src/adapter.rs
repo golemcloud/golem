@@ -5,11 +5,17 @@ use bash_shell::commands::CommandDescriptor;
 use bash_shell::commands::{CommandFuture, CommandInvoker, CommandOutput, PreparedCommand};
 #[cfg(target_arch = "wasm32")]
 use bash_shell::session::Session;
-use golem_schema::tool::{
-    ProcessExitStatus, Tool,
-    argv::{self, ParsedToolArguments},
+use golem_rust::bindings::golem::tool::streams::{
+    ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
 };
-use golem_schema::{IntoSchema, SchemaGraph, SchemaType, TypedSchemaValue};
+use golem_schema::TypedSchemaValue;
+use golem_schema::tool::{
+    Tool,
+    process::{
+        ParsedProcessCommand, command_line_error, parse_command, process_status_type,
+        render_custom_error, render_result,
+    },
+};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
@@ -48,50 +54,32 @@ impl Catalog {
             .tools
             .get(name)
             .ok_or_else(|| failure(127, "tool is not bound"))?;
-        let parsed = argv::parse_with_variables(tool, args, variables).map_err(|message| {
-            // The shared parser forbids constructing opaque capabilities from text.
-            let message = if message.contains("capabilit") || message.contains("secret") {
-                format!("secret and other capability arguments are unsupported: {message}")
-            } else {
-                message
-            };
-            failure(2, message)
-        })?;
+        let parsed = parse_command(tool, args, variables)
+            .map_err(|message| failure(2, command_line_error(message)))?;
         match parsed {
-            ParsedToolArguments::Help(text) => Err(CommandOutput {
+            ParsedProcessCommand::Help(text) => Err(CommandOutput {
                 stdout: text.into_bytes(),
                 stderr: vec![],
                 exit_code: 0,
             }),
-            ParsedToolArguments::Invoke {
+            ParsedProcessCommand::Invoke {
                 command_path,
                 input,
-            } => {
-                let index = tool
-                    .command_index_by_path(&command_path)
-                    .ok_or_else(|| failure(2, "unknown command path"))?;
-                let body = tool.commands.nodes[index]
-                    .body
-                    .as_ref()
-                    .ok_or_else(|| failure(2, "command has no body"))?;
-                Ok(Invocation {
-                    name: name.into(),
-                    path: command_path,
-                    input: *input,
-                    stdin: body.stdin.is_some(),
-                    stdout: body.stdout.is_some(),
-                    stderr: body.stderr.is_some(),
-                    result_is_status: body
-                            .result
-                            .as_ref()
-                            .is_some_and(|result| matches!(&result.type_, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id())),
-                    errors: body
-                        .errors
-                        .iter()
-                        .map(|error| (error.name.clone(), error.exit_code))
-                        .collect(),
-                })
-            }
+                stdin,
+                stdout,
+                stderr,
+                result_is_status,
+                errors,
+            } => Ok(Invocation {
+                name: name.into(),
+                path: command_path,
+                input: *input,
+                stdin,
+                stdout,
+                stderr,
+                result_is_status,
+                errors,
+            }),
         }
     }
 }
@@ -149,10 +137,7 @@ fn rpc_failure(
     error: golem_rust::schema::wit::wire::ToolRpcError,
     declared: &BTreeMap<String, u8>,
 ) -> (u8, String) {
-    use golem_rust::schema::{
-        render::json_value::to_json_value_redacted,
-        wit::wire::{ToolError, ToolRpcError},
-    };
+    use golem_rust::schema::wit::wire::{ToolError, ToolRpcError};
     match error {
         ToolRpcError::Denied(message) => (3, message),
         ToolRpcError::NotFound(message) => (127, message),
@@ -161,17 +146,8 @@ fn rpc_failure(
             ToolError::InvalidInput(message) | ToolError::ConstraintViolation(message),
         ) => (2, message),
         ToolRpcError::RemoteToolError(ToolError::CustomError(custom)) => {
-            let code = declared.get(&custom.name).copied().unwrap_or(1);
-            let payload = golem_rust::decode_typed_schema_value(&custom.payload)
-                .ok()
-                .and_then(|typed| {
-                    to_json_value_redacted(typed.graph(), &typed.graph().root, typed.value()).ok()
-                });
-            let message = match payload {
-                Some(payload) => format!("tool error: {}: {payload}", custom.name),
-                None => format!("tool error: {}", custom.name),
-            };
-            (code, message)
+            let payload = golem_rust::decode_typed_schema_value(&custom.payload).ok();
+            render_custom_error(&custom.name, payload.as_ref(), declared)
         }
         ToolRpcError::ProtocolError(message)
         | ToolRpcError::RemoteInternalError(message)
@@ -180,26 +156,69 @@ fn rpc_failure(
     }
 }
 
-fn process_status_type(graph: &SchemaGraph, root: &SchemaType) -> Result<bool, String> {
-    if !matches!(root, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id()) {
-        return Ok(false);
+/// How a bound command is named in its diagnostics: the tool, then its subcommand path.
+fn command_label(name: &str, path: &[String]) -> String {
+    std::iter::once(name)
+        .chain(path.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Why an output channel of a bound command ended before all of its bytes arrived.
+enum OutputFailure {
+    /// The stream ended with a failure item.
+    Stream(ByteStreamFailure),
+    /// The channel passed the 16 MiB limit, and the shell stopped reading it.
+    LimitExceeded,
+}
+
+/// The stderr line for an output channel that did not end cleanly. A crashed tool's streams and
+/// its call error carry the same text, and the call error follows on stderr, so the line leaves
+/// out a text that `call_error` repeats.
+fn output_failure_line(
+    command: &str,
+    channel: &str,
+    failure: &OutputFailure,
+    call_error: Option<&str>,
+) -> String {
+    match failure {
+        OutputFailure::LimitExceeded => format!("{command}: {channel} attachment limit exceeded"),
+        OutputFailure::Stream(failure) => {
+            format!(
+                "{command}: {channel}: {}",
+                stream_failure_text(failure, call_error)
+            )
+        }
     }
-    let definition = graph.lookup(&ProcessExitStatus::type_id());
-    if let Some(definition) = definition
-        && let SchemaType::Record { fields, .. } = &definition.body
-        && fields.len() == 1
-        && fields[0].name == "exit_code"
-        && matches!(
-            fields[0].body,
-            SchemaType::U8 {
-                restrictions: None,
-                ..
-            }
-        )
-    {
-        return Ok(true);
+}
+
+/// The stderr line for a write to a bound command's stdin that failed.
+fn stdin_failure_line(command: &str, error: &StreamWriteError) -> String {
+    let reason = match error {
+        StreamWriteError::Closed(ByteStreamCloseCause::Finished) => "closed".to_string(),
+        StreamWriteError::Closed(ByteStreamCloseCause::ConsumerCancelled) => {
+            "closed by the tool".to_string()
+        }
+        StreamWriteError::Closed(ByteStreamCloseCause::Failed(failure)) => {
+            stream_failure_text(failure, None)
+        }
+        StreamWriteError::ConcurrentOperation => "concurrent write".to_string(),
+    };
+    format!("{command}: stdin: {reason}")
+}
+
+/// A stream failure in plain words, never debug-printed. `repeated` is a text that the caller
+/// writes anyway; a failure text equal to it is left out.
+fn stream_failure_text(failure: &ByteStreamFailure, repeated: Option<&str>) -> String {
+    match failure {
+        ByteStreamFailure::Cancelled => "cancelled".to_string(),
+        ByteStreamFailure::Abandoned => "abandoned".to_string(),
+        ByteStreamFailure::ResourceExhausted => "resource exhausted".to_string(),
+        ByteStreamFailure::Failed(details) if repeated == Some(details.as_str()) => {
+            "failed".to_string()
+        }
+        ByteStreamFailure::Failed(details) => format!("failed: {details}"),
     }
-    Err("ProcessExitStatus must define exactly one exit_code: u8 field".into())
 }
 
 /// ProcessExitStatus controls shell status; all other results retain their rendering behavior.
@@ -210,49 +229,28 @@ fn apply_result(
     result_is_status: bool,
     wire: Option<golem_rust::schema::wit::wire::TypedSchemaValue>,
 ) {
-    let result = (|| -> Result<(), String> {
-        if stdout && !result_is_status {
-            return Ok(());
-        }
-        let Some(wire) = wire else {
-            return if result_is_status {
-                Err("result: missing ProcessExitStatus".into())
-            } else {
-                Ok(())
-            };
-        };
-        let typed = golem_rust::decode_typed_schema_value(&wire)
-            .map_err(|error| format!("result: {error:?}"))?;
-        if result_is_status {
-            if !process_status_type(typed.graph(), typed.root_type())? {
-                return Err("result: expected named ProcessExitStatus".into());
-            }
-            let golem_schema::SchemaValue::Record { fields } = typed.value() else {
-                return Err("result: expected ProcessExitStatus record".into());
-            };
-            let [golem_schema::SchemaValue::U8(status)] = fields.as_slice() else {
-                return Err("result: expected exactly one u8 exit status value".into());
-            };
+    if stdout && !result_is_status {
+        return;
+    }
+    let result = wire
+        .as_ref()
+        .map(golem_rust::decode_typed_schema_value)
+        .transpose()
+        .map_err(|error| format!("result: {error:?}"))
+        .and_then(|typed| render_result(stdout, result_is_status, typed.as_ref()));
+    match result {
+        Ok(result) => {
             if output.exit_code == 0 {
-                output.exit_code = *status;
+                output.exit_code = result.exit_code;
             }
-        } else {
-            let json = golem_rust::schema::render::json_value::to_json_value_redacted(
-                typed.graph(),
-                typed.root_type(),
-                typed.value(),
-            )
-            .map_err(|error| format!("result: {error:?}"))?;
-            output.stdout = match json {
-                serde_json::Value::String(text) => text.into_bytes(),
-                value => format!("{value}\n").into_bytes(),
-            };
+            if let Some(stdout) = result.stdout {
+                output.stdout = stdout;
+            }
         }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        output.exit_code = 1;
-        output.stderr.extend(format!("{error}\n").bytes());
+        Err(error) => {
+            output.exit_code = 1;
+            output.stderr.extend(format!("{error}\n").bytes());
+        }
     }
 }
 

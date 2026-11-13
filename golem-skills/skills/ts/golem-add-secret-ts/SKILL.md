@@ -83,7 +83,8 @@ golem secret delete apiKey
 
 ## Secret Defaults in golem.yaml
 
-For development environments, define secret defaults in `golem.yaml`. These are **not** used in production:
+Use secret defaults in `golem.yaml` only for development. Defaults apply to the
+named environment, even production if configured there. Never commit real credentials:
 
 ```yaml
 secretDefaults:

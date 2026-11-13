@@ -1,8 +1,10 @@
 # Using MySQL from a TypeScript Agent
 
 The TypeScript SDK ships a typed MySQL helper built on the
-`golem:rdbms/mysql@1.5.0` host interface. Every operation returns a `Promise` and
-throws a typed `MySqlError` on failure.
+`golem:rdbms/mysql@1.5.0` host interface. Connection queries and transaction
+commit/rollback return promises. Transaction `query`, `queryValues`, `execute`,
+and `run` are synchronous. Connection `close()` is currently a synchronous no-op;
+resources are GC-managed, not deterministically released by `close()`. Failures throw a typed `MySqlError`.
 
 ## Imports
 
@@ -44,19 +46,11 @@ const affected = await conn.execute("INSERT INTO notes (id, body) VALUES (?, ?)"
 
 ## Transactions
 
-Run a block inside a transaction — it commits on success and rolls back if the
-callback throws:
+Run a block inside a transaction — it commits on success and attempts rollback if
+the callback or commit fails, preserving the original error even if rollback fails:
 
 ```ts
 await conn.transaction(async (tx) => {
   tx.execute("UPDATE notes SET body = ? WHERE id = ?", ["updated", 1]);
 });
-```
-
-Or drive it manually with `begin()` / `commit()` / `rollback()`:
-
-```ts
-const tx = await conn.begin();
-tx.execute("UPDATE notes SET body = ? WHERE id = ?", ["updated", 1]);
-await tx.commit();
 ```

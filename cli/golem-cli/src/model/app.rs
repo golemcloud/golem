@@ -287,7 +287,6 @@ pub struct ComponentStubInterfaces {
 pub enum AppBuildStep {
     Check,
     Build,
-    AddMetadata,
     GenBridge,
 }
 
@@ -2606,16 +2605,6 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render componentWasm: {}", err))?,
             );
 
-            value.output_wasm.apply_layer(
-                id,
-                selection,
-                properties
-                    .output_wasm
-                    .value()
-                    .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
-            );
-
             value.dependency_agents.apply_layer(
                 id,
                 selection,
@@ -2927,23 +2916,6 @@ impl<'a> Component<'a> {
             .join(self.properties().component_wasm.clone())
     }
 
-    /// The final output component WASM
-    pub fn final_wasm(&self) -> PathBuf {
-        self.properties()
-            .output_wasm
-            .as_ref()
-            .map(|output_wasm| self.component_dir().join(output_wasm))
-            .unwrap_or_else(|| {
-                self.temp_dir
-                    .join("final-wasm")
-                    .join(format!("{}.wasm", self.component_name.as_str()))
-            })
-    }
-
-    pub fn agent_type_extraction_source_wasm(&self) -> PathBuf {
-        self.final_wasm()
-    }
-
     /// File for storing extracted component metadata (agent types and tools)
     pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
         extracted_component_metadata_path(
@@ -3032,7 +3004,6 @@ pub struct ComponentLayerProperties {
 
     pub guest_language: OptionalProperty<ComponentLayer, GuestLanguage>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
-    pub output_wasm: OptionalProperty<ComponentLayer, String>,
     pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
     pub dependency_tools: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3079,7 +3050,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             applied_layers: vec![],
             guest_language: value.guest_language.into(),
             component_wasm: value.component_wasm.into(),
-            output_wasm: value.output_wasm.into(),
             dependency_agents: value.dependencies.agents.into(),
             dependency_tools: value.dependencies.tools.into(),
             build_merge_mode: value.build_merge_mode,
@@ -3156,7 +3126,6 @@ impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
-        self.output_wasm.compact_trace();
         self.dependency_agents.compact_trace();
         self.dependency_tools.compact_trace();
         self.build.compact_trace();
@@ -3925,7 +3894,6 @@ pub struct ComponentProperties {
     pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
     pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
-    pub output_wasm: Option<String>,
     pub dependencies: Vec<ComponentDependency>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
@@ -3969,7 +3937,6 @@ impl ComponentProperties {
             dir,
             component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
-            output_wasm: merged.output_wasm.value().clone(),
             dependencies: Self::validate_dependencies(
                 validation,
                 merged.dependency_agents.value(),
@@ -5176,7 +5143,7 @@ mod app_builder {
                         app.application
                             .clean
                             .into_iter()
-                            .map(|path| WithSource::new(app.source.to_path_buf(), path)),
+                            .map(|path| WithSource::new(app_source_dir.to_path_buf(), path)),
                     );
 
                     if let Some(http_api) = app.application.http_api {
@@ -11284,7 +11251,7 @@ bridge:
         fs::write(
             &golem_yaml_path,
             indoc! {r#"
-                manifestVersion: 1.5.0-dev.1
+                manifestVersion: 2.0.0
                 includes:
                   - ./shared/*.yaml
                 futureMigrationHints:

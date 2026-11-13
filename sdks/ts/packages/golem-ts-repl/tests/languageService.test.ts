@@ -143,30 +143,29 @@ describe('LanguageService remote method diagnostic hints', () => {
     expectRemoteMethodHint(result!, '(authorization: string): Promise<string>;');
   });
 
-  it('enriches operation diagnostics with the relevant operation signature', () => {
-    const cases = [
-      ['MyAgent.get.trigger()', 'trigger: (authorization: string) => void;'],
-      [
-        'MyAgent.get.schedule("2026-01-01T00:00:00Z")',
-        'schedule: (scheduleAt: string, authorization: string) => void;',
-      ],
-      [
-        'MyAgent.get.scheduleCancelable("2026-01-01T00:00:00Z")',
-        'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
-      ],
-      [
-        'MyAgent.get.abortable(new AbortController().signal)',
-        'abortable: (signal: AbortSignal, authorization: string) => Promise<string>;',
-      ],
-    ];
-
-    for (const [snippet, expected] of cases) {
+  it.each([
+    ['MyAgent.get.trigger()', 'trigger: (authorization: string) => void;'],
+    [
+      'MyAgent.get.schedule("2026-01-01T00:00:00Z")',
+      'schedule: (scheduleAt: string, authorization: string) => void;',
+    ],
+    [
+      'MyAgent.get.scheduleCancelable("2026-01-01T00:00:00Z")',
+      'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
+    ],
+    [
+      'MyAgent.get.abortable(new AbortController().signal)',
+      'abortable: (signal: AbortSignal, authorization: string) => Promise<string>;',
+    ],
+  ])(
+    'enriches operation diagnostics with the relevant operation signature: %s',
+    (snippet, expected) => {
       const result = typeCheckSnippet(remoteMethodHistory, snippet, remoteMethodConfig);
 
       expect(result?.formattedErrors).toContain('TS2554');
       expectRemoteMethodHint(result!, expected);
-    }
-  });
+    },
+  );
 
   it('enriches element-access remote method diagnostics', () => {
     const result = typeCheckSnippet(remoteMethodHistory, 'MyAgent["get"]()', remoteMethodConfig);
@@ -175,39 +174,36 @@ describe('LanguageService remote method diagnostic hints', () => {
     expectRemoteMethodHint(result!, '(authorization: string): Promise<string>;');
   });
 
-  it('enriches unfinished remote invocation diagnostics', () => {
-    for (const snippet of ['MyAgent.get(', 'MyAgent.get(1,', 'MyAgent.get(1, 2,']) {
+  it.each(['MyAgent.get(', 'MyAgent.get(1,', 'MyAgent.get(1, 2,'])(
+    'enriches unfinished remote invocation diagnostics: %s',
+    (snippet) => {
       const result = typeCheckSnippet(remoteMethodHistory, snippet, remoteMethodConfig);
 
       expect(result?.formattedErrors).toContain('TS1005');
       expectRemoteMethodHint(result!, '(authorization: string): Promise<string>;');
-    }
-  });
+    },
+  );
 
-  it('enriches unfinished remote operation diagnostics', () => {
-    const cases = [
-      ['MyAgent.get.trigger(', 'trigger: (authorization: string) => void;'],
-      ['MyAgent.get.schedule(', 'schedule: (scheduleAt: string, authorization: string) => void;'],
-      [
-        'MyAgent.get.schedule("2026-01-01T00:00:00Z",',
-        'schedule: (scheduleAt: string, authorization: string) => void;',
-      ],
-      [
-        'MyAgent.get.scheduleCancelable(',
-        'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
-      ],
-      [
-        'MyAgent.get.abortable(',
-        'abortable: (signal: AbortSignal, authorization: string) => Promise<string>;',
-      ],
-    ];
+  it.each([
+    ['MyAgent.get.trigger(', 'trigger: (authorization: string) => void;'],
+    ['MyAgent.get.schedule(', 'schedule: (scheduleAt: string, authorization: string) => void;'],
+    [
+      'MyAgent.get.schedule("2026-01-01T00:00:00Z",',
+      'schedule: (scheduleAt: string, authorization: string) => void;',
+    ],
+    [
+      'MyAgent.get.scheduleCancelable(',
+      'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
+    ],
+    [
+      'MyAgent.get.abortable(',
+      'abortable: (signal: AbortSignal, authorization: string) => Promise<string>;',
+    ],
+  ])('enriches unfinished remote operation diagnostics: %s', (snippet, expected) => {
+    const result = typeCheckSnippet(remoteMethodHistory, snippet, remoteMethodConfig);
 
-    for (const [snippet, expected] of cases) {
-      const result = typeCheckSnippet(remoteMethodHistory, snippet, remoteMethodConfig);
-
-      expect(result?.formattedErrors).toContain('TS1005');
-      expectRemoteMethodHint(result!, expected);
-    }
+    expect(result?.formattedErrors).toContain('TS1005');
+    expectRemoteMethodHint(result!, expected);
   });
 
   it('does not enrich normal function diagnostics', () => {

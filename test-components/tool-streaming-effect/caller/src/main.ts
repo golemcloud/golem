@@ -1,4 +1,6 @@
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect"
+import { Buffer } from "node:buffer"
+import { execFile, spawnSync } from "node:child_process"
 import "./concurrent-stream.js"
 import {
   defineAgent,
@@ -15,6 +17,19 @@ import { client as matrixResource } from "matrix-resource-tool-guest-client"
 
 declare module "@golemcloud/effect-golem/BridgeTool" {
   export type AgentStream<T> = Stream.Stream<T, unknown>
+}
+
+// Runs the bound `streaming` tool through node:child_process: `produce 3 2` streams chunks 0, 1
+// and 2 of two bytes each, and an unknown command is a usage error from the shared parser.
+const childProcessToolObservation = async (): Promise<string> => {
+  const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex")
+  const sync = spawnSync("streaming", ["produce", "3", "2"])
+  const asynchronous = await new Promise<string>((resolve, reject) => {
+    execFile("streaming", ["produce", "3", "2"], { encoding: "buffer" }, (error, stdout) =>
+      error ? reject(error) : resolve(hex(stdout)))
+  })
+  const usage = spawnSync("streaming", ["no-such-command"])
+  return `sync=${sync.status}:${hex(sync.stdout)};async=${asynchronous};usage=${usage.status}`
 }
 
 defineAgent({
@@ -173,10 +188,12 @@ defineAgent({
       input: {},
       success: Schema.String,
     }),
+    child_process_tool_observation: method({ input: {}, success: Schema.String }),
   },
 }).implement({
   init: () => Effect.void,
   methods: () => ({
+    child_process_tool_observation: () => Effect.promise(childProcessToolObservation),
     matrix_core_observation: () =>
       Effect.gen(function* () {
         const artifact = matrixCore.artifact()

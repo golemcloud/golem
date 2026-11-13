@@ -11,8 +11,9 @@ import {
   "golemcloud/golem_sdk/gen" @gen,
 }
 
+pkgtype(kind: "foreign_library")
+
 options(
-  "is-main": true,
   link: {
     "wasm": {
       "export-memory-name": "memory",

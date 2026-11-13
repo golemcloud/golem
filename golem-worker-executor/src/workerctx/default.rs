@@ -63,7 +63,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::AccountUsagePeriod;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -560,8 +560,8 @@ impl wasmtime_wasi::WasiView for Context {
     }
 }
 
-impl wasmtime_wasi_http::p3::WasiHttpView for Context {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+impl wasmtime_wasi_http::WasiHttpView for Context {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view_p3()
     }
 }
@@ -697,7 +697,7 @@ impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
@@ -818,14 +818,6 @@ impl ExternalOperations<Context> for Context {
             worker_status_record,
         )
         .await
-    }
-
-    async fn resume_replay(
-        store: &mut wasmtime::Store<Context>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::resume_replay(store, instance, refresh_replay_target).await
     }
 
     async fn prepare_instance(
@@ -1267,7 +1259,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -1376,7 +1368,7 @@ pub(crate) mod tests {
     use golem_service_base::model::MonthlyResourcePolicy;
     use std::sync::Arc;
     use test_r::test;
-    use wasmtime::{AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
+    use wasmtime::{AsContext, AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
 
     struct FuelTestContext {
         tracker: Option<FuelTracker>,
@@ -1551,7 +1543,7 @@ pub(crate) mod tests {
             );
             store.set_fuel(u64::MAX).unwrap();
             store.call_hook(|mut store, boundary| {
-                let gauge = store.get_fuel()?;
+                let gauge = store.as_context().get_fuel()?;
                 let live = boundary.exiting_host() && store.data().live;
                 store.data_mut().usage.enter(gauge, live);
                 Ok(())
@@ -2120,7 +2112,7 @@ pub(crate) mod tests {
         );
         store.set_fuel(INITIAL)?;
         store.epoch_deadline_callback(|mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             store
                 .data_mut()
                 .ensure_fuel(current_level)
@@ -2228,7 +2220,7 @@ pub(crate) mod tests {
                 );
                 store.set_fuel(INITIAL)?;
                 store.epoch_deadline_callback(|mut store| {
-                    let current_level = store.get_fuel().unwrap_or(0);
+                    let current_level = store.as_context().get_fuel().unwrap_or(0);
                     store
                         .data_mut()
                         .ensure_fuel(current_level)
@@ -2293,7 +2285,7 @@ pub(crate) mod tests {
         );
         store.set_fuel(INITIAL)?;
         store.epoch_deadline_callback(|mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             store
                 .data_mut()
                 .ensure_fuel(current_level)

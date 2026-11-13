@@ -23,7 +23,7 @@ agent-type(param1, param2)
 
 ## Creating and Addressing Phantom Agents (RPC)
 
-The `#derive(agent)` macro generates a `<AgentName>Client` with three constructor methods:
+For durable agents, `#derive.agent` generates a `<AgentName>Client` with three constructor methods:
 
 | Method | Description |
 |--------|-------------|
@@ -34,7 +34,7 @@ The `#derive(agent)` macro generates a `<AgentName>Client` with three constructo
 ### Example
 
 ```moonbit
-#derive(agent)
+#derive.agent
 struct Counter {
   name : String
   mut value : UInt
@@ -63,42 +63,48 @@ let phantom2 = CounterClient::new_phantom("shared")
 // phantom1 and phantom2 are different agents, both with name="shared"
 
 // Retrieve the phantom ID to reconnect later
-let id : @rpcTypes.Uuid? = phantom1.phantom_id()
+let id : @schema.Uuid? = phantom1.phantom_id()
 
 // Reconnect to an existing phantom by its UUID
 let same_as_phantom1 = CounterClient::get_phantom("shared", id.unwrap())
+
+// Persist the UUID as a string and parse it back later
+let saved : String = id.unwrap().to_string()
+let restored = CounterClient::get_phantom("shared", @schema.Uuid::parse(saved))
 ```
 
 ### Scoped Variants
 
-The generated client also includes scoped versions that automatically call `drop()` when the closure completes:
+The generated client also includes async scoped versions that automatically call `drop()` when the closure completes. Run these fragments inside an async function and propagate async to callers:
 
 ```moonbit
 // Scoped non-phantom
-CounterClient::scoped("shared", fn(client) {
+CounterClient::scoped("shared", async fn(client) {
   client.increment()
   client.get_value()
 })
 
 // Scoped new phantom
-CounterClient::scoped_new_phantom("shared", fn(client) {
+CounterClient::scoped_new_phantom("shared", async fn(client) {
   client.increment()
   client.get_value()
 })
 
 // Scoped get phantom (reconnect)
-CounterClient::scoped_get_phantom("shared", phantom_id, fn(client) {
+CounterClient::scoped_get_phantom("shared", phantom_id, async fn(client) {
   client.get_value()
 })
 ```
 
 ### WithConfig Variants
 
-If the agent has `@config` fields, additional methods are generated:
+If the constructor has a `@config.Config[ConfigType]` parameter with overridable non-secret leaves, the native SDK generator emits methods accepting one `ConfigTypeOverride` record, not flattened config fields. Configs without such leaves have no override record or with-config methods:
 
-- `AgentClient::get_with_config(params..., config_fields...)`
-- `AgentClient::new_phantom_with_config(params..., config_fields...)`
-- `AgentClient::get_phantom_with_config(params..., phantom_id, config_fields...)`
+- `AgentClient::get_with_config(params..., config_override)`
+- `AgentClient::new_phantom_with_config(params..., config_override)`
+- `AgentClient::get_phantom_with_config(params..., phantom_id, config_override)`
+
+Construct the generated `ConfigTypeOverride` record with optional leaf values and nested override records, or use its `empty()` constructor, and pass it as the last argument. External CLI bridge clients use a separate generated API with flattened config options; inspect the selected client's signatures rather than mixing the two families.
 
 ## Querying the Phantom ID
 
@@ -108,7 +114,7 @@ Use the `phantom_id()` method on any client instance:
 
 ```moonbit
 let phantom = CounterClient::new_phantom("shared")
-let id : @rpcTypes.Uuid? = phantom.phantom_id()
+let id : @schema.Uuid? = phantom.phantom_id()
 // Returns Some(uuid) for phantom agents, None for non-phantom agents
 ```
 
@@ -117,21 +123,20 @@ let id : @rpcTypes.Uuid? = phantom.phantom_id()
 When an agent is mounted as an HTTP endpoint, you can set `mount_phantom` to `true` to make every incoming HTTP request create a **new phantom instance** automatically:
 
 ```moonbit
-#derive(agent)
+#derive.agent
 #derive.mount("/api")
 #derive.mount_phantom(true)
 struct RequestHandler {
-  // ...
+  status : String
 }
 
 fn RequestHandler::new() -> RequestHandler {
-  { .. }
+  { status: "ready" }
 }
 
-#derive.get("/status")
-pub fn RequestHandler::handle(self : Self, input : String) -> String {
-  // ...
-  ""
+#derive.endpoint(get="/status")
+pub fn RequestHandler::handle(self : Self) -> String {
+  self.status
 }
 ```
 
@@ -139,7 +144,7 @@ Each HTTP request will be handled by a fresh agent instance with its own phantom
 
 ## Key Points
 
-- Phantom agents are **fully durable** — they persist just like regular agents.
+- These recipes describe durable agents. Ephemeral clients have no `get`, `scoped`, or `phantom_id` API: use `new_phantom`/`get_phantom` and their scoped variants. An ephemeral client is a logical proxy; each call runs in a fresh execution and does not reconnect to persistent mutable state.
 - The phantom ID is a standard UUID.
 - `new_phantom` generates the UUID internally.
 - `get_phantom` is idempotent: calling it with the same UUID and parameters always returns the same agent.

@@ -17,20 +17,23 @@ pub(super) use selection::{
 pub(super) use selection::{missing_start_waits_for, nearest_active_body};
 pub(super) use settling::historical_reconstruction_owner_failure;
 
-use super::claims::{AdmissionRefusal, StartClaim, matching_admission_refusal};
+use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
-    AtomicOplogIndex, AtomicU8, BlockedOn, CHUNK_SIZE, CardId, CompletionMarker, CompletionMarkers,
-    ConcurrentReplayResolver, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
+    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, CHUNK_SIZE, CompletionMarker,
+    CompletionMarkers, CursorState, DeletedRegions, DurableInvocationId, EntityAttribution,
     ForkResult, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName, HostResponse,
-    HostResponseGolemApiFork, InvocationContextStack, LivePublicationOutcome, LogLevel,
-    MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
+    HostResponseGolemApiFork, InvocationContextStack, InvocationFinishes, LivePublicationOutcome,
+    LogLevel, MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
     OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayEvent,
-    ReplayState, ReplayToLiveOutcome, ReplayToLiveRole, ReplayTransitionPhase, Resolution,
-    RetainedStart, RetainedStartCounts, StartClaimAttempt, StoredCard, StreamObservationPositions,
-    ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
+    ReplayStarts, ReplayState, ReplayToLiveOutcome, ReplayTransitionPhase, Resolution,
+    RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata, StartClaimAttempt,
+    StartsByInvocationId, StreamObservationPositions, ToolAttachmentReconstruction,
+    TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use super::{CardId, StoredCard};
 use crate::durable_host::PositionalRead;
 use crate::durable_host::tool::operation::OwnerToolOperation;
 use crate::services::oplog::UnreadableOplog;

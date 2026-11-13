@@ -119,6 +119,9 @@ fn create_entry(
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: id.agent_id.clone(),
+        component_id: id.agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_mode: mode,
         component_revision: ComponentRevision::INITIAL,
@@ -132,6 +135,12 @@ fn create_entry(
         local_agent_config: vec![],
         original_phantom_id: None,
         instance_id: fingerprint.0,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 
@@ -277,6 +286,12 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
 
 #[test]
 async fn committed_cancellation_probe_preserves_exact_authority_after_takeover() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        check_committed_cancellation_authority(mode).await;
+    }
+}
+
+async fn check_committed_cancellation_authority(mode: AgentMode) {
     use crate::durable_host::durable_stream::{
         ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe,
         StreamAttachmentConsumerProbe,
@@ -290,17 +305,13 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     let key = session_key(&owner, &IdempotencyKey::new("session".into()));
     let mut metadata = agent_metadata(&owner);
     metadata.fingerprint = key.callee_fingerprint;
+    metadata.agent_mode = mode;
     let oplog = oplog_service
         .create_fresh(
             &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
-            AgentMode::Durable,
-            create_entry(
-                &owner,
-                AgentMode::Durable,
-                metadata.created_by,
-                key.callee_fingerprint,
-            ),
+            mode,
+            create_entry(&owner, mode, metadata.created_by, key.callee_fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -426,14 +437,15 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     let consumer_invocation = session_key(&foreign, &IdempotencyKey::new("consumer".into()));
     let mut foreign_metadata = agent_metadata(&foreign);
     foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
+    foreign_metadata.agent_mode = mode;
     let foreign_oplog = oplog_service
         .create_fresh(
             &mut oplog_service.lock_lifecycle(&foreign.agent_id).await,
             &foreign,
-            AgentMode::Durable,
+            mode,
             create_entry(
                 &foreign,
-                AgentMode::Durable,
+                mode,
                 foreign_metadata.created_by,
                 consumer_invocation.callee_fingerprint,
             ),
@@ -535,6 +547,7 @@ async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -564,6 +577,7 @@ async fn service_with_oplog() -> (
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -681,6 +695,9 @@ fn agent_metadata_with_identity(
 ) -> AgentMetadata {
     AgentMetadata {
         agent_id: id.agent_id.clone(),
+        component_id: id.agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
         environment_id: id.environment_id,
@@ -693,6 +710,12 @@ fn agent_metadata_with_identity(
         original_phantom_id: None,
         fingerprint,
         agent_mode,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -770,6 +793,7 @@ async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -877,6 +901,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
             1000,
             1000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1463,6 +1488,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -1627,6 +1653,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -3006,7 +3033,16 @@ async fn raw_session_cache_uses_the_oplog_owner_fingerprint_in_both_modes() {
     let indexed = Arc::new(InMemoryIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed,
@@ -3087,7 +3123,16 @@ async fn stale_durable_hint_falls_back_to_current_ephemeral_create_and_is_remove
     let indexed = Arc::new(InMemoryIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed,
@@ -3146,6 +3191,7 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4188,6 +4234,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4246,7 +4293,16 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     drop(multilayer);
 
     let primary = Arc::new(
-        PrimaryOplogService::new(indexed.clone(), blobs, 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
         indexed.clone(),
@@ -4306,6 +4362,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
             10000,
             10000,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4532,6 +4589,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4658,6 +4716,7 @@ async fn archived_services() -> (
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,

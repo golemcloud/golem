@@ -1,4 +1,4 @@
-use super::{CommandOutput, Invocation, MAX_ATTACHMENT_BYTES, failure};
+use super::{CommandOutput, Invocation, MAX_ATTACHMENT_BYTES, OutputFailure, failure};
 use golem_rust::{
     bindings::golem::tool::{host, streams},
     schema::wit::wire::ToolRpcError,
@@ -65,14 +65,11 @@ pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> Command
     let pump = async {
         if let Some((writer, bytes)) = writer {
             for chunk in bytes.chunks(64 * 1024) {
-                writer
-                    .write(chunk.to_vec())
-                    .await
-                    .map_err(|e| format!("stdin: {e:?}"))?;
+                writer.write(chunk.to_vec()).await?;
             }
-            writer.finish().await.map_err(|e| format!("stdin: {e:?}"))?;
+            writer.finish().await?;
         }
-        Ok::<_, String>(())
+        Ok::<_, streams::StreamWriteError>(())
     };
     // Every reader is drained in the same join as the terminal wait: an undrained one would stall
     // the provider once its buffer fills.
@@ -82,19 +79,25 @@ pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> Command
         ))
         .get(),
         pump,
-        drain(reader, "stdout"),
-        drain(error_reader, "stderr")
+        drain(reader),
+        drain(error_reader)
     );
+    let command = super::command_label(&call.name, &call.path);
+    let terminal = terminal.map_err(|error| super::rpc_failure(error, &call.errors));
+    let call_error = terminal.as_ref().err().map(|(_, message)| message.as_str());
     // The provider's own stderr comes first, then the shell's diagnostics about the call.
     let mut output = CommandOutput {
         stdout,
         stderr,
         ..Default::default()
     };
-    for error in [stdout_failure, stderr_failure].into_iter().flatten() {
-        log::warn!("{}: {error}", call.path.join(" "));
-        output.stderr.extend(format!("{error}\n").bytes());
-        output.exit_code = 1;
+    for (channel, failure) in [("stdout", stdout_failure), ("stderr", stderr_failure)] {
+        if let Some(failure) = failure {
+            let line = super::output_failure_line(&command, channel, &failure, call_error);
+            log::warn!("{line}");
+            output.stderr.extend(format!("{line}\n").bytes());
+            output.exit_code = 1;
+        }
     }
     match terminal {
         Ok(result) => {
@@ -104,14 +107,15 @@ pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> Command
                 call.result_is_status,
                 result.result,
             );
-            if let Err(e) = pumped {
-                output.stderr.extend(format!("{e}\n").bytes());
+            if let Err(error) = pumped {
+                let line = super::stdin_failure_line(&command, &error);
+                log::warn!("{line}");
+                output.stderr.extend(format!("{line}\n").bytes());
                 output.exit_code = 1;
             }
         }
-        Err(error) => {
-            let (code, message) = super::rpc_failure(error, &call.errors);
-            log::warn!("{}: exit {code}: {message}", call.path.join(" "));
+        Err((code, message)) => {
+            log::warn!("{command}: exit {code}: {message}");
             output.exit_code = code;
             output.stderr.extend(format!("{message}\n").bytes());
         }
@@ -120,7 +124,7 @@ pub(super) async fn invoke(call: &Invocation, stdin: Option<Vec<u8>>) -> Command
 }
 
 /// Reads one declared output channel to its end, keeping at most [`MAX_ATTACHMENT_BYTES`].
-async fn drain(reader: Option<OutputReader>, channel: &str) -> (Vec<u8>, Option<String>) {
+async fn drain(reader: Option<OutputReader>) -> (Vec<u8>, Option<OutputFailure>) {
     let mut bytes = Vec::new();
     let Some(mut reader) = reader else {
         return (bytes, None);
@@ -128,12 +132,12 @@ async fn drain(reader: Option<OutputReader>, channel: &str) -> (Vec<u8>, Option<
     while let Some(item) = reader.next().await {
         let chunk = match item {
             Ok(chunk) => chunk,
-            Err(error) => return (bytes, Some(format!("{channel}: {error:?}"))),
+            Err(error) => return (bytes, Some(OutputFailure::Stream(error))),
         };
         let remaining = MAX_ATTACHMENT_BYTES - bytes.len();
         bytes.extend(&chunk[..chunk.len().min(remaining)]);
         if chunk.len() > remaining {
-            return (bytes, Some(format!("{channel} attachment limit exceeded")));
+            return (bytes, Some(OutputFailure::LimitExceeded));
         }
     }
     (bytes, None)

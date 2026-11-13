@@ -74,8 +74,8 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex,
-    OplogIndexRange,
+    CreateRequest, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
+    OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
@@ -101,6 +101,7 @@ pub trait WorkerForkService: Send + Sync {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -114,6 +115,7 @@ pub trait WorkerForkService: Send + Sync {
         invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -567,9 +569,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
-        if source_metadata.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+        if source_metadata.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(
-                "External-tool owners cannot be forked",
+                "Only component-agent owners can be forked",
             ));
         }
 
@@ -591,6 +593,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
+        fork_request: &CreateRequest,
     ) -> Result<
         (
             Arc<dyn Oplog>,
@@ -665,6 +668,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // is attributed to the component owner, not the caller.
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
+            component_id: initial_source_worker_metadata.component_id,
+            agent_type_name: initial_source_worker_metadata.agent_type_name.clone(),
+            canonical_key: None,
             owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
@@ -677,6 +683,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
+            create_request: fork_request.clone(),
         };
 
         let source_oplog = self
@@ -776,15 +783,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         fork_cut.export = export.map(|candidate| candidate.export.clone());
 
         let initial_oplog_entry = read_source(OplogIndex::INITIAL).await?;
-        let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
-            .map_err(WorkerExecutorError::runtime)?
-            .len() as u64;
 
         // Update the oplog initial entry with the new worker
-        let target_initial_oplog_entry =
-            Self::update_agent_id(initial_oplog_entry, &target_agent_id, instance_id).ok_or(
-                WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
-            )?;
+        let target_initial_oplog_entry = Self::update_agent_id(
+            initial_oplog_entry,
+            &target_agent_id,
+            instance_id,
+            fork_request.clone(),
+        )
+        .ok_or(WorkerExecutorError::unknown(
+            "Failed to update worker id in oplog entry",
+        ))?;
+        let initial_size = golem_common::serialization::serialize(&target_initial_oplog_entry)
+            .map_err(WorkerExecutorError::runtime)?
+            .len() as u64;
 
         let new_oplog = self
             .oplog_service
@@ -1042,6 +1054,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1084,6 +1097,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     source_metadata.fingerprint,
                     hash,
                     guest_result,
+                    &fork_request,
                 )
                 .await?;
             }
@@ -1113,6 +1127,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        fork_request: &CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
@@ -1130,6 +1145,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     None,
                     None,
                     None,
+                    fork_request,
                 )
                 .await?;
             if let Some((scope, invocation_id, phantom)) = guest_result {
@@ -1197,10 +1213,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         result
     }
 
+    /// Rewrites the source's Create entry for the fork target. The target records the fork
+    /// request, not the request that created the source.
     pub fn update_agent_id(
         entry: OplogEntry,
         agent_id: &AgentId,
         instance_id: Uuid,
+        fork_request: CreateRequest,
     ) -> Option<OplogEntry> {
         match entry {
             OplogEntry::Create {
@@ -1209,6 +1228,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => {
                 parameters.agent_id = agent_id.clone();
                 parameters.instance_id = instance_id;
+                parameters.canonical_key = None;
+                parameters.create_request = fork_request;
                 Some(OplogEntry::Create {
                     timestamp,
                     parameters,
@@ -1289,6 +1310,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1297,6 +1319,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             oplog_index_cut_off,
             None,
             auth_ctx,
+            fork_request,
         )
         .await
     }
@@ -1311,6 +1334,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         invocation_id: Option<DurableInvocationId>,
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
+        fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1319,6 +1343,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             oplog_index_cut_off,
             Some((copied_scope_start, invocation_id, forked_phantom_id)),
             auth_ctx,
+            fork_request,
         )
         .await
     }
@@ -1515,6 +1540,67 @@ mod tests {
     }
 
     #[test]
+    fn fork_target_create_records_the_fork_request_not_the_source_request() {
+        use golem_common::model::account::AccountId;
+        use golem_common::model::agent::{AgentMode, AgentPrincipal, OwnerKind};
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::invocation_context::InvocationContextStack;
+        use golem_common::model::oplog::{CreateParameters, CreateRequestKind};
+
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let source_request = CreateRequest::new(
+            CreateRequestKind::Exclusive,
+            Some(IdempotencyKey::new("source-create".to_string())),
+            Principal::anonymous(),
+            &InvocationContextStack::fresh_rounded(),
+        );
+        let fork_request = CreateRequest::new(
+            CreateRequestKind::Fork,
+            None,
+            Principal::Agent(AgentPrincipal {
+                agent_id: agent_id("forker"),
+            }),
+            &InvocationContextStack::fresh_rounded(),
+        );
+        let entry = OplogEntry::create(Box::new(CreateParameters {
+            agent_id: source.clone(),
+            component_id: source.component_id,
+            agent_type_name: None,
+            canonical_key: None,
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::INITIAL,
+            env: vec![],
+            environment_id: EnvironmentId::new(),
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 100,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: vec![],
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+            create_request: source_request,
+        }));
+        let instance_id = Uuid::new_v4();
+
+        match DefaultWorkerFork::<crate::workerctx::default::Context>::update_agent_id(
+            entry,
+            &target,
+            instance_id,
+            fork_request.clone(),
+        ) {
+            Some(OplogEntry::Create { parameters, .. }) => {
+                assert_eq!(parameters.agent_id, target);
+                assert_eq!(parameters.instance_id, instance_id);
+                assert_eq!(parameters.create_request, fork_request);
+            }
+            other => panic!("expected a Create entry, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn fork_rewrites_only_local_transfer_holders() {
         let source = agent_id("source");
         let target = agent_id("target");
@@ -1603,6 +1689,7 @@ mod tests {
     fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
@@ -1772,6 +1859,7 @@ mod tests {
     fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
@@ -1843,6 +1931,7 @@ mod tests {
 
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(

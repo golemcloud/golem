@@ -58,6 +58,8 @@ def chatCompletion(prompt: String, apiKey: String): Future[String] = {
                 ).asInstanceOf[js.Promise[js.Dynamic]].toFuture
     text     <- response.text().asInstanceOf[js.Promise[String]].toFuture
   } yield {
+    if (!response.ok.asInstanceOf[Boolean])
+      throw new RuntimeException(s"Provider HTTP ${response.status.asInstanceOf[Int]}")
     val json = js.JSON.parse(text)
     json.choices.asInstanceOf[js.Array[js.Dynamic]](0)
       .message.content.asInstanceOf[String]
@@ -72,12 +74,15 @@ For ZIO-based agents, use `zio-http` which provides a typed Scala HTTP client:
 ```scala
 import zio._
 import zio.http._
+import scala.scalajs.js
 import scala.concurrent.Future
 
 def chatCompletion(prompt: String, apiKey: String): Future[String] = {
-  val body = Body.fromString(
-    s"""{"model": "gpt-4o", "messages": [{"role": "user", "content": "$prompt"}]}"""
-  )
+  val payload = js.JSON.stringify(js.Dynamic.literal(
+    model = "gpt-4o",
+    messages = js.Array(js.Dynamic.literal(role = "user", content = prompt))
+  ))
+  val body = Body.fromString(payload)
 
   val effect =
     (for {
@@ -89,10 +94,13 @@ def chatCompletion(prompt: String, apiKey: String): Future[String] = {
                       .batched
                       .post("/v1/chat/completions")(body)
                   }
+      _ <- ZIO.fail(new RuntimeException(s"Provider HTTP ${response.status.code}"))
+             .unless(response.status.isSuccess)
       text <- response.body.asString
     } yield {
-      // Parse the JSON response to extract the message content
-      text
+      val json = js.JSON.parse(text)
+      json.choices.asInstanceOf[js.Array[js.Dynamic]](0)
+        .message.content.asInstanceOf[String]
     }).provide(ZClient.default)
 
   Unsafe.unsafe { implicit u =>
@@ -128,13 +136,14 @@ Access in code with `config.value.apiKey.get`.
 ```scala
 import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
 import golem.BaseAgent
+import golem.config.{AgentConfig, Config}
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits._
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 
 @agentDefinition(mount = "/chats/{value}")
-trait ChatAgent extends BaseAgent {
+trait ChatAgent extends BaseAgent with AgentConfig[MyAgentConfig] {
   class Id(val value: String)
 
   @endpoint(method = "POST", path = "/ask")
@@ -142,7 +151,7 @@ trait ChatAgent extends BaseAgent {
 }
 
 @agentImplementation()
-final class ChatAgentImpl(private val chatName: String) extends ChatAgent {
+final class ChatAgentImpl(private val chatName: String, config: Config[MyAgentConfig]) extends ChatAgent {
   private var messages: List[js.Dynamic] = List(
     js.Dynamic.literal(
       role = "system",
@@ -153,11 +162,10 @@ final class ChatAgentImpl(private val chatName: String) extends ChatAgent {
   override def ask(question: String): Future[String] = {
     messages = messages :+ js.Dynamic.literal(role = "user", content = question)
 
-    val apiKey = sys.env.getOrElse("OPENAI_API_KEY",
-      throw new RuntimeException("OPENAI_API_KEY not set"))
+    val apiKey = config.value.apiKey.get
 
     val payload = js.JSON.stringify(js.Dynamic.literal(
-      model = sys.env.getOrElse("LLM_MODEL", "gpt-4o"),
+      model = "gpt-4o",
       messages = js.Array(messages: _*)
     ))
 
@@ -177,6 +185,8 @@ final class ChatAgentImpl(private val chatName: String) extends ChatAgent {
                   ).asInstanceOf[js.Promise[js.Dynamic]].toFuture
       text     <- response.text().asInstanceOf[js.Promise[String]].toFuture
     } yield {
+      if (!response.ok.asInstanceOf[Boolean])
+        throw new RuntimeException(s"Provider HTTP ${response.status.asInstanceOf[Int]}")
       val json = js.JSON.parse(text)
       val reply = json.choices.asInstanceOf[js.Array[js.Dynamic]](0)
         .message.content.asInstanceOf[String]
@@ -194,4 +204,4 @@ final class ChatAgentImpl(private val chatName: String) extends ChatAgent {
 - Use `%%%` (not `%%`) in `build.sbt` for Scala.js-compatible dependencies
 - Calling the REST API directly with `fetch` is the most reliable approach
 - API keys should be stored as secrets using Golem's typed config system (load the `golem-add-secret-scala` skill)
-- All HTTP requests are automatically durably persisted by Golem
+- In durable mode, Golem records HTTP operations for replay. This is not provider-side exactly-once execution; use provider idempotency support where available. Ephemeral methods do not recover by replay.

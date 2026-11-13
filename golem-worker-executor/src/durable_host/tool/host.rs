@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use wasmtime::component::Access;
+
 use super::{
     Accessor, AttachmentMemory, ByteStreamCloseCause, ByteStreamFailure, CallReplayOutcome,
     DurabilityHost, DurableCallSession, DurableFunctionType, DurableWorkerCtx, EntityCallMode,
@@ -28,12 +30,12 @@ use super::{
     ToolStdinClosedEntry, ToolStdinEntry, ToolStdinStreamConsumer, ToolStdinStreamPumpTask,
     ToolStdinWriterEntry, TypedSchemaValue, UnderlyingError, UnderlyingInvokeResultEntry,
     UnderlyingToolEntry, WitRegisteredTool, WorkerCtx, admit_tool_response_secret_holds,
-    attachment_pair, await_tool_invoke_plans, boundary, cleanup_failed_tool_dispatch, close_stdin,
-    create_output_attachment, create_underlying_stdin, dispatch_tool_attempt, dispatch_tool_call,
-    durability, get_tool_invoke_results, input, invoke_tool_terminal, mpsc, project_tool_response,
-    project_tool_unit, read_tool_attempt, reject_output, reserve_invocation_id_before_await,
-    resolve_tool_command, spawn_tool_execution, tool_admission_activity,
-    tool_rpc_for_current_owner, tool_rpc_resource,
+    attachment_pair, boundary, cleanup_failed_tool_dispatch, close_stdin, create_output_attachment,
+    create_underlying_stdin, dispatch_tool_attempt, dispatch_tool_call, durability,
+    get_tool_invoke_results, input, invoke_tool_terminal, mpsc, observe_tool_invoke_plans,
+    project_tool_response, project_tool_unit, read_tool_attempt, reject_output,
+    reserve_invocation_id_before_await, resolve_tool_command, spawn_tool_execution,
+    tool_admission_activity, tool_rpc_for_current_owner, tool_rpc_resource,
 };
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
@@ -217,33 +219,31 @@ pub(super) fn allocate_stdin<Ctx: WorkerCtx>(
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn create_stdin_from_stream(
-        accessor: &Accessor<U, Self>,
+        mut access: Access<'_, U, Self>,
         source: StreamReader<Result<Vec<u8>, ByteStreamFailure>>,
     ) -> anyhow::Result<Resource<ToolStdinEntry>> {
-        accessor.with(|mut access| {
-            let ctx = access.get();
-            let memory = AttachmentMemory::for_store(
-                ctx.public_state.worker().active_agents(),
-                ctx.state.is_live(),
-            );
-            let (producer, consumer, observer) =
-                attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
-            let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
-            let (items, received) = mpsc::unbounded_channel();
-            if let Err(error) =
-                source.pipe(&mut access, ToolStdinStreamConsumer::new(items, observer))
-            {
-                access.get().table().delete(stdin)?;
-                return Err(error.into());
-            }
-            access.spawn(ToolStdinStreamPumpTask::<Ctx> {
-                producer,
-                items: received,
-                source_cancel: None,
-                _ctx: std::marker::PhantomData,
-            });
-            Ok(stdin)
-        })
+        let ctx = access.get();
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
+        let (producer, consumer, observer) =
+            attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
+        let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
+        let (items, received) = mpsc::unbounded_channel();
+        if let Err(error) = source.pipe(&mut access, ToolStdinStreamConsumer::new(items, observer))
+        {
+            access.get().table().delete(stdin)?;
+            return Err(error.into());
+        }
+        let task = ToolStdinStreamPumpTask::<Ctx> {
+            producer,
+            items: received,
+            source_cancel: None,
+            _ctx: std::marker::PhantomData,
+        };
+        access.spawn(async move |access| task.run(access).await)?;
+        Ok(stdin)
     }
 
     async fn create_output(
@@ -394,7 +394,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         let mut response_edge = None;
         if let Ok(input) = &attempt.input {
             let mut streams =
-                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(accessor);
+                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(accessor)?;
             match boundary::prepare_underlying_tool_call(
                 &underlying.position,
                 command_path.clone(),
@@ -521,19 +521,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
             };
             Ok::<_, anyhow::Error>((plan, entry.response_edge.clone()))
         })?;
-        let mut responses = await_tool_invoke_plans(&accessor, vec![plan]).await?;
-        let response = responses
-            .pop()
-            .expect("a scalar underlying result await must return one response");
-        let response = if let Some(edge) = response_edge {
-            let mut streams =
-                crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(&accessor);
-            boundary::project_underlying_tool_response(response, &edge, &mut streams)
-        } else {
-            response
-        };
-        let response = admit_tool_response_secret_holds(&accessor, response).await?;
-        let response = project_tool_response(&accessor, response);
+        let response = observe_tool_invoke_plans(&accessor, vec![plan], async |mut responses| {
+            let response = responses
+                .pop()
+                .expect("a scalar underlying result await must return one response");
+            let response = if let Some(edge) = response_edge {
+                let mut streams =
+                    crate::durable_host::schema_value_stream::ExecutorProjectionStreams::new(
+                        &accessor,
+                    )?;
+                boundary::project_underlying_tool_response(response, &edge, &mut streams)
+            } else {
+                response
+            };
+            let response = admit_tool_response_secret_holds(
+                &accessor,
+                response,
+                crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+            )
+            .await?;
+            Ok(project_tool_response(&accessor, response))
+        })
+        .await?;
         match response {
             Ok(result) => Ok(Ok(result.result)),
             Err(ToolRpcError::RemoteToolError(error)) => Ok(Err(UnderlyingError::ToolError(error))),
@@ -665,7 +674,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     close_stdin(accessor, stdin)?;
                     reject_output(accessor, stdout)?;
                     reject_output(accessor, stderr)?;
-                    let response = admit_tool_response_secret_holds(accessor, *response).await?;
+                    let response = admit_tool_response_secret_holds(
+                        accessor,
+                        *response,
+                        crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                    )
+                    .await?;
                     accessor.with(|mut access| {
                         Ok(access.get().table().push(FutureInvokeResultEntry {
                             state: FutureToolInvokeState::Ready(Box::new(response)),

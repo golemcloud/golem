@@ -133,7 +133,7 @@ pub(super) fn running_lifecycle(
     owner_generation_started: bool,
 ) -> WorkerInstance {
     WorkerInstance::Running(RunningWorker {
-        handle: None,
+        handle: tokio::spawn(async {}),
         sender: tokio::sync::mpsc::unbounded_channel().0,
         queue: Default::default(),
         waiting_for_command: Default::default(),
@@ -143,7 +143,6 @@ pub(super) fn running_lifecycle(
         unload_request: Default::default(),
         idle_since_millis: Default::default(),
         interrupts,
-        resume_replay_pending: Default::default(),
         start_attempt,
         owner_generation_started,
     })

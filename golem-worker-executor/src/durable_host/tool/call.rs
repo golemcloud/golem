@@ -27,11 +27,11 @@ use super::{
     ToolInvokeResponse, ToolName, ToolOutputContract, ToolOutputEntry, ToolOwnerPattern,
     ToolRpcEntry, ToolRpcOwnerContext, ToolStdinEntry, TypedSchemaValue, UnderlyingToolEntry,
     WorkerCtx, WorkerExecutorError, admit_tool_response_secret_holds, anyhow,
-    authorize_live_permissions_at_serialized_access, await_tool_invoke_plans,
-    classify_tool_discovery_error, cleanup_failed_tool_dispatch, close_stdin, decode_tool_terminal,
-    decode_typed_tool_value, durability, join_or_park_at_runtime_shutdown, mcp, oneshot, operation,
-    record_tool_rejection_access, reject_output, resolve_tool_command, run_guest_call_settled,
-    spawn_tool_execution, tool_target, validate_stream_attachments,
+    authorize_live_permissions_at_serialized_access, classify_tool_discovery_error,
+    cleanup_failed_tool_dispatch, close_stdin, decode_tool_terminal, decode_typed_tool_value,
+    durability, join_or_park_at_runtime_shutdown, mcp, observe_tool_invoke_plans, oneshot,
+    operation, record_tool_rejection_access, reject_output, resolve_tool_command,
+    run_guest_call_settled, spawn_tool_execution, tool_target, validate_stream_attachments,
 };
 
 impl UnderlyingToolEntry {
@@ -161,6 +161,7 @@ where
             key_context,
             parent,
             attempt_ordinal,
+            invocation_id: crate::durable_host::concurrent::InvocationIdSource::GuestImport,
         })
     })
 }
@@ -386,6 +387,7 @@ where
         key_context: _,
         parent,
         attempt_ordinal,
+        invocation_id: _,
     } = attempt;
     let tool_name = target.tool_name()?;
     let input = match input {
@@ -441,12 +443,10 @@ where
                     ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                         agent_type_name: agent.agent_type.clone(),
                     },
-                    ResolvedOwnerContext::ComponentWorker
-                    | ResolvedOwnerContext::ComponentBaseline => {
-                        ToolBindingOwner::ComponentBaseline {
-                            component_id: component.id,
-                        }
-                    }
+                    ResolvedOwnerContext::ComponentBaseline
+                    | ResolvedOwnerContext::OplogProcessor => ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
                 }
             });
             let activation_snapshot = if let Some(activation) = pinned_activation {
@@ -722,12 +722,14 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let invocation_id = attempt.invocation_id;
     if accessor.with(|mut access| !access.get().state.durable_call_is_live()) {
         match EntityInvocationDurability::replay_tool_access(
             accessor,
             accessor.getter(),
             attempt.parent.clone(),
             &attempt.key_context,
+            invocation_id,
         )
         .await?
         {
@@ -760,7 +762,7 @@ where
                     .ok_or_else(|| anyhow!("owner generation fenced replayed tool invocation"))?;
                 accessor.with(|mut access| {
                     durability::install_cancellation_effect(access.get(), &operation)
-                });
+                })?;
                 return Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                     durability,
                     operation,
@@ -790,8 +792,14 @@ where
     .await?
     {
         ToolCallPreparation::Rejected { request, stdin } => {
-            let response =
-                record_tool_rejection_access(accessor, accessor.getter(), parent, *request).await?;
+            let response = record_tool_rejection_access(
+                accessor,
+                accessor.getter(),
+                parent,
+                *request,
+                invocation_id,
+            )
+            .await?;
             Ok(ToolCallDispatch::Rejected {
                 response: Box::new(decode_tool_terminal(response)?),
                 stdin,
@@ -810,6 +818,7 @@ where
                 context.descriptor.clone(),
                 prepared.plan.clone(),
                 context.input.clone(),
+                invocation_id,
             )
             .await?;
             let operation = prepared
@@ -818,7 +827,7 @@ where
                 .ok_or_else(|| anyhow!("owner generation fenced tool invocation"))?;
             accessor.with(|mut access| {
                 durability::install_cancellation_effect(access.get(), &operation)
-            });
+            })?;
             let _permit = prepared.permit;
             Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                 durability,
@@ -898,7 +907,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
             let accessor =
                 accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(|ctx| ctx.durable_ctx_mut());
             let (result, receiver) = oneshot::channel();
-            accessor.spawn(NativeToolTask {
+            let task = NativeToolTask {
                 activation,
                 tool_name,
                 command_path,
@@ -908,7 +917,8 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
                 stderr,
                 principal,
                 result,
-            });
+            };
+            accessor.spawn(async move |accessor| task.run(accessor).await)?;
             receiver
                 .await
                 .map_err(|_| anyhow!("native tool task ended without a result"))
@@ -998,11 +1008,27 @@ where
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
                 drop(admission_activity);
-                let mut results =
-                    await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
-                results.pop().expect("one tool invocation has one result")
+                return observe_tool_invoke_plans(
+                    accessor,
+                    vec![execution.get_plan()],
+                    async |mut results| {
+                        let response = results.pop().expect("one tool invocation has one result");
+                        admit_tool_response_secret_holds(
+                            accessor,
+                            response,
+                            crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                        )
+                        .await
+                    },
+                )
+                .await;
             }
         },
     };
-    admit_tool_response_secret_holds(accessor, response).await
+    admit_tool_response_secret_holds(
+        accessor,
+        response,
+        crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+    )
+    .await
 }

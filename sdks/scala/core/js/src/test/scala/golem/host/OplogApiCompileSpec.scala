@@ -34,7 +34,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
   private val walletPin   = PublicInvocationWalletPin(
     PermissionsApi.WalletVersionToken(Vector[Byte](1, 2, 3), BigInt(7)),
-    Some(golem.Uuid(BigInt(10), BigInt(20)))
+    Some(new java.util.UUID(10L, 20L))
   )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
@@ -124,6 +124,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.RolledBackRemoteTransaction(p)  => s"rolled-back(${p.beginIndex})"
     case OplogEntry.Snapshot(ts, _, mime, fs)       => s"snapshot($ts,$mime,$fs)"
     case OplogEntry.SnapshotConfirmed(ts, fs)       => s"snapshot-confirmed($ts,$fs)"
+    case OplogEntry.SpanClosed(ts, idx, sf)         => s"span-closed($ts,$idx,${sf.outcome})"
     case OplogEntry.OplogProcessorCheckpoint(p)     => s"checkpoint(${p.confirmedUpTo})"
   }
 
@@ -137,6 +138,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         CreateParameters(
           ts,
           mockAgentId,
+          OwnerKind.ComponentAgent,
           BigInt(1),
           Map("env" -> "val"),
           "golem",
@@ -172,6 +174,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry
         .Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
       OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
+      OplogEntry.SpanClosed(ts, Some(BigInt(7)), SpanFinished("span-1", ts, SpanOutcome.Completed)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
@@ -210,7 +213,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           walletPin
         )
       ),
-      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),
+      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
       OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),
@@ -248,7 +251,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   def spec = suite("OplogApiCompileSpec")(
     test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size == 40)
+      assertTrue(distinctTags.size == 41)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))
@@ -298,6 +301,13 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("OplogIndex type alias") {
       val idx: OplogIndex = BigInt(99)
       assertTrue(idx == BigInt(99))
+    },
+    test("owner kinds preserve the WIT discriminant") {
+      assertTrue(
+        OwnerKind.fromJs("component-agent") == OwnerKind.ComponentAgent,
+        OwnerKind.fromJs("ephemeral-external-tool") == OwnerKind.EphemeralExternalTool,
+        OwnerKind.fromJs("oplog-processor") == OwnerKind.OplogProcessor
+      )
     }
   )
 }

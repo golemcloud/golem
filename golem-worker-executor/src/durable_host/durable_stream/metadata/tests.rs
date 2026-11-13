@@ -78,6 +78,7 @@ impl Fixture {
                 max_operations_before_commit,
                 1,
                 100,
+                32,
                 RetryConfig::default(),
             )
             .await,
@@ -101,6 +102,9 @@ impl Fixture {
         let metadata = AgentMetadata {
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_id: identity.agent_id.clone(),
+            component_id: identity.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             env: vec![],
             environment_id: identity.environment_id,
             created_by: account,
@@ -112,9 +116,18 @@ impl Fixture {
             original_phantom_id: None,
             fingerprint: identity.fingerprint,
             agent_mode: AgentMode::Durable,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: identity.agent_id.clone(),
+            component_id: identity.agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: golem_common::model::component::ComponentRevision::INITIAL,
@@ -128,6 +141,12 @@ impl Fixture {
             local_agent_config: vec![],
             original_phantom_id: None,
             instance_id: identity.fingerprint.0,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }));
         let service = Arc::new(DefaultWorkerService::new(
             storage,

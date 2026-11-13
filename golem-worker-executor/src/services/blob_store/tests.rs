@@ -2111,14 +2111,23 @@ async fn caller_loss_retains_mutation(copy: bool, fail: bool, entity: bool) {
                 .await
         };
         (
-            result.map_err(|error| WorkerExecutorError::runtime(error.to_string())),
+            result
+                .map(crate::worker::entity_invocation::EntityBodyOutcome::Completed)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
             None::<Box<dyn RetainedEntityStore>>,
         )
     };
     let abort = registration.cancellation();
     let mut caller = Box::pin(async {
         if entity {
-            await_component_entity_body(abort, work).await
+            await_component_entity_body(
+                tokio_util::sync::CancellationToken::new(),
+                Some(abort),
+                None,
+                Default::default(),
+                work,
+            )
+            .await
         } else {
             work.await
         }
@@ -2137,10 +2146,10 @@ async fn caller_loss_retains_mutation(copy: bool, fail: bool, entity: bool) {
     if entity {
         assert_eq!(slot.fence().len(), 1);
         let (result, retained) = caller.as_mut().await;
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Runtime error: Entity body was cancelled"
-        );
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::Interrupted { .. })
+        ));
         assert!(retained.is_none());
     }
     drop(caller);

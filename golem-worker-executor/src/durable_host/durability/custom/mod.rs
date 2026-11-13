@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    DurableCallTrapContext, OplogEntryVersion, PersistedDurableFunctionInvocation,
-    is_write_side_effect, reserve_invocation_id,
+    DurableCallTrapContext, GuestImportIdentity, OplogEntryVersion,
+    PersistedDurableFunctionInvocation, is_write_side_effect,
 };
 use crate::durable_host::concurrent::{
     self, DropEvent, Resolution, ResolutionOutcome, finish_prepared_access_to_live,
@@ -28,7 +28,7 @@ use crate::services::oplog::OplogOps;
 use crate::services::{HasShutdownToken, HasWorker};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::Timestamp;
-use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
@@ -61,25 +61,19 @@ enum CustomLiveContinuation {
 }
 
 /// The Store identity a custom durable invocation was admitted from, captured synchronously with
-/// worker state before the claim. Mirrors `PreparedAccessStart` for the accessor path so both
+/// worker state before the claim. Mirrors `BegunCall` for the accessor path so both
 /// paths take the same replay-to-live transition for the same Store.
 struct CustomStoreAdmission<Ctx: WorkerCtx> {
-    primary_runtime: bool,
-    replaying_incomplete_entity: bool,
+    store_replay_state: crate::durable_host::StoreReplayState,
     store_continued_live: bool,
     tool_entity: bool,
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
-    local_live_tail: Arc<AtomicBool>,
     public_state: PublicDurableWorkerState<Ctx>,
 }
 
 impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
     fn role(&self) -> ReplayToLiveRole {
-        if self.primary_runtime {
-            ReplayToLiveRole::PrimaryAgent
-        } else {
-            ReplayToLiveRole::NonPrimary
-        }
+        self.store_replay_state.role()
     }
 
     async fn continue_to_live<U: Send + 'static>(
@@ -93,14 +87,12 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
         let pending = match continuation {
             CustomLiveContinuation::ReplayTail => {
                 match crate::durable_host::begin_replay_to_live(
-                    self.replaying_incomplete_entity,
+                    &self.store_replay_state,
                     self.tool_entity,
                     self.tool_operation.clone(),
                     &self.public_state,
                     linear_memory,
                     replay_state,
-                    self.role(),
-                    self.local_live_tail.clone(),
                 )
                 .await?
                 {
@@ -114,22 +106,25 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
             }
             CustomLiveContinuation::LocalTail => {
                 crate::durable_host::begin_local_live_continuation(
-                    self.replaying_incomplete_entity,
+                    &self.store_replay_state,
                     self.tool_entity,
                     self.tool_operation.clone(),
                     &self.public_state,
                     linear_memory,
-                    self.role(),
-                    self.local_live_tail.clone(),
                     replay_state,
                     replay_state.replay_target(),
                 )
                 .await?
             }
         };
-        finish_prepared_access_to_live(pending, self.primary_runtime, accessor, accessor.getter())
-            .await?
-            .require_live()
+        finish_prepared_access_to_live(
+            pending,
+            self.role() == ReplayToLiveRole::PrimaryAgent,
+            accessor,
+            accessor.getter(),
+        )
+        .await?
+        .require_live()
     }
 }
 #[derive(Debug)]
@@ -902,7 +897,16 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 "custom durable invocation parent {parent} is not active"
             ));
         }
-        let invocation_id = reserve_invocation_id(ctx, activity, anchor)?;
+        let invocation_id = match ctx.guest_imports.reserve_import_identity(activity)? {
+            GuestImportIdentity::Id(invocation_id) if invocation_id.anchor == anchor => {
+                invocation_id
+            }
+            identity => {
+                return Err(anyhow::anyhow!(
+                    "custom durable invocation under {anchor} has guest import identity {identity:?}"
+                ));
+            }
+        };
         let child_initiation = parent_start_index
             .and_then(|parent| ctx.state.active_custom_invocations.get(&parent))
             .map(|parent| CustomChildInitiation::new(parent.initiating_children.clone()));
@@ -921,17 +925,13 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             recorded_parent_start_index,
             ctx.state.durable_call_is_live(),
             CustomStoreAdmission {
-                primary_runtime: *ctx.runtime() == OwnerRuntime::Agent,
-                replaying_incomplete_entity: ctx.entity_invocation_scope().is_some_and(|scope| {
-                    scope.mode() == InvocationExecutionMode::ReplayingIncomplete
-                }),
+                store_replay_state: ctx.state.store_replay_state.clone(),
                 store_continued_live: ctx.state.store_continued_live(),
                 tool_entity: matches!(
                     ctx.runtime(),
                     OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
                 ),
                 tool_operation: ctx.entity_tool_operation(),
-                local_live_tail: ctx.state.local_live_tail(),
                 public_state: ctx.public_state.clone(),
             },
             ctx.state.oplog.clone(),
@@ -970,8 +970,8 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             outcome @ (CustomStartClaimOutcome::ReplayEnded
             | CustomStartClaimOutcome::StoreAlreadyLive) => {
                 let replay_ended = matches!(outcome, CustomStartClaimOutcome::ReplayEnded);
-                if !admission.replaying_incomplete_entity
-                    && !(admission.primary_runtime && replay_ended)
+                if !admission.store_replay_state.is_incomplete_entity()
+                    && !(admission.role() == ReplayToLiveRole::PrimaryAgent && replay_ended)
                 {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                             format!("custom durable Start {{ invocation_id: {invocation_id} }}"),

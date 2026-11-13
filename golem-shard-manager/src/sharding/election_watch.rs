@@ -21,8 +21,9 @@
 //! version, and the readiness check uses the time of etcd's last answer.
 
 use crate::sharding::error::{ShardManagerError, is_stale_auth_token, is_stale_auth_token_reason};
+use crate::sharding::etcd_clients::ElectionClient;
 use crate::sharding::leader_election::{ElectionValue, RetryDelays, bounded};
-use etcd_client::{Client, GetOptions, KeyValue, KvClient, WatchOptions};
+use etcd_client::{GetOptions, KeyValue, KvClient, WatchOptions};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -139,7 +140,9 @@ impl ElectionWatch {
 
 /// Write side: the task that keeps the view current. Runs until the replica stops.
 pub struct ElectionWatcher {
-    client: Client,
+    /// The handle: each follow, and each new login, takes the current client, so that a watch that
+    /// starts again uses renewed TLS files.
+    client: ElectionClient,
     prefix: String,
     request_timeout: Duration,
     /// Past this much silence from etcd the watch is started again: a black-holed connection
@@ -153,7 +156,7 @@ pub struct ElectionWatcher {
 
 impl ElectionWatcher {
     pub fn new(
-        client: Client,
+        client: ElectionClient,
         election_name: &str,
         request_timeout: Duration,
         quiet_limit: Duration,
@@ -201,7 +204,7 @@ impl ElectionWatcher {
                     "etcd's users or roles changed since this replica logged in; logging in again \
                      to watch the shard manager election"
                 );
-                match bounded(self.request_timeout, self.client.refresh_token()).await {
+                match bounded(self.request_timeout, self.client.current().refresh_token()).await {
                     Ok(()) => continue,
                     Err(login_failed) => warn!(
                         error = %login_failed,
@@ -221,13 +224,14 @@ impl ElectionWatcher {
 
     /// Reads the campaign, then watches it from the next revision. Returns only on a failure.
     async fn follow(&self, backoff: &mut Duration) -> ShardManagerError {
-        let mut kv = self.client.kv_client();
+        let client = self.client.current();
+        let mut kv = client.kv_client();
         let revision = match self.read(&mut kv).await {
             Ok(revision) => revision,
             Err(err) => return err,
         };
 
-        let mut watch_client = self.client.watch_client();
+        let mut watch_client = client.watch_client();
         let options = WatchOptions::new()
             .with_prefix()
             .with_start_revision(revision + 1);

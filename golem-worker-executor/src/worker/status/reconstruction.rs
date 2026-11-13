@@ -213,8 +213,11 @@ where
 {
     // Direct commits may return receipts already covered by an earlier catch-up.
     entries.retain(|index, _| *index > baseline.oplog_idx);
-    let flushes_buffer =
-        agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
+    let flushes_buffer = match commit_level {
+        CommitLevel::ReportOnly => false,
+        CommitLevel::DurableOnly => agent_mode != AgentMode::Ephemeral,
+        CommitLevel::Always | CommitLevel::Deferred => true,
+    };
     let horizon = baseline
         .oplog_idx
         .max(if flushes_buffer {

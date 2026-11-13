@@ -14,13 +14,13 @@
 
 use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentInvocationResult, AgentMode, CanStartWorker, ComponentRevision, DateTime, Future, HasAll,
-    HasComponentService, HasSchedulerService, IdempotencyKey, InvocationFreshnessDisposition,
-    InvocationStart, InvocationStatus, ParsedAgentId, Pin, Principal, ScheduledAction, SchemaValue,
-    ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
-    build_durable_streaming_request, extract_owned_agent_id, from_proto_invocation_context, golem,
-    validate_agent_method_invocation,
+    AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
+    HasComponentService, IdempotencyKey, InvocationFreshnessDisposition, InvocationStart,
+    InvocationStatus, ParsedAgentKey, Pin, Principal, SchemaValue, ScopeCard, UsesAllDeps, Utc,
+    Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
+    extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
 };
+use crate::services::HasActiveAgents;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .as_ref()
             .and_then(|ts| DateTime::from_timestamp(ts.seconds, ts.nanos as u32));
 
-        let account_id: AccountId = request
+        let _account_id: AccountId = request
             .component_owner_account_id
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
             .try_into()
@@ -165,7 +165,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let invocation_context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
-        let worker_creation_principal = principal.clone();
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
@@ -175,6 +174,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
+                let metadata = worker.get_initial_worker_metadata();
                 let status = worker.get_last_known_status().await;
                 let queued_manual_update_revision = status
                     .pending_invocations
@@ -189,21 +189,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 });
                 let current_component = self
                     .component_service()
-                    .get_metadata(
-                        owned_agent_id.component_id(),
-                        Some(status.component_revision),
-                    )
+                    .get_metadata(metadata.component_id, Some(status.component_revision))
                     .await?;
                 let (component, streaming) = if let Some(pending_revision) = pending_update_revision
                     && pending_revision != status.component_revision
                     && let Ok(pending_component) = self
                         .component_service()
-                        .get_metadata(owned_agent_id.component_id(), Some(pending_revision))
+                        .get_metadata(metadata.component_id, Some(pending_revision))
                         .await
-                    && let Ok(parsed_agent_id) = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &pending_component.metadata,
-                    )
+                    && let Ok(parsed_agent_id) =
+                        metadata.parse_agent_id(&pending_component.metadata)
                     && let Ok(streaming) = validate_agent_method_invocation(
                         &pending_component.metadata,
                         Some(&parsed_agent_id),
@@ -212,11 +207,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ) {
                     (pending_component, streaming)
                 } else {
-                    let parsed_agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &current_component.metadata,
-                    )
-                    .map_err(WorkerExecutorError::invalid_request)?;
+                    let parsed_agent_id = metadata
+                        .parse_agent_id(&current_component.metadata)
+                        .map_err(WorkerExecutorError::invalid_request)?;
                     let streaming = validate_agent_method_invocation(
                         &current_component.metadata,
                         Some(&parsed_agent_id),
@@ -296,6 +289,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(invocation_output)
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
+                let pinned_worker = if let (Some(expected), Some(_)) =
+                    (request.expected_callee_fingerprint, schedule_at)
+                {
+                    let expected = golem_common::model::AgentFingerprint(expected.into());
+                    let worker = self
+                        .active_agents()
+                        .get_existing_with_fingerprint(
+                            self,
+                            &owned_agent_id,
+                            principal.clone(),
+                            Some(expected),
+                        )
+                        .await?;
+                    if worker.get_initial_worker_metadata().fingerprint != expected {
+                        return Err(WorkerExecutorError::worker_not_found(
+                            owned_agent_id.agent_id(),
+                        ));
+                    }
+                    Some(worker)
+                } else {
+                    None
+                };
                 let existing_metadata =
                     if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                         None
@@ -319,11 +334,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 });
                 let component = self
                     .component_service()
-                    .get_metadata(owned_agent_id.component_id(), component_revision)
+                    .get_metadata(
+                        existing_metadata.as_ref().map_or_else(
+                            || owned_agent_id.component_id(),
+                            |metadata| metadata.component_id,
+                        ),
+                        component_revision,
+                    )
                     .await?;
-                let parsed_agent_id =
-                    ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                        .map_err(WorkerExecutorError::invalid_request)?;
+                let parsed_agent_id = match &existing_metadata {
+                    Some(metadata) => metadata.parse_agent_id(&component.metadata),
+                    None => ParsedAgentKey::parse(
+                        &owned_agent_id.agent_id.agent_id,
+                        &component.metadata,
+                    ),
+                }
+                .map_err(WorkerExecutorError::invalid_request)?;
                 let streaming = validate_agent_method_invocation(
                     &component.metadata,
                     Some(&parsed_agent_id),
@@ -346,48 +372,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 match schedule_at {
                     Some(scheduled_time) => {
-                        let agent_mode = component
-                            .metadata
-                            .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
-                            .map(|agent_type| agent_type.mode)
-                            .ok_or_else(|| {
-                                WorkerExecutorError::invalid_request(
-                                    "Scheduled invocation target is not a registered agent type",
-                                )
-                            })?;
-                        let action = if agent_mode == AgentMode::Ephemeral {
-                            ScheduledAction::InvokeEphemeral {
-                                account_id,
-                                owned_agent_id,
-                                invocation: Box::new(invocation),
-                                component_revision: component.revision,
-                                env: request.env().unwrap_or_default(),
-                                config: request.config()?,
-                                parent: request.parent(),
-                                creation_principal: Box::new(worker_creation_principal),
-                            }
-                        } else {
-                            let (worker, _response_lease) = self
-                                .get_or_create_pending_with_freshness(
+                        let (worker, _response_lease) = match pinned_worker {
+                            Some(worker) => (worker, None),
+                            None => {
+                                self.get_or_create_pending_with_freshness(
                                     request,
                                     freshness_disposition,
                                 )
-                                .await?;
-                            scope
-                                .bind(&worker.tasks)
-                                .map_err(WorkerExecutorError::runtime)?;
-                            let target_worker_fingerprint =
-                                worker.get_initial_worker_metadata().fingerprint;
-                            ScheduledAction::Invoke {
-                                account_id,
-                                owned_agent_id,
-                                invocation: Box::new(invocation),
-                                target_worker_fingerprint,
+                                .await?
                             }
                         };
-                        self.scheduler_service()
-                            .schedule(scheduled_time, action)
-                            .await;
+                        scope
+                            .bind(&worker.tasks)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        worker
+                            .schedule_invocation(invocation, scheduled_time)
+                            .await?;
+                        let metadata = worker.get_initial_worker_metadata();
                         publish_acceptance(
                             acceptance_committed,
                             accepted,
@@ -401,7 +402,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             agent_id: Some(final_agent_id),
                             idempotency_key: Some(ik),
                             oplog_index: None,
-                            agent_fingerprint: None,
+                            agent_fingerprint: Some(metadata.fingerprint),
                         })
                     }
                     None => {

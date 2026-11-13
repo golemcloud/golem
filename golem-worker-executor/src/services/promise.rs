@@ -182,6 +182,13 @@ pub trait PromiseService: Send + Sync {
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
 
+    /// Persists completion and notifies registered handles without activating an agent.
+    async fn complete_without_wakeup(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError>;
+
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
     async fn cleanup(&self);
 }
@@ -245,6 +252,27 @@ impl PromiseService for LazyPromiseService {
         };
         crate::metrics::promises::record_promise_completion(start.elapsed(), outcome);
 
+        result
+    }
+
+    async fn complete_without_wakeup(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
+        crate::metrics::promises::record_promise_data_size(data.len());
+        let start = std::time::Instant::now();
+        let result = self
+            .implementation()
+            .await
+            .complete_without_wakeup(promise_id, data)
+            .await;
+        let outcome = match &result {
+            Ok(true) => "fulfilled",
+            Ok(false) => "already_fulfilled",
+            Err(_) => "failed",
+        };
+        crate::metrics::promises::record_promise_completion(start.elapsed(), outcome);
         result
     }
 
@@ -438,6 +466,22 @@ impl PromiseService for DefaultPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        let written = self
+            .complete_without_wakeup(promise_id.clone(), data)
+            .await?;
+        // Retry activation even for duplicate completions: persistence may have succeeded before
+        // an earlier activation failed.
+        self.worker_access
+            .activate_worker_if_needed(&promise_id)
+            .await?;
+        Ok(written)
+    }
+
+    async fn complete_without_wakeup(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
         if !self.exists(&promise_id).await? {
@@ -481,13 +525,6 @@ impl PromiseService for DefaultPromiseService {
         if written {
             crate::metrics::promises::dec_promise_pending_count();
         }
-
-        // Wake up the worker that owns the promise, ensuring that it resumes its work.
-        // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
-        // the result to storage, but failed before the worker could persist the result.
-        self.worker_access
-            .activate_worker_if_needed(&promise_id)
-            .await?;
 
         Ok(written)
     }
@@ -713,6 +750,14 @@ impl PromiseService for PromiseServiceMock {
         Ok(true)
     }
 
+    async fn complete_without_wakeup(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.complete(promise_id, data).await
+    }
+
     async fn cleanup(&self) {}
 }
 
@@ -825,6 +870,54 @@ mod tests {
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
         assert!(!service_b.complete(id, vec![2]).await.unwrap());
         assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    struct RefusePromiseActivation;
+
+    #[async_trait]
+    impl PromiseWorkerAccess for RefusePromiseActivation {
+        async fn activate_worker_if_needed(
+            &self,
+            _promise_id: &PromiseId,
+        ) -> Result<(), WorkerExecutorError> {
+            Err(WorkerExecutorError::runtime("activation refused"))
+        }
+    }
+
+    #[test]
+    async fn no_wakeup_completion_notifies_duplicate_with_original_payload_without_activation() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let service_a =
+            DefaultPromiseService::new(storage.clone(), Arc::new(RefusePromiseActivation));
+        let service_b = DefaultPromiseService::new(storage, Arc::new(RefusePromiseActivation));
+        let id = promise_id();
+        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
+        let handle_a = service_a.poll(id.clone()).await.unwrap();
+        let handle_b = service_b.poll(id.clone()).await.unwrap();
+        assert!(
+            service_a
+                .complete_without_wakeup(id.clone(), vec![1])
+                .await
+                .unwrap()
+        );
+        assert_eq!(handle_a.get().await, Some(vec![1]));
+        assert!(!handle_b.is_ready().await);
+        let waiting = handle_b.await_ready();
+        tokio::pin!(waiting);
+        assert!(futures::FutureExt::now_or_never(waiting.as_mut()).is_none());
+        assert!(
+            !service_b
+                .complete_without_wakeup(id.clone(), vec![2])
+                .await
+                .unwrap()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .unwrap();
+        assert_eq!(handle_b.get().await, Some(vec![1]));
+        // Ordinary completion still propagates activation failures, including on duplicates.
+        assert!(service_b.complete(id, vec![3]).await.is_err());
+        assert_eq!(handle_b.get().await, Some(vec![1]));
     }
 
     /// A poll that finds a handle another poll has registered but not yet hydrated must read

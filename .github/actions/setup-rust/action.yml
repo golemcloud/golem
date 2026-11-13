@@ -25,9 +25,6 @@ inputs:
   install-cargo-binstall:
     description: 'Whether to install cargo-binstall'
     default: 'false'
-  install-protoc:
-    description: 'Install protoc when building etcd-client (via golem-shard-manager or golem)'
-    default: 'false'
 runs:
   using: 'composite'
   steps:
@@ -38,18 +35,13 @@ runs:
     - name: Setup Rust
       shell: bash
       run: |
-        rustup update stable --no-self-update && rustup default stable
+        # Rust 1.100 runs a wasm32-wasip2 component's constructors during core instantiation,
+        # which the executor and its tests do not expect yet.
+        rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt --no-self-update
+        rustup default 1.99.1
         for target in ${{ inputs.rust-targets }}; do
           rustup target add "$target"
         done
-    - name: Install protoc
-      if: inputs.install-protoc == 'true'
-      # `etcd-client`'s build script compiles its protos with tonic-prost-build, which shells out
-      # to `protoc`. The workspace's own protos are compiled with protox (pure Rust) and need no
-      # binary, so this is the only thing that requires it.
-      uses: arduino/setup-protoc@v3
-      with:
-        repo-token: ${{ github.token }}
     - name: Setup Rust cache
       if: inputs.use-cache == 'true'
       uses: Swatinem/rust-cache@v2

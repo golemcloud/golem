@@ -16,12 +16,13 @@
 
 package golem
 
-import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsEnvironmentId}
+import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsEnvironmentId, JsUuid}
 import golem.host.js.schema.JsSchemaValueTree
+import golem.runtime.rpc.AgentIdentity
 import golem.runtime.rpc.host.AgentHostApi
-import golem.Uuid
 import zio.blocks.schema.Schema
 import zio.blocks.schema.json.{JsonCodec, JsonCodecDeriver}
+import java.util.UUID
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.Dictionary
@@ -100,12 +101,12 @@ object HostApi {
   type AgentAllFilter         = AgentHostApi.AgentAllFilter
   type AgentAnyFilter         = AgentHostApi.AgentAnyFilter
   sealed trait ForkResult {
-    def forkedPhantomId: Uuid
+    def forkedPhantomId: UUID
   }
 
   object ForkResult {
-    final case class Original(forkedPhantomId: Uuid) extends ForkResult
-    final case class Forked(forkedPhantomId: Uuid)   extends ForkResult
+    final case class Original(forkedPhantomId: UUID) extends ForkResult
+    final case class Forked(forkedPhantomId: UUID)   extends ForkResult
   }
   type GetAgentsHandle        = AgentHostApi.GetAgentsHandle
   type GetPromiseResultHandle = AgentHostApi.GetPromiseResultHandle
@@ -121,7 +122,7 @@ object HostApi {
    * @param phantom
    *   Optional phantom UUID (for pre-provisioned instances)
    */
-  final case class AgentIdParts(agentTypeName: String, phantom: Option[Uuid])
+  final case class AgentIdParts(agentTypeName: String, phantom: Option[UUID])
   val AgentIdLiteral: AgentHostApi.AgentIdLiteral.type     = AgentHostApi.AgentIdLiteral
   val PromiseIdLiteral: AgentHostApi.PromiseIdLiteral.type = AgentHostApi.PromiseIdLiteral
 
@@ -134,12 +135,12 @@ object HostApi {
   private[golem] def makeAgentId(
     agentTypeName: String,
     payload: JsSchemaValueTree,
-    phantom: Option[Uuid]
+    phantom: Option[UUID]
   ): Either[String, String] =
-    AgentHostApi.makeAgentId(agentTypeName, payload, phantom)
+    AgentIdentity.make(agentTypeName, payload, phantom)
 
   private[golem] def parseAgentIdRaw(agentId: String): Either[String, AgentHostApi.AgentIdParts] =
-    AgentHostApi.parseAgentId(agentId)
+    AgentIdentity.parse(agentId)
 
   /**
    * Parses a Golem agent ID string into its components.
@@ -148,7 +149,7 @@ object HostApi {
    *   Either an error or the parsed parts (type name, phantom UUID)
    */
   def parseAgentId(agentId: String): Either[String, AgentIdParts] =
-    AgentHostApi.parseAgentId(agentId).map { raw =>
+    AgentIdentity.parse(agentId).map { raw =>
       AgentIdParts(agentTypeName = raw.agentTypeName, phantom = raw.phantom)
     }
 
@@ -173,8 +174,8 @@ object HostApi {
   def nextAgentBatch(handle: GetAgentsHandle): Option[List[AgentMetadata]] =
     AgentHostApi.nextAgentBatch(handle).map(_.map(fromHostMetadata))
 
-  def generateIdempotencyKey(): Uuid =
-    fromUuidLiteral(AgentHostApi.generateIdempotencyKey())
+  def generateIdempotencyKey(): UUID =
+    JsUuid.toUuid(AgentHostApi.generateIdempotencyKey())
 
   def updateAgent(agentId: AgentIdLiteral, targetVersion: BigInt, mode: UpdateMode): Unit =
     AgentHostApi.updateAgent(agentId, toJsBigInt(targetVersion), mode)
@@ -190,7 +191,7 @@ object HostApi {
 
   def fork(): ForkResult = {
     val (tag, phantomIdLit) = AgentHostApi.fork()
-    val phantomId           = fromUuidLiteral(phantomIdLit)
+    val phantomId           = JsUuid.toUuid(phantomIdLit)
     tag match {
       case "original" => ForkResult.Original(phantomId)
       case "forked"   => ForkResult.Forked(phantomId)
@@ -419,12 +420,6 @@ object HostApi {
 
   private def fromJsBigInt(value: js.BigInt): BigInt =
     BigInt(value.toString)
-
-  private def fromUuidLiteral(uuid: UuidLiteral): Uuid =
-    Uuid(
-      highBits = BigInt(uuid.highBits.toString),
-      lowBits = BigInt(uuid.lowBits.toString)
-    )
 
   private def jsonCodec[A](rejectExtraFields: Boolean)(implicit schema: Schema[A]): JsonCodec[A] = {
     val deriver =

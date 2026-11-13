@@ -35,6 +35,101 @@ use test_r::test;
 mod live_files;
 
 #[test]
+async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+
+    let harness = InvocationHarness::new(
+        AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentInitialization,
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+            agent_id: None,
+            idempotency_key: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+        },
+        AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+        },
+        vec![],
+    );
+    let mut route = test_route(1, "/email", Some("POST"), "typed");
+    route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
+    };
+    call.component_id = harness.component_id;
+    call.agent_type = AgentTypeName("mcp-agent".into());
+    call.body = RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([(
+                "email",
+                SchemaType::string(),
+            )])),
+        },
+    };
+    let handler = request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+
+    for (body, code, detail) in [
+        (
+            r#"{"email":"ada@example.com","additionalProp1":{}}"#,
+            "REQUEST_JSON_BODY_PARSING_FAILED",
+            "additionalProp1",
+        ),
+        (
+            r#"{"email":"ada@example.com""#,
+            "REQUEST_BODY_INVALID_JSON",
+            "Request body was not valid json",
+        ),
+    ] {
+        let response = endpoint
+            .execute(
+                Request::builder()
+                    .method(http::Method::POST)
+                    .uri("/email".parse().unwrap())
+                    .header("host", "example.com")
+                    .header("origin", "https://client.example")
+                    .content_type("application/json")
+                    .body(body),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            response.headers()[http::header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json")
+        );
+        assert_eq!(
+            response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://client.example"
+        );
+        let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+        assert_eq!(body["code"], code);
+        assert!(
+            body["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains(detail))
+        );
+    }
+    assert!(harness.contexts.lock().unwrap().is_empty());
+}
+
+#[test]
 async fn http_api_body_limit_rejects_before_invocation_and_keeps_cors() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};

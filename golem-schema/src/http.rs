@@ -3,6 +3,112 @@
 
 //! Shared HTTP path and file-mapping grammar for metadata producers and consumers.
 
+use golem_schema_derive::{FromSchema, IntoSchema};
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "protobuf")]
+mod protobuf;
+#[cfg(any(feature = "host", feature = "guest"))]
+pub mod wit;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum HttpRouteMode {
+    DurableStreams,
+    Plain,
+    Sse,
+    WebSocket,
+}
+
+impl HttpRouteMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DurableStreams => "durableStreams",
+            Self::Plain => "plain",
+            Self::Sse => "sse",
+            Self::WebSocket => "webSocket",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamRouteOptions {
+    pub slots: Vec<DurableStreamSlotOptions>,
+    pub load: Option<DurableStreamRouteLoadOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamSlotOptions {
+    pub source: DurableStreamSlotSource,
+    pub name: Option<String>,
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")
+)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum DurableStreamSlotSource {
+    Input(DurableStreamInputSlotSource),
+    Output(DurableStreamOutputSlotSource),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct DurableStreamInputSlotSource {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct DurableStreamOutputSlotSource {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamRouteLoadOptions {
+    pub max_concurrent_readers_per_stream: Option<u32>,
+    pub max_append_requests_per_second_per_stream: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileMapping {
     Exact {

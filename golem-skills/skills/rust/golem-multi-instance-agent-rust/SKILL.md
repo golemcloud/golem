@@ -7,6 +7,10 @@ description: "Using phantom agents in Rust to create multiple agent instances wi
 
 Phantom agents allow creating **multiple distinct agent instances** that share the same constructor parameters. Normally, an agent is uniquely identified by its constructor parameter values — calling `get` with the same parameters always returns the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical parameters.
 
+The persistent identity and reconnect behavior below applies to durable agents only. For an
+ephemeral type, a client is a logical proxy: each invocation gets an idempotency-key-derived
+phantom execution identity. A completed execution is terminal, not a reusable stateful instance.
+
 ## Agent ID Format
 
 A phantom agent's ID appends the phantom UUID in square brackets:
@@ -62,11 +66,16 @@ let same_as_phantom1 = CounterClient::get_phantom(id, "shared".to_string());
 
 ### WithConfig Variants
 
-If the agent has `@config` fields, additional methods are generated:
+If the constructor injects `#[agent_config] config: Config<MyAgentConfig>`, additional methods
+accept a `MyAgentConfigRpc` override record after the identity arguments (one record per injected
+config parameter), not flattened config fields:
 
-- `get_with_config(params..., config_fields...)`
-- `new_phantom_with_config(params..., config_fields...)`
-- `get_phantom_with_config(uuid, params..., config_fields...)`
+- `get_with_config(params..., config_overrides)`
+- `new_phantom_with_config(params..., config_overrides)`
+- `get_phantom_with_config(uuid, params..., config_overrides)`
+
+For example, `MyAgentClient::get_with_config(name, MyAgentConfigRpc { foo: Some(42), ..Default::default() })`.
+These are definition-derived guest clients; external bridge client configuration signatures differ.
 
 ## Querying the Phantom ID from Inside an Agent
 
@@ -85,9 +94,12 @@ fn some_method(&self) -> Option<golem_rust::Uuid> {
 When an agent is mounted as an HTTP endpoint, you can set `phantom_agent = true` to make every incoming HTTP request create a **new phantom instance** automatically:
 
 ```rust
+use golem_rust::{agent_definition, endpoint};
+
 #[agent_definition(mount = "/api", phantom_agent = true)]
 pub trait RequestHandler {
     fn new() -> Self;
+    #[endpoint(post = "/handle")]
     fn handle(&self, input: String) -> String;
 }
 ```
@@ -96,8 +108,8 @@ Each HTTP request will be handled by a fresh agent instance with its own phantom
 
 ## Key Points
 
-- Phantom agents are **fully durable** — they persist just like regular agents.
+- Phantom instances of durable types are **fully durable** — they persist just like regular durable agents.
 - The phantom ID is a standard UUID (v4 by default when using `new_phantom`).
 - `new_phantom` generates the UUID internally via `golem_rust::Uuid::new_v4()`.
-- `get_phantom` is idempotent: calling it with the same UUID and parameters always returns the same agent.
+- For durable types, `get_phantom` is idempotent: calling it with the same UUID and parameters returns the same agent.
 - Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.

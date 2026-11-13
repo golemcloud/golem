@@ -71,22 +71,22 @@ pub impl FromSchema for Bool with fn from_value(v) {
 // ============================================================
 
 ///|
-pub impl IntoSchema for Int with fn type_id() {
+pub impl IntoSchema for Int32 with fn type_id() {
   "i32"
 }
 
 ///|
-pub impl IntoSchema for Int with fn register_in(_b) {
+pub impl IntoSchema for Int32 with fn register_in(_b) {
   @model.schema_type(S32(None))
 }
 
 ///|
-pub impl IntoSchema for Int with fn to_value(self) {
+pub impl IntoSchema for Int32 with fn to_value(self) {
   S32(self)
 }
 
 ///|
-pub impl FromSchema for Int with fn from_value(v) {
+pub impl FromSchema for Int32 with fn from_value(v) {
   match v {
     S32(x) => x
     other =>
@@ -97,6 +97,29 @@ pub impl FromSchema for Int with fn from_value(v) {
 // ============================================================
 // UInt -> u32
 // ============================================================
+
+///|
+pub impl IntoSchema for Int16 with fn type_id() {
+  "s16"
+}
+
+///|
+pub impl IntoSchema for Int16 with fn register_in(_b) {
+  @model.schema_type(S16(None))
+}
+
+///|
+pub impl IntoSchema for Int16 with fn to_value(self) {
+  S16(self.to_int())
+}
+
+///|
+pub impl FromSchema for Int16 with fn from_value(v) {
+  match v {
+    S16(x) if x >= -32768 && x <= 32767 => Int16::from_int(x)
+    _ => raise FromSchemaError::custom("expected a signed 16-bit integer")
+  }
+}
 
 ///|
 pub impl IntoSchema for UInt16 with fn type_id() {
@@ -122,22 +145,22 @@ pub impl FromSchema for UInt16 with fn from_value(v) {
 }
 
 ///|
-pub impl IntoSchema for UInt with fn type_id() {
+pub impl IntoSchema for UInt32 with fn type_id() {
   "u32"
 }
 
 ///|
-pub impl IntoSchema for UInt with fn register_in(_b) {
+pub impl IntoSchema for UInt32 with fn register_in(_b) {
   @model.schema_type(U32(None))
 }
 
 ///|
-pub impl IntoSchema for UInt with fn to_value(self) {
+pub impl IntoSchema for UInt32 with fn to_value(self) {
   U32(self)
 }
 
 ///|
-pub impl FromSchema for UInt with fn from_value(v) {
+pub impl FromSchema for UInt32 with fn from_value(v) {
   match v {
     U32(x) => x
     other =>

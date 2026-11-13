@@ -7,13 +7,13 @@ description: "Adding LLM and AI capabilities to a TypeScript Golem agent. Use wh
 
 ## Overview
 
-There are no Golem-specific AI libraries for TypeScript. Instead, use **third-party npm packages** that work with the `fetch` API — Golem's TypeScript runtime provides full `fetch` support via WASI HTTP, so most LLM client libraries that use `fetch` internally will work out of the box.
+Use a provider's REST API with `fetch`, or evaluate its third-party npm SDK. Golem provides `fetch` via WASI HTTP, but that alone does not establish package compatibility: SDKs can also depend on unsupported runtime APIs. Build and exercise the exact package version and API path in Golem before relying on it. The package examples below are integration starting points, not tested runtime-compatibility guarantees.
 
 ## Recommended Libraries
 
 ### OpenAI
 
-The official `openai` npm package works in Golem:
+The official OpenAI npm package is `openai`:
 
 ```shell
 npm install openai
@@ -36,7 +36,7 @@ const text = response.choices[0]?.message?.content ?? '';
 
 ### Anthropic
 
-The official `@anthropic-ai/sdk` package works in Golem:
+The official Anthropic npm package is `@anthropic-ai/sdk`:
 
 ```shell
 npm install @anthropic-ai/sdk
@@ -50,7 +50,7 @@ const client = new Anthropic({
 });
 
 const response = await client.messages.create({
-  model: 'claude-sonnet-4-20250514',
+  model: 'claude-sonnet-5-5',
   max_tokens: 1024,
   messages: [{ role: 'user', content: 'Hello!' }],
 });
@@ -58,12 +58,14 @@ const response = await client.messages.create({
 
 ### Other Providers
 
-Any npm library that uses `fetch` or `node:http` internally should work. This includes:
+Provider SDK candidates include:
 
-- **Google AI** (`@google/generative-ai`) — Gemini models
+- **Google AI** (`@google/genai`) — Gemini models; Google's maintained replacement for the deprecated `@google/generative-ai`
 - **Cohere** (`cohere-ai`) — chat, embeddings, reranking
 - **Mistral** (`@mistralai/mistralai`) — Mistral models
 - **Groq** (`groq-sdk`) — fast inference
+
+Anthropic's [model lifecycle page](https://platform.claude.com/docs/en/about-claude/model-deprecations) lists `claude-sonnet-5-5` as active and as the replacement for the retired `claude-sonnet-4-20250514`. Google's [library guide](https://ai.google.dev/gemini-api/docs/libraries) recommends `@google/genai`; use its [migration guide](https://ai.google.dev/gemini-api/docs/migrate) rather than only renaming imports in legacy code. These provider facts do not establish Golem runtime compatibility. Confirm model availability for your account and test the selected SDK in a deployed agent.
 
 ### Calling Any LLM API Directly
 
@@ -163,7 +165,7 @@ export const ChatAgentImpl = ChatAgent.implement({
 
 ## Key Constraints
 
-- Use npm libraries that internally use `fetch` or `node:http` — these work in Golem's WASM runtime
+- Prefer REST with `fetch`, or validate the selected npm SDK version in Golem; using `fetch` or `node:http` internally is not by itself a compatibility guarantee
 - Libraries that depend on native C/C++ bindings (e.g., `onnxruntime-node`) will **not** work
 - API keys should be stored as secrets using Golem's typed config system (load the `golem-add-secret-ts` skill)
 - All HTTP requests made from agent code are automatically durably persisted by Golem

@@ -13,16 +13,28 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::oplog::attachment::{
+    ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolAttachmentId,
+    ToolAttachmentSlot, ToolAttachmentTerminal,
+};
 use golem_common::model::oplog::payload::{
     HostResponseGolemRpcInvokeAndAwait, HostResponseGolemToolTools, HostResponseRandomBytes,
+    HostResponseToolAttachmentClosed, HostResponseToolAttachmentCreated,
+    HostResponseToolAttachmentTerminalResult, HostResponseToolAttachmentWrite,
+    tool_attachment::{
+        ToolAttachmentCreated, ToolAttachmentTerminalOutcome, ToolAttachmentWriteOutcome,
+    },
 };
 use test_r::test;
 
-#[test]
-fn response_encoding_preserves_payload() {
-    let response = HostResponseRandomBytes {
-        bytes: vec![1, 2, 3, 4],
-    };
+fn assert_response_roundtrip<Resp>(response: Resp)
+where
+    Resp: Into<HostResponse>
+        + TryFrom<HostResponse, Error = String>
+        + Clone
+        + PartialEq
+        + std::fmt::Debug,
+{
     let expected: HostResponse = response.clone().into();
     let (returned, bytes) = *encode_response(Box::new(response.clone())).unwrap();
     assert_eq!(*returned, response);
@@ -34,6 +46,13 @@ fn response_encoding_preserves_payload() {
         golem_common::serialization::deserialize::<HostResponse>(&bytes).unwrap(),
         expected
     );
+}
+
+#[test]
+fn response_encoding_preserves_payload() {
+    assert_response_roundtrip(HostResponseRandomBytes {
+        bytes: vec![1, 2, 3, 4],
+    });
     assert!(response_has_bounded_encoding_stack::<HostResponseRandomBytes>());
     assert!(!response_has_bounded_encoding_stack::<
         HostResponseGolemRpcInvokeAndAwait,
@@ -70,15 +89,69 @@ async fn response_encoding_on_wasmtime_fiber() -> anyhow::Result<()> {
     )?;
     let mut linker = wasmtime::Linker::new(&engine);
     linker.func_wrap("host", "encode", || -> wasmtime::Result<()> {
+        for slot in [
+            ToolAttachmentSlot::Stdin,
+            ToolAttachmentSlot::Stdout,
+            ToolAttachmentSlot::Stderr,
+            ToolAttachmentSlot::Output,
+        ] {
+            assert_response_roundtrip(HostResponseToolAttachmentCreated {
+                created: ToolAttachmentCreated {
+                    attachment: ToolAttachmentId {
+                        creation_start: OplogIndex::from_u64(37),
+                        slot,
+                    },
+                    capacity_bytes: 4099,
+                },
+            });
+        }
+        for outcome in [
+            ToolAttachmentWriteOutcome::Accepted,
+            ToolAttachmentWriteOutcome::Empty,
+            ToolAttachmentWriteOutcome::Discarded,
+            ToolAttachmentWriteOutcome::HostResourceExhausted,
+            ToolAttachmentWriteOutcome::Rejected(StreamWriteError::ConcurrentOperation),
+        ] {
+            assert_response_roundtrip(HostResponseToolAttachmentWrite { outcome });
+        }
+        for outcome in [
+            ToolAttachmentTerminalOutcome::Unchanged,
+            ToolAttachmentTerminalOutcome::Selected(ToolAttachmentTerminal::HostResourceExhausted),
+            ToolAttachmentTerminalOutcome::Rejected(StreamWriteError::ConcurrentOperation),
+        ] {
+            assert_response_roundtrip(HostResponseToolAttachmentTerminalResult { outcome });
+        }
         for length in [0, 4, 64 * 1024] {
-            let response = HostResponseRandomBytes {
+            assert_response_roundtrip(HostResponseRandomBytes {
                 bytes: vec![42; length],
-            };
-            let (returned, bytes) = *encode_response(Box::new(response))
-                .map_err(wasmtime::Error::msg)?;
-            assert_eq!(returned.bytes.len(), length);
-            assert!(!bytes.is_empty());
-            assert!(matches!(golem_common::serialization::deserialize::<HostResponse>(&bytes).unwrap(), HostResponse::RandomBytes(value) if value.bytes == returned.bytes));
+            });
+            for cause in [
+                ByteStreamCloseCause::Finished,
+                ByteStreamCloseCause::ConsumerCancelled,
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled),
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned),
+                ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Failed("é".repeat(length))),
+            ] {
+                assert_response_roundtrip(HostResponseToolAttachmentClosed {
+                    cause: cause.clone(),
+                });
+                assert_response_roundtrip(HostResponseToolAttachmentWrite {
+                    outcome: ToolAttachmentWriteOutcome::Rejected(StreamWriteError::Closed(
+                        cause.clone(),
+                    )),
+                });
+                assert_response_roundtrip(HostResponseToolAttachmentTerminalResult {
+                    outcome: ToolAttachmentTerminalOutcome::Selected(
+                        ToolAttachmentTerminal::Application(cause.clone()),
+                    ),
+                });
+                assert_response_roundtrip(HostResponseToolAttachmentTerminalResult {
+                    outcome: ToolAttachmentTerminalOutcome::Rejected(StreamWriteError::Closed(
+                        cause,
+                    )),
+                });
+            }
         }
         Ok(())
     })?;

@@ -14,6 +14,40 @@
 
 use crate::worker::*;
 
+impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
+    pub(super) async fn finish(
+        runtime: Runtime,
+        filesystem: ReconstructingFilesystem<Adapter>,
+        decision: &Option<RetryDecision>,
+    ) -> Result<
+        Self,
+        (
+            Runtime,
+            crate::services::agent_filesystem::ReconstructionFailure<Adapter>,
+        ),
+    > {
+        if decision.is_some() {
+            // A Store can retain pending stream operations. Unload must drop it before
+            // draining the sealed generation; this attempt cannot become resident.
+            return Ok(Self::Aborted {
+                runtime,
+                filesystem: abort_reconstruction(filesystem),
+            });
+        }
+        let filesystem = match finish_replay(filesystem).await {
+            Ok(filesystem) => filesystem,
+            Err(failure) => return Err((runtime, failure)),
+        };
+        match finish_reconstruction(filesystem).await {
+            Ok(filesystem) => Ok(Self::Resident(RunningAgent {
+                runtime,
+                filesystem,
+            })),
+            Err(failure) => Err((runtime, failure)),
+        }
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
@@ -25,6 +59,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
         authority_wallet: Vec<StoredCard>,
         entity_start_index: Option<OplogIndex>,
+        filesystem_generation: crate::services::agent_filesystem::FilesystemGenerationHandle,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -40,7 +75,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id,
                 )?
             }
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 crate::durable_host::owner_effective_surface_from_component_metadata(
                     &owner_component_metadata,
                     &self.owned_agent_id,
@@ -88,7 +123,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map(|(path, value)| TypedAgentConfigEntry { path, value })
                     .collect()
             }
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 effective_agent_config(
                     worker_metadata.config,
                     owner_component_metadata
@@ -102,9 +137,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .collect()
             }
         };
-        let filesystem_generation = self
-            .owner_runtime_resources
-            .filesystem_generation_handle()?;
         if let Some(files) =
             Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {
@@ -254,7 +286,7 @@ impl RunningWorker {
     ) -> Result<Box<[golem_common::model::component::InitialAgentFile]>, WorkerExecutorError> {
         let metadata = parent
             .component_service()
-            .get_metadata(parent.owned_agent_id.component_id(), Some(revision))
+            .get_metadata(parent.component_id(), Some(revision))
             .await?;
         Ok(parent
             .parsed_agent_id
@@ -380,13 +412,13 @@ impl RunningWorker {
         filesystem_snapshot_slot: &filesystem_snapshots::SnapshotSlot,
     ) -> Result<
         (
-            WorkerRunningAgent<Ctx>,
+            PreparedAgent<RunningAgentRuntime<Ctx>>,
             monthly_limits::ExecutionWindow,
             Option<RetryDecision>,
         ),
         CreateWorkerInstanceError,
     > {
-        let component_id = parent.owned_agent_id.component_id();
+        let component_id = parent.component_id();
         let entity_generation = parent
             .active_agents()
             .try_get_active_agent(&parent.owned_agent_id)
@@ -616,7 +648,7 @@ impl RunningWorker {
                         ))
                         .await;
                     }
-                    None => return Err(error.into()),
+                    None => return Err(start_outcome::component_startup_error(error).into()),
                 },
             }
         };
@@ -654,7 +686,9 @@ impl RunningWorker {
         .await
         {
             Ok(start_filesystem) => start_filesystem,
-            Err(StartFilesystemError::Other(error)) => return Err(error.into()),
+            Err(StartFilesystemError::Other(error)) => {
+                return Err(start_outcome::component_startup_error(error).into());
+            }
             Err(StartFilesystemError::Disabled) => {
                 let action = Self::start_action(
                     &parent,
@@ -682,7 +716,8 @@ impl RunningWorker {
                 parent
                     .component_service()
                     .get_metadata(component_id, Some(component_version_for_replay))
-                    .await?
+                    .await
+                    .map_err(start_outcome::component_startup_error)?
             };
 
         let agent_effective_surface =
@@ -710,7 +745,7 @@ impl RunningWorker {
             .unwrap_or_else(|| {
                 if matches!(
                     parent.owner_context,
-                    ResolvedOwnerContext::ComponentBaseline
+                    ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor
                 ) {
                     component_metadata_for_replay
                         .metadata
@@ -744,7 +779,7 @@ impl RunningWorker {
             )
             .await
             .map_err(|failure| CreateWorkerInstanceError::Failed {
-                error: WorkerExecutorError::runtime(failure.source.to_string()),
+                error: WorkerExecutorError::recovery_required(failure.source.to_string()),
                 filesystem_cleanup_failure: failure.source.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
                         failure.source.to_string(),
@@ -818,11 +853,17 @@ impl RunningWorker {
         .await
         {
             Ok(prepared) => prepared,
+            // The outcome table decides, as for a failed restore. A pending manual update starts
+            // on its target revision, so a permanent failure of these files fails only that update.
             Err(error) => {
-                return Err(cleanup_reconstructing_agent_filesystem(
-                    reconstructing,
-                    window,
-                    WorkerExecutorError::runtime(error.to_string()),
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &start_filesystem.replay().role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Filesystem(&error),
+                    async move |error| {
+                        cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await
+                    },
                 )
                 .await);
             }
@@ -853,7 +894,7 @@ impl RunningWorker {
                     return Err(cleanup_reconstructing_agent_filesystem(
                         reconstructing,
                         window,
-                        WorkerExecutorError::runtime(error.to_string()),
+                        WorkerExecutorError::recovery_required(error.to_string()),
                     )
                     .await);
                 }
@@ -862,16 +903,18 @@ impl RunningWorker {
             Arc::clone(&parent.owner_runtime_resources),
             reconstruction_generation_handle.clone(),
         );
-        let filesystem_context = match create_filesystem_context(reconstruction_generation_handle)
-            .await
-        {
-            Ok(context) => context,
-            Err(error) => {
-                return Err(
-                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-                );
-            }
-        };
+        let filesystem_context =
+            match create_filesystem_context(reconstruction_generation_handle).await {
+                Ok(context) => context,
+                Err(error) => {
+                    return Err(cleanup_reconstructing_agent_filesystem(
+                        reconstructing,
+                        window,
+                        WorkerExecutorError::recovery_required(error.to_string()),
+                    )
+                    .await);
+                }
+            };
         let install_wallet = async {
             parent
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -910,11 +953,7 @@ impl RunningWorker {
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;
-            if let WorkerInstance::Running(running) = lifecycle.deletion_runtime_mut()
-                && running.start_attempt == start_attempt
-            {
-                running.owner_generation_started = true;
-            }
+            lifecycle.owner_generation_started(start_attempt);
         }
         let mut context = match Ctx::create(
             worker_metadata.created_by,
@@ -1070,55 +1109,44 @@ impl RunningWorker {
                 );
             }
         };
-        let reconstructing = match finish_replay(reconstructing).await {
-            Ok(filesystem) => filesystem,
-            Err(failure) => {
-                drop(store);
-                return Err(Self::end_failed_start(
-                    &parent,
-                    &role,
-                    pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Finish(&failure.source),
-                    async move |error| {
-                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
-                    },
-                )
-                .await);
-            }
-        };
-        let filesystem = match finish_reconstruction(reconstructing).await {
-            Ok(filesystem) => filesystem,
-            Err(failure) => {
-                drop(store);
-                return Err(Self::end_failed_start(
-                    &parent,
-                    &role,
-                    pending_update_ref.as_ref(),
-                    start_outcome::RawStartError::Finish(&failure.source),
-                    async move |error| {
-                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
-                    },
-                )
-                .await);
-            }
-        };
-        let filesystem_generation = resident_generation_handle(&filesystem);
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .activate_resident_generation_handle(filesystem_generation.clone());
-        filesystem_publication.commit(filesystem_generation);
-        Ok((
-            RunningAgent {
-                runtime: RunningAgentRuntime {
-                    instance,
-                    store: store.map(async_lock::Mutex::new),
-                },
-                filesystem,
+        let prepared = match PreparedAgent::finish(
+            RunningAgentRuntime {
+                instance,
+                store: store.map(async_lock::Mutex::new),
             },
-            window,
-            decision,
-        ))
+            reconstructing,
+            &decision,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err((runtime, failure)) => {
+                drop(runtime);
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Finish(&failure.source),
+                    async move |error| {
+                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
+                    },
+                )
+                .await);
+            }
+        };
+        if let PreparedAgent::Resident(agent) = &prepared {
+            let filesystem_generation = resident_generation_handle(&agent.filesystem);
+            agent
+                .runtime
+                .store
+                .lock()
+                .await
+                .data_mut()
+                .durable_ctx_mut()
+                .activate_resident_generation_handle(filesystem_generation.clone());
+            filesystem_publication.commit(filesystem_generation);
+        }
+        Ok((prepared, window, decision))
     }
 }
 

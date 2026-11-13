@@ -178,6 +178,3 @@ pub fn grant_execution_decision(
         GrantExecutionDecision::ContinueReadOnly
     }
 }
-
-#[cfg(test)]
-mod tests;

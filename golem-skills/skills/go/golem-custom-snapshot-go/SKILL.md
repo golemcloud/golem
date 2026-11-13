@@ -1,31 +1,30 @@
 ---
 name: golem-custom-snapshot-go
-description: "Go snapshotting availability and SDK API reference. Use when asked about custom snapshots, snapshot-based updates, or slow recovery in Go agents. Snapshotting is not supported in this release."
+description: "Configures custom snapshot recovery for Go agents and explains unresolved default JSON recovery and manual update limitations. Use when asked about custom snapshots, snapshot-based updates, or slow recovery in Go agents."
 ---
 
 # Custom Snapshots in Go
 
 ## Availability
 
-**Go snapshotting is not supported in this release.** Leave `Spec.Snapshot` disabled and use
-oplog replay for durable recovery. There is no `go/snapshotting` CLI template.
+Use `Snapshotter` with an explicit policy to restore state after a restart.
+Rebuild transient state in `OnRestore`. There is no `go/snapshotting` CLI template.
 
-The API reference below describes the SDK's snapshot interfaces. It does not describe a supported
-recovery or update workflow. Do not enable a snapshot policy or use snapshot-based updates for Go agents.
+**Default JSON recovery remains unresolved** because of Go runtime clock-read
+divergence. Use custom snapshots instead.
+**Do not use manual snapshot-based component updates:** runtime startup host
+calls remain a separate limitation.
 
 ## Overview
 
-Snapshotting serializes a running Go agent's state so the host can save it and later restore it. It solves two problems:
+Snapshotting serializes a running Go agent's state so the host can save it and later restore it. Custom snapshots reduce recovery replay for long-running agents: recovery loads a restore point and replays subsequent oplog entries. This recovery workflow is distinct from changing the component through a manual update.
 
-1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions. A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update.
-2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, frequent state changes). Without snapshotting, every recovery replays the full oplog; with periodic snapshotting, recovery starts from the latest snapshot and replays only what came after it.
-
-> **You cannot opt out of oplog writes for a durable agent.** Do not skip persistence to reduce oplog volume or replay cost. Snapshot-based recovery is not supported for Go in this release.
+> **You cannot opt out of oplog writes for a durable agent.** Do not skip persistence to reduce oplog volume or replay cost. Use custom snapshot recovery when reducing replay cost, with the limitations above.
 
 ## Two things to set
 
 1. **A snapshot policy** on the agent's `Spec` — *whether and how often* the platform snapshots. Without a policy, no snapshots are taken.
-2. **How the state serializes** — the default (JSON of **exported** fields) or a custom `golem.Snapshotter` implementation (needed for unexported state or a custom/binary format).
+2. **A custom serializer** — implement `golem.Snapshotter` to save and restore the agent's state.
 
 ## Step 1: enable a snapshot policy (`Spec.Snapshot`)
 
@@ -56,13 +55,13 @@ Snapshot: golem.SnapshotPeriodic(30 * time.Second)    // at most once per 30s
 
 ## Step 2a: automatic (default) snapshotting
 
-If you set a policy and do nothing else, the SDK JSON-encodes the state's **exported** fields. This is enough when all state you need to preserve lives in exported fields.
+If you set a policy and do nothing else, the SDK JSON-encodes the state's **exported** fields. Because of the default JSON recovery limitation above, use the custom path below for recovery.
 
 > **Caveat:** Go reflection cannot see **unexported** fields. The idiomatic private state (e.g. an unexported `count`) is invisible to the default snapshot and would be **dropped**. To capture unexported state, implement `golem.Snapshotter` (Step 2b).
 
 ## Step 2b: custom snapshotting (`golem.Snapshotter`)
 
-Implement `Save`/`Load` on the state type (pointer receiver) when you need to capture unexported fields, use a compact binary format, or migrate between schema versions:
+Implement `Save`/`Load` on the state type (pointer receiver) for custom recovery, including unexported fields or a compact binary format:
 
 ```go
 type Snapshotter interface {
@@ -74,6 +73,9 @@ type Snapshotter interface {
 When the state implements `Snapshotter`, its bytes are stored **verbatim** by the host (opaque payload) and handed back on restore — bypassing the reflective JSON path entirely.
 
 ## Step 2c: JSON state and named bytes (`golem.MultipartSnapshotter`)
+
+Multipart serialization is available, but restart recovery remains unverified. Use the binary
+`Snapshotter` recipe above unless you validate multipart recovery on your runtime.
 
 When the state holds binary data that should not go through JSON (an index, an image), implement `SaveParts`/`LoadParts` instead of `Snapshotter`. The snapshot is a small JSON projection plus named parts of opaque bytes with a bare MIME type:
 
@@ -165,6 +167,7 @@ package impl
 
 import (
     "encoding/binary"
+    "fmt"
 
     "myapp/agents/session"
 
@@ -184,9 +187,10 @@ func (s *state) Save() ([]byte, error) {
     return b, nil
 }
 func (s *state) Load(b []byte) error {
-    if len(b) == 8 {
-        s.total = int64(binary.LittleEndian.Uint64(b))
+    if len(b) != 8 {
+        return fmt.Errorf("invalid snapshot length: got %d, want 8", len(b))
     }
+    s.total = int64(binary.LittleEndian.Uint64(b))
     return nil
 }
 
@@ -205,18 +209,17 @@ func init() {
 
 ## Best practices
 
-1. **Prefer the default JSON snapshot** unless you have unexported state, need a compact binary format, or need cross-version migration — in those cases implement `Snapshotter`.
-2. **Version your format** — include a version byte or tag so `Load` can read snapshots written by an older `Save`.
-3. **Keep snapshots small** — large snapshots slow recovery and updates.
+1. **Use `Snapshotter` for recovery** — do not rely on the default JSON serializer.
+2. **Validate your format** — reject malformed or unexpected snapshot data in `Load`.
+3. **Keep snapshots small** — large snapshots slow recovery.
 4. **Test round-trips** — `Save` → `Load` should reproduce equivalent state (this is native, host-free, so it unit-tests easily).
-5. **Handle migration** in `Load` when the schema changes between versions; returning an `error` from `Load` fails a snapshot-based update.
 
 ## Key Constraints
 
-- A policy is required for snapshots to happen — `Spec.Snapshot` defaults to `SnapshotDisabled`, and `SnapshotDefault` may resolve to the server's default (possibly disabled). Use `SnapshotEveryN` / `SnapshotPeriodic` to guarantee it.
+- A policy is required for snapshots to happen — `Spec.Snapshot` defaults to `SnapshotDisabled`, and `SnapshotDefault` may resolve to the server's default (possibly disabled). Use `SnapshotEveryN` / `SnapshotPeriodic` to request an explicit cadence; filesystem and runtime constraints still apply.
 - `Snapshotter` and `MultipartSnapshotter` are the **only** ways to capture unexported state — the default reflective path sees exported fields only.
 - Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
-- `Save`/`Load` return an `error`; a non-nil `Load` error fails the snapshot-based update.
+- `Save`/`Load` return an `error`; a non-nil `Load` error fails restoration.
 - A restore never runs the constructor: the state starts from its zero value, `Load` (or the JSON default) fills it, and `OnRestore` rebuilds the rest. Do not rely on fields the constructor sets unless they are in the snapshot or rebuilt in `OnRestore`.
 - The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it for the agent; `Save`/`Load` see only your own bytes.
 

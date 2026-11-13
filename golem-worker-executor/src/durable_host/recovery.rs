@@ -15,7 +15,7 @@
 use super::*;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Replays the recorded invocations of the start, as `resume_replay` does. A failure says
+    /// Replays the recorded invocations of the start. A failure says
     /// whether the replay after an application snapshot diverged from the oplog with a typed
     /// divergence while the start still replayed it.
     pub(in crate::durable_host) async fn replay(
@@ -28,15 +28,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
-            let new_target = store
-                .as_context()
-                .data()
-                .durable_ctx()
-                .public_state
-                .worker()
-                .oplog()
-                .current_oplog_index()
-                .await;
+            let worker = store.as_context().data().durable_ctx().public_state.worker();
+            // Repaired status covers committed history, not buffered appends. Publish the
+            // snapshot-assisted update's full prefix before sampling both target and index.
+            worker.commit_oplog_and_update_state(CommitLevel::Always).await?;
+            let status = worker.get_repaired_status().await?;
+            let new_target = status.oplog_idx;
+            store.as_context().data().durable_ctx().state.replay_state
+                .install_entity_replay_progress(&status, new_target).await?;
 
             store
                 .as_context()
@@ -197,7 +196,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.
-                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                        if store.as_context().data().durable_ctx().state.replay_state.at_replay_tail()
                             && let Err(error) = store
                                 .as_context_mut()
                                 .data_mut()
@@ -213,16 +212,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            InvocationMode::Replay,
+                            uses_streams.then_some(&idempotency_key),
                         )
                         .instrument(span)
                         .await;
-
-                        let invoke_result = if uses_streams {
-                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
-                        } else {
-                            invoke_result
-                        };
 
                         // Invocation-owned spans are closed by AgentInvocationFinished in the
                         // oplog processor; removing their resident context records no transition.
@@ -341,7 +334,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
                                             != SnapshotReplayPurpose::None
                                             && !store.as_context().data().durable_ctx().is_live()
-                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure =>
+                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire) =>
                                     {
                                         // Speculative reconstruction failures, after a snapshot or
                                         // in the replay for a pending automatic update, must not
@@ -401,7 +394,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
                                                     || store.as_context().data().durable_ctx().is_live()
-                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure)
+                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure.load(Ordering::Acquire))
                                             {
                                                 // A refused write means the shard has moved:
                                                 // record it before the startup result is published.
@@ -507,16 +500,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
-    async fn resume_replay(
-        store: &mut Store<Ctx>,
-        instance: &Instance,
-        refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        Self::replay(store, instance, refresh_replay_target)
-            .await
-            .map_err(|failure| failure.error)
-    }
-
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
@@ -530,7 +513,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             // Ephemeral workers cannot be recovered
 
             // Only typed agent owners have an initialize call to replay.
-            let replay_decision = Self::resume_replay(store, instance, false).await;
+            let replay_decision = Self::replay(store, instance, false)
+                .await
+                .map_err(|failure| failure.error);
             record_resume_worker(start.elapsed());
 
             if replay_decision == Ok(None) {
@@ -542,15 +527,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .switch_to_live()
                     .await?;
 
-                // Appending a Restart marker
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .add(OplogEntry::restart())
-                    .await?;
-
+                // The invocation loop committed this start's `Restart` before instantiation.
                 Ok(None)
             } else {
                 replay_decision
@@ -646,7 +623,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 },
                 None => match Self::try_load_snapshot(store, instance).await {
                     SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
-                        let result = Self::resume_replay(store, instance, false).await;
+                        let result = Self::replay(store, instance, false)
+                            .await
+                            .map_err(|failure| failure.error);
                         record_resume_worker(start.elapsed());
                         result
                     }
@@ -872,7 +851,7 @@ pub(in crate::durable_host) fn should_restart_after_shard_assignment_change(
         && (matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
-        ) || status.has_pending_work())
+        ) || status.has_pending_work(golem_common::model::Timestamp::now_utc()))
 }
 
 pub(in crate::durable_host) fn should_replay_invocation(

@@ -443,6 +443,9 @@ impl TextOutput for PublicOplogEntry {
                     &params.timestamp,
                     &params.invocation,
                 );
+                if let Some(not_before) = &params.not_before {
+                    logln(format!("{pad}not before:        {}", format_id(not_before)));
+                }
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));
@@ -728,6 +731,20 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}filesystem:        {}",
                     format_id(&params.filesystem_snapshot)
+                ));
+            }
+            PublicOplogEntry::SpanClosed(params) => {
+                logln(format_message_highlight("SPAN CLOSED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                if let Some(start_index) = &params.resource_start_index {
+                    logln(format!("{pad}resource start:    {start_index}"));
+                }
+                logln(format!(
+                    "{pad}span finished:     {:?}",
+                    params.span_finished
                 ));
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {

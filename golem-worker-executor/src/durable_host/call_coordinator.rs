@@ -104,26 +104,6 @@ enum WalletAdmission {
     Synchronize,
 }
 
-/// The result of successful admission and durable-scope recovery for a host call.
-///
-/// This carries the exact begin index that must later finish the same durable function. For a
-/// scoped function it is the scope's `Start` index; for an unscoped function it is the oplog index
-/// immediately before the call.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DurableCallBoundary {
-    begin_index: OplogIndex,
-}
-
-impl DurableCallBoundary {
-    pub(crate) fn from_begin_index(begin_index: OplogIndex) -> Self {
-        Self { begin_index }
-    }
-
-    pub(crate) fn begin_index(self) -> OplogIndex {
-        self.begin_index
-    }
-}
-
 /// Owns the ordering around a durable host call on [`DurableWorkerCtx`].
 ///
 /// Before writing or claiming `Start`, it checks read-only access, stabilizes wallet and authority
@@ -142,7 +122,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
     pub(crate) async fn admit(
         self,
         admission: DurableCallAdmission<'_>,
-    ) -> Result<DurableCallBoundary, WorkerExecutorError> {
+    ) -> Result<(), WorkerExecutorError> {
         self.check_allowed(admission)?;
         match admission.wallet_admission(
             &self.ctx.runtime,
@@ -167,36 +147,13 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                 self.ctx.synchronize_agent_wallet_at_boundary().await?;
             }
         }
-        let begin_index = self
-            .ctx
-            .begin_function(admission.function_type, admission.invocation_id)
-            .await?;
-        Ok(DurableCallBoundary::from_begin_index(begin_index))
-    }
-
-    pub(crate) async fn admit_with_span(
-        self,
-        admission: DurableCallAdmission<'_>,
-        span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<(DurableCallBoundary, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
-    {
-        self.check_allowed(admission)?;
-        self.ctx.synchronize_agent_wallet_at_boundary().await?;
-        let (begin_index, recorded) = self
-            .ctx
-            .begin_function_with_span(
-                admission.function_type,
-                span_started,
-                admission.invocation_id,
-            )
-            .await?;
-        Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
+        self.ctx.begin_function(admission.function_type).await
     }
 
     pub(crate) async fn admit_with_agent_authority(
         self,
         admission: DurableCallAdmission<'_>,
-    ) -> Result<(DurableCallBoundary, Option<AuthCtx>), WorkerExecutorError> {
+    ) -> Result<Option<AuthCtx>, WorkerExecutorError> {
         self.admit_with_agent_authority_capture(admission, |ctx| ctx.agent_auth_ctx())
             .await
     }
@@ -205,16 +162,13 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         self,
         admission: DurableCallAdmission<'_>,
         mut capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
-    ) -> Result<(DurableCallBoundary, Option<T>), WorkerExecutorError> {
+    ) -> Result<Option<T>, WorkerExecutorError> {
         self.check_allowed(admission)?;
         let mut captured = self
             .ctx
             .capture_live_agent_authority_at_boundary(&mut capture)
             .await?;
-        let begin_index = self
-            .ctx
-            .begin_function(admission.function_type, admission.invocation_id)
-            .await?;
+        self.ctx.begin_function(admission.function_type).await?;
         if captured.is_none() {
             if self.ctx.state.snapshotting_mode && self.ctx.state.is_replay() {
                 // Snapshot loading executes guest code without durable host-call records while
@@ -228,19 +182,14 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
                     .await?;
             }
         }
-        Ok((DurableCallBoundary::from_begin_index(begin_index), captured))
+        Ok(captured)
     }
 
     pub(crate) async fn finish(
         self,
         function_type: &DurableFunctionType,
-        boundary: DurableCallBoundary,
         forced_commit: bool,
-        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
-        self.ctx
-            .end_function_impl(function_type, boundary.begin_index(), span_finished)
-            .await?;
         if !self.ctx.state.snapshotting_mode
             && (function_type == &DurableFunctionType::WriteRemote || forced_commit)
         {

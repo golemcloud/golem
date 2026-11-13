@@ -49,7 +49,19 @@ object AgentSurfaceIR {
     constructor: ConstructorSurface,
     metadata: AgentMetadataSurface,
     methods: List[MethodSurface],
-    configFields: List[ConfigFieldSurface] = Nil
+    configFields: List[ConfigFieldSurface] = Nil,
+    sourceScopes: List[SourceScopeSurface] = Nil
+  )
+
+  /**
+   * One level of the package clauses that enclose the agent trait in its source
+   * file, with the import statements of that level which precede the trait, as
+   * written. An empty `packageRef` is the level outside every package clause.
+   * The non-empty references, joined with dots, form the agent's package name.
+   */
+  final case class SourceScopeSurface(
+    packageRef: String,
+    imports: List[String]
   )
 
   final case class ConstructorSurface(

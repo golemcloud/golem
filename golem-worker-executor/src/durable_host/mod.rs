@@ -60,7 +60,9 @@ use recovery::{
     prepare_failure, recovered_restart, recovered_status, should_replay_invocation,
     should_restart_after_shard_assignment_change,
 };
-use replay_to_live::{begin_local_live_continuation, begin_replay_to_live, store_is_live};
+use replay_to_live::{
+    LiveFinalization, StoreReplayState, begin_local_live_continuation, begin_replay_to_live,
+};
 pub(crate) use replay_to_live::{
     is_tool_attachment_live_admission_rejection, tool_attachment_live_admission_cancelled_error,
     tool_attachment_live_admission_rejected_error,
@@ -92,15 +94,15 @@ mod random;
 pub mod rdbms;
 pub(crate) mod replay_application;
 pub(crate) mod replay_state;
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct TestEntityBoundaryClaim(pub(crate) concurrent::ReplayCallHandle);
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl TestEntityBoundaryClaim {
     pub fn start_idx(&self) -> OplogIndex {
         self.0.start_idx()
     }
 }
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub use replay_state::ReplayEvent as TestReplayEvent;
 pub(crate) mod revision_update;
 pub mod schema_value_stream;
@@ -219,9 +221,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
-    materialize_streaming_result,
+    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
@@ -236,7 +237,6 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
@@ -245,7 +245,7 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
@@ -288,7 +288,6 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use http_body_util::BodyExt;
-use http_body_util::combinators::UnsyncBoxBody;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -309,17 +308,14 @@ use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
-use wasmtime_wasi_http::p3::RequestOptions;
-use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
+use wasmtime_wasi_http::{HttpConnectionPool, RequestOptions, WasiHttpCtx};
 
 /// Hooks providing the custom HTTP request handling needed for durable
 /// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
 /// for `wasmtime-wasi-http`.
+#[derive(Clone)]
 pub struct DurableHttpHooks {
-    /// Connection pool used for outgoing HTTP requests. Mirror of
-    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
-    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
+    /// Connection pool used for outgoing HTTP requests.
     pub connection_pool: Option<HttpConnectionPool>,
     /// Shared replay flag that durable execution toggles when transitioning
     /// between live and replay modes. When `true`, outgoing HTTP requests are
@@ -352,6 +348,28 @@ pub(crate) struct LiveAuthorizationPermit {
     pub(crate) _private: (),
 }
 
+/// The inputs from which [`Self::derive`] derives the idempotency key of one durable call once its
+/// `Start` index is known: the current invocation key, and the logical position that an entity
+/// Store assigns to the call. Without a logical position the key derives from the `Start` index,
+/// which live execution and replay agree on. The call site takes these inputs from the begun call
+/// before the `Start` is appended, because the request is built without access to the context.
+#[derive(Debug, Clone)]
+pub(crate) struct IdempotencyKeyPosition {
+    parent: IdempotencyKey,
+    logical: Option<OplogIndex>,
+}
+
+impl IdempotencyKeyPosition {
+    pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
+        IdempotencyKey::derived(&self.parent, self.index(start_index))
+    }
+
+    /// The oplog index the key derives from: the logical position, or else the `Start` index.
+    pub(crate) fn index(&self, start_index: OplogIndex) -> OplogIndex {
+        self.logical.unwrap_or(start_index)
+    }
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -367,11 +385,14 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
     entity_cancellation: Option<tokio_util::sync::CancellationToken>,
+    pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
+    pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
+    pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
@@ -379,7 +400,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
-    filesystem_preopen: AgentDescriptor,
+    filesystem_preopen: Option<AgentDescriptor>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
@@ -511,7 +532,7 @@ pub(crate) struct TailWorkDeadline {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_stage_replay_applications(
         &mut self,
         events: Vec<TestReplayEvent>,
@@ -520,7 +541,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         replay_application::reserve(self)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_replay_application_state(&self) -> (Vec<(usize, bool)>, u64, u64, bool) {
         use futures::FutureExt;
         (
@@ -540,13 +561,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_set_historical_wallet_generation(&mut self, generation: u64) {
         assert!(self.state.replay_applications.is_empty());
         self.state.wallet_generation = generation;
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_refuse_next_metadata_admission(&self) {
         self.public_state
             .worker()
@@ -562,13 +583,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     )> {
         (self.agent_mode() == AgentMode::Durable).then(|| {
             (
-                self.state.wakeup_scheduler(),
+                self.state.wakeup_scheduler(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                ),
                 self.state.config.suspend.clone(),
             )
         })
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn test_install_entity_tool_operation(
         &mut self,
         parent: OwnerInvocationId,
@@ -643,17 +669,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn filesystem_preopen(&self) -> AgentDescriptor {
-        self.filesystem_preopen.clone()
+        self.filesystem_preopen
+            .as_ref()
+            .expect("filesystem preopen requested after guest resource disposal")
+            .clone()
     }
 
+    pub(crate) fn dispose_trapped_guest_resources(&mut self) {
+        *self.table.lock().unwrap() = ResourceTable::new();
+        drop(self.filesystem_preopen.take());
+    }
+
+    /// The idempotency key of an accessor call. It takes the next entity logical position, so an
+    /// accessor call must derive its key exactly once, in live execution and in replay alike.
+    /// A Store-holding call takes its position when it begins; see
+    /// [`concurrent::DurableCallSession::idempotency_key_position`].
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
-        let current_idempotency_key = self
-            .state
-            .get_current_idempotency_key()
-            .unwrap_or(IdempotencyKey::fresh());
-        let idempotency_key_oplog_index =
-            self.state.current_idempotency_key_oplog_index(oplog_index);
-        IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
+        let logical = self.state.take_logical_key_position();
+        self.idempotency_key_position(logical).derive(oplog_index)
+    }
+
+    fn idempotency_key_position(&self, logical: Option<OplogIndex>) -> IdempotencyKeyPosition {
+        IdempotencyKeyPosition {
+            parent: self
+                .state
+                .get_current_idempotency_key()
+                .unwrap_or(IdempotencyKey::fresh()),
+            logical,
+        }
     }
 
     /// Returns the per-instance cache of resolved typed guest export handles.
@@ -763,7 +806,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by_email
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.state.owner_context.agent().cloned()
     }
 
@@ -995,11 +1038,7 @@ pub(crate) enum FinishReplayToLive {
 pub(crate) struct PendingReplayToLive {
     #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     replay_target: OplogIndex,
-    role: ReplayToLiveRole,
-    replaying_incomplete_entity: bool,
-    tool_entity: bool,
-    tool_operation: Option<tool::operation::OwnerToolOperation>,
-    local_live_tail: Arc<AtomicBool>,
+    finalization: LiveFinalization,
     linear_memory: LinearMemoryTracker,
 }
 
@@ -1099,18 +1138,10 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
-    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
-    /// published replay state instead.
-    entity_execution_mode: Option<InvocationExecutionMode>,
-    /// Per-Store live continuation after this entity's matching historical call was removed by a
-    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
-    local_live_tail: Arc<AtomicBool>,
+    store_replay_state: StoreReplayState,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
-    /// Next custom invocation ordinal in each logical parent namespace for the current top-level
-    /// agent invocation. `None` is the root namespace.
-    invocation_ordinals: HashMap<OplogIndex, u64>,
     /// Next tool invocation attempt ordinal in each durable parent namespace.
     tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
@@ -1127,13 +1158,9 @@ struct PrivateDurableWorkerState {
     pub(crate) open_p3_http_responses:
         HashMap<u32, crate::durable_host::p3::http::OpenP3HttpResponseState>,
 
-    /// Body-transmission wiring of open p3 outgoing HTTP requests, keyed by the request resource
-    /// rep. Registered by the durable `request::new` (which interposes on the guest-facing
-    /// transmission future) and detached by the host call that consumes the request:
-    /// `client::send` records/replays the transmission result durably, while a guest-side
-    /// `consume-body`/`drop` forwards the deterministic value with no recording.
-    pub(crate) pending_p3_http_request_transmissions:
-        HashMap<u32, crate::durable_host::p3::http::PendingHttpRequestBodyTransmission>,
+    /// Transmission wiring and future identities for P3 HTTP bodies. Host transfers preserve
+    /// their recorded result while the recipient owns any later guest delivery boundary.
+    pub(crate) p3_http_transmissions: crate::durable_host::p3::http::HttpTransmissionRegistry,
 
     /// WebSocket connection state indexed by websocket resource rep.
     open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
@@ -1307,7 +1334,7 @@ struct PrivateDurableWorkerState {
     snapshot_replay_purpose: SnapshotReplayPurpose,
 
     /// A protocol refusal ended replay without granting live authority.
-    authoritative_replay_failure: bool,
+    authoritative_replay_failure: Arc<AtomicBool>,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -1336,6 +1363,7 @@ pub(crate) struct WakeupScheduler {
     oplog: Arc<dyn Oplog>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
+    target_worker_fingerprint: golem_common::model::AgentFingerprint,
 }
 
 impl WakeupScheduler {
@@ -1356,6 +1384,7 @@ impl WakeupScheduler {
                     account_id: self.created_by,
                     environment_id: self.owned_agent_id.environment_id(),
                     promise_id,
+                    target_worker_fingerprint: self.target_worker_fingerprint,
                 },
             )
             .await;
@@ -1450,13 +1479,17 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn wakeup_scheduler(&self) -> WakeupScheduler {
+    fn wakeup_scheduler(
+        &self,
+        target_worker_fingerprint: golem_common::model::AgentFingerprint,
+    ) -> WakeupScheduler {
         WakeupScheduler {
             promise_service: self.promise_service.clone(),
             scheduler_service: self.scheduler_service.clone(),
             oplog: self.oplog.clone(),
             owned_agent_id: self.owned_agent_id.clone(),
             created_by: self.created_by,
+            target_worker_fingerprint,
         }
     }
 
@@ -1483,13 +1516,15 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(position) = self.entity_logical_key_position.as_mut() {
+        self.take_logical_key_position().unwrap_or(oplog_index)
+    }
+
+    pub(crate) fn take_logical_key_position(&mut self) -> Option<OplogIndex> {
+        self.entity_logical_key_position.as_mut().map(|position| {
             let result = *position;
             *position = position.next();
             result
-        } else {
-            oplog_index
-        }
+        })
     }
 
     /// Enriches retry properties with the worker's `agent-type`.
@@ -1515,15 +1550,8 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        store_is_live(
-            self.entity_execution_mode,
-            self.local_live_tail.load(Ordering::Acquire),
-            self.replay_state.is_live_published(),
-        )
-    }
-
-    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
-        self.local_live_tail.clone()
+        self.store_replay_state
+            .is_live(self.replay_state.is_live_published())
     }
 
     /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
@@ -1542,7 +1570,8 @@ impl PrivateDurableWorkerState {
     /// call's own quota class.
     pub fn durable_call_is_live(&self) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.has_unclaimed_retained_starts())
     }
 
@@ -1557,7 +1586,8 @@ impl PrivateDurableWorkerState {
     /// bounded by the recorded prefix of one recovered invocation.
     pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.retains_unclaimed_start_charged_to(quota))
     }
 
@@ -1565,8 +1595,7 @@ impl PrivateDurableWorkerState {
     /// shared cursor may still replay other owners' records. See
     /// [`ReplayState::claim_start_for_store`].
     pub(crate) fn store_continued_live(&self) -> bool {
-        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
-            && self.is_live()
+        self.store_replay_state.continued_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -1584,7 +1613,6 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
-        self.invocation_ordinals.clear();
     }
 
     pub async fn get_workers(

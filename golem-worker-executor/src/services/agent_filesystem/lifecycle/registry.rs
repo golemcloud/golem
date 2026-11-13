@@ -14,6 +14,44 @@
 
 use super::*;
 
+impl FilesystemInvocation {
+    pub(super) fn admit(&self) -> Result<InvocationLease, AccessError> {
+        let mut state = self.activity.state.lock().unwrap();
+        if state.closed {
+            return Err(AccessError::Revoked);
+        }
+        state.active += 1;
+        Ok(InvocationLease(self.clone()))
+    }
+
+    /// Call after stopping the body and destroying its resource table. Previously admitted calls
+    /// retain their leases when abandoned, and can still create and close descriptors.
+    pub(crate) async fn close_and_drain(&self) {
+        self.activity.state.lock().unwrap().closed = true;
+        loop {
+            let changed = self.activity.changed.notified();
+            if self.activity.state.lock().unwrap().active == 0 {
+                return;
+            }
+            changed.await;
+        }
+    }
+}
+
+impl InvocationLease {
+    pub(super) fn retain(&self) -> Self {
+        self.0.activity.state.lock().unwrap().active += 1;
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for InvocationLease {
+    fn drop(&mut self) {
+        self.0.activity.state.lock().unwrap().active -= 1;
+        self.0.activity.changed.notify_waiters();
+    }
+}
+
 /// Returns a weak activity observer for a `Resident` filesystem generation.
 ///
 /// Worker lifecycle code uses it to monitor terminal invalidation and in-flight effects without
@@ -173,8 +211,7 @@ impl GenerationRegistry {
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(RegistryState {
-                admission: AdmissionState::Open,
-                replay_access: false,
+                admission: Admission::new(),
                 calls: 0,
                 nodes: 0,
                 generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -192,13 +229,7 @@ impl GenerationRegistry {
         effect: CallEffect,
     ) -> Result<CallLease, AccessError> {
         let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open => {}
-            AdmissionState::Transitioning => return Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => {
-                return Err(AccessError::Revoked);
-            }
-        }
+        state.admission.admit_call()?;
         state.calls = state
             .calls
             .checked_add(1)
@@ -208,6 +239,7 @@ impl GenerationRegistry {
         }
         Ok(CallLease {
             registry: Arc::clone(self),
+            invocation: None,
         })
     }
 
@@ -245,6 +277,7 @@ impl GenerationRegistry {
             .expect("filesystem call count overflowed");
         CallLease {
             registry: Arc::clone(self),
+            invocation: None,
         }
     }
 
@@ -258,76 +291,16 @@ impl GenerationRegistry {
             NodeLease {
                 registry: Arc::clone(self),
             },
-            matches!(
-                state.admission,
-                AdmissionState::Open | AdmissionState::Transitioning
-            ),
+            state.admission.can_return_node(),
         )
     }
 
-    pub(super) fn begin_transition(&self) -> Result<(), AccessError> {
-        let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open => {
-                state.admission = AdmissionState::Transitioning;
-                Ok(())
-            }
-            AdmissionState::Transitioning => Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => Err(AccessError::Revoked),
-        }
-    }
-
-    pub(super) fn enable_replay_access(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.admission == AdmissionState::Open {
-            state.replay_access = true;
-        }
-    }
-
     pub(super) fn replay_access_allowed(&self) -> bool {
-        self.state.lock().unwrap().replay_access
-    }
-
-    pub(super) fn begin_replay_drain(&self) -> Result<(), AccessError> {
-        let mut state = self.state.lock().unwrap();
-        match state.admission {
-            AdmissionState::Open if state.replay_access => {
-                state.replay_access = false;
-                state.admission = AdmissionState::Transitioning;
-                Ok(())
-            }
-            AdmissionState::Open | AdmissionState::Transitioning => Err(AccessError::Transitioning),
-            AdmissionState::Sealed | AdmissionState::Invalidated => Err(AccessError::Revoked),
-        }
-    }
-
-    pub(super) fn finish_transition(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.admission == AdmissionState::Transitioning {
-            state.admission = AdmissionState::Open;
-        }
-        self.changed.notify_waiters();
-    }
-
-    pub(super) fn seal(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.replay_access = false;
-        if state.admission != AdmissionState::Invalidated {
-            state.admission = AdmissionState::Sealed;
-        }
-        self.changed.notify_waiters();
-    }
-
-    pub(super) fn invalidate(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.replay_access = false;
-        state.admission = AdmissionState::Invalidated;
-        drop(state);
-        self.changed.notify_waiters();
+        self.state.lock().unwrap().admission.replay_access_allowed()
     }
 
     pub(super) fn is_invalidated(&self) -> bool {
-        self.state.lock().unwrap().admission == AdmissionState::Invalidated
+        self.state.lock().unwrap().admission.is_invalidated()
     }
 
     pub(super) async fn wait_for_invalidation(&self) {

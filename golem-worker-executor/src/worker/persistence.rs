@@ -226,7 +226,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         commit_level: CommitLevel,
     ) -> Result<OplogIndex, OplogError> {
         match self.state_actor.commit_and_update_state(commit_level).await {
-            Ok((index, _)) => Ok(index),
+            Ok(index) => Ok(index),
             Err(refusal) => Err(self.refused_by(refusal)),
         }
     }
@@ -422,28 +422,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.published_authority_generation.clone()
     }
     /// [`Self::add_and_commit_oplog`] for a caller holding the worker lifecycle lock, which sends
-    /// `wakeup` to the running loop when the commit changed the status.
+    /// `wakeup` to the running loop after the commit.
+    ///
+    /// The wakeup does not depend on whether this commit changed the status: a threshold commit
+    /// of the add can fold the entry first, and that fold sends only a generic status wakeup.
     ///
     /// A refusal is returned rather than acknowledged: the management request that wrote the
     /// entry must not report it as accepted.
     pub(in crate::worker) async fn add_and_commit_oplog_internal(
         &self,
-        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        instance_guard: &WorkerLifecycle,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
         let index = self.add_to_oplog(entry).await?;
         // The caller holds the lifecycle lock. The actor only enqueues its notification and never
         // awaits that lock, so this commit and the caller's specific wakeup below cannot deadlock.
-        let (_, changed) = self
-            .state_actor
+        self.state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
             .map_err(|refusal| self.refused_by(refusal))?;
 
-        if changed
-            && let Some(wakeup) = wakeup
-            && let WorkerInstance::Running(running) = &**instance_guard
+        if let Some(wakeup) = wakeup
+            && let WorkerInstance::Running(running) = instance_guard.state()
         {
             running.sender.send(wakeup).unwrap();
         };

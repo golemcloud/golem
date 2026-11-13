@@ -7,7 +7,7 @@ description: "Using webhooks in a Scala Golem agent. Use when the user asks to c
 
 ## Overview
 
-Golem webhooks let an agent generate a temporary public URL that, when POSTed to by an external system, delivers the request body to the agent. Under the hood, a webhook is backed by a Golem promise — the agent is durably suspended while waiting for the callback, consuming no resources.
+Golem webhooks let an agent generate a public URL that, when POSTed to by an external system, delivers the request body to the agent. Under the hood, a webhook is backed by a Golem promise. Creation does not suspend the agent. For durable agents awaiting a callback, suspension can occur after the suspension policy delay when all active work permits it. Suspension frees guest execution resources; persisted state and other resources remain.
 
 This is useful for:
 - Integrating with webhook-driven APIs (payment gateways, CI/CD, GitHub, Stripe, etc.)
@@ -81,10 +81,10 @@ trait OrderAgent extends BaseAgent {
 }
 ```
 
-Path variables in `{braces}` are also supported in `webhookSuffix`:
+Only system variables such as `{agent-type}` and `{agent-version}` are supported in `webhookSuffix`, not constructor parameters such as `{name}`:
 
 ```scala
-@agentDefinition(mount = "/api/events/{name}", webhookSuffix = "/{agent-type}/callbacks/{name}")
+@agentDefinition(mount = "/api/events/{name}", webhookSuffix = "/{agent-type}/callbacks/{agent-version}")
 ```
 
 ## Usage Pattern
@@ -96,7 +96,7 @@ val webhook = HostApi.createWebhook()
 val url = webhook.url
 
 // Share `url` with an external service (e.g., register it as a callback URL)
-// The agent is durably suspended here until the external service POSTs to the URL
+// Awaiting can suspend the durable agent after the suspension policy delay
 
 val payload: Future[WebhookRequestPayload] = webhook.await()
 ```
@@ -185,8 +185,8 @@ class IntegrationAgentImpl(private val name: String) extends IntegrationAgent {
 ## Key Constraints
 
 - The agent **must** have an HTTP mount (`mount = "..."` on `@agentDefinition`) and be deployed via `httpApi` in `golem.yaml`
-- The webhook URL is a one-time-use URL — once POSTed to, the promise is completed and the URL becomes invalid
+- Completion is first-write-wins: duplicate POSTs return HTTP 204 without replacing the first payload; completion does not immediately invalidate the URL
 - Only `POST` requests to the webhook URL will complete the promise
 - Return the `Future` from `await()` (or a `map`/`flatMap` of it) from the agent method; do not block or detach the wait
-- The agent is durably suspended while waiting — it survives failures, restarts, and updates
+- A durable agent can suspend after the suspension policy delay while waiting — it survives failures, restarts, and updates
 - JSON decoding requires an implicit `zio.blocks.schema.Schema[A]` instance (use `derives Schema` in Scala 3)

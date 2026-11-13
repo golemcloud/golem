@@ -13,47 +13,51 @@
 // limitations under the License.
 
 use super::super::*;
+use golem_common::model::card::RdbmsVerb;
+
+/// The ID of the runtime card that the durable call at `oplog_index` derives.
+pub(crate) fn derived_card_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> CardId {
+    CardId(derive_permission_uuid(
+        DERIVED_CARD_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    ))
+}
+
+/// The ID of the card transfer that the durable call at `oplog_index` performs.
+pub(crate) fn transfer_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> Uuid {
+    derive_permission_uuid(
+        TRANSFER_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    )
+}
+
+/// The ID of the child card that the durable call at `oplog_index` installs.
+pub(crate) fn installed_child_card_id(
+    owned_agent_id: &OwnedAgentId,
+    invocation_key: &IdempotencyKey,
+    oplog_index: OplogIndex,
+) -> CardId {
+    CardId(derive_permission_uuid(
+        INSTALLED_CHILD_CARD_ID_CONTEXT,
+        owned_agent_id,
+        invocation_key,
+        oplog_index,
+    ))
+}
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) fn derive_card_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> CardId {
-        CardId(derive_permission_uuid(
-            DERIVED_CARD_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        ))
-    }
-
-    pub(crate) fn derive_transfer_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> Uuid {
-        derive_permission_uuid(
-            TRANSFER_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        )
-    }
-
-    pub(crate) fn derive_installed_child_card_id(
-        &self,
-        invocation_key: &IdempotencyKey,
-        oplog_index: OplogIndex,
-    ) -> CardId {
-        CardId(derive_permission_uuid(
-            INSTALLED_CHILD_CARD_ID_CONTEXT,
-            &self.owned_agent_id,
-            invocation_key,
-            oplog_index,
-        ))
-    }
-
     pub(crate) fn derive_scope_card_id(
         &self,
         invocation_key: &IdempotencyKey,
@@ -78,7 +82,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -337,7 +341,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         assert_live_authorization(self.state.is_live());
 
-        if self.operator_authorizes_current_invocation() {
+        if operator_bypasses_permission_checks(
+            self.operator_authorizes_current_invocation(),
+            targets,
+        ) {
             record_permission_decisions(targets, true);
             return Ok(Ok(LiveAuthorizationPermit { _private: () }));
         }
@@ -597,7 +604,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -961,7 +968,7 @@ impl InheritedInvocationScope {
 pub(crate) fn agent_effective_surface_from_component_metadata(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
     let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
     let card = agent_initial_card_from_component_metadata(component, agent_id)?;
@@ -977,7 +984,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             let card = StoredCard::Polymorphic(
                 component
                     .metadata
@@ -997,7 +1004,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
     golem_common::model::card::AgentPermissionMonomorphizationContext {
         account: component.account_email.clone(),
@@ -1035,7 +1042,7 @@ pub(crate) fn owner_monomorphization_context(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_monomorphization_context(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             component_baseline_monomorphization_context(component, owned_agent_id)
         }
     }
@@ -1052,7 +1059,7 @@ pub(in crate::durable_host) fn component_baseline_effective_surface_from_wallet<
 
 pub(crate) fn agent_initial_card_from_component_metadata(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<StoredCard, WorkerExecutorError> {
     let card = component
         .metadata
@@ -1064,7 +1071,7 @@ pub(crate) fn agent_initial_card_from_component_metadata(
 
 fn missing_agent_initial_card_error(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> WorkerExecutorError {
     WorkerExecutorError::invalid_request(format!(
         "Missing initial permission card for agent type {} in component {} revision {}",
@@ -1114,6 +1121,16 @@ pub(in crate::durable_host) fn derive_permission_uuid_for_sequence(
 
 pub(crate) fn card_holder_is_agent(holder: &CardHolder, agent_id: &AgentId) -> bool {
     matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *agent_id)
+}
+
+fn operator_bypasses_permission_checks(
+    operator_authorized: bool,
+    targets: &[PermissionTarget],
+) -> bool {
+    operator_authorized
+        && !targets.iter().any(|target| {
+            matches!(target, PermissionTarget::Rdbms(target) if target.verb == Some(RdbmsVerb::Unanalyzed))
+        })
 }
 
 pub(crate) fn authorize_effective_surface(
@@ -1485,4 +1502,135 @@ pub(crate) fn replace_wallet_cards(
     }
     *generation = next_generation;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::card::recipient::{RecipientOwnerContext, RecipientPattern};
+    use golem_common::model::card::{
+        AgentPermissionMonomorphizationContext, ClassPermissionTarget, EffectiveSurface,
+        GrantSurface, PermissionPattern, PolymorphicCard, default_agent_initial_permission_grants,
+        parse_permission,
+    };
+    use test_r::test;
+
+    fn rdbms_grant(verb: &str, resource: &str) -> PermissionTarget {
+        let PermissionPattern::Rdbms(pattern) = parse_permission(&format!(
+            "rdbms(owner@example.com/shop/prod) @ * : {verb} : {resource}"
+        ))
+        .unwrap() else {
+            unreachable!()
+        };
+        PermissionTarget::Rdbms(ClassPermissionTarget {
+            verb: pattern.verb,
+            owner: pattern.owner,
+            resource: pattern.resource,
+        })
+    }
+
+    #[test]
+    fn operator_authorization_does_not_bypass_unanalyzed_rdbms_authority() {
+        let active = Arc::new(AtomicBool::new(false));
+        let _guard = OperatorAuthorizedOplogProcessorInvocationGuard::enter(&active);
+        let operator_authorized = active.load(Ordering::Acquire);
+        assert!(operator_authorized);
+        let target = rdbms_grant("unanalyzed", "database(postgres)");
+        assert!(!operator_bypasses_permission_checks(
+            operator_authorized,
+            std::slice::from_ref(&target),
+        ));
+
+        let context = AgentPermissionMonomorphizationContext {
+            account: "owner@example.com".into(),
+            application: "shop".try_into().unwrap(),
+            environment: "prod".try_into().unwrap(),
+            component: golem_common::model::component::ComponentName("migrations".into()),
+            agent_name: "Migrator(test)".into(),
+            owner: RecipientOwnerContext::AgentType(AgentTypeName("Migrator".into())),
+        };
+        let defaults = StoredCard::Polymorphic(PolymorphicCard {
+            card_id: CardId::new(),
+            parent_ids: Vec::new(),
+            lower_positive: default_agent_initial_permission_grants(
+                RecipientPattern::parse("owner@example.com/shop/prod/migrations/Migrator").unwrap(),
+            ),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+        });
+        let default_surface =
+            golem_common::model::card::agent_effective_surface_from_wallet(&context, [&defaults]);
+        assert!(
+            authorize_effective_surface(
+                &default_surface,
+                &[rdbms_grant("query", "postgres.public.jobs")],
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            authorize_effective_surface(&default_surface, std::slice::from_ref(&target)),
+            Err(AuthorizationError::PermissionNotAllowed(_)),
+        ));
+
+        for (case, positive, allowed) in [
+            ("no grant", vec![], false),
+            ("wildcard", vec![rdbms_grant("*", "*.*.*")], false),
+            (
+                "database wildcard",
+                vec![rdbms_grant("*", "postgres.*.*")],
+                false,
+            ),
+            (
+                "wrong database",
+                vec![rdbms_grant("unanalyzed", "database(other)")],
+                false,
+            ),
+            (
+                "explicit database",
+                vec![rdbms_grant("unanalyzed", "database(postgres)")],
+                true,
+            ),
+        ] {
+            let surface = EffectiveSurface {
+                lower: vec![GrantSurface {
+                    positive,
+                    negative: Vec::new(),
+                }],
+                ..Default::default()
+            };
+            let result = authorize_effective_surface(&surface, std::slice::from_ref(&target));
+            assert_eq!(result.is_ok(), allowed, "{case}",);
+            if !allowed {
+                assert!(matches!(
+                    result,
+                    Err(AuthorizationError::PermissionNotAllowed(_)),
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn operator_permission_bypass_preserves_ordinary_targets_but_not_mixed_batches() {
+        let ordinary = rdbms_grant("query", "postgres.public.jobs");
+        let unanalyzed = rdbms_grant("unanalyzed", "database(postgres)");
+        assert!(operator_bypasses_permission_checks(
+            true,
+            std::slice::from_ref(&ordinary),
+        ));
+        assert!(!operator_bypasses_permission_checks(
+            false,
+            std::slice::from_ref(&ordinary),
+        ));
+        for targets in [
+            vec![ordinary.clone(), unanalyzed.clone()],
+            vec![unanalyzed, ordinary],
+        ] {
+            assert!(!operator_bypasses_permission_checks(true, &targets));
+        }
+    }
 }

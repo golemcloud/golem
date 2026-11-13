@@ -1,0 +1,114 @@
+name: Golem Cloud billing
+
+# Tests and publishes the hosted billing app in golem-cloud-billing/. Every push to main that
+# changes the app publishes golemservices/golem-cloud-billing:main-<run number>-<short SHA>; a
+# published Golem release publishes golemservices/golem-cloud-billing:v<version>.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "golem-cloud-billing/**"
+      - ".github/workflows/golem-cloud-billing.yaml"
+  pull_request:
+    paths:
+      - "golem-cloud-billing/**"
+      - ".github/workflows/golem-cloud-billing.yaml"
+  release:
+    types: [published]
+
+concurrency:
+  group: golem-cloud-billing-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name != 'release' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: blacksmith
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: golem
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: golem
+    defaults:
+      run:
+        working-directory: golem-cloud-billing
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: golem-cloud-billing/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: golem-cloud-billing/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+
+  image:
+    needs: test
+    runs-on: blacksmith
+    env:
+      PUBLISH: ${{ github.repository == 'golemcloud/golem' && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # A pull request only checks that the image builds, on the platform of the runner.
+      - uses: docker/setup-qemu-action@v3
+        if: env.PUBLISH == 'true'
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: golemservices/golem-cloud-billing
+          flavor: |
+            latest=false
+          # Flux on the clusters orders the main builds by run number.
+          tags: |
+            type=raw,value=main-${{ github.run_number }}-{{sha}},enable=${{ github.event_name == 'push' }}
+            type=ref,event=tag
+            type=ref,event=pr
+      - name: Build and push image
+        uses: useblacksmith/build-push-action@v1
+        with:
+          context: golem-cloud-billing
+          file: golem-cloud-billing/docker/Dockerfile
+          platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

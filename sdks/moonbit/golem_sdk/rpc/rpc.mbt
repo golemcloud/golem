@@ -7,7 +7,7 @@
 pub(all) struct AgentClient {
   agent_type_name : String
   constructor_input : @types.SchemaValueTree
-  phantom_id : @types.Uuid?
+  phantom_id : @schema.Uuid?
   rpc : @agentHost.WasmRpc
   priv mut default_scope_card : @permissions.ScopeCard?
 }
@@ -47,12 +47,13 @@ pub(open) trait AgentConfigOverrides {
 fn make_client(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-  phantom_id : @types.Uuid?,
+  phantom_id : @schema.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient {
-  let rpc = @agentHost.WasmRpc::wasm_rpc(
-    agent_type_name, constructor_input, phantom_id, agent_config,
+  let prepared = @identity.Constructor::from_wire(
+    agent_type_name, constructor_input, phantom_id,
   )
+  let rpc = prepared.connect(agent_config)
   {
     agent_type_name,
     constructor_input,
@@ -84,7 +85,7 @@ pub fn AgentClient::new_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
 ) -> AgentClient {
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @identity.new_phantom_id()
   AgentClient::get_phantom(agent_type_name, constructor_input, phantom_id)
 }
 
@@ -94,7 +95,7 @@ pub fn AgentClient::new_phantom_with_config(
   constructor_input : @types.SchemaValueTree,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient {
-  let phantom_id = @apiHost.generate_idempotency_key()
+  let phantom_id = @identity.new_phantom_id()
   AgentClient::get_phantom_with_config(
     agent_type_name, constructor_input, phantom_id, agent_config,
   )
@@ -123,7 +124,7 @@ pub fn AgentClient::ephemeral_with_config(
 pub fn AgentClient::get_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
 ) -> AgentClient {
   make_client(agent_type_name, constructor_input, Some(phantom_id), [])
 }
@@ -132,7 +133,7 @@ pub fn AgentClient::get_phantom(
 pub fn AgentClient::get_phantom_with_config(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-  phantom_id : @types.Uuid,
+  phantom_id : @schema.Uuid,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient {
   make_client(
@@ -147,19 +148,15 @@ pub fn AgentClient::get_phantom_with_config(
 pub fn AgentClient::get_agent_id(
   self : AgentClient,
 ) -> String raise @common.AgentError {
-  match
-    @agentHost.make_agent_id(
-      self.agent_type_name,
-      self.constructor_input,
-      self.phantom_id,
-    ) {
-    Ok(id) => id
-    Err(e) => raise e
-  }
+  @identity.Constructor::from_wire(
+    self.agent_type_name,
+    self.constructor_input,
+    self.phantom_id,
+  ).agent_id()
 }
 
 ///|
-pub fn AgentClient::phantom_id(self : AgentClient) -> @types.Uuid? {
+pub fn AgentClient::phantom_id(self : AgentClient) -> @schema.Uuid? {
   self.phantom_id
 }
 

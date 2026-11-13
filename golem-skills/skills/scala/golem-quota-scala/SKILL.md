@@ -30,6 +30,15 @@ resourceDefaults:
       enforcementAction: reject
       unit: byte
       units: bytes
+    llm-tokens:
+      limit:
+        type: Rate
+        value: 10000
+        period: minute
+        max: 10000
+      enforcementAction: reject
+      unit: token
+      units: tokens
     connections:
       limit:
         type: Concurrency
@@ -82,7 +91,8 @@ The callback returns `Future[(BigInt, T)]` where the first element is actual usa
 Reserve the maximum expected cost, then commit actual usage:
 
 ```scala
-val result = withReservation(token, BigInt(4000)) { reservation =>
+val llmToken = QuotaToken("llm-tokens", BigInt(4000))
+val result = withReservation(llmToken, BigInt(4000)) { reservation =>
   callLlm(prompt, maxTokens = 4000).map { response =>
     (BigInt(response.tokensUsed), response)
   }
@@ -108,17 +118,17 @@ token.reserve(BigInt(100)) match {
 Split a portion of your quota to pass to a child agent:
 
 ```scala
-val childToken: QuotaToken = token.split(BigInt(200))
-for {
-  childAgent <- SummarizerAgent.newPhantom()
-  summary <- childAgent.summarize(text, childToken)
-} yield summary
+val parentToken = QuotaToken("api-calls", BigInt(1000))
+val childToken: QuotaToken = parentToken.split(BigInt(200))
+// Assumes SummarizerAgent has no identity fields and uses durable mode.
+val childAgent = SummarizerAgentClient.newPhantom()
+val summary = childAgent.summarize(text, childToken)
 ```
 
 The child agent receives the `QuotaToken` as a method parameter and uses it for its own reservations. Merge returned tokens back:
 
 ```scala
-token.merge(returnedToken)
+parentToken.merge(returnedToken)
 ```
 
 ## 7. Dynamic Resource Updates via CLI

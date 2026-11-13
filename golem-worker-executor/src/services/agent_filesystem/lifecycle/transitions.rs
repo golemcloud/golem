@@ -13,8 +13,44 @@
 // limitations under the License.
 
 use super::*;
+use crate::filesystem::errors::OperationContext;
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGenerationHandle<Adapter> {
+    /// Gives one body its own admission and drainage boundary without sealing its siblings.
+    pub(crate) fn for_invocation(&self) -> (Self, FilesystemInvocation) {
+        let invocation = FilesystemInvocation {
+            activity: Arc::new(InvocationActivity {
+                state: Mutex::new(InvocationActivityState {
+                    closed: false,
+                    active: 0,
+                }),
+                changed: tokio::sync::Notify::new(),
+            }),
+        };
+        let mut handle = self.clone();
+        handle.invocation = Some(invocation.clone());
+        (handle, invocation)
+    }
+
+    pub(crate) fn invocation(&self) -> Option<FilesystemInvocation> {
+        self.invocation.clone()
+    }
+
+    pub(super) fn lease_call(
+        &self,
+        registry: &Arc<GenerationRegistry>,
+        effect: CallEffect,
+    ) -> Result<CallLease, AccessError> {
+        let invocation = self
+            .invocation
+            .as_ref()
+            .map(FilesystemInvocation::admit)
+            .transpose()?;
+        let mut lease = registry.lease_call(effect)?;
+        lease.invocation = invocation;
+        Ok(lease)
+    }
+
     pub(crate) fn attach_usage_tracker(
         &self,
         tracker: &crate::services::linear_memory::LinearMemoryTracker,
@@ -33,6 +69,7 @@ impl<Adapter: SandboxFilesystemAdapter> Clone for FilesystemGenerationHandle<Ada
         Self {
             generation: self.generation.clone(),
             phase: self.phase,
+            invocation: self.invocation.clone(),
         }
     }
 }
@@ -57,8 +94,7 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
-    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
@@ -73,14 +109,12 @@ pub fn create_fresh_with_pressure_recovery(
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    let accounting = provisioning.agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
         scratch,
         agent,
         limits,
         Some(pressure_recovery),
-        accounting,
     )
 }
 
@@ -90,19 +124,17 @@ fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
-    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None)
 }
 
-/// Creates a generation on storage that accounts for each agent as `accounting` says.
+/// Creates a generation with the accounting policy of its sandbox.
 pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: Option<FilesystemWriteRecovery>,
-    accounting: AgentAccounting,
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
@@ -114,6 +146,7 @@ pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter
         .await
         .map_err(|source| CreateFailure { source })?;
     let allocation_reader = sandbox.allocation_reader();
+    let accounting = sandbox.agent_accounting();
     Ok(AgentFilesystem {
         generation: Some(Arc::new(FilesystemGeneration {
             usage_activation: None,
@@ -155,6 +188,18 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
     account: ResourceUsageAccount,
     config: crate::services::golem_config::ResourceUsageMeteringConfig,
 ) -> Result<ReconstructingFilesystem<Adapter>, MeteringBindFailure<Adapter>> {
+    bind_configured_resource_usage_metering_with(filesystem, config, |config| {
+        create_unbound_meter(config, account)
+    })
+}
+
+pub(super) fn bind_configured_resource_usage_metering_with<Adapter: SandboxFilesystemAdapter>(
+    filesystem: CreatedFilesystem<Adapter>,
+    config: crate::services::golem_config::ResourceUsageMeteringConfig,
+    create_meter: impl FnOnce(
+        crate::services::golem_config::ResourceUsageMeteringConfig,
+    ) -> ResourceUsageMeter,
+) -> Result<ReconstructingFilesystem<Adapter>, MeteringBindFailure<Adapter>> {
     let (generation, _) = filesystem.into_parts();
     let mut generation = match Arc::try_unwrap(generation) {
         Ok(generation) => generation,
@@ -169,7 +214,7 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
             });
         }
     };
-    let meter = create_unbound_meter(config, account);
+    let meter = create_meter(config);
     generation.usage_activation = meter.live_activation();
     let generation = Arc::new(generation);
     if config.filesystem {
@@ -213,6 +258,7 @@ pub(crate) fn reconstruction_generation_handle<Adapter: SandboxFilesystemAdapter
     Ok(FilesystemGenerationHandle {
         generation: Arc::downgrade(generation),
         phase: GenerationHandlePhase::Reconstruction,
+        invocation: None,
     })
 }
 
@@ -231,6 +277,7 @@ pub(crate) fn resident_generation_handle<Adapter: SandboxFilesystemAdapter>(
                 .expect("agent filesystem generation already consumed"),
         ),
         phase: GenerationHandlePhase::Resident,
+        invocation: None,
     }
 }
 
@@ -275,7 +322,7 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
         })
     } else {
         match generation.registry.begin_replay_drain() {
-            Ok(()) => Ok((generation, stage)),
+            Ok(transition) => Ok((generation, stage, transition)),
             Err(error) => Err(ReconstructionFailure {
                 filesystem: sealed_filesystem(generation, stage.meter),
                 source: Error::Access(error),
@@ -285,13 +332,16 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, mut stage)) => {
+            Ok((generation, mut stage, transition)) => {
                 generation.registry.wait_for_calls().await;
                 stage.replay_drained = true;
-                Ok(AgentFilesystem {
-                    generation: Some(generation),
-                    stage: Some(stage),
-                })
+                Ok((
+                    AgentFilesystem {
+                        generation: Some(generation),
+                        stage: Some(stage),
+                    },
+                    transition,
+                ))
             }
             Err(failure) => Err(failure),
         };
@@ -300,18 +350,11 @@ pub(crate) fn finish_replay<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (filesystem, transition) = receiver
             .await
-            .expect("module-owned replay drain stopped unexpectedly");
-        if let Ok(filesystem) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("reconstructing filesystem generation missing")
-                .registry
-                .finish_transition();
-        }
-        result
+            .expect("module-owned replay drain stopped unexpectedly")?;
+        transition.finish();
+        Ok(filesystem)
     }
 }
 
@@ -327,7 +370,7 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
 + 'static {
     let (generation, stage) = filesystem.into_parts();
     let fenced = match generation.begin_transition() {
-        Ok(()) => Ok((generation, stage)),
+        Ok(transition) => Ok((generation, stage, transition)),
         Err(error) => Err(ReconstructionFailure {
             filesystem: sealed_filesystem(generation, stage.meter),
             source: Error::Access(error),
@@ -336,7 +379,9 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, stage)) => complete_reconstruction(generation, stage).await,
+            Ok((generation, stage, transition)) => complete_reconstruction(generation, stage)
+                .await
+                .map(|filesystem| (filesystem, transition)),
             Err(failure) => Err(failure),
         };
         if let Err(unobserved) = sender.send(result) {
@@ -344,18 +389,11 @@ pub(crate) fn finish_reconstruction<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (filesystem, transition) = receiver
             .await
-            .expect("module-owned reconstruction transition stopped unexpectedly");
-        if let Ok(filesystem) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("resident filesystem generation missing")
-                .registry
-                .finish_transition();
-        }
-        result
+            .expect("module-owned reconstruction transition stopped unexpectedly")?;
+        transition.finish();
+        Ok(filesystem)
     }
 }
 
@@ -408,7 +446,7 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
 {
     let (generation, stage) = filesystem.into_parts();
     let fenced = match generation.begin_transition() {
-        Ok(()) => Ok((generation, stage)),
+        Ok(transition) => Ok((generation, stage, transition)),
         Err(error) => Err(LimitFailure {
             filesystem: sealed_filesystem(generation, stage.meter),
             source: Error::Access(error),
@@ -417,7 +455,11 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
         let result = match fenced {
-            Ok((generation, stage)) => complete_limit_transition(generation, stage, limits).await,
+            Ok((generation, stage, transition)) => {
+                complete_limit_transition(generation, stage, limits)
+                    .await
+                    .map(|outcome| (outcome, transition))
+            }
             Err(failure) => Err(failure),
         };
         if let Err(unobserved) = sender.send(result) {
@@ -425,18 +467,13 @@ pub(crate) fn set_limits<Adapter: SandboxFilesystemAdapter>(
         }
     });
     async move {
-        let result = receiver
+        let (outcome, transition) = receiver
             .await
-            .expect("module-owned filesystem limit transition stopped unexpectedly");
-        if let Ok(LimitTransition::Resident(filesystem)) = &result {
-            filesystem
-                .generation
-                .as_ref()
-                .expect("resident filesystem generation missing")
-                .registry
-                .finish_transition();
+            .expect("module-owned filesystem limit transition stopped unexpectedly")?;
+        if matches!(outcome, LimitTransition::Resident(_)) {
+            transition.finish();
         }
-        result
+        Ok(outcome)
     }
 }
 
@@ -496,7 +533,7 @@ async fn complete_limit_transition<Adapter: SandboxFilesystemAdapter>(
 }
 
 pub(super) fn decide_limit_transition(
-    allocation: crate::sandbox_filesystem::FilesystemAllocation,
+    allocation: crate::filesystem::volume::FilesystemAllocation,
     limits: FilesystemLimits,
 ) -> LimitDecision {
     if allocation.allocated_bytes > limits.allocated_bytes
@@ -630,9 +667,11 @@ fn spawn_cleanup<Adapter: SandboxFilesystemAdapter>(
                         .get_or_init(Default::default)
                         .fail(crate::metrics::resource_release::Failure::ExclusiveOwnership);
                     *sandbox = Some(adapter);
-                    Err(FilesystemStorageError::verification(
-                        "take exclusive ownership for agent filesystem deletion",
-                        std::path::Path::new("<agent-filesystem>"),
+                    Err(FilesystemStorageError::from(
+                        OperationContext::verification(
+                            "take exclusive ownership for agent filesystem deletion",
+                            None,
+                        ),
                     ))
                 }
             },
@@ -679,7 +718,7 @@ pub(super) fn spawn_module_task(task: impl Future<Output = ()> + Send + 'static)
     }
 }
 
-impl<Reader: crate::sandbox_filesystem::SandboxFilesystemAllocationReader> FilesystemUsageReader
+impl<Reader: crate::filesystem::sandbox::SandboxFilesystemAllocationReader> FilesystemUsageReader
     for GenerationUsageReader<Reader>
 {
     fn observe(

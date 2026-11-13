@@ -19,6 +19,7 @@ use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::ShardId;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::{Blob, SqlDateTime};
+use golem_shard_manager::RequestClient;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::quota::quota_repo::QUOTA_KEY_PREFIX;
 use golem_shard_manager::quota::{DbQuotaRepo, EtcdQuotaRepo, QuotaRepo};
@@ -467,7 +468,7 @@ impl EtcdStore {
 
     pub(crate) async fn quota_repo_with(&self, fence: LeaderFence) -> Arc<dyn QuotaRepo> {
         Arc::new(EtcdQuotaRepo::new(
-            self.client().await,
+            RequestClient::fixed(self.client().await),
             fence,
             self.read_retry(),
         ))
@@ -1461,7 +1462,7 @@ async fn fenced_persistence_over(
         .await;
     let (_, fence) = store.mint_leader_key().await;
     EtcdRoutingTablePersistence::with_client(
-        request_client(endpoints).await,
+        RequestClient::fixed(request_client(endpoints).await),
         NUMBER_OF_SHARDS,
         fence,
         compaction_retention_revisions,

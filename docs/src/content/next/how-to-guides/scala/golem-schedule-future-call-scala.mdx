@@ -6,7 +6,7 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 
 ## Usage
 
-Each method on the remote proxy has a `.scheduleAt(when)` method that enqueues the call for the given time:
+For stream-free methods, `.scheduleAt(when)` enqueues the call for the given time. Durable guest clients return `Future[Unit]`; ephemeral guest clients return `Future[InvocationReceipt]` with invocation metadata. Return or compose the future to observe enqueue errors; it does not await execution of the scheduled method.
 
 ```scala
 import golem.Datetime
@@ -37,18 +37,25 @@ Datetime.afterSeconds(3600)   // 1 hour from now
 
 ## Cancelable Variant
 
-Every method also has a `scheduleCancelableAt` variant that returns a `Future[CancellationToken]`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+For a durable, stream-free target, `scheduleCancelableAt` returns `Future[CancellationToken]`. Ephemeral guest clients instead return `Future[CancelableInvocationReceipt]` (`golem.runtime.rpc`), which carries metadata and a cancellation token. Use asynchronous composition in Scala.js, never `Await.result`:
 
 ```scala
 import golem.runtime.rpc.CancellationToken
+import scala.concurrent.{ExecutionContext, Future}
 
-val token: CancellationToken = Await.result(
-  counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)),
-  Duration.Inf
-)
+given ExecutionContext = ExecutionContext.parasitic
+var pending: Option[CancellationToken] = None
 
-// Later, to cancel the pending invocation:
-token.cancel()
+val scheduled: Future[Unit] =
+  counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)).map { token =>
+    pending = Some(token)
+  }
+
+// From a later invocation, after scheduled has completed:
+def cancelPending(): Unit = {
+  pending.foreach(_.cancel())
+  pending = None
+}
 ```
 
 ## Use Cases

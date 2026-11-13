@@ -1,7 +1,9 @@
 import {
-  "golemcloud/golem_sdk/tool" @tool,
+  "golemcloud/golem_sdk/tool",
 }
 
+pkgtype(kind: "foreign_library")
+
 options(
-  "is-main": true,
+  link: { "wasm": { "export-memory-name": "memory" } },
 )

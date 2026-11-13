@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::QuotaClass;
-use crate::durable_host::concurrent::{
-    ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
-};
+use crate::durable_host::concurrent::{ReplayCallHandle, Resolution, ResolutionOutcome};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
@@ -192,9 +190,11 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
+mod starts;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
+pub(crate) use starts::ReplayStarts;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -230,9 +230,109 @@ enum ReplayTransitionPhase {
     Live = 2,
 }
 
-type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+#[derive(Debug)]
+struct AtomicReplayTransitionPhase(AtomicU8);
+
+impl AtomicReplayTransitionPhase {
+    fn replaying() -> Self {
+        Self(AtomicU8::new(ReplayTransitionPhase::Replaying as u8))
+    }
+
+    fn load(&self) -> ReplayTransitionPhase {
+        match self.0.load(Ordering::Acquire) {
+            0 => ReplayTransitionPhase::Replaying,
+            1 => ReplayTransitionPhase::Settling,
+            2 => ReplayTransitionPhase::Live,
+            _ => unreachable!("invalid replay transition phase"),
+        }
+    }
+
+    fn begin_settling(&self) {
+        let _ = self.0.compare_exchange(
+            ReplayTransitionPhase::Replaying as u8,
+            ReplayTransitionPhase::Settling as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn publish_live(&self) {
+        self.0
+            .store(ReplayTransitionPhase::Live as u8, Ordering::Release);
+    }
+
+    fn resume_replay(&self) {
+        self.0
+            .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
+    }
+}
+
+/// The completion-delivery markers, keyed by the `Start` they refer to, with the positions of the
+/// `CompletionDelivered` markers in oplog order, so a claim can ask whether a delivery boundary
+/// lies in a range without visiting every marker.
+#[derive(Debug, Default)]
+struct CompletionMarkers {
+    by_start: HashMap<OplogIndex, CompletionMarker>,
+    delivered_at: std::collections::BTreeSet<OplogIndex>,
+}
+
+impl CompletionMarkers {
+    fn get(&self, start_index: &OplogIndex) -> Option<&CompletionMarker> {
+        self.by_start.get(start_index)
+    }
+
+    /// Records `marker` for the `Start` at `start_index` and returns the marker it replaced.
+    fn insert(
+        &mut self,
+        start_index: OplogIndex,
+        marker: CompletionMarker,
+    ) -> Option<CompletionMarker> {
+        let previous = self.by_start.insert(start_index, marker);
+        if let Some(CompletionMarker::Delivered(index)) = previous {
+            self.delivered_at.remove(&index);
+        }
+        if let CompletionMarker::Delivered(index) = marker {
+            self.delivered_at.insert(index);
+        }
+        previous
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_start.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&OplogIndex, &CompletionMarker)> {
+        self.by_start.iter()
+    }
+
+    /// Drops the markers recorded after `target`.
+    fn truncate_after(&mut self, target: OplogIndex) {
+        self.by_start.retain(|_, marker| marker.index() <= target);
+        self.delivered_at.retain(|index| *index <= target);
+    }
+
+    /// The `CompletionDelivered` positions in `range`, in oplog order.
+    fn delivered_in(
+        &self,
+        range: impl std::ops::RangeBounds<OplogIndex>,
+    ) -> impl Iterator<Item = OplogIndex> + '_ {
+        self.delivered_at.range(range).copied()
+    }
+}
 type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
-type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
+type StartsByInvocationId =
+    HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
+type InvocationFinishes = std::collections::BTreeSet<OplogIndex>;
+
+/// The recovery metadata that one scan of a visible oplog range collects.
+struct ScannedRecoveryMetadata {
+    completion_markers: CompletionMarkers,
+    stream_observations: StreamObservationPositions,
+    transaction_markers: TransactionMarkers,
+    start_invocation_ids: StartsByInvocationId,
+    invocation_finishes: InvocationFinishes,
+}
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
 /// is delivered, including host-internal descendants of its imports.
@@ -486,7 +586,7 @@ impl ToolAttachmentReconstruction {
 /// [`Self::state`] for a [`cursor::CursorTx`]. Retained claims need only `state`: they use history
 /// already passed by the reader and cannot advance it or publish live.
 ///
-/// Hot, read-only position queries (`is_live`, `last_replayed_index`, …) read [`Self::position`]
+/// Hot, read-only position queries (`at_replay_tail`, `last_replayed_index`, …) read [`Self::position`]
 /// and [`Self::replay_target`] without taking the lock. Physical and claimed-position publication
 /// happens while `state` is held; retained claims can publish `last_replayed_non_hint_index`
 /// without moving the physical reader. `replay_target` is set at phase boundaries
@@ -502,13 +602,25 @@ struct ReplayCursor {
     /// no later oplog entry can be consumed until the actual guest-delivery boundary acknowledges
     /// and releases it.
     advance_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Distinguishes an unacknowledged guest delivery from an ordinary cursor transaction.
+    delivery_in_progress: AtomicBool,
     /// Set when replay cannot reproduce a recorded successful delivery (for example, the guest
     /// cancels the completion after its delivery marker was consumed). Every subsequent cursor
     /// transaction fails with this same deterministic replay error.
-    delivery_failure: std::sync::Mutex<Option<String>>,
+    delivery_failure: std::sync::Mutex<Option<WorkerExecutorError>>,
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
+    /// The `Start`s recorded under each durable invocation id, in oplog order, including the ones
+    /// in deleted regions. Built by the recovery metadata scan with the delivery markers, and
+    /// extended by the scan of exactly the newly visible range when the replay target grows. A
+    /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
+    start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
+    /// The visible `AgentInvocationFinished` positions up to the replay target. Built and kept in
+    /// sync with the visible prefix by the same scans as the delivery markers; an entry in a
+    /// deleted region is not visible. A delivery wait looks up its invocation boundary here
+    /// instead of reading the oplog.
+    invocation_finishes: std::sync::Mutex<InvocationFinishes>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -518,14 +630,14 @@ struct ReplayCursor {
     /// Cursor exhaustion is published before historical reconstruction validation so resolver
     /// incompletes can wake without exposing live owner admission. Only the primary transition
     /// publishes `Live`, after every completed reconstruction fence validates.
-    transition_phase: AtomicU8,
+    transition_phase: AtomicReplayTransitionPhase,
     /// The cursor lock. Guards every piece of state a cursor-advance transaction touches, including
     /// the concurrent-replay resolver. Held across the transaction's internal `await`s (oplog reads,
     /// payload downloads), but never while a call is parked on its resolution / cursor progress — an
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Counts of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor
+    /// Counts of the retained entries in [`CursorState::starts`]: unclaimed `Start`s the cursor
     /// has already committed past, in total and per quota class. Written while `state` is held
     /// and read lock-free so durable-call admission and quota charging can tell "the cursor is
     /// exhausted" apart from "every recorded call has been
@@ -615,6 +727,10 @@ impl ReplayDeliveryBarrier {
         marker_index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!(
@@ -629,6 +745,10 @@ impl ReplayDeliveryBarrier {
         index: OplogIndex,
         gate: tokio::sync::OwnedMutexGuard<()>,
     ) -> Self {
+        replay_state
+            .cursor
+            .delivery_in_progress
+            .store(true, Ordering::Release);
         Self {
             replay_state,
             boundary: format!("consumer stream observation at {index}"),
@@ -637,16 +757,25 @@ impl ReplayDeliveryBarrier {
     }
 
     pub(in crate::durable_host) fn acknowledge(mut self) {
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
 
     pub(in crate::durable_host) fn fail(mut self, reason: impl Into<String>) {
-        self.replay_state.record_delivery_failure(format!(
-            "replay could not reproduce {}: {}",
-            self.boundary,
-            reason.into()
-        ));
+        self.replay_state
+            .record_delivery_failure(WorkerExecutorError::runtime(format!(
+                "replay could not reproduce {}: {}",
+                self.boundary,
+                reason.into()
+            )));
+        self.replay_state
+            .cursor
+            .delivery_in_progress
+            .store(false, Ordering::Release);
         self.gate.take();
         self.replay_state.cursor.progress.notify_waiters();
     }
@@ -655,10 +784,14 @@ impl ReplayDeliveryBarrier {
 impl Drop for ReplayDeliveryBarrier {
     fn drop(&mut self) {
         if self.gate.is_some() {
-            self.replay_state.record_delivery_failure(format!(
+            self.replay_state.record_delivery_failure(WorkerExecutorError::runtime(format!(
                 "replay delivery barrier for {} was dropped before the recorded guest-delivery boundary",
                 self.boundary
-            ));
+            )));
+            self.replay_state
+                .cursor
+                .delivery_in_progress
+                .store(false, Ordering::Release);
             self.gate.take();
             self.replay_state.cursor.progress.notify_waiters();
         }
@@ -705,6 +838,13 @@ struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
     initial_snapshot_skip_end: Option<OplogIndex>,
+    entity_replay_progress: golem_common::model::EntityReplayProgress,
+    entity_replay_horizon: OplogIndex,
+    /// Enclosing, still-open entities of processed Starts. Protocol-parent routes survive their
+    /// own terminal, but disappear once their last enclosing entity reaches its terminal.
+    entity_start_routes: HashMap<OplogIndex, Vec<OplogIndex>>,
+    /// Reverse routes let an entity terminal retire only that entity's subtree membership.
+    entity_route_members: HashMap<OplogIndex, HashSet<OplogIndex>>,
     /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
     /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
     /// the recorded guest callback boundary.
@@ -717,17 +857,10 @@ struct CursorState {
     /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
     /// trip us up.
     pending_fork_starts: HashSet<OplogIndex>,
-    /// Matches replayed `End`/`Cancelled` entries to the concurrent
-    /// [`crate::durable_host::concurrent::DurableCallSession`]s awaiting them, keyed by their `Start` index.
-    /// Fed only from the committed-consume hook. Lives under the cursor lock because awaited-terminal
-    /// detection, terminal resolution, and `Start`-claim registration are all part of the cursor
-    /// transaction; the rare slow-path `unregister` re-acquires the lock from outside a transaction.
-    concurrent_resolver: ConcurrentReplayResolver,
-    /// `Start` entries ahead of the cursor that were already claimed out-of-position by
-    /// [`CursorTx::claim_owned_start`] (identity-keyed scan-ahead claims). When the cursor reaches
-    /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
-    /// positional reader; its resolver awaiter was registered at claim time.
-    claimed_starts: HashSet<OplogIndex>,
+    /// Retained Starts and claimed replay obligations, keyed by their Start index. All lifecycle
+    /// mutations share the cursor lock: retention, ahead consumption, registration and terminal
+    /// routing cannot race. Explicit unregistration outside a transaction re-acquires this lock.
+    starts: ReplayStarts,
     /// Replay-inert subtrees. Completed custom durable invocations replay as one logical subtree:
     /// once a root `Start` is claimed, descendant `Start`s are replay-inert implementation details
     /// of that recorded operation and are drained with their terminals while resolving the root.
@@ -736,27 +869,14 @@ struct CursorState {
     /// them again. The map stores every known member index for each root so nested descendants
     /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
-    /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
-    /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
-    /// closed them if the cursor has reached it.
-    ///
-    /// Concurrent host tasks append their `Start`s in scheduling order, so a reader driving the
-    /// cursor (a positional marker read, a direct call awaiting its own `End`, a sibling's
-    /// terminal drain) may reach a `Start` that belongs to a call the guest has issued but whose
-    /// host task has not been admitted yet. Such a reader is not entitled to that entry: it must
-    /// neither consume it as its own (kind/ownership validation happens at claim time) nor park
-    /// on it, because the owner may need the same Store the parked reader holds. The cursor
-    /// therefore commits past it and retains it here, where the owner's later claim finds it in
-    /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
-    /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
-    /// target shrink or external history cut deletes their region.
-    retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
 }
 
-/// One entry of [`CursorState::retained_starts`].
+/// One retained entry of [`CursorState::starts`].
 #[derive(Debug)]
 struct RetainedStart {
     entry: OplogEntry,
+    /// Entity membership at this Start's position, independent of later route retirement.
+    enclosing_entities: Vec<OplogIndex>,
     /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
     terminal: Option<(OplogIndex, OplogEntry)>,
     /// Replay events of the entries the cursor committed past on this `Start`'s behalf: the
@@ -768,10 +888,10 @@ struct RetainedStart {
     deferred_events: Vec<(OplogIndex, ReplayEvent)>,
 }
 
-/// Lock-free publication of how many `Start`s [`CursorState::retained_starts`] holds, in total
-/// and per [`QuotaClass`]. Rewritten from the retained map whenever it changes (only under a held
-/// [`ReplayCursor::state`] lock); each counter is read independently, so readers see a consistent
-/// value per counter but need no snapshot across them.
+/// Lock-free publication of how many retained `Start`s [`CursorState::starts`] holds, in total
+/// and per [`QuotaClass`]. Copies the registry's incremental summary whenever retention changes
+/// (only under a held [`ReplayCursor::state`] lock); each counter is read independently, so
+/// readers see a consistent value per counter but need no snapshot across them.
 #[derive(Debug, Default)]
 struct RetainedStartCounts {
     total: AtomicUsize,
@@ -780,26 +900,14 @@ struct RetainedStartCounts {
 }
 
 impl RetainedStartCounts {
-    fn publish<'a>(&self, retained: impl Iterator<Item = &'a OplogEntry>) {
-        let (mut total, mut http, mut rpc) = (0usize, 0usize, 0usize);
-        for entry in retained {
-            let OplogEntry::Start { function_name, .. } = entry else {
-                unreachable!("only Start entries are retained");
-            };
-            total += 1;
-            match QuotaClass::of_recorded_call(function_name) {
-                Some(QuotaClass::Http) => http += 1,
-                Some(QuotaClass::Rpc) => rpc += 1,
-                None => {}
-            }
-        }
-        self.total.store(total, Ordering::Release);
-        self.http.store(http, Ordering::Release);
-        self.rpc.store(rpc, Ordering::Release);
+    fn publish(&self, retained: &starts::RetainedSummary) {
+        self.total.store(retained.total, Ordering::Release);
+        self.http.store(retained.http, Ordering::Release);
+        self.rpc.store(retained.rpc, Ordering::Release);
     }
 
     fn clear(&self) {
-        self.publish(std::iter::empty());
+        self.publish(&starts::RetainedSummary::default());
     }
 
     fn any(&self) -> bool {

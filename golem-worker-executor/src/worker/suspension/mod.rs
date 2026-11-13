@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use crate::durable_host::durability::GuestImportNumbering;
 use futures::future::Either;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use golem_common::model::entity::EntityInvocationId;
-use golem_common::model::oplog::DurableInvocationId;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
@@ -217,6 +217,11 @@ impl OwnerSuspension {
         }
         for activity in &state.external_activities {
             match state.activities.get(activity) {
+                Some(ActivityClass::Neutral { dependencies, .. })
+                    if !dependencies.is_empty()
+                        && dependencies
+                            .iter()
+                            .all(|id| state.activities.contains_key(id)) => {}
                 Some(ActivityClass::SourceWait { store_id })
                     if state.stores.get(store_id).is_some_and(|store| {
                         store.driver.runtime_run.is_some()
@@ -375,6 +380,19 @@ impl RuntimeSource {
 }
 
 impl ExternalActivity {
+    pub(crate) fn coordinate_entity<'a, F: Future>(
+        &'a self,
+        invocation: &'a EntityInvocationId,
+        future: F,
+    ) -> EntityCoordinate<'a, F> {
+        EntityCoordinate {
+            activity: self,
+            invocation,
+            future,
+            enabled: None,
+        }
+    }
+
     /// Only the receive is passive; the caller retains the activity for all processing.
     /// The source must identify the runtime that can produce this receive's next event.
     pub(crate) fn receive<'a, F: Future>(
@@ -421,6 +439,77 @@ pub(crate) struct ExternalReceive<'a, F> {
     source: &'a RuntimeSource,
     future: F,
     fence_delivery: bool,
+}
+
+pub(crate) struct EntityCoordinate<'a, F> {
+    activity: &'a ExternalActivity,
+    invocation: &'a EntityInvocationId,
+    future: F,
+    enabled: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
+impl<'a, F> EntityCoordinate<'a, F> {
+    pub(crate) fn after(mut self, enabled: &'a std::sync::atomic::AtomicBool) -> Self {
+        self.enabled = Some(enabled);
+        self
+    }
+}
+
+impl<F: Future> Future for EntityCoordinate<'_, F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: the inner future is structurally pinned and never moved.
+        let this = unsafe { self.get_unchecked_mut() };
+        {
+            let mut state = this.activity.owner.state.lock().unwrap();
+            this.activity
+                .invalidated
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            state
+                .activities
+                .insert(this.activity.activity.clone(), ActivityClass::Unknown);
+            OwnerSuspension::invalidate(&mut state);
+        }
+        let wake = Arc::new(ExternalReceiveWake {
+            owner: this.activity.owner.clone(),
+            activity: this.activity.activity.clone(),
+            invalidated: this.activity.invalidated.clone(),
+            forward: cx.waker().clone(),
+        });
+        let waker = futures::task::waker_ref(&wake);
+        let result =
+            unsafe { Pin::new_unchecked(&mut this.future) }.poll(&mut Context::from_waker(&waker));
+        if result.is_pending()
+            && this
+                .enabled
+                .is_none_or(|enabled| enabled.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            let mut state = this.activity.owner.state.lock().unwrap();
+            if !wake.invalidated.load(std::sync::atomic::Ordering::Relaxed)
+                && state.stopped.is_none()
+                && let Some(dependency) = state.entity_activities.get(this.invocation).cloned()
+            {
+                state.next_classification = state.next_classification.wrapping_add(1);
+                let classification = state.next_classification;
+                state.activities.insert(
+                    this.activity.activity.clone(),
+                    ActivityClass::Neutral {
+                        classification,
+                        dependencies: vec![dependency],
+                    },
+                );
+                OwnerSuspension::invalidate(&mut state);
+            }
+        }
+        result
+    }
+}
+
+impl<F> Drop for EntityCoordinate<'_, F> {
+    fn drop(&mut self) {
+        self.activity.active();
+    }
 }
 
 struct ExternalReceiveWake {
@@ -772,30 +861,8 @@ impl<F: Future> Future for CoordinatedRpc<F> {
 pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
-    guest_imports: Mutex<GuestImports>,
+    guest_imports: Arc<GuestImportNumbering>,
     guest_blocked: tokio::sync::Notify,
-}
-
-/// The guest import calls of one Store, in the order the guest made them.
-///
-/// Wasmtime registers the activity of a concurrent guest import and polls the host future once
-/// inside the guest's call, before the guest can make another call. So the newest import activity
-/// is the only one that can still take the next invocation id in guest call order.
-#[derive(Default)]
-struct GuestImports {
-    latest: Option<RuntimeActivityId>,
-    invocation_ids: HashMap<RuntimeActivityId, DurableInvocationId>,
-}
-
-/// The invocation id of a guest import call, as far as the Store's import order allows.
-pub(crate) enum GuestImportInvocationId {
-    /// The call already reserved this id for an earlier durable call it made.
-    Reserved(DurableInvocationId),
-    /// The call is the guest's newest import, so it can reserve the next id now.
-    Reservable,
-    /// The guest made another import call after this one, so an id reserved now could be out
-    /// of guest call order.
-    Late,
 }
 
 impl RuntimeStore {
@@ -806,7 +873,16 @@ impl RuntimeStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new(owner: Arc<OwnerSuspension>) -> Arc<Self> {
+        Self::with_guest_imports(owner, Default::default())
+    }
+
+    /// A Store whose guest import calls are numbered by `guest_imports`.
+    pub(crate) fn with_guest_imports(
+        owner: Arc<OwnerSuspension>,
+        guest_imports: Arc<GuestImportNumbering>,
+    ) -> Arc<Self> {
         let store_id = {
             let mut state = owner.state.lock().unwrap();
             state.next_store_id = state.next_store_id.wrapping_add(1);
@@ -818,7 +894,7 @@ impl RuntimeStore {
         Arc::new(Self {
             owner,
             store_id,
-            guest_imports: Mutex::new(GuestImports::default()),
+            guest_imports,
             guest_blocked: tokio::sync::Notify::new(),
         })
     }
@@ -842,32 +918,6 @@ impl RuntimeStore {
         }
     }
 
-    pub(crate) fn guest_import_invocation_id(
-        &self,
-        activity: RuntimeActivityId,
-    ) -> GuestImportInvocationId {
-        let imports = self.guest_imports.lock().unwrap();
-        if let Some(invocation_id) = imports.invocation_ids.get(&activity) {
-            GuestImportInvocationId::Reserved(*invocation_id)
-        } else if imports.latest == Some(activity) {
-            GuestImportInvocationId::Reservable
-        } else {
-            GuestImportInvocationId::Late
-        }
-    }
-
-    pub(crate) fn record_guest_import_invocation_id(
-        &self,
-        activity: RuntimeActivityId,
-        invocation_id: DurableInvocationId,
-    ) {
-        self.guest_imports
-            .lock()
-            .unwrap()
-            .invocation_ids
-            .insert(activity, invocation_id);
-    }
-
     pub(crate) fn timer(
         &self,
         runtime: RuntimeActivityId,
@@ -888,6 +938,7 @@ impl RuntimeStore {
         self.owner.register_rpc(eligible_after, resume_after)
     }
 
+    #[cfg(test)]
     pub(crate) fn neutral_runtime(
         &self,
         runtime: RuntimeActivityId,
@@ -907,14 +958,27 @@ impl RuntimeStore {
         self.neutral(&mut state, runtime, dependencies)
     }
 
+    #[cfg(test)]
     pub(crate) fn neutral_entity(
         &self,
         runtime: RuntimeActivityId,
         invocation: &EntityInvocationId,
     ) -> Option<NeutralActivity> {
+        self.neutral_entities(runtime, std::slice::from_ref(invocation))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn neutral_entities(
+        &self,
+        runtime: RuntimeActivityId,
+        invocations: &[EntityInvocationId],
+    ) -> Option<NeutralActivity> {
         let mut state = self.owner.state.lock().unwrap();
-        let dependency = state.entity_activities.get(invocation)?.clone();
-        self.neutral(&mut state, runtime, vec![dependency])
+        let dependencies = invocations
+            .iter()
+            .map(|invocation| state.entity_activities.get(invocation).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        self.neutral(&mut state, runtime, dependencies)
     }
 
     fn neutral(
@@ -952,6 +1016,23 @@ impl RuntimeStore {
 
     pub(crate) fn external_activity(&self) -> ExternalActivity {
         self.owner.register_external()
+    }
+
+    pub(crate) fn neutral_externals<'a>(
+        &self,
+        runtime: RuntimeActivityId,
+        external: impl IntoIterator<Item = &'a ExternalActivity>,
+    ) -> Option<NeutralActivity> {
+        let mut state = self.owner.state.lock().unwrap();
+        let dependencies = external
+            .into_iter()
+            .map(|external| {
+                (Arc::ptr_eq(&self.owner, &external.owner)
+                    && state.activities.contains_key(&external.activity))
+                .then(|| external.activity.clone())
+            })
+            .collect::<Option<Vec<_>>>()?;
+        self.neutral(&mut state, runtime, dependencies)
     }
 
     fn delegate(&self, invocation: &EntityInvocationId) -> Option<DelegatedActivity> {
@@ -1245,13 +1326,13 @@ impl RuntimeObserver for RuntimeStore {
             RuntimeObservation::ActivityStarted {
                 activity,
                 kind: RuntimeActivityKind::Import,
-            } => self.guest_imports.lock().unwrap().latest = Some(*activity),
+            } => self.guest_imports.import_started(*activity),
+            RuntimeObservation::ActivityStarted {
+                activity,
+                kind: RuntimeActivityKind::Root,
+            } => self.guest_imports.driver_started(*activity),
             RuntimeObservation::ActivityFinished { activity } => {
-                self.guest_imports
-                    .lock()
-                    .unwrap()
-                    .invocation_ids
-                    .remove(activity);
+                self.guest_imports.activity_finished(*activity)
             }
             _ => {}
         }

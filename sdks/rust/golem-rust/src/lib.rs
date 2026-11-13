@@ -141,6 +141,7 @@ mod raw_bindings {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -201,11 +202,11 @@ pub mod load_snapshot {
     generate!({
         path: "wit",
         world: "golem-rust-load-snapshot",
-        async: ["export:golem:api/load-snapshot@1.5.0#load"],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -250,11 +251,11 @@ pub mod save_snapshot {
     generate!({
         path: "wit",
         world: "golem-rust-save-snapshot",
-        async: ["export:golem:api/save-snapshot@1.5.0#save"],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -299,17 +300,12 @@ pub mod golem_agentic {
     generate!({
         path: "wit",
         world: "golem-agentic",
-        async: [
-            "export:golem:agent/guest@2.0.0#initialize",
-            "export:golem:agent/guest@2.0.0#invoke",
-            "export:golem:tool/guest@0.1.0#invoke",
-            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
-        ],
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
 
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -376,6 +372,7 @@ pub mod oplog_processor {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,

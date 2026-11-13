@@ -23,6 +23,7 @@ import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/worker/scheduled_invocation_cancellation.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/update_mode.proto";
@@ -147,6 +148,8 @@ message CreateWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 7;
   optional golem.component.Principal principal = 8;
   optional golem.worker.InvocationContext invocation_context = 9;
+  optional golem.worker.IdempotencyKey idempotency_key = 10;
+  golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
 }
 
 message CreateWorkerSuccessResponse {
@@ -507,6 +510,7 @@ message CancelInvocationRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
 }
 
 message CancelInvocationResponse {
@@ -696,6 +700,8 @@ message ForkStreamSlotRequest {
   bytes initial_content = 15;
   bool closed = 16;
   StreamSessionExpiryPolicy expiry_policy = 17;
+  // The caller that forks the slot: the principal of the fork target's create request.
+  optional golem.component.Principal principal = 18;
 }
 
 message ForkStreamSlotSuccess {

@@ -25,6 +25,12 @@ pub(all) enum GolemServer {
 } derive(Debug, Eq)
 
 ///|
+pub extend GolemServer with Debug::{to_repr}
+
+///|
+pub extend GolemServer with Eq::{equal, not_equal}
+
+///|
 let local_well_known_token : String = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 
 ///|
@@ -48,17 +54,46 @@ pub fn GolemServer::token(self : GolemServer) -> String {
 }
 
 ///|
+/// How long a streaming call keeps reconnecting without progress: a
+/// connection that stays up for 5 seconds after the server accepted its start
+/// or a resume.
+pub(all) enum ReconnectPolicy {
+  /// Reconnects until the caller cancels the call.
+  Unlimited
+  /// Fails with [BridgeError::Unreachable] once the given number of
+  /// milliseconds pass without progress.
+  Within(Int)
+} derive(Debug, Eq)
+
+///|
+pub extend ReconnectPolicy with Debug::{to_repr}
+
+///|
+pub extend ReconnectPolicy with Eq::{equal, not_equal}
+
+///|
+/// The reconnect policy of a configuration that does not set one: 5 minutes.
+pub let default_reconnect_policy : ReconnectPolicy = Within(5 * 60 * 1000)
+
+///|
 /// Connection configuration shared by all generated bridge clients in this
-/// project. Holds the target [GolemServer] and the application/environment
-/// names the agents live in.
+/// project. Holds the target [GolemServer], the application/environment names
+/// the agents live in, and the reconnect policy of streaming calls.
 pub(all) struct Configuration {
   server : GolemServer
   app_name : String
   env_name : String
+  reconnect : ReconnectPolicy
 } derive(Debug, Eq)
 
 ///|
-let config_cell : Ref[Configuration?] = { val: None }
+pub extend Configuration with Debug::{to_repr}
+
+///|
+pub extend Configuration with Eq::{equal, not_equal}
+
+///|
+let config_cell : Ref[Configuration?] = { val: None, }
 
 ///|
 /// Configure all bridge clients in this project. Can be called repeatedly to
@@ -67,8 +102,9 @@ pub fn configure(
   server : GolemServer,
   app_name : String,
   env_name : String,
+  reconnect? : ReconnectPolicy = default_reconnect_policy,
 ) -> Unit {
-  config_cell.val = Some({ server, app_name, env_name })
+  config_cell.val = Some({ server, app_name, env_name, reconnect })
 }
 
 ///|

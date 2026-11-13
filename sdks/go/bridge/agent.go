@@ -79,11 +79,13 @@ func WithConfig(entries ...ConfigEntry) AgentOption {
 
 // TypedConfigEntry overrides one configuration value given as a schema value,
 // with the schema graph of its type in the schema-native wire form. Generated
-// clients build these from typed configuration structs.
+// clients build these from typed configuration structs. Value encodes the
+// value when the agent is built, through [Encode], so a value its schema does
+// not accept is reported by NewAgent.
 type TypedConfigEntry struct {
 	Path  []string
 	Type  string
-	Value schema.SchemaValue
+	Value func() schema.SchemaValue
 }
 
 // WithTypedConfig overrides configuration values given as schema values; each
@@ -113,11 +115,15 @@ func NewAgent(typeName string, parameters schema.SchemaValue, opts ...AgentOptio
 		return nil, err
 	}
 	for _, entry := range a.typedConfig {
+		sv, err := Encode(entry.Value)
+		if err != nil {
+			return nil, fmt.Errorf("golem: %s config %v: %w", typeName, entry.Path, err)
+		}
 		graph, err := schema.UnmarshalWireGraph([]byte(entry.Type))
 		if err != nil {
 			return nil, fmt.Errorf("golem: %s config %v: %w", typeName, entry.Path, err)
 		}
-		value, err := schema.NewRef(graph).UnpackJSON(entry.Value)
+		value, err := schema.NewRef(graph).UnpackJSON(sv)
 		if err != nil {
 			return nil, fmt.Errorf("golem: %s config %v: %w", typeName, entry.Path, err)
 		}

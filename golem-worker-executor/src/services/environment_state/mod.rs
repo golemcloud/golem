@@ -25,8 +25,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_import::McpImportSource;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolBindingOwner, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig,
+    CompiledToolBinding, ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolRegistration,
 };
 pub use golem_common::model::tool::{ToolActivationSnapshot, ToolDispatchTarget};
 use golem_common::schema::tool::DiscoveredTool;
@@ -225,7 +225,7 @@ pub fn tool_activation_from_mcp(
         .map_err(|error| invalid(format!("invalid MCP projection digest: {error}")))?;
     let projected_tool = tool.to_json().map_err(|error| invalid(error.to_string()))?;
     source.upstream_tool_name = tool.upstream_name;
-    let registered_tool = RegisteredTool {
+    let registered_tool = ToolRegistration {
         deployment_revision: source.deployment_revision,
         release_id: None,
         definition: tool.definition,
@@ -370,21 +370,23 @@ pub fn get_tool_activation_from_deployment(
         .get(owner)
         .and_then(|chains| chains.get(tool_name));
 
-    let consistent = registered_tool.deployment_revision == deployment.deployment_revision
+    let consistent = registered_tool.registration.deployment_revision
+        == deployment.deployment_revision
         && registered_tool
+            .registration
             .definition
             .name()
             .is_some_and(|name| name == tool_name.as_str())
         && binding.deployment_revision == deployment.deployment_revision
         && binding.owner == *owner
         && binding.tool_name == *tool_name
-        && binding.version == registered_tool.definition.version
-        && binding.metadata_version == registered_tool.metadata_version
-        && binding.release_id == registered_tool.release_id
-        && binding.metadata_digest == registered_tool.metadata_digest
-        && binding.account_id == registered_tool.owner_account_id
-        && binding.account_email == registered_tool.owner_account_email
-        && binding.source == registered_tool.source
+        && binding.version == registered_tool.registration.definition.version
+        && binding.metadata_version == registered_tool.registration.metadata_version
+        && binding.release_id == registered_tool.registration.release_id
+        && binding.metadata_digest == registered_tool.registration.metadata_digest
+        && binding.account_id == registered_tool.registration.owner_account_id
+        && binding.account_email == registered_tool.registration.owner_account_email
+        && binding.source == registered_tool.registration.source
         && binding
             .secret_keys_revealable
             .is_subset_of(&binding.secret_keys_readable);
@@ -432,8 +434,8 @@ pub fn get_tool_activation_from_deployment(
 
     let filesystem = golem_common::model::tool::filesystem_capability(
         binding.filesystem_access,
-        &registered_tool.provision,
-        registered_tool.definition.requires_filesystem,
+        &registered_tool.registration.provision,
+        registered_tool.registration.definition.requires_filesystem,
     )
     .map_err(|details| ToolDiscoveryError::InconsistentSnapshot {
         details: format!("tool '{tool_name}' cannot be activated: {details}"),
@@ -442,7 +444,7 @@ pub fn get_tool_activation_from_deployment(
     Ok(ToolActivationOutcome::Ready(Box::new(
         ToolActivationSnapshot {
             filesystem,
-            registered_tool: registered_tool.clone(),
+            registered_tool: registered_tool.registration.clone(),
             binding: binding.clone(),
             mcp_import: None,
             middleware_chain: middleware_chain.cloned(),

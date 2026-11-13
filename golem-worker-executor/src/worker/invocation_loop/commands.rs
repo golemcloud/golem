@@ -59,7 +59,6 @@ pub(super) fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
         match command {
             WorkerCommand::WorkAvailable => work_available = true,
             WorkerCommand::InternalStatusChanged => {}
-            WorkerCommand::ResumeReplay => commands.resume_replay = true,
             WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
                 commands.filesystem_limit_updates.push(sender);
             }
@@ -73,21 +72,9 @@ pub(super) fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
     commands
 }
 
-pub(super) fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
-    commands: DelayedRetryCommands,
-    final_decision: &mut Option<RetryDecision>,
-    has_recovery_failure: bool,
-    deferred_wakeups: &mut VecDeque<WorkerCommand>,
-) {
-    let delayed = matches!(final_decision, Some(RetryDecision::Delayed(_)));
+pub(super) fn apply_delayed_retry_commands_after_unload(commands: DelayedRetryCommands) {
     for sender in commands.filesystem_limit_updates {
         let _ = sender.send(Ok(()));
-    }
-    if commands.resume_replay && delayed && !has_recovery_failure {
-        *final_decision = Some(RetryDecision::Immediate);
-    }
-    if commands.resume_replay {
-        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::ResumeReplay);
     }
 }
 
@@ -100,9 +87,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             WorkerCommand::WorkAvailable => deferred_wakeups
                 .iter()
                 .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
-            WorkerCommand::ResumeReplay => deferred_wakeups
-                .iter()
-                .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
             WorkerCommand::InternalStatusChanged => true,
             WorkerCommand::UpdateFilesystemLimit { .. } => false,
         };

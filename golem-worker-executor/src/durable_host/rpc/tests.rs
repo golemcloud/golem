@@ -24,8 +24,9 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -326,9 +327,36 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 
 #[async_trait]
 impl Rpc for FingerprintMismatchRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn create_demand(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -336,6 +364,8 @@ impl Rpc for FingerprintMismatchRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         Ok(Box::new(FixedDemand {
             fingerprint: self.live_fingerprint,
@@ -344,7 +374,8 @@ impl Rpc for FingerprintMismatchRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -363,7 +394,8 @@ impl Rpc for FingerprintMismatchRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -381,9 +413,36 @@ impl Rpc for FingerprintMismatchRpc {
 
 #[async_trait]
 impl Rpc for ActivationFailureRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn create_demand(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -391,6 +450,8 @@ impl Rpc for ActivationFailureRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         Err(ServiceRpcError::Denied {
             details: "activation denied".to_string(),
@@ -399,7 +460,8 @@ impl Rpc for ActivationFailureRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -418,7 +480,8 @@ impl Rpc for ActivationFailureRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -436,9 +499,36 @@ impl Rpc for ActivationFailureRpc {
 
 #[async_trait]
 impl Rpc for RecordingEnvRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn create_demand(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -446,6 +536,8 @@ impl Rpc for RecordingEnvRpc {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _idempotency_key: Option<IdempotencyKey>,
+        _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         *self.activation_env.lock().unwrap() = Some(self_env.to_vec());
         Ok(Box::new(FixedDemand {
@@ -455,7 +547,8 @@ impl Rpc for RecordingEnvRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -474,7 +567,8 @@ impl Rpc for RecordingEnvRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _method_name: String,
@@ -917,7 +1011,7 @@ fn rejected_rpc_creation_drains_every_config_handle() {
 fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId(Uuid::from_u128(1));
-    let logical_agent_id = ParsedAgentId::try_new(
+    let logical_agent_id = ParsedAgentKey::try_new(
         golem_common::model::agent::AgentTypeName("ephemeral-target".to_string()),
         data_value!("constructor"),
         None,

@@ -6,7 +6,12 @@ impl SelectedWork {
         status: Arc<AgentStatusRecord>,
         constructor_key: Option<&IdempotencyKey>,
         filesystem_turn_used: &mut bool,
+        now: Timestamp,
     ) -> Self {
+        let next_pending = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.is_due(now));
         let filesystem_request = matches!(
             queue.front(),
             Some(
@@ -18,13 +23,9 @@ impl SelectedWork {
         // constructor completes during replay instead of remaining in the pending queue.
         let needs_initialization = filesystem_request
             && constructor_key.is_some_and(|key| {
-                status
-                    .pending_invocations
-                    .first()
-                    .is_some_and(|pending| pending.has_idempotency_key(key))
+                next_pending.is_some_and(|pending| pending.has_idempotency_key(key))
             });
-        let pending_work =
-            !status.pending_updates.is_empty() || !status.pending_invocations.is_empty();
+        let pending_work = status.has_pending_work(now);
         let yield_filesystem_turn = filesystem_request && *filesystem_turn_used && pending_work;
         if !needs_initialization
             && !yield_filesystem_turn
@@ -39,7 +40,7 @@ impl SelectedWork {
         if !status.pending_updates.is_empty() {
             return Self::ApplyPendingUpdate;
         }
-        if let Some(pending) = status.pending_invocations.first() {
+        if let Some(pending) = next_pending {
             return Self::Durable(pending.clone());
         }
         Self::Idle(status)
@@ -200,10 +201,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay => {
-                    self.resume_replay_pending.store(false, Ordering::Release);
-                    self.resume_replay().await
-                }
                 WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
@@ -268,8 +265,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
 
         let status = self.parent.get_last_known_status().await;
-        !status.pending_updates.is_empty()
-            || !status.pending_invocations.is_empty()
+        status.has_pending_work(Timestamp::now_utc())
             || !matches!(
                 self.periodic_snapshot_action(&status),
                 PeriodicSnapshotAction::NotNeeded
@@ -316,6 +312,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             status,
             constructor_key.as_ref(),
             &mut self.filesystem_turn_used,
+            Timestamp::now_utc(),
         ))
     }
 
@@ -498,7 +495,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 // and re-acquire its permit through the FIFO queue if
                 // more durable work remains.
                 let status = self.parent.get_last_known_status().await;
-                if !status.pending_invocations.is_empty() {
+                let now = Timestamp::now_utc();
+                if status
+                    .pending_invocations
+                    .iter()
+                    .any(|pending| pending.is_due(now))
+                {
                     // More durable work remains — self-wake so we return
                     // to the outer loop, release the permit (entering
                     // idle), and re-enter through the scheduler queue.
@@ -513,42 +515,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
-    /// Resumes an interrupted replay process
-    ///
-    /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
-    /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
-    pub(super) async fn resume_replay(&self) -> CommandOutcome {
-        async {
-            if !matches!(
-                monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode()),
-                MonthlyResourceAdmission::Admit
-            ) {
-                return CommandOutcome::Continue;
-            }
-            let mut store = self.store.lock().await;
-
-            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
-
-            match resume_replay_result {
-                Ok(None) => CommandOutcome::Continue,
-                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
-                Err(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
-                }) => {
-                    store.data().set_suspended();
-                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                }
-                Err(err) => {
-                    warn!("Failed to resume replay: {err}");
-                    store.data().set_suspended();
-                    CommandOutcome::BreakOuterLoop(Some(err))
-                }
-            }
-        }
-        .instrument(agent_phase_span!(self, "resume_replay"))
-        .await
-    }
-
     /// Performs a queued invocation on the worker
     ///
     /// The queued invocations internal invocations that we use for

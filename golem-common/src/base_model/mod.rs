@@ -21,6 +21,7 @@ pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod caller;
 pub mod card;
 pub mod component;
 #[allow(unused_assignments)]
@@ -59,6 +60,7 @@ pub mod tool;
 pub mod tool_middleware;
 pub mod tool_middleware_release;
 pub mod tool_release;
+pub mod type_id;
 pub mod worker;
 pub mod worker_filter;
 

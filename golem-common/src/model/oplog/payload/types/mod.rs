@@ -28,7 +28,7 @@ use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 
 use crate::base_model::TransactionId;
 use crate::base_model::durable_stream::{
-    StreamBindingRecord, StreamConsumerObservation, StreamRegistrationInvocation,
+    StreamBindingRecord, StreamCancelRole, StreamConsumerObservation, StreamRegistrationInvocation,
 };
 use crate::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentTerminal};
 pub use crate::base_model::tool::{
@@ -896,6 +896,7 @@ pub enum SerializableRpcError {
 pub enum SerializableEntityBodyExecution {
     Executed,
     Skipped,
+    Trapped,
 }
 
 #[derive(
@@ -976,6 +977,11 @@ pub enum SerializableToolAdmissionRefusal {
     BeforeAttachmentDisposal {
         attachment: ToolAttachmentId,
         terminal: ToolAttachmentTerminal,
+    },
+    BeforeDurableInputDisposal {
+        session: StreamRegistrationInvocation,
+        binding: Box<StreamBindingRecord>,
+        role: StreamCancelRole,
     },
 }
 

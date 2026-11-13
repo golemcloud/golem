@@ -75,7 +75,6 @@ impl InteractiveHandler {
         )
     }
 
-    // NOTE: static because happens during context construction, before Context exists.
     pub fn confirm_manifest_upgrade_plan_apply(yes: bool) -> anyhow::Result<bool> {
         confirm(
             yes,
@@ -342,7 +341,7 @@ impl InteractiveHandler {
         &self,
         component_name: &ComponentName,
         agent_id: &RawAgentId,
-        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
+        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentKey>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {

@@ -13,7 +13,7 @@ Use the Effect SDK's MySQL adapter. It implements Effect's SQL client API over t
 
 ```typescript
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { method } from "@golemcloud/effect-golem";
 import { MySql, MySqlClient } from "@golemcloud/effect-golem/mysql";
 ```
@@ -43,7 +43,7 @@ const findNote = (noteId: number) =>
 const runnable = findNote(1).pipe(Effect.provide(MySqlLive));
 ```
 
-`SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` use this same service for
+`SqlSchema`, `SqlResolver`, and `Migrator` from `effect/sql` use this same service for
 schema decoding, batching, and migrations. Keep `MySql` imports only for MySQL-specific rich
 parameter values or dialect behavior.
 
@@ -58,16 +58,30 @@ return it as state before `methods` constructs the handlers, so
 the implemented agent instance reuses one host connection:
 
 ```typescript
-Effect.gen(function* () {
+// In the existing .implement({ ... }) object:
+init: ({ name }) => Effect.gen(function* () {
+  const state = yield* Ref.make({ count: 0 });
+  yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ name }));
   const sql = yield* MySqlClient.make({
     connectionAddress: "mysql://user:password@localhost:3306/app",
   });
-
-  return {
-    // Agent method implementations close over `sql`.
-  };
-});
+  return { state, sql };
+}),
+methods: ({ state, sql }) => ({
+  // Keep the existing handlers here, using state as before.
+  checkMysql: () => sql`SELECT 'mysql-ok'`.values.pipe(
+    Effect.flatMap((rows) => typeof rows[0]?.[0] === "string"
+      ? Effect.succeed(rows[0][0])
+      : Effect.die("Expected a MySQL string")),
+    Effect.orDie,
+  ),
+}),
 ```
+
+Import `Ref` from `effect`. Preserve all existing init work and state fields; return the client
+alongside them. For the default counter template, remove `.implement<Ref.Ref<{ count: number }>>`
+so the new `{ state, sql }` type is inferred (or update the explicit type). Keep every existing
+handler in `methods: ({ state, sql }) => ({ ... })`; do not return handlers from `init`.
 
 Do not open a new client in every method or wrap this client in a shorter-lived
 `Effect.scoped(...)`. The host MySQL API has no explicit close operation; the SDK relies on the
@@ -84,7 +98,7 @@ checkMysql: method({
 }),
 ```
 
-Add a handler with the same TypeScript-cased property name to the object returned by `implement`.
+Add a handler with the same TypeScript-cased property name to the object returned by `methods`.
 Keep existing contracts and handlers unchanged unless the task requests otherwise.
 
 The CLI agent type comes from the definition's `name`, not the exported TypeScript constant.
@@ -113,20 +127,20 @@ checkMysql: () =>
     const value = rows[0]?.[0];
 
     if (typeof value !== "string") {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "Expected MySQL row 0, column 0 to contain a string",
       );
     }
 
     return value;
-  }),
+  }).pipe(Effect.orDie),
 ```
 
 The handler succeeds with a plain `string`; it does not expose a result wrapper in the agent
 method contract. Make sure the handler explicitly returns `value`; `.values` yields all positional
-rows, not the first cell. SQL failures can remain in the Effect error channel and fail the
-invocation. Do not add `catchAll` merely to make the public success type a plain string. For an
-expected domain failure, declare a matching `error` schema and map the SQL failure to that type.
+rows, not the first cell. The success-only handler converts unexpected SQL failures to defects
+with `Effect.orDie`. For an expected domain failure, declare a matching `error` schema and map the
+SQL failure to that type. Defects fail the invocation; they do not guarantee retry.
 
 ## Query Rows
 
@@ -239,12 +253,13 @@ Nested `withTransaction` calls use savepoints. Do not invent public `begin`, `co
 
 - Import the adapter from `@golemcloud/effect-golem/mysql`, not a native Node driver.
 - Prefer repository code that consumes `SqlClient.SqlClient`; provide it with `MySqlClient.layer`.
-- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/unstable/sql` with the same adapter
+- Use `SqlSchema`, `SqlResolver`, and `Migrator` from `effect/sql` with the same adapter
   layer when their schema, batching, or migration behavior is needed.
 - Return Effects from agent handlers; do not replace them with `async` functions.
 - Reuse one `MySqlClient` per implemented agent instance.
 - Declare every added handler in the agent's `methods` map with an Effect Schema.
 - Use `.values` when the result must be read by row and column position.
 - Use tagged-template interpolation rather than manual MySQL placeholders.
-- Let Golem handle durable retries; do not add retry loops around SQL operations.
+- Let host retry policy handle retryable SQL host failures. A returned `SqlError` still needs
+  handling or mapping at the method boundary; `Effect.orDie` does not guarantee retry.
 - Keep external database initialization idempotent because snapshots do not include MySQL state.

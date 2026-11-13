@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durability::find_durable_call_trap_context;
 
 fn body_span_outcome(
     cancelled: bool,
@@ -163,7 +164,7 @@ pub(in crate::durable_host::p3::http) struct HttpConsumeBodyTask<Ctx> {
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-    trailers_delivery: Arc<HttpTrailersDelivery>,
+    trailers_delivery: Arc<HttpFutureDelivery>,
     /// Open-response state of the send that produced this response (its
     /// `outgoing-http-request` span, retry properties, and — for a replayed
     /// response — the send rebuild info), taken over from the response
@@ -184,7 +185,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
         demand_signal: Arc<HttpBodyDemandSignal>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
-        trailers_delivery: Arc<HttpTrailersDelivery>,
+        trailers_delivery: Arc<HttpFutureDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
         invocation_id: InvocationIdSource,
         activity: TailActivity,
@@ -203,12 +204,14 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
     }
 }
 
-impl<Ctx, U> AccessorTask<U, DurableP3<Ctx>> for HttpConsumeBodyTask<Ctx>
+impl<Ctx> HttpConsumeBodyTask<Ctx>
 where
     Ctx: WorkerCtx,
-    U: Send + 'static,
 {
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+    pub(super) async fn run<U: Send + 'static>(
+        self,
+        accessor: &Accessor<U, DurableP3<Ctx>>,
+    ) -> wasmtime::Result<()> {
         let HttpConsumeBodyTask {
             mut body,
             demand_rx,
@@ -327,17 +330,20 @@ where
         .await
         {
             Ok(stream) => stream,
-            // No parent handle exists yet, so there is nothing to abandon; the
-            // `WorkerExecutorError` carries no call context but there is no scope
-            // to group against either.
+            // No parent handle exists yet, so there is nothing to abandon.
             Err(error) => {
                 if let Some(error) = recording_recovery.error() {
                     return Err(error.into());
                 }
-                return fail_consume_body_task(trailers_tx, wasmtime::Error::from(error), None);
+                let trap_context = find_durable_call_trap_context(&error);
+                return fail_consume_body_task(
+                    trailers_tx,
+                    wasmtime::Error::from_anyhow(error),
+                    trap_context,
+                );
             }
         };
-        let parent_begin = stream.begin_index();
+        let parent_begin = stream.start_index();
 
         // The trailers / body-error terminal, set on the live path; on replay it
         // is taken from the parent marker instead.
@@ -376,13 +382,19 @@ where
                 .await
             {
                 Ok(item) => item,
-                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
-                    return Err(error.into());
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<WorkerExecutorError>(),
+                        Some(WorkerExecutorError::RecoveryRequired { .. })
+                    ) =>
+                {
+                    return Err(wasmtime::Error::from_anyhow(error));
                 }
                 Err(error) => {
                     // Durable-machinery failure (not an HTTP body error): surface
                     // it to the in-flight guest read and leave the parent incomplete.
-                    let trap_context = stream.trap_context();
+                    let trap_context = find_durable_call_trap_context(&error)
+                        .unwrap_or_else(|| stream.trap_context());
                     let _ = demand.send(HttpBodyChunkReply::Failed {
                         message: error.to_string(),
                         trap_context,
@@ -1119,7 +1131,7 @@ where
                     })?;
                 }
             }
-            trailers_delivery.arm(delivery);
+            trailers_delivery.arm(delivery)?;
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
                 // The terminal observer has already settled the delivery token if the guest

@@ -41,12 +41,14 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::agent::ScheduleId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -781,9 +783,13 @@ impl WorkerGrpcApi {
             let method_name = request
                 .method_name
                 .ok_or_else(|| bad_request_error("Missing method name"))?;
+            let freshness_disposition = sanitize_invocation_freshness_disposition(
+                request.freshness_disposition,
+                matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)),
+            );
             self.worker_service
                 .prepare_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     method_name,
                     request.env,
                     config,
@@ -791,12 +797,14 @@ impl WorkerGrpcApi {
                     auth,
                     request.context,
                     request.principal,
+                    request.idempotency_key.map(Into::into),
+                    freshness_disposition,
                 )
                 .await?
         } else if let Some(method_name) = request.method_name {
             self.worker_service
                 .create_for_invocation(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     method_name,
                     request.env,
                     config,
@@ -809,7 +817,7 @@ impl WorkerGrpcApi {
         } else {
             self.worker_service
                 .create(
-                    &agent_id,
+                    &AgentTarget::Current(agent_id.clone()),
                     request.env,
                     config,
                     request.ignore_already_existing,
@@ -899,9 +907,20 @@ impl WorkerGrpcApi {
         let source_agent_id = validate_protobuf_agent_id(request.source_agent_id)?;
         let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
+        let principal = request
+            .principal
+            .map(golem_common::model::agent::Principal::try_from)
+            .transpose()
+            .map_err(|e| bad_request_error(format!("failed converting principal: {e}")))?;
 
         self.worker_service
-            .fork_worker(&source_agent_id, &target_agent_id, oplog_idx, auth)
+            .fork_worker(
+                &source_agent_id,
+                &target_agent_id,
+                oplog_idx,
+                principal,
+                auth,
+            )
             .await?;
 
         Ok(())
@@ -1002,7 +1021,7 @@ impl WorkerGrpcApi {
         let output = self
             .worker_service
             .invoke_agent(
-                &agent_id,
+                &AgentTarget::Current(agent_id),
                 request.method_name,
                 request.method_parameters,
                 request.mode,
@@ -1161,6 +1180,34 @@ impl WorkerGrpcApi {
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
             .into();
+
+        if let Some(scheduled) = request.scheduled {
+            let owner = validate_protobuf_agent_id(scheduled.owner_agent_id)?;
+            let receipt = ScheduleId {
+                id: scheduled
+                    .schedule_id
+                    .ok_or_else(|| bad_request_error("Missing schedule_id"))?
+                    .into(),
+            };
+            let environment = scheduled
+                .target_environment_id
+                .ok_or_else(|| bad_request_error("Missing target_environment_id"))?
+                .try_into()
+                .map_err(|error| {
+                    bad_request_error(format!("invalid target_environment_id: {error}"))
+                })?;
+            return self
+                .worker_service
+                .cancel_scheduled_invocation(
+                    &OwnedAgentId::new(environment, &agent_id),
+                    &idempotency_key,
+                    receipt,
+                    &owner,
+                    auth,
+                )
+                .await
+                .map_err(Into::into);
+        }
 
         let canceled = self
             .worker_service

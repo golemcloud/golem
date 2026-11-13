@@ -676,9 +676,12 @@ mod tests {
 
     fn enabled(server_domain_name: Option<&str>) -> GrpcClientTlsConfig {
         GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
-            client_cert: Base64(vec![]),
-            client_key: Base64(vec![]),
-            server_ca_cert: Base64(vec![]),
+            client_cert: Some(Base64(vec![])),
+            client_cert_file: None,
+            client_key: Some(Base64(vec![])),
+            client_key_file: None,
+            server_ca_cert: Some(Base64(vec![])),
+            server_ca_cert_file: None,
             server_domain_name: server_domain_name.map(str::to_string),
         })
     }

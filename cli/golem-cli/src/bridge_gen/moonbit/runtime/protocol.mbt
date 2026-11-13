@@ -32,6 +32,9 @@ pub(all) struct CreateAgentResponse {
 } derive(Debug)
 
 ///|
+pub extend CreateAgentResponse with Debug::{to_repr}
+
+///|
 /// Response of a `POST /v1/agents/invoke-agent` request.
 pub(all) struct AgentInvocationResult {
   agent_id : AgentId
@@ -66,7 +69,7 @@ pub(all) struct ResolvedAgent {
   configuration : Configuration
   agent_type_name : String
   parameters : SchemaValue
-  phantom_id : String?
+  phantom_id : Uuid?
   config : Array[AgentConfigEntry]
   agent_id : AgentId?
 }
@@ -84,9 +87,10 @@ fn write_request_fields(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> Unit {
+) -> Unit raise {
+  schema_value_check_text(parameters)
   output.write_string("{\"appName\":")
   output.write_string(Json::string(app_name).stringify())
   output.write_string(",\"envName\":")
@@ -98,7 +102,7 @@ fn write_request_fields(
   match phantom_id {
     Some(id) => {
       output.write_string(",\"phantomId\":")
-      output.write_string(Json::string(id).stringify())
+      output.write_string(Json::string(id.to_string()).stringify())
     }
     None => ()
   }
@@ -118,9 +122,9 @@ fn render_create_agent_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
-) -> String {
+) -> String raise {
   let output = StringBuilder()
   write_request_fields(
     output, app_name, env_name, agent_type_name, parameters, phantom_id, config,
@@ -135,14 +139,15 @@ fn render_agent_invocation_request(
   env_name : String,
   agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : String?,
+  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
   method_name : String,
   method_parameters : SchemaValue,
   mode : String,
   schedule_at : String?,
   idempotency_key : String?,
-) -> String {
+) -> String raise {
+  schema_value_check_text(method_parameters)
   let output = StringBuilder()
   write_request_fields(
     output, app_name, env_name, agent_type_name, parameters, phantom_id, config,

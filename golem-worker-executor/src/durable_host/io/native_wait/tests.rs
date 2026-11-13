@@ -94,7 +94,7 @@ impl Sources {
             }
             Source::EntityCancellation => {
                 self.cancellation.cancel();
-                None
+                Some(InterruptKind::EntityCancellation)
             }
             Source::Lifecycle => {
                 let kind = InterruptKind::Suspend(Timestamp::now_utc());
@@ -318,7 +318,9 @@ async fn check_connect(source: Source, order: Order) {
                 sources.trigger(source);
             } else {
                 let error = result.unwrap_err();
-                if matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle) {
+                if matches!(order, Order::DuringWait)
+                    || matches!(source, Source::Lifecycle | Source::EntityCancellation)
+                {
                     if let Some(expected) = expected {
                         assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
                     } else {
@@ -440,7 +442,9 @@ async fn check_input(source: Source, order: Order) {
         let StreamError::Trap(error) = result.unwrap_err() else {
             panic!("raw input must return a typed interruption trap");
         };
-        if matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle) {
+        if matches!(order, Order::DuringWait)
+            || matches!(source, Source::Lifecycle | Source::EntityCancellation)
+        {
             if let Some(expected) = expected {
                 assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
             } else {
@@ -547,7 +551,8 @@ async fn check_splice(source: Source, order: Order) {
             panic!("raw splice must return a typed interruption trap");
         };
         if let Some(expected) = expected
-            && (matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle))
+            && (matches!(order, Order::DuringWait)
+                || matches!(source, Source::Lifecycle | Source::EntityCancellation))
         {
             assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
         } else {

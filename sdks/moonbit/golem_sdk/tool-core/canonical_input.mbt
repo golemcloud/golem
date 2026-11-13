@@ -7,6 +7,9 @@ pub(all) struct CanonicalInputField {
 } derive(Eq)
 
 ///|
+pub extend CanonicalInputField with Eq::{equal, not_equal}
+
+///|
 pub(all) struct CanonicalInputValue {
   name : String
   aliases : Array[String]
@@ -16,10 +19,16 @@ pub(all) struct CanonicalInputValue {
 } derive(Eq)
 
 ///|
+pub extend CanonicalInputValue with Eq::{equal, not_equal}
+
+///|
 pub(all) struct CanonicalInputModel {
   fields : Array[CanonicalInputField]
   record_graph : @model.SchemaGraph
 } derive(Eq)
+
+///|
+pub extend CanonicalInputModel with Eq::{equal, not_equal}
 
 ///|
 fn release_canonical_input_values(
@@ -35,7 +44,7 @@ fn release_canonical_input_values(
 pub fn ToolDef::command_index_by_path(
   self : ToolDef,
   path : Array[String],
-) -> Int? {
+) -> Int32? {
   guard self.commands.get(0) is Some(_) else { return None }
   let mut current = 0
   for part in path {
@@ -62,15 +71,15 @@ pub fn ToolDef::command_index_by_path(
 ///|
 fn ToolDef::path_to_command(
   self : ToolDef,
-  target : Int,
-) -> Array[Int] raise ToolBuildError {
+  target : Int32,
+) -> Array[Int32] raise ToolBuildError {
   guard self.commands.length() > 0 else { raise EmptyCommandTree }
   guard target >= 0 && target < self.commands.length() else {
     raise InvalidCommandTree("command index \{target} is out of bounds")
   }
   self.validate_command_subtree(0, Map([]), Map([]))
-  let path : Array[Int] = []
-  let on_stack : Map[Int, Unit] = Map([])
+  let path : Array[Int32] = []
+  let on_stack : Map[Int32, Unit] = Map([])
   if self.visit_command(0, target, path, on_stack) {
     path
   } else {
@@ -81,9 +90,9 @@ fn ToolDef::path_to_command(
 ///|
 fn ToolDef::validate_command_subtree(
   self : ToolDef,
-  current : Int,
-  visited : Map[Int, Unit],
-  on_stack : Map[Int, Unit],
+  current : Int32,
+  visited : Map[Int32, Unit],
+  on_stack : Map[Int32, Unit],
 ) -> Unit raise ToolBuildError {
   guard self.commands.get(current) is Some(node) else {
     raise InvalidCommandTree("subcommand index \{current} is out of bounds")
@@ -110,10 +119,10 @@ fn ToolDef::validate_command_subtree(
 ///|
 fn ToolDef::visit_command(
   self : ToolDef,
-  current : Int,
-  target : Int,
-  path : Array[Int],
-  on_stack : Map[Int, Unit],
+  current : Int32,
+  target : Int32,
+  path : Array[Int32],
+  on_stack : Map[Int32, Unit],
 ) -> Bool raise ToolBuildError {
   guard self.commands.get(current) is Some(node) else {
     raise InvalidCommandTree("subcommand index \{current} is out of bounds")
@@ -146,7 +155,7 @@ fn ToolDef::visit_command(
 ///|
 pub fn ToolDef::canonical_input_fields(
   self : ToolDef,
-  command_index : Int,
+  command_index : Int32,
 ) -> Array[CanonicalInputField] raise ToolBuildError {
   let path = self.path_to_command(command_index)
   let command = match self.commands.get(command_index) {
@@ -293,7 +302,7 @@ fn option_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
 ///|
 pub fn ToolDef::canonical_input_model(
   self : ToolDef,
-  command_index : Int,
+  command_index : Int32,
 ) -> CanonicalInputModel raise ToolBuildError {
   let fields = self.canonical_input_fields(command_index)
   let graphs = fields.map(field => field.type_)
@@ -316,7 +325,7 @@ pub fn ToolDef::canonical_input_model(
 ///|
 pub fn decode_canonical_input(
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
   input : @types.TypedSchemaValue,
   context : String,
 ) -> Array[CanonicalInputValue] raise @types.ToolError {
@@ -332,7 +341,7 @@ pub fn decode_canonical_input(
 ///|
 fn decode_canonical_input_with_resource_drops(
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
   input : @types.TypedSchemaValue,
   context : String,
   drops : @model.SchemaValueResourceDrops,
@@ -354,7 +363,7 @@ fn decode_canonical_input_with_resource_drops(
 #doc(hidden)
 pub fn decode_canonical_input_value(
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
   typed : @model.TypedSchemaValue,
   context : String,
 ) -> Array[CanonicalInputValue] raise @types.ToolError {
@@ -370,7 +379,7 @@ pub fn decode_canonical_input_value(
 ///|
 fn decode_canonical_input_value_with_resource_drops(
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
   typed : @model.TypedSchemaValue,
   context : String,
   drops : @model.SchemaValueResourceDrops,
@@ -558,7 +567,7 @@ fn canonical_value_for_sdk(
 pub fn forward_canonical_input(
   fields : Array[CanonicalInputValue],
   def : ToolDef,
-  command_index : Int,
+  command_index : Int32,
 ) -> @types.TypedSchemaValue raise @types.ToolError {
   let model = def.canonical_input_model(command_index) catch {
     error =>

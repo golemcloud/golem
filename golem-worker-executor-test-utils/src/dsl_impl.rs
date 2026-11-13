@@ -40,7 +40,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
@@ -76,12 +76,15 @@ use uuid::Uuid;
 
 fn invocation_agent_id(
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<AgentId> {
     let is_ephemeral = component
         .metadata
-        .find_agent_type_by_name_ref(&agent_id.agent_type)
+        .agent_types
+        .iter()
+        .map(|agent| &agent.declaration)
+        .find(|agent| agent.type_name == agent_id.agent_type)
         .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
     let agent_id = if is_ephemeral && agent_id.phantom_id.is_none() {
         agent_id
@@ -564,7 +567,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
@@ -588,6 +591,8 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
                 invocation_context: None,
+                idempotency_key: None,
+                freshness_disposition: 0,
             })
             .await?;
 
@@ -606,7 +611,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: TypedSchemaValue,
@@ -648,7 +653,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
@@ -1250,6 +1255,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                scheduled: None,
             })
             .await?
             .into_inner();

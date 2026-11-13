@@ -107,7 +107,9 @@ The resolved `Response` is the *last* attempt. See the
 `golem-retry-policies-ts` skill for the policy YAML / SDK shape.
 
 This is the recommended path when the retry trigger is a status code (or status-code range). It
-also handles request-body reconstruction, idempotency checks, and replay correctly.
+also handles request-body reconstruction and replay. Retry eligibility is not
+checked against the HTTP method. The host can inject an idempotency key when
+configured, but it does not verify that the peer deduplicates requests.
 
 > **POST/PUT/PATCH are eligible for retry.** The guest cannot opt out with an idempotence-mode
 > switch. Make writes duplicate-safe at the peer: exactly-once processing requires the peer to
@@ -141,16 +143,18 @@ const response = await fetch('https://payments.example.com/charge', {
 });
 
 if (!response.ok) {
-  // The host already retried up to maxRetries times against the 5xx policy;
-  // this is the *final* response after retries were exhausted.
+  // For a matching status (500, 502, 503, 504), this is the last response
+  // after status-policy retries are exhausted. Other error statuses are
+  // returned without retries from this status policy.
   throw new Error(`charge failed: ${response.status}`);
 }
 const charge = await response.json();
 ```
 
-If status retry "doesn't seem to work", load the `golem-local-dev-server` skill and look for the
-`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was not
-retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+To diagnose missing status retries, check that the policy references `status-code`
+and matches the response. Transparent retries require live execution outside
+snapshotting. Inspect the server logs for policy-resolution failures, observational
+calls, or delays above the in-function retry threshold (see `golem-local-dev-server`).
 
 ### Application-level retry
 

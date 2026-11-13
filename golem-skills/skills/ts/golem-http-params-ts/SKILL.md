@@ -87,7 +87,7 @@ Only scalar schemas can be used for inputs bound to path/query/header variables 
 | Schema | Behavior |
 |---|---|
 | `z.string().optional()` (any supported scalar) | Optional — absent query param or header produces `undefined` |
-| `z.array(z.string())` (any supported scalar) | Repeated query params or comma-separated header values |
+| `z.array(z.string())` (any supported scalar) | Repeated query parameters or repeated header field occurrences; each occurrence is one item, with no comma splitting |
 
 **All other schemas** (`z.object(...)`, nested arrays, maps, etc.) can only be used as **body parameters**.
 
@@ -246,13 +246,22 @@ download: method({
 
 ## Accessing the Principal
 
-When authentication is enabled, access the authenticated user via `this.getPrincipal()` inside the handler (it is not a method input). See the `golem-add-http-auth-ts` skill:
+Declare a bare `s.principal()` input to receive the current invocation principal.
+The host injects it; callers supply no wire field and it is not bound to the URL,
+headers, or body. `this.getPrincipal()` instead returns the initialization principal,
+which can differ from a later caller. See the `golem-add-http-auth-ts` skill:
 
 ```typescript
-whoAmI() {
-  const principal = this.getPrincipal();
-  return { value: principal };
-}
+// Contract (import s from '@golemcloud/golem-ts-sdk'):
+whoAmI: method({
+  input: { caller: s.principal() },
+  returns: z.object({ kind: z.string() }),
+  http: http.get('/whoami'),
+}),
+// Handler:
+whoAmI({ caller }) {
+  return { kind: caller.tag };
+},
 ```
 
 ## Related Skills

@@ -5,9 +5,9 @@
 An **ephemeral agent** gets a **fresh instance for every invocation**. Unlike the default durable agents, an ephemeral agent:
 
 - **Has no shared state** — each invocation starts from a clean init function; values set in one call are gone by the next.
-- **Is not replayed** — an oplog is still recorded lazily (inspectable via `golem agent oplog`), but it is never used to replay/recover.
+- **Has no method recovery replay** — an oplog is still recorded lazily (inspectable via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **Discards its memory** after each invocation completes.
-- **Keeps the same identity model** — still addressed by its constructor parameters (`ID`), but every call behaves as if the agent was just created.
+- **Requires phantom addressing** — constructor parameters (`ID`) initialize each invocation, but do not name a reusable durable instance. Create a new `Agent.NewPhantom(id)` client for each independent invocation; an ephemeral invocation's resulting agent ID cannot be passed to `Agent.Bind`.
 
 This fits **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
 
@@ -21,7 +21,7 @@ package handler
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 
-// An ID with no fields is a singleton identity; add fields to address variants.
+// No constructor inputs; each ephemeral invocation still gets fresh state.
 type ID struct{}
 
 type HandleIn struct{ Input string }
@@ -64,7 +64,17 @@ func init() {
 
 ## What "fresh instance per invocation" means
 
-The only difference from a durable agent is `Mode`:
+`Mode` controls state lifetime; client addressing must also use `NewPhantom` for an ephemeral target.
+
+`NewPhantom` chooses its UUID once per client, not once per call. Do not reuse that client for independent invocations: a terminal ephemeral identity cannot be invoked again. For the handler defined above:
+
+```go
+for _, input := range inputs {
+    c := handler.Agent.NewPhantom(handler.ID{})
+    result := handler.Handle.MustCall(c, handler.HandleIn{Input: input})
+    _ = result
+}
+```
 
 ```go
 // DURABLE (default) — state accumulates across calls.
@@ -73,7 +83,7 @@ var Durable = golem.DefineAgent[ID](golem.Spec{Name: "DurableCounter"})
 
 // EPHEMERAL — state resets every call.
 var Ephemeral = golem.DefineAgent[ID](golem.Spec{Name: "EphemeralCounter", Mode: golem.Ephemeral})
-// increment() three times → 1, 1, 1
+// increment() with three fresh NewPhantom clients → 1, 1, 1
 ```
 
 Each invocation of an ephemeral agent:
@@ -118,9 +128,9 @@ var (
 ## Key Constraints
 
 - Ephemeral mode is set at the **agent type level** (`Spec.Mode`) — all instances of the type are ephemeral.
-- Constructor parameters still define identity — different `ID` values are still distinct addressable agents.
-- Ephemeral agents can still call other agents (RPC), make HTTP requests, and use the rest of the SDK — they simply don't retain state or replay.
-- The oplog is recorded lazily (inspectable via `golem agent oplog`) but is never replayed for recovery.
+- Constructor parameters initialize each fresh invocation; they do not create reusable durable identities. Use `NewPhantom(id)`, not plain `Get(id)` or `Bind(agentID)`, for an ephemeral target.
+- Ephemeral agents can still call other agents (RPC), make HTTP requests, and use the rest of the SDK — they do not retain state across independent invocations or recover methods by replay.
+- The oplog is recorded lazily (inspectable via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - Snapshot-based recovery does not apply to ephemeral agents; leave `Spec.Snapshot` at its default.
 
 ### Related Guides

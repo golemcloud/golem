@@ -102,7 +102,7 @@ fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
 ///
 /// Must be called after `preflight`; without it every write is applied, which
 /// is the previous behaviour rather than a wrong result.
-fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int raise {
+fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int32 raise {
   let mut written = 0
   for write in self.writes {
     let unchanged = match write.existing {
@@ -140,41 +140,29 @@ fn main {
   }
   if args[1] == "reexports" {
     let options = @lib.parse_reexports_command_args(command_args) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
+      e => {
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
         return
       }
     }
     run_reexports(options.sdk_path, options.target_dir) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
       e => {
-        println("Error: \{e}")
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
       }
     }
   } else if args[1] == "agents" {
     let options = @lib.parse_agents_command_args(command_args) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
+      e => {
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
         return
       }
     }
     run_agents(options.project_root, options.component_dir) catch {
-      @lib.ComponentRoleError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
-      @lib.ToolEmitError(message) => {
-        println("Error: \{message}")
-        @sys.exit(1)
-      }
       e => {
-        println("Error: \{e}")
+        println("Error: \{@lib.error_message(e)}")
         @sys.exit(1)
       }
     }
@@ -391,6 +379,9 @@ fn run_agents(project_root : String, component_dir : String) -> Unit raise {
       required_pkg_imports.push(
         ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
       )
+      required_pkg_imports.push(
+        ("golemcloud/golem_sdk/interface/golem/core/http", "@coreHttp"),
+      )
       required_pkg_imports.push(("golemcloud/golem_sdk/rpc", "@rpc"))
       required_pkg_imports.push(
         ("golemcloud/golem_sdk/permissions", "@permissions"),
@@ -499,8 +490,8 @@ fn generate_derive_file(
   value_types : Array[@lib.ValueTypeInfo],
   multimodal_enums : Array[@lib.MultimodalEnumInfo],
   config_types : Array[@lib.ConfigTypeInfo],
-  all_config_types? : Array[@lib.ConfigTypeInfo] = [],
-  type_id_prefix? : String = "",
+  all_config_types~ : Array[@lib.ConfigTypeInfo] = [],
+  type_id_prefix~ : String = "",
 ) -> String {
   let all_impls : Array[@syntax.Impl] = []
   if value_types.length() > 0 {

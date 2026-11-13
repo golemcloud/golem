@@ -54,7 +54,8 @@ import (
 // and works with [TypedValue].
 //
 // P is the middleware's static configuration, whose schema is published so an
-// installation can be checked before it runs. Use [Unit] for none.
+// installation can be checked before it runs. Like a method's input, it is a
+// struct whose exported fields are the parameters; use [golem.Unit] for none.
 
 // MiddlewareSpec describes a middleware as a whole.
 type MiddlewareSpec struct {
@@ -191,6 +192,24 @@ type MiddlewareCall interface {
 	middlewareInvocation() *middlewareInvocation
 }
 
+// decodeParameters reads the parameters of an installation, the record of P's
+// fields, into P. A failed decode leaves the value as it was.
+func decodeParameters[P any](inv *middlewareInvocation) (P, error) {
+	var out P
+	c := inv.entry.d.CompileParams(reflect.TypeFor[P]())
+	if c.Invalid != "" {
+		return out, fmt.Errorf("%s cannot be decoded: %s", reflect.TypeFor[P](), c.Invalid)
+	}
+	w := witOf(inv.parameters)
+	dec := engine.Decoder{Nodes: w.Value.ValueNodes}
+	if err := c.Decode(&dec, reflect.ValueOf(&out).Elem(), w.Value.Root); err != nil {
+		dec.Restore()
+		var zero P
+		return zero, err
+	}
+	return out, nil
+}
+
 // MiddlewareContext is the per-invocation context of a typed middleware.
 type MiddlewareContext[P any] struct {
 	inv    *middlewareInvocation
@@ -198,7 +217,7 @@ type MiddlewareContext[P any] struct {
 }
 
 func newMiddlewareContext[P any](inv *middlewareInvocation) (*MiddlewareContext[P], error) {
-	params, err := golem.DecodeTypedValue[P](inv.parameters)
+	params, err := decodeParameters[P](inv)
 	if err != nil {
 		return nil, &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 	}
@@ -340,7 +359,7 @@ func (m *UniversalMiddleware[P]) Handle(h func(*UniversalMiddlewareContext[P]) (
 		return golem.Registered{}
 	}
 	m.e.universal = func(inv *middlewareInvocation) (golem.Option[golem.TypedValue], error) {
-		params, err := golem.DecodeTypedValue[P](inv.parameters)
+		params, err := decodeParameters[P](inv)
 		if err != nil {
 			return golem.None[golem.TypedValue](), &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 		}
@@ -512,8 +531,12 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 		ok = false
 	}
 
+	if problem := engine.ParamsTypeProblem("P", e.paramsType); problem != "" {
+		e.fail("%s", problem)
+		ok = false
+	}
 	g := engine.GraphBuilder{E: d.Engine}
-	paramsRoot := g.Node(d.Compile(e.paramsType))
+	paramsRoot := g.Node(d.CompileParams(e.paramsType))
 	paramsGraph := g.Build()
 	paramsGraph.Root = paramsRoot
 	for typ, why := range g.Invalids {

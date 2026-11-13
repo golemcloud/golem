@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::drop_events::AccessDropEventDrainGuard;
 use super::*;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::LiveAuthorizationPermit;
-use crate::durable_host::durability::reserve_invocation_id;
+use crate::durable_host::durability::GuestImportIdentity;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
 use futures::future::BoxFuture;
 use golem_common::SafeDisplay;
 use golem_common::model::card::PermissionTarget;
-use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
@@ -33,33 +35,39 @@ mod claims;
 mod completion_replay;
 mod execution;
 mod start;
+mod state;
 mod terminal;
-pub(crate) use access_start::reserve_access_invocation_id;
-pub(in crate::durable_host::concurrent) use access_start::reserve_guest_import_invocation_id;
-pub(crate) use access_start::reserve_import_invocation_id;
+pub(crate) use access_start::access_invocation_id;
+pub(in crate::durable_host::concurrent) use access_start::guest_import_invocation_id;
+pub(crate) use access_start::import_invocation_id;
 pub(crate) use access_start::reserve_invocation_id_before_await;
 pub(crate) use access_start::resolve_current_observational_owner;
 pub(crate) use access_start::resolve_observational_owner;
 pub(crate) use claims::admission_refusal_before_start;
 pub(crate) use claims::finish_prepared_access_to_live;
 pub(crate) use claims::finish_prepared_access_to_live_at;
-use claims::prepare_access_replay_continuation;
 use claims::publish_incomplete_replay_tail_access;
 pub(in crate::durable_host::concurrent) use claims::publish_incomplete_replay_tail_at;
 pub(crate) use claims::reproduce_incomplete_start_refusal;
 pub(in crate::durable_host::concurrent) use completion_replay::classify_replay_resolution;
 use completion_replay::expect_cancelled_resolution;
 pub(in crate::durable_host::concurrent) use execution::ambient_trap_context;
+pub use state::{CallRecording, ResolvingReplay, SessionState};
 #[cfg(test)]
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
 pub(crate) use terminal::finish_span_in_memory;
+pub(crate) use terminal::record_released_resource_span;
 #[cfg(test)]
 use terminal::response_has_bounded_encoding_stack;
 
 /// Compile-time policy describing what happens when a [`DurableCallSession`] is dropped without being
 /// explicitly finished or cancelled.
 pub trait DropPolicy: Send + 'static {
+    /// Store-local calls may settle by cancellation when their tool body permanently traps.
+    /// Independently supervised calls retain their own terminal selection.
+    const CANCEL_ON_TOOL_TRAP: bool = false;
+
     fn unfinished_drop(call: DroppedCall, sink: Option<&UnboundedSender<DropEvent>>);
 
     fn production_drop_sink(
@@ -97,29 +105,10 @@ pub(crate) trait CallSpanObserver: std::fmt::Debug + Send + Sync {
 /// finished twice; an unfinished drop runs the `P` drop policy.
 pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     pub(super) start_idx: OplogIndex,
-    /// Carries the [`DurableCallBoundary`] admitted for this session.
-    pub(super) boundary: DurableCallBoundary,
-    pub(super) is_live: bool,
-    /// `true` when a `Start` entry was actually appended. It is `false` during unpersisted
-    /// execution and for replay handles.
-    pub(super) persisted: bool,
-    /// Tracks the (possibly deferred) blob upload of this call's request payload, started when the
-    /// `Start` was reserved. Awaited before the matching `End` / `Cancelled` is appended so an
-    /// upload failure surfaces at the call site rather than only at the leaf oplog's commit barrier.
-    /// `PendingUpload::already_durable()` (a no-op) for replay handles, unpersisted execution, and
-    /// inline requests.
-    pub(super) request_upload: PendingUpload,
-    /// Replay-side resolver receiver; `Some` only for replay handles.
-    pub(super) replay: Option<ReplayCallHandle>,
-    pub(super) finished: bool,
+    state: SessionState<P>,
     /// Span closed by a guest cancellation of this call, including a dropped host future.
     pub(super) cancellation_span_id: Option<SpanId>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// `true` when this replay handle parked on a recorded terminal that was never delivered to
-    /// the guest — a `Cancelled { partial: None }` or an `End` marked `CompletionDiscarded` —
-    /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
-    /// drop an expected state (debug-logged) rather than an anomaly.
-    pub(super) parked_undelivered_replay: bool,
     /// Whether the call was started with [`AccessClaimOptions::host_internal_calls`], which
     /// [`Self::invoke_host_internal_access`] requires of the owner of a host-internal call.
     pub(super) host_internal_calls: bool,
@@ -135,6 +124,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// cancellation or a host-call programming error.
     pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     pub(super) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) tool_trap_disposal: Arc<AtomicBool>,
+    /// An accepted entity Start whose body has not transferred to an independent supervisor.
+    pub(super) entity_admission: bool,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
     /// permission-card authority boundary.
     pub(super) requires_agent_authority: bool,
@@ -150,8 +142,6 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// in-flight permit to the next drain even for policies whose `production_drop_sink` is `None`
     /// (e.g. `NotCancellable`).
     pub(super) cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// Counts this handle as an in-flight live host call while present.
-    pub(super) live_call_permit: Option<LiveCallPermit>,
     pub(super) _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -191,6 +181,10 @@ pub(super) struct BegunCallExecutionScope {
     /// Invocation id of the guest call, recorded in every `Start` of the call; see
     /// [`InvocationIdSource`].
     pub(super) invocation_id: Option<DurableInvocationId>,
+    /// The entity logical position of the call's idempotency key. A Store-holding call takes it
+    /// when it begins, in guest call order, so live execution and replay agree on it. `None`
+    /// outside an entity Store with logical key positions, and for accessor calls.
+    pub(super) logical_key_position: Option<OplogIndex>,
 }
 
 impl BegunCallExecutionScope {
@@ -204,6 +198,7 @@ impl BegunCallExecutionScope {
             durable_scope: self.parent_start_index,
             observational_owner: self.observational_owner,
             invocation_id: self.invocation_id,
+            logical_key_position: self.logical_key_position,
         }
     }
 }
@@ -221,6 +216,8 @@ pub(super) struct CallExecutionScope {
     pub(super) observational_owner: Option<OplogIndex>,
     /// Invocation id of the guest call; see [`BegunCallExecutionScope::invocation_id`].
     pub(super) invocation_id: Option<DurableInvocationId>,
+    /// See [`BegunCallExecutionScope::logical_key_position`].
+    pub(super) logical_key_position: Option<OplogIndex>,
 }
 
 impl CallExecutionScope {
@@ -234,7 +231,7 @@ impl CallExecutionScope {
 }
 
 pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
-    prepared: PreparedAccessStart<Pair, P, Ctx>,
+    prepared: BegunCall<Pair, P, Ctx>,
 }
 
 /// The request of an accessor call's `Start`.
@@ -304,18 +301,20 @@ struct OwnedReplayClaim<Pair: HostPayloadPair, P: DropPolicy, T: 'static, Ctx: W
     _activity: crate::durable_host::tail_work::TailActivity,
 }
 
-struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
+/// The first phase of a durable call: admitted, with its initiation-time scope captured, before
+/// its host-call `Start` is claimed or appended. [`Self::resolve_against_history`] claims the
+/// recorded `Start` or continues live at the replay tail; the accessor, context and direct
+/// (Store-holding) start paths all produce and resolve this type.
+pub(crate) struct BegunCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     is_live: bool,
     unpersisted: bool,
     requires_agent_authority: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
-    primary_runtime: bool,
-    replaying_incomplete_entity: bool,
+    store_replay_state: StoreReplayState,
     tool_entity: bool,
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     admission_boundary: Option<SerializableToolAdmissionRefusal>,
-    local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
@@ -331,6 +330,8 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     /// `Start` append and its handle construction in `finish_access_start`. `Some` for live calls,
     /// `None` on replay.
     live_call_permit: Option<LiveCallPermit>,
+    /// The agent authority a direct call captured at admission or at the replay tail.
+    agent_auth_ctx: Option<AuthCtx>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -401,28 +402,31 @@ impl AccessClaimOptions {
 
 /// Where an accessor call gets the invocation id it records in its `Start`s.
 ///
-/// A guest call that reaches the durable call path through a concurrent guest import records the
-/// invocation id of that import (see [`reserve_invocation_id`]), and replay claims its `Start`s
-/// by that id. Calls observed inside a custom durable invocation record none: replay never claims
-/// them.
+/// A guest import call that makes durable calls reserves an identity in guest call order (see
+/// [`crate::durable_host::durability::GuestImportNumbering`]). Replay claims a call's `Start`s by
+/// that id. Calls observed inside a custom durable invocation record none: replay
+/// never claims them.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum InvocationIdSource {
-    /// The call reserves the id of its guest import when it starts. This is correct only when the
-    /// import has made no `await` that lets the guest make another import call first.
+    /// The id of the guest import the call's accessor belongs to. A call made by a task that is
+    /// not a guest import fails: such a task must say where its id comes from.
     #[default]
-    AtStart,
-    /// The id reserved earlier by the guest import that issued this call, with
-    /// [`reserve_access_invocation_id`] or [`reserve_import_invocation_id`]. `None` means the
-    /// import is not identified by an invocation id.
+    GuestImport,
+    /// The id of the guest import that issued this call, looked up by that import with
+    /// [`access_invocation_id`] or [`import_invocation_id`] and passed to the task that makes the
+    /// call. `None` means the import is not identified by an invocation id.
     Reserved(Option<DurableInvocationId>),
+    /// The call is made by a host task that no single guest import issued. It records no id, and
+    /// replay claims it in oplog order.
+    HostTask,
 }
 
 impl InvocationIdSource {
-    /// The reserved invocation id, or `None` when the call reserves its id at start.
+    /// The id passed from the issuing guest import, or `None` for any other source.
     pub(crate) fn reserved(self) -> Option<DurableInvocationId> {
         match self {
-            Self::AtStart => None,
             Self::Reserved(invocation_id) => invocation_id,
+            Self::GuestImport | Self::HostTask => None,
         }
     }
 }
@@ -464,26 +468,51 @@ pub(crate) enum ScopeReplayRecovery {
 }
 
 #[cfg(test)]
-mod scope_replay_recovery_tests;
+pub use tests::{live_unfinished_handle, live_unfinished_handle_with_counter};
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
-    begin_index: OplogIndex,
     start_idx: OplogIndex,
-    persisted: bool,
+    state: SessionState<P>,
     requires_agent_authority: bool,
     agent_auth_ctx: Option<AuthCtx>,
-    request_upload: PendingUpload,
-    replay: Option<ReplayCallHandle>,
     execution_scope: CallExecutionScope,
     retry: InFunctionRetryController,
     scope_replay_recovery: ScopeReplayRecovery,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// The in-flight permit taken at prepare time (or when a replayed scope switched to live),
-    /// handed on to the [`DurableCallSession`] so the call stays counted continuously from before its
-    /// first oplog append until its terminal is recorded.
-    live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
+}
+
+/// Owns the accepted Start across both sides of the metadata oneshot handoff.
+struct AcceptedAccessStart<P: DropPolicy> {
+    result: Option<(OplogIndex, PendingUpload)>,
+    call: Option<DroppedCall>,
+    marker: Arc<AtomicBool>,
+    sink: Option<UnboundedSender<DropEvent>>,
+    cleanup_sink: Option<UnboundedSender<DropEvent>>,
+    teardown: TeardownProbe,
+    _policy: PhantomData<P>,
+}
+
+impl<P: DropPolicy> AcceptedAccessStart<P> {
+    fn take(mut self) -> (OplogIndex, PendingUpload) {
+        self.call = None;
+        self.result.take().expect("accepted Start result")
+    }
+}
+
+impl<P: DropPolicy> Drop for AcceptedAccessStart<P> {
+    fn drop(&mut self) {
+        if let Some(call) = self.call.take() {
+            if (P::CANCEL_ON_TOOL_TRAP || call.entity_admission)
+                && self.marker.load(Ordering::Acquire)
+            {
+                Cancellable::unfinished_drop(call, self.cleanup_sink.as_ref());
+            } else if !self.teardown.is_tearing_down() {
+                P::unfinished_drop(call, self.sink.as_ref());
+            }
+        }
+    }
 }
 
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], before the
@@ -508,9 +537,9 @@ pub(crate) type BuildSpanCallback = Box<
 >;
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy> {
+pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     Replay(DurableCallSession<Pair, P>),
-    Live(BegunCall<Pair, P>),
+    Live(BegunCall<Pair, P, Ctx>),
 }
 
 fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
@@ -532,7 +561,7 @@ pub(super) struct ScopedRetryHost<'a, H> {
 
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     pub fn is_live(&self) -> bool {
-        self.is_live
+        self.state.is_executing()
     }
 
     /// The invocation id recorded in the `Start`s of this call.
@@ -541,13 +570,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     pub(crate) fn is_persisted(&self) -> bool {
-        self.persisted || !self.is_live
+        self.state.has_recorded_start()
     }
 
     pub(crate) fn take_historical_reconstruction(&mut self) -> Option<HistoricalReconstruction> {
-        self.replay
-            .as_mut()
-            .and_then(ReplayCallHandle::take_historical_reconstruction)
+        self.state.take_historical_reconstruction()
     }
 
     pub async fn recorded_request<Ctx: WorkerCtx>(
@@ -620,13 +647,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
-    /// The boundary index returned by `begin_durable_function`.
-    /// Used by call sites that derive a stable identifier from that index (e.g. the idempotency-key
-    /// derivation).
-    pub fn begin_index(&self) -> OplogIndex {
-        self.boundary.begin_index()
-    }
-
     pub(crate) fn require_incomplete_repair_readiness(
         &mut self,
         readiness: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
@@ -641,6 +661,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    /// The inputs of this call's idempotency key.
+    pub(crate) fn idempotency_key_position<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> IdempotencyKeyPosition {
+        ctx.idempotency_key_position(self.execution_scope.logical_key_position)
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {
@@ -749,20 +777,6 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
 fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionType) -> bool {
     is_accessor_supported_function_type(function_type)
         || matches!(function_type, DurableFunctionType::WriteRemote)
-}
-
-/// The first phase of a two-phase durable call, produced by [`DurableCallSession::begin`]. The
-/// boundary index is known; the host-call `Start` has not yet been
-/// written or claimed. Resolve replay before preparing a live request with [`Self::resolve`].
-pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
-    boundary: DurableCallBoundary,
-    execution_scope: BegunCallExecutionScope,
-    retry: InFunctionRetryController,
-    requires_agent_authority: bool,
-    agent_auth_ctx: Option<AuthCtx>,
-    drop_sink: Option<UnboundedSender<DropEvent>>,
-    cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    _phantom: PhantomData<(Pair, P)>,
 }
 
 #[cfg(test)]

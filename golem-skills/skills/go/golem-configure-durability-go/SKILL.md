@@ -21,7 +21,7 @@ regardless of mode.
 
 1. **Decide the mode** — durable (default) unless the agent is genuinely stateless.
 2. **Set `Mode`** on the `golem.Spec` in the definition package (omit it for durable).
-3. **Add a snapshot policy** if the oplog would otherwise grow unboundedly.
+3. **Add a snapshot policy** to reduce recovery replay cost, not oplog writes or storage growth.
 4. **Build** — run `golem build`.
 
 ## Durable Agents (Default)
@@ -35,9 +35,9 @@ so you never write it explicitly:
 - No special code needed — durability is automatic.
 
 You **cannot opt out of oplog writes for a durable agent** — the oplog is how
-durability works. If oplog volume or replay cost is the concern (long-running
-agents, heartbeats, polling, recurring tasks), do not try to skip persistence;
-add **periodic snapshots** instead (below).
+durability works. Do not try to skip persistence to reduce oplog volume.
+Snapshots reduce **recovery replay cost**, not oplog writes or storage growth.
+Use an explicit snapshot policy for recovery (below).
 
 ```go
 // Package counter is the DEFINITION of a standard durable agent.
@@ -89,9 +89,17 @@ func init() {
 ## Durable with Periodic Snapshots
 
 Same durability guarantees as the default, but recovery starts from the **latest
-snapshot** instead of replaying the whole oplog. Use this whenever the oplog grows
-unboundedly — long-running agents, high-frequency state changes, heartbeats,
-polling loops, recurring tasks.
+snapshot** and replays subsequent oplog entries instead of the whole oplog.
+This reduces replay cost, not oplog writes or storage growth.
+
+Periodic snapshots run at invocation boundaries or while the agent is idle;
+they do not interrupt an endless handler on a timer. Split recurring work into
+bounded invocations if it must reach snapshot points.
+
+For Go, implement a custom `golem.Snapshotter` as well as setting a policy.
+Custom recovery supports state restoration and `OnRestore` after restart.
+Default JSON recovery and manual snapshot-based component updates have separate
+runtime limitations. See `golem-custom-snapshot-go` before enabling snapshots.
 
 Set the `Snapshot` field on the `golem.Spec`:
 
@@ -124,7 +132,7 @@ The snapshot policy constructors are:
 | `golem.SnapshotDisabled` | The zero value — the platform never snapshots. |
 | `golem.SnapshotDefault` | Snapshot at the platform's default cadence. |
 | `golem.SnapshotEveryN(n uint16)` | Snapshot every `n` invocations. |
-| `golem.SnapshotPeriodic(d time.Duration)` | Snapshot on a fixed time interval. |
+| `golem.SnapshotPeriodic(d time.Duration)` | Snapshot when due at an invocation boundary or while idle, not inside a running handler. |
 
 ### What gets snapshotted
 
@@ -140,8 +148,9 @@ type Snapshotter interface {
 ```
 
 Without a `Snapshotter`, the snapshot is the JSON of the state's **exported**
-fields only. If your durable state is unexported (the common case), implement
-`Save`/`Load` on the `*state` before relying on snapshots.
+fields only. Use `Save`/`Load` on the `*state` for recovery even when all fields
+are exported; default JSON serialization does not remove the recovery limitation
+described above.
 
 ## Ephemeral Agents
 
@@ -168,7 +177,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 | Long-running saga or multi-step pipeline | **Durable** (default) |
 | Pure computation, no side effects worth persisting | **Ephemeral** |
 | Agent that calls external APIs with at-least-once semantics | **Durable** (default) |
-| Long-running agent with heartbeats, polling, or recurring tasks | **Durable + periodic snapshots** |
+| Agent with bounded heartbeat, polling, or recurring invocations | **Durable + periodic snapshots** |
 | Any durable agent whose oplog grows so large that replay is slow | **Durable + periodic snapshots** |
 
 When in doubt, use the default (durable). Ephemeral is an optimization for agents

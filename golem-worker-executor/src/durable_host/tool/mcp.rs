@@ -96,7 +96,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
         )
         .await?;
     // Consume the logical entity position on live and replay, exactly as RPC does.
-    let key = ctx.with_ctx(|ctx| ctx.derive_idempotency_key(call.begin_index()).to_string());
+    let key = ctx.with_ctx(|ctx| ctx.derive_idempotency_key(call.start_index()).to_string());
     let response = 'response: {
         if !call.is_live() {
             match call.replay_context(ctx).await? {

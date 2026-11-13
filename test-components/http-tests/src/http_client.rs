@@ -7,6 +7,7 @@ pub trait HttpClient {
 
     async fn run(&self) -> String;
     async fn run_with_interrupt(&self) -> String;
+    async fn send_with_random_key(&self, explicit_key: bool) -> String;
     async fn send_request(&mut self);
     fn process_response(&mut self) -> String;
 }
@@ -31,6 +32,25 @@ impl HttpClient for HttpClientImpl {
 
         send_restart_request().await;
         format!("{status} {body}")
+    }
+
+    async fn send_with_random_key(&self, explicit_key: bool) -> String {
+        let port = std::env::var("PORT").unwrap();
+        let key = format!(
+            "{:016x}{:016x}:reserve_inventory",
+            golem_rust::wasip3::random::random::get_random_u64(),
+            golem_rust::wasip3::random::random::get_random_u64(),
+        );
+        let mut request = Request::post(format!("http://localhost:{port}/reservations"))
+            .header("x-reservation-id", &key);
+        if explicit_key {
+            request = request.header("idempotency-key", &key);
+        }
+        let response = http::send(request.body(Vec::new()).unwrap())
+            .await
+            .expect("Reservation failed");
+        assert_eq!(response.status().as_u16(), 204);
+        key
     }
 
     async fn send_request(&mut self) {

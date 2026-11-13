@@ -36,7 +36,7 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
-use golem_common::model::tool_middleware::RegisteredToolMiddleware;
+use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareName};
 use golem_common::schema::AgentTypeKind;
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -56,6 +56,8 @@ pub enum DeploymentError {
     AgentTypeNotFound(String),
     #[error("Tool {0} not found")]
     ToolNotFound(ToolName),
+    #[error("Tool middleware {0} not found")]
+    ToolMiddlewareNotFound(ToolMiddlewareName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -69,6 +71,7 @@ impl SafeDisplay for DeploymentError {
             Self::DeploymentNotFound(_) => self.to_string(),
             Self::AgentTypeNotFound(_) => self.to_string(),
             Self::ToolNotFound(_) => self.to_string(),
+            Self::ToolMiddlewareNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -103,6 +106,41 @@ impl DeploymentService {
             deployment_repo,
             native_tool_catalog,
         }
+    }
+
+    pub async fn list_environment_type_ids(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<
+        Vec<(
+            golem_common::model::type_id::TypeIdKind,
+            String,
+            golem_common::model::type_id::TypeId,
+        )>,
+        DeploymentError,
+    > {
+        self.deployment_repo
+            .list_environment_type_ids(environment_id.0)
+            .await?
+            .into_iter()
+            .map(|row| row.into_model().map_err(Into::into))
+            .collect()
+    }
+
+    pub async fn resolve_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        type_id: golem_common::model::type_id::TypeId,
+    ) -> Result<Option<(golem_common::model::type_id::TypeIdKind, String)>, DeploymentError> {
+        self.deployment_repo
+            .get_environment_type_id(environment_id.0, type_id.into())
+            .await?
+            .map(|row| {
+                row.into_model()
+                    .map(|(kind, name, _)| (kind, name))
+                    .map_err(Into::into)
+            })
+            .transpose()
     }
 
     pub async fn list_deployments(
@@ -689,6 +727,7 @@ mod tests {
         let account_id = AccountId::new();
         let account_email = golem_common::model::account::AccountEmail::new("owner@example.com");
         DeployedRegisteredAgentType {
+            type_id: golem_common::model::type_id::TypeId::try_from(1u32).unwrap(),
             agent_type: AgentTypeSchema {
                 kind,
                 type_name: AgentTypeName(name.to_string()),

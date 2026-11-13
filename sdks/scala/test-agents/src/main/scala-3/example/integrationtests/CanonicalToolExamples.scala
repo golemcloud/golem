@@ -20,18 +20,19 @@ import golem.runtime.annotations.*
 import golem.tool.{ToolInputStream, ToolOutputStream}
 import zio.blocks.schema.Schema
 
+import java.net.URI
+
 type GolemPath = _root_.golem.schema.GolemPath
-type Url       = _root_.golem.schema.Url
 type Instant   = _root_.java.time.Instant
 
-implicit val optionUrlIntoSchema: _root_.golem.schema.IntoSchema[Option[Url]] =
-  new _root_.golem.schema.IntoSchema[Option[Url]] {
-    private val inner: _root_.golem.schema.IntoSchema[Url] = _root_.golem.schema.IntoSchema[Url]
+implicit val optionUriIntoSchema: _root_.golem.schema.IntoSchema[Option[URI]] =
+  new _root_.golem.schema.IntoSchema[Option[URI]] {
+    private val inner: _root_.golem.schema.IntoSchema[URI] = _root_.golem.schema.IntoSchema[URI]
 
     override lazy val graph: _root_.golem.schema.SchemaGraph =
       inner.graph.copy(root = _root_.golem.schema.t.option(inner.graph.root))
 
-    override def toValue(value: Option[Url]): _root_.golem.schema.SchemaValue =
+    override def toValue(value: Option[URI]): _root_.golem.schema.SchemaValue =
       _root_.golem.schema.SchemaValue.OptionValue(value.map(inner.toValue))
   }
 
@@ -280,7 +281,7 @@ trait GitRemoteTool {
   def add(
     verbose: Int,
     name: String,
-    url: Url,
+    url: URI,
     track: Seq[String],
     master: Option[String],
     tags: Boolean,
@@ -304,8 +305,8 @@ trait GitRemoteTool {
   @constraint(mutexGroups = Array(Array[Any]("add"), Array[Any]("delete")))
   def setUrl(
     name: String,
-    newurl: Url,
-    oldurl: Option[Url],
+    newurl: URI,
+    oldurl: Option[URI],
     push: Boolean,
     add: Boolean,
     delete: Boolean
@@ -316,7 +317,7 @@ final class GitRemoteToolImpl extends GitRemoteTool {
   def add(
     verbose: Int,
     name: String,
-    url: Url,
+    url: URI,
     track: Seq[String],
     master: Option[String],
     tags: Boolean,
@@ -327,8 +328,8 @@ final class GitRemoteToolImpl extends GitRemoteTool {
 
   def setUrl(
     name: String,
-    newurl: Url,
-    oldurl: Option[Url],
+    newurl: URI,
+    oldurl: Option[URI],
     push: Boolean,
     add: Boolean,
     delete: Boolean

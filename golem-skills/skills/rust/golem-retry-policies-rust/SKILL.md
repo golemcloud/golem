@@ -58,7 +58,7 @@ retryPolicyDefaults:
 
 ### Policy Evaluation Order
 
-When an error occurs, policies are evaluated in **descending priority order**. The first matching predicate's policy is applied. If no user-defined policy matches, the built-in default policy (3 retries, exponential backoff, clamped to [100ms, 1s], 15% jitter) is used.
+When an error occurs, policies are evaluated in **descending priority order**. The first matching predicate's policy is applied. If no user-defined policy matches, the built-in default policy (3 total attempts: the initial attempt and up to 2 retries, exponential backoff, clamped to [100ms, 1s], 15% jitter) is used.
 
 ### Base Policies
 
@@ -78,7 +78,7 @@ When an error occurs, policies are evaluated in **descending priority order**. T
 | `timeBox` | Limits retries to a wall-clock duration |
 | `clamp` | Clamps computed delay to a `[minDelay, maxDelay]` range |
 | `addDelay` | Adds a constant offset on top of the computed delay |
-| `jitter` | Adds random noise (±factor × delay) to avoid thundering herds |
+| `jitter` | Adds positive jitter, producing a delay in `[delay, delay + factor × delay]`, to avoid thundering herds |
 | `filteredOn` | Apply the inner policy only when a predicate matches; otherwise give up |
 | `andThen` | Run the first policy until it gives up, then switch to the second |
 | `union` | Retry if *either* sub-policy wants to; pick the shorter delay |
@@ -291,7 +291,7 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - **Name**: `default`
 - **Priority**: `0`
 - **Predicate**: `true` (matches everything)
-- **Policy**: Up to 3 retries, exponential backoff (factor 3.0), delays clamped to [100ms, 1s], 15% jitter
+- **Policy**: 3 total attempts (the initial attempt and up to 2 retries), exponential backoff (factor 3.0), delays clamped to [100ms, 1s], 15% jitter
 
 ## Key Constraints
 
@@ -299,5 +299,5 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - Policy names must be unique within an environment
 - Higher priority policies are evaluated first; the first matching predicate wins
 - `with_named_policy` is scoped — the policy is restored when the closure exits
-- Inline retries (automatic transparent retries for transient network errors) happen before the policy system kicks in
+- Inline retries (automatic transparent retries for transient network errors) already use the semantic retry policy system
 - Changes made via CLI or REST API take effect immediately for running agents

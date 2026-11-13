@@ -15,10 +15,11 @@
 use super::{
     OutboundRpcDenial, RpcTargetActivation, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
     WasmRpcTargetActivation, classified_host_error, classify_rpc_error,
-    create_embedded_invocation_span, install_embedded_span, restore_embedded_span,
+    embedded_invocation_span_builder, install_embedded_span, restore_embedded_span,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
@@ -43,11 +44,12 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::AgentTarget;
+use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
@@ -80,13 +82,12 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentId,
+    logical_agent_id: ParsedAgentKey,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -98,7 +99,6 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation: WasmRpcTargetActivation::DeferredEphemeral { env, config },
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -107,7 +107,7 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<OwnedAgentId> {
     let Some(logical_agent_id) = ephemeral_logical_agent_id else {
@@ -126,6 +126,44 @@ pub(super) fn invocation_target_agent_id(
     ))
 }
 
+/// The idempotency key inputs and the logical target of one durable RPC. Once the call's `Start`
+/// index is known, [`Self::at`] gives its idempotency key and the agent it dispatches to. A live
+/// call uses it in the `Start` writer step; replay and repair use it with the recorded index.
+#[derive(Clone)]
+pub(super) struct RpcCallTarget {
+    key_position: IdempotencyKeyPosition,
+    logical_remote_agent_id: OwnedAgentId,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
+}
+
+impl RpcCallTarget {
+    pub(super) fn new(
+        key_position: IdempotencyKeyPosition,
+        logical_remote_agent_id: &OwnedAgentId,
+        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
+    ) -> Self {
+        Self {
+            key_position,
+            logical_remote_agent_id: logical_remote_agent_id.clone(),
+            ephemeral_logical_agent_id: ephemeral_logical_agent_id.cloned(),
+        }
+    }
+
+    pub(super) fn at(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(IdempotencyKey, OwnedAgentId), WorkerExecutorError> {
+        let idempotency_key = self.key_position.derive(start_index);
+        let remote_agent_id = invocation_target_agent_id(
+            &self.logical_remote_agent_id,
+            self.ephemeral_logical_agent_id.as_ref(),
+            &idempotency_key,
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        Ok((idempotency_key, remote_agent_id))
+    }
+}
+
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
@@ -135,7 +173,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -165,7 +202,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             ),
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -183,7 +219,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -206,7 +241,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation,
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -241,7 +275,8 @@ fn set_rpc_target_replay_pending<Ctx: WorkerCtx>(
 /// fingerprint matches the one persisted at construction time. Failures are returned as
 /// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
 /// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
-/// a fingerprint change is always permanent.
+/// a fingerprint change is always permanent. `idempotency_key` identifies the create the
+/// activation may perform; only the recorded activation call passes one.
 pub(super) async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
@@ -253,10 +288,12 @@ pub(super) async fn activate_rpc_target(
     config: Vec<AgentConfigEntryDto>,
     auth_ctx: &AuthCtx,
     expected_fingerprint: Option<AgentFingerprint>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<Box<dyn RpcDemand>, Error> {
     let demand = rpc
         .create_demand(
-            remote_agent_id,
+            AgentTarget::Current(remote_agent_id.agent_id()),
+            remote_agent_id.environment_id,
             method_name,
             created_by,
             agent_id,
@@ -264,6 +301,8 @@ pub(super) async fn activate_rpc_target(
             stack,
             config,
             auth_ctx,
+            idempotency_key,
+            InvocationFreshnessDisposition::MayExist,
         )
         .await
         .map_err(|err| classified_host_error(classify_rpc_error(&err), err.to_string()))?;
@@ -335,6 +374,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             config.clone(),
             auth_ctx,
             expected_fingerprint,
+            None,
         );
         tokio::pin!(activation);
         match futures::future::select(activation, interrupt_signal).await {
@@ -427,13 +467,10 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     request: HostRequestGolemRpcCreate,
     with_agent_authority: bool,
-) -> Result<
-    (
-        DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
-        Arc<InvocationContextSpan>,
-    ),
-    WorkerExecutorError,
-> {
+) -> anyhow::Result<(
+    DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
+    Arc<InvocationContextSpan>,
+)> {
     let function_type = rpc_connection_function_type(with_agent_authority);
     let begun = if with_agent_authority {
         DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin_with_agent_authority(
@@ -445,7 +482,6 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
         DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin(ctx, function_type.clone())
             .await?
     };
-    let begin_index = begun.begin_index();
     match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
             let attributes = HashMap::from([
@@ -473,13 +509,22 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
             match begun.start_live_with_span(ctx, request, started).await {
                 Ok(handle) => Ok((handle, span)),
                 Err(error) => {
-                    ctx.end_function(&function_type, begin_index).await?;
                     finish_span_in_memory(ctx, span.span_id())?;
-                    Err(error)
+                    Err(error.into())
                 }
             }
         }
-        ResolvedCall::Replay(handle) => {
+        ResolvedCall::Replay(mut handle) => {
+            let recorded = match handle.recorded_request(ctx).await {
+                Ok(recorded) => recorded,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            if recorded.remote_agent_id != request.remote_agent_id {
+                return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("RPC connection to {}", request.remote_agent_id),
+                    format!("RPC connection to {}", recorded.remote_agent_id),
+                )));
+            }
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     "RPC connection Start carrying span_started",
@@ -598,10 +643,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 DurableFunctionType::WriteRemote,
             )
             .await?;
-        let begin_index = begun.begin_index();
         let mut handle;
         let decision;
         let mut rejection_span = None;
+        let key_position = begun.idempotency_key_position(self);
 
         match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
@@ -620,25 +665,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
                         .span_id
                         .clone();
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let (span, started) = create_embedded_invocation_span(
-                        self,
-                        &connection_span_id,
-                        method_name,
-                        &idempotency_key,
-                    )?;
-                    rejection_span = Some((span, idempotency_key));
+                    let span_started =
+                        embedded_invocation_span_builder(self, &connection_span_id, method_name)?;
+                    let request = HostRequestGolemRpcActivate {
+                        remote_agent_id: remote_agent_id.agent_id(),
+                        method_name: method_name.to_string(),
+                        decision: decision.clone(),
+                    };
+                    let request_key_position = key_position.clone();
                     handle = begun
-                        .start_live_with_span(
-                            self,
-                            HostRequestGolemRpcActivate {
-                                remote_agent_id: remote_agent_id.agent_id(),
-                                method_name: method_name.to_string(),
-                                decision: decision.clone(),
-                            },
-                            started,
-                        )
+                        .start_live_with_index_and_span(self, move |start_index| {
+                            let started = span_started(&request_key_position.derive(start_index));
+                            Ok((request, started))
+                        })
                         .await?;
+                    let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
+                        WorkerExecutorError::runtime("denied RPC activation Start has no span")
+                    })?;
+                    rejection_span = Some((
+                        restore_embedded_span(self, &started)?,
+                        key_position.derive(handle.start_index()),
+                    ));
                 } else {
                     handle = begun
                         .start_live(
@@ -652,41 +699,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await?;
                 }
             }
-            ResolvedCall::Replay(replay) => match replay.replay(self).await? {
-                CallReplayOutcome::Replayed(response) => {
-                    return match response.result {
-                        Ok(target_fingerprint) => {
-                            set_rpc_target_replay_pending(self, rpc_resource, target_fingerprint)?;
-                            Ok(Ok(RpcTargetAdmission::Recorded))
-                        }
-                        Err(error) => Ok(Err(OutboundRpcDenial {
-                            error: InternalRpcError::from(error).into(),
-                            activation_decision: Some(self.derive_idempotency_key(begin_index)),
-                        })),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => {
-                    let recorded = self
-                        .load_recorded_rpc_activation_request(live.start_index())
-                        .await?;
-                    decision = recorded.decision;
-                    if decision.is_err() {
-                        let started = live.recorded_span_started(self).await?.ok_or_else(|| {
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "denied RPC activation Start carrying span_started",
-                                format!(
-                                    "activation Start at {} without span metadata",
-                                    live.start_index()
-                                ),
-                            )
-                        })?;
-                        let idempotency_key = self.derive_idempotency_key(begin_index);
-                        rejection_span =
-                            Some((restore_embedded_span(self, &started)?, idempotency_key));
+            ResolvedCall::Replay(replay) => {
+                let start_index = replay.start_index();
+                match replay.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        return match response.result {
+                            Ok(target_fingerprint) => {
+                                set_rpc_target_replay_pending(
+                                    self,
+                                    rpc_resource,
+                                    target_fingerprint,
+                                )?;
+                                Ok(Ok(RpcTargetAdmission::Recorded))
+                            }
+                            Err(error) => Ok(Err(OutboundRpcDenial {
+                                error: InternalRpcError::from(error).into(),
+                                activation_decision: Some(key_position.derive(start_index)),
+                            })),
+                        };
                     }
-                    handle = live;
+                    CallReplayOutcome::Incomplete(live) => {
+                        let recorded = self
+                            .load_recorded_rpc_activation_request(live.start_index())
+                            .await?;
+                        decision = recorded.decision;
+                        if decision.is_err() {
+                            let started =
+                                live.recorded_span_started(self).await?.ok_or_else(|| {
+                                    WorkerExecutorError::unexpected_oplog_entry(
+                                        "denied RPC activation Start carrying span_started",
+                                        format!(
+                                            "activation Start at {} without span metadata",
+                                            live.start_index()
+                                        ),
+                                    )
+                                })?;
+                            let idempotency_key = key_position.derive(live.start_index());
+                            rejection_span =
+                                Some((restore_embedded_span(self, &started)?, idempotency_key));
+                        }
+                        handle = live;
+                    }
                 }
-            },
+            }
         }
 
         if let Err(error) = decision {
@@ -736,6 +791,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (env.clone(), config.clone(), payload.span_id.clone())
         };
         let stack = self.clone_as_inherited_stack(&span_id);
+        // A repaired activation keeps its Start, so it sends the key of the original attempt.
+        let idempotency_key = key_position.derive(handle.start_index());
         let demand = {
             let rpc = self.rpc();
             let created_by = self.created_by();
@@ -752,6 +809,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config.clone(),
                 handle.agent_auth_ctx(),
                 None,
+                Some(idempotency_key),
             );
             tokio::pin!(activation);
             match futures::future::select(activation, interrupt_signal).await {

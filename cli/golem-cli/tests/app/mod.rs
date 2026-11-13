@@ -42,10 +42,13 @@ mod moonbit_native_tool;
 mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod multipart_snapshot;
-mod plugins;
+mod quantity_interop;
 mod remote_releases;
+mod rust_http_router;
 mod rust_minimal_exports;
+mod rust_refined_tool_args;
 mod rust_streams;
+mod rust_tool_middleware_refined_args;
 mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
 mod scala_http_router;
@@ -56,14 +59,40 @@ mod self_identity;
 mod server_config;
 #[cfg(unix)]
 mod server_restart;
+mod service_config_failure;
 mod ssh;
 mod tls_endpoint;
 mod tool_metadata_conformance;
 mod tool_middleware;
 mod tool_middleware_conformance;
+mod trusted_ingress;
 mod typescript_guest_streams;
 mod typescript_http_router;
 mod typescript_native_source;
+mod uuid_interop;
+
+fn add_moonbit_local_dependency(ctx: &TestContext, module: &str, path: &str) {
+    let manifest_path = ctx.cwd_path_join("moon.mod");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        manifest.replacen("import {", &format!("import {{\n  \"{module}@0.0.1\","), 1),
+    )
+    .unwrap();
+    let workspace_path = ctx.cwd_path_join("moon.work");
+    let workspace = std::fs::read_to_string(&workspace_path).unwrap();
+    let mut members: Vec<String> =
+        serde_json::from_str(workspace.trim().strip_prefix("members = ").unwrap()).unwrap();
+    members.push(path.to_string());
+    std::fs::write(
+        workspace_path,
+        format!(
+            "members = {}\n",
+            serde_json::to_string_pretty(&members).unwrap()
+        ),
+    )
+    .unwrap();
+}
 
 inherit_test_dep!(Tracing);
 
@@ -89,6 +118,8 @@ tag_suite!(
 );
 tag_suite!(scala_http_router, agents_guest_bridge_sources);
 tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
+tag_suite!(quantity_interop, agents_guest_bridge_sources);
+tag_suite!(uuid_interop, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
@@ -121,8 +152,9 @@ tag_suite!(moonbit_native_tool, agents_guest_bridge);
 tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(multipart_snapshot, deploy);
-tag_suite!(plugins, deploy);
+tag_suite!(rust_http_router, agents_guest_bridge);
 tag_suite!(rust_minimal_exports, deploy);
+tag_suite!(rust_refined_tool_args, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
@@ -136,7 +168,10 @@ tag_suite!(tls_endpoint, agents);
 tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(tool_middleware_conformance, deploy);
+tag_suite!(trusted_ingress, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(quantity_interop, agents_guest_bridge);
+tag_suite!(uuid_interop, agents_guest_bridge);
 tag_suite!(typescript_http_router, deploy);
 tag_suite!(typescript_native_source, agents_guest_bridge);
 
@@ -199,7 +234,6 @@ mod cmd {
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static PROFILE: &str = "profile";
-    pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static RESOURCE: &str = "resource";
     pub static RETRY_POLICY: &str = "retry-policy";
@@ -1459,6 +1493,25 @@ impl TestContext {
         self.working_dir.join(path)
     }
 
+    async fn component_wasm(&self, component_name: &str, preset: Option<&str>) -> PathBuf {
+        let mut args = vec!["component", "manifest-trace", "-F", "json"];
+        if let Some(preset) = preset {
+            args.extend(["-P", preset]);
+        }
+        let output = self.cli(args).await;
+        assert!(output.success_or_dump());
+        let trace = output
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|trace| trace["componentName"] == component_name)
+            .unwrap_or_else(|| panic!("missing manifest trace for {component_name}"));
+        self.cwd_path_join(
+            trace["properties"]["componentWasm"]["value"]
+                .as_str()
+                .unwrap(),
+        )
+    }
+
     fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         crate_path().join("test-data").join(path)
     }
@@ -1471,11 +1524,12 @@ impl TestContext {
 /// consistency check should update this helper and all callers together.
 ///
 /// The file's modification time is backdated so that metadata files seeded afterwards are
-/// strictly newer than any wasm copied from the placeholder (copies must preserve the
-/// timestamp: use [`copy_placeholder_wasm`] or `cp -p`). The extraction up-to-date check
-/// compares timestamps strictly, so equal timestamps (possible on filesystems with coarse
-/// timestamp granularity) would re-run extraction against the placeholder, which fails
-/// because it exports no agent guest interface.
+/// strictly newer than prebuilt copies made with [`copy_placeholder_wasm`]. Build commands
+/// that refresh the metadata must backdate the component wasm to 2000 before refreshing
+/// the metadata, so that the metadata stays newer than the component wasm, as required
+/// by the strict timestamp-based up-to-date checks.
+/// Otherwise extraction would run against the placeholder, which exports no agent guest
+/// interface.
 fn placeholder_component_wasm(ctx: &TestContext) -> PathBuf {
     let path = ctx.cwd_path_join("placeholder-component.wasm");
     if !path.exists() {
@@ -1581,6 +1635,14 @@ fn seed_extracted_metadata(
     )
 }
 
+fn seed_empty_component(ctx: &TestContext, component_name: &str, wasm: impl AsRef<Path>) {
+    let wasm = ctx.cwd_path_join(wasm);
+    fs::create_dir_all(wasm.parent().unwrap()).unwrap();
+    copy_placeholder_wasm(placeholder_component_wasm(ctx), &wasm);
+    seed_extracted_metadata(ctx, component_name, &wasm, "[]");
+    seed_extraction_marker(ctx, component_name);
+}
+
 fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
     fs::create_dir_all(&marker_dir).unwrap();
@@ -1594,22 +1656,6 @@ fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {
     .unwrap()
     .success()
     .unwrap();
-}
-
-fn check_component_metadata(
-    wasm: &Path,
-    expected_package_name: String,
-    expected_version: Option<String>,
-) {
-    let wasm = std::fs::read(wasm).unwrap();
-    let payload = wasm_metadata::Payload::from_binary(&wasm).unwrap();
-    let metadata = payload.metadata();
-
-    assert_eq!(metadata.name, Some(expected_package_name));
-    assert_eq!(
-        metadata.version.as_ref().map(|v| v.to_string()),
-        expected_version
-    );
 }
 
 #[must_use]

@@ -63,10 +63,14 @@ export const SecureAgent = defineAgent({
           // Reveal only long enough to derive the non-secret result.
           apiKeyPrefix: Redacted.value(apiKey).slice(0, 4),
         };
-      }),
+      }).pipe(Effect.orDie),
   }),
 });
 ```
+
+Config and secret reads can fail with `ConfigError`. The success-only handler uses `Effect.orDie`
+for unexpected infrastructure failures. To expose a recoverable error, declare an `error` schema
+and map the failure to that domain type. Defects fail the invocation; they do not guarantee retry.
 
 Register the implementation from the component entry point:
 

@@ -21,6 +21,10 @@ use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
 use crate::schema::AgentTypeSchema;
+pub use golem_schema::http::{
+    DurableStreamInputSlotSource, DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions,
+    DurableStreamRouteOptions, DurableStreamSlotOptions, DurableStreamSlotSource, HttpRouteMode,
+};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -32,7 +36,7 @@ pub mod http_files;
 /// Authoritative kind of an execution owner.
 ///
 /// This is persisted at creation time. In particular, an instance name that
-/// happens to look like an external-tool owner never grants that authority.
+/// happens to use a reserved owner namespace never grants that authority.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
@@ -43,13 +47,16 @@ pub enum OwnerKind {
     #[default]
     ComponentAgent,
     EphemeralExternalTool,
+    OplogProcessor,
 }
 
 impl OwnerKind {
     pub const EXTERNAL_TOOL_INSTANCE_PREFIX: &'static str = "~golem-external-tool-owner-";
+    pub const OPLOG_PROCESSOR_INSTANCE_PREFIX: &'static str = "~golem-oplog-processor-";
 
     pub fn is_reserved_instance_name(name: &str) -> bool {
         name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
+            || name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
     }
 
     /// Derives the stable virtual owner name solely from ordinary request
@@ -63,11 +70,29 @@ impl OwnerKind {
         format!("{}{id}", Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
     }
 
+    pub fn oplog_processor_instance_name(id: Uuid) -> String {
+        format!("{}{id}", Self::OPLOG_PROCESSOR_INSTANCE_PREFIX)
+    }
+
     pub fn validate_instance_name(self, name: &str) -> Result<(), String> {
-        let reserved = Self::is_reserved_instance_name(name);
-        match (self, reserved) {
-            (Self::ComponentAgent, true) => Err("agent instance names in the reserved external-tool owner namespace are not allowed".to_string()),
-            (Self::EphemeralExternalTool, false) => Err("external-tool owner metadata does not agree with its reserved instance name".to_string()),
+        match self {
+            Self::ComponentAgent if Self::is_reserved_instance_name(name) => {
+                Err("agent instance names in reserved owner namespaces are not allowed".to_string())
+            }
+            Self::EphemeralExternalTool
+                if !name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX) =>
+            {
+                Err(
+                    "external-tool owner metadata does not agree with its reserved instance name"
+                        .to_string(),
+                )
+            }
+            Self::OplogProcessor if !name.starts_with(Self::OPLOG_PROCESSOR_INSTANCE_PREFIX) => {
+                Err(
+                    "oplog processor owner metadata does not agree with its reserved instance name"
+                        .to_string(),
+                )
+            }
             _ => Ok(()),
         }
     }
@@ -80,6 +105,7 @@ impl TryFrom<i32> for OwnerKind {
         match value {
             0 => Ok(Self::ComponentAgent),
             1 => Ok(Self::EphemeralExternalTool),
+            2 => Ok(Self::OplogProcessor),
             _ => Err(format!("unknown owner kind: {value}")),
         }
     }
@@ -90,6 +116,7 @@ impl From<OwnerKind> for i32 {
         match value {
             OwnerKind::ComponentAgent => 0,
             OwnerKind::EphemeralExternalTool => 1,
+            OwnerKind::OplogProcessor => 2,
         }
     }
 }
@@ -161,6 +188,7 @@ pub struct RegisteredAgentTypeImplementer {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {
+    pub type_id: crate::model::type_id::TypeId,
     pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
 }
@@ -172,6 +200,7 @@ pub struct RegisteredAgentType {
 /// RegisteredAgentType with deployment specific information
 /// Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
 pub struct DeployedRegisteredAgentType {
+    pub type_id: crate::model::type_id::TypeId,
     pub agent_type: AgentTypeSchema,
     pub implemented_by: RegisteredAgentTypeImplementer,
     pub webhook_prefix_authority_and_path: Option<String>,
@@ -180,6 +209,7 @@ pub struct DeployedRegisteredAgentType {
 impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
     fn from(value: DeployedRegisteredAgentType) -> Self {
         Self {
+            type_id: value.type_id,
             agent_type: value.agent_type,
             implemented_by: value.implemented_by,
         }
@@ -648,86 +678,8 @@ pub struct HttpEndpointDetails {
     pub query_vars: Vec<QueryVariable>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub cors_options: CorsOptions,
+    pub mode: Option<HttpRouteMode>,
     pub durable_streams: Option<DurableStreamRouteOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamRouteOptions {
-    pub slots: Vec<DurableStreamSlotOptions>,
-    pub allow_external_writes: Option<bool>,
-    pub allow_stream_delete: Option<bool>,
-    pub allow_invocation_delete: Option<bool>,
-    pub load: Option<DurableStreamRouteLoadOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamSlotOptions {
-    pub source: DurableStreamSlotSource,
-    pub name: Option<String>,
-    pub content_type: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(
-    feature = "full",
-    oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")
-)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum DurableStreamSlotSource {
-    Input(DurableStreamInputSlotSource),
-    Output(DurableStreamOutputSlotSource),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct DurableStreamInputSlotSource {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct DurableStreamOutputSlotSource {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DurableStreamRouteLoadOptions {
-    pub max_concurrent_readers_per_stream: Option<u32>,
-    pub max_append_requests_per_second_per_stream: Option<u32>,
 }
 
 #[derive(
@@ -1282,6 +1234,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
             },
+            mode: None,
             durable_streams: None,
         };
 
@@ -1290,9 +1243,6 @@ mod tests {
             HttpEndpointDetails {
                 durable_streams: Some(DurableStreamRouteOptions {
                     slots: Vec::new(),
-                    allow_external_writes: Some(false),
-                    allow_stream_delete: None,
-                    allow_invocation_delete: Some(true),
                     load: Some(DurableStreamRouteLoadOptions {
                         max_concurrent_readers_per_stream: None,
                         max_append_requests_per_second_per_stream: None,
@@ -1320,9 +1270,6 @@ mod tests {
                             content_type: Some("application/octet-stream".to_string()),
                         },
                     ],
-                    allow_external_writes: None,
-                    allow_stream_delete: Some(false),
-                    allow_invocation_delete: None,
                     load: Some(DurableStreamRouteLoadOptions {
                         max_concurrent_readers_per_stream: Some(8),
                         max_append_requests_per_second_per_stream: Some(25),

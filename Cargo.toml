@@ -16,6 +16,7 @@ members = [
     "golem-shard-manager",
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
+    "golem-worker-executor-tests",
     "golem-worker-service",
     "golem-xfs-quotad",
     "integration-tests",
@@ -93,8 +94,8 @@ bzip2 = "0.6.1"
 bytes = "1.10.1"
 bytesize = "2.7.0"
 camino = "1.1.10"
-cap-fs-ext = "3.4.5" # keep in sync with wasmtime
-cap-std = "3.4.5" # keep in sync with wasmtime
+cap-fs-ext = "3.4.5"
+cap-std = "3.4.5"
 cap-time-ext = "3.4.5"
 cargo_metadata = "0.21.0"
 cargo_toml = "0.22.1"
@@ -122,7 +123,7 @@ desert_rust = { version = "0.1.11", features = ["bigdecimal", "uuid", "chrono", 
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
-etcd-client = { version = "0.21.0", features = ["tls"] }
+etcd-client = { git = "https://github.com/golemcloud/etcd-client", rev = "1a3789dedac7e3d21982dfc6b612b1834f53df26", features = ["tls"] }
 evicting_cache_map = "0.4.0"
 expectrl = "0.8.0"
 fancy-regex = "0.14.0"
@@ -164,6 +165,7 @@ include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
 inquire = { version = "0.9.4", default-features = false, features = ["crossterm", "fuzzy"] }
+ipnet = { version = "2.12.1", features = ["serde"] }
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
@@ -282,7 +284,7 @@ tap = "1.0.1"
 tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.12", default-features = true }
+test-r = { version = "3.0.14", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }
@@ -333,21 +335,21 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.13", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.5.0", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
-wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
-wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
-wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
-wasmtime-wizer = { version = "=46.0.1", features = ["component-model", "wasmtime"] }
+wasmtime = { version = "=50.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
+wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2", "p3"] }
+wasmtime-wasi-http = { version = "=50.0.1", features = ["p3"] }
+wasmtime-wizer = { version = "=50.0.1", features = ["component-model", "wasmtime"] }
 wat = "1.248.0"
 wax = "0.7.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.251"
 wit-encoder = "0.251"
@@ -357,10 +359,10 @@ x509-parser = "0.18.1"
 zstd = "0.13"
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
-wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
+wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
 rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 

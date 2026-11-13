@@ -38,7 +38,7 @@ const scheduleReport = () =>
     const recorder = yield* DelayedRecorderDefinition.client.get({ name });
     yield* recorder.recordCount.schedule(scheduledAt, { value: newCount });
     return newCount;
-  }).pipe(Effect.orDie);
+  }).pipe(Effect.scoped, Effect.orDie);
 ```
 
 Here `state` is the snapshot-backed `Ref` initialized by the agent implementation. Keep the
@@ -67,12 +67,13 @@ const scheduleIncrement = Effect.gen(function* () {
 ```
 
 Do not translate the Promise-based TypeScript SDK mechanically. In this Effect SDK there is no
-generated `.scheduleCancelable()` variant, and `.schedule(...)` does not accept a JavaScript
-`Date`, an ISO string, or an epoch-millisecond number directly.
+generated `.scheduleCancelable()` variant. `.schedule(...)` accepts `Datetime.Input`: a WIT
+datetime, a JavaScript `Date`, an Effect `DateTime`, or a numeric epoch-millisecond timestamp.
+ISO strings are not supported. Invalid or out-of-range values fail during normalization.
 
 ## Datetime Representation
 
-The schedule time is an absolute Unix timestamp represented as:
+The schedule time is an absolute Unix timestamp. For nanosecond precision, use the WIT form:
 
 ```typescript
 const scheduledAt = {
@@ -82,16 +83,16 @@ const scheduledAt = {
 ```
 
 `seconds` is a `bigint`. `nanoseconds` is the fractional part of the second as a number from
-`0` through `999_999_999`. Convert milliseconds explicitly as shown above; passing
-`Date.now() + delayMs` directly has the wrong type and units.
+`0` through `999_999_999`. Convert milliseconds explicitly as shown above when constructing the
+WIT record, or pass `Date.now() + delayMs` directly as a numeric epoch-millisecond input.
 
 Treat the requested time as a lower bound. Scheduler polling and already queued work on the target
 agent can delay execution beyond that instant.
 
 ## Cancellation
 
-Every `.schedule(...)` call returns a `Client.ScheduledInvocation`. Keep the returned handle only
-when later cancellation is required:
+Every `.schedule(...)` call returns a `Client.ScheduledInvocation` owned by its allocating Scope.
+Use it for cancellation only while that Scope remains open:
 
 ```typescript
 const cancelBeforeStart = Effect.gen(function* () {
@@ -99,20 +100,23 @@ const cancelBeforeStart = Effect.gen(function* () {
     value,
   });
 
-  // Later, before the invocation starts:
+  // Before execution starts, within this same open Scope:
   yield* scheduled.cancel();
-});
+}).pipe(Effect.scoped);
 ```
 
 Cancellation is best-effort and becomes a no-op once execution has started. Dropping the handle
 does not cancel the schedule. The handle wraps a live host resource and is not schema-serializable:
 
-- it may be retained in an ordinary in-memory `Ref` while the agent instance remains live;
+- closing the allocating Scope drops the cancellation resource; a `Ref` does not extend its
+  lifetime, and a handle saved past `Effect.scoped` cannot be used by a later invocation;
 - do not put it in `Snapshot.define(...)` state;
 - the pinned SDK exposes no stable schedule id or API for reopening the handle after restoration.
 
-When recovery-safe stopping is required, persist a logical flag or generation number and let a
-stale scheduled invocation observe that state and exit without doing work.
+For later cancellation, persist a generation number, include it in the scheduled method input,
+and let stale invocations exit without doing work. Increment the generation on cancellation and
+restart; a boolean alone allows an old invocation to resume work after a restart. See the complete
+workflow in [`golem-recurring-task-effect`](../golem-recurring-task-effect/SKILL.md).
 
 ## Use Cases
 

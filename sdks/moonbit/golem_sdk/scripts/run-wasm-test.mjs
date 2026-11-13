@@ -421,9 +421,21 @@ const importObject = {
       memory.setUint32(resultPtr + 4, 0, true)
     },
   },
+  "wasi:random/random@0.3.0": {
+    "get-random-u64"() {
+      const [value] = crypto.getRandomValues(new BigUint64Array(1))
+      return BigInt.asIntN(64, value)
+    },
+  },
   "golem:agent/host@2.0.0": {
     "parse-agent-id"() {
       throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
+    },
+    "make-agent-id"() {
+      throw new Error("unexpected identity creation in SDK unit-test host")
+    },
+    "[static]wasm-rpc.create"() {
+      throw new Error("unexpected RPC connection in SDK unit-test host")
     },
   },
   "wasi:logging/logging": {

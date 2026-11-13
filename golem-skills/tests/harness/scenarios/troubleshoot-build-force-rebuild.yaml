@@ -16,9 +16,9 @@ steps:
       - "golem-troubleshoot-build"
     verify:
       expectedFiles:
-        rust: ["test-app/golem-temp/agents/test_app_rust_main_debug.wasm"]
-        ts: ["test-app/golem-temp/agents/test_app_ts_main.wasm"]
-        effect: ["test-app/golem-temp/agents/test_app_effect_main.wasm"]
-        scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
-        moonbit: ["test-app/golem-temp/final-wasm/test-app:moonbit-main.wasm"]
+        rust: ["test-app/target/wasm32-wasip2/debug/test_app_rust_main.wasm"]
+        ts: ["test-app/golem-temp/agents/test_app_ts_main.preinitialized.wasm"]
+        effect: ["test-app/golem-temp/agents/test_app_effect_main.preinitialized.wasm"]
+        scala: ["test-app/golem-temp/agents/test_app_scala_main.preinitialized.wasm"]
+        moonbit: ["test-app/_build/wasm/debug/test_app_moonbit_main.agent.wasm"]
         go: ["test-app/golem-temp/agents/test_app_go_main.wasm"]

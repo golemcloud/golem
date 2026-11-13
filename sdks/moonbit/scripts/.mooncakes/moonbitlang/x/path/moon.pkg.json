@@ -1,9 +1,0 @@
-{
-    "import": [
-        "moonbitlang/x/path/posix",
-        "moonbitlang/x/path/win32",
-        "moonbitlang/x/path/internal/ffi"
-    ],
-
-    "warn-list": "-1"
-}

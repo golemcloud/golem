@@ -173,3 +173,41 @@ pub mod grpc {
             .inc();
     }
 }
+
+pub mod tls {
+    //! Metrics for the TLS material the services keep current from files.
+
+    use std::time::SystemTime;
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        pub static ref CERTIFICATE_NOT_AFTER_SECONDS: GaugeVec = register_gauge_vec!(
+            "golem_tls_certificate_not_after_seconds",
+            "Unix time at which the TLS certificate in use expires, by use",
+            &["use"]
+        )
+        .unwrap();
+        pub static ref RELOAD_FAILURES_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "golem_tls_certificate_reload_failures_total",
+            "Changed TLS files that could not be used, by use",
+            &["use"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_certificate_not_after(use_name: &str, not_after: SystemTime) {
+        let seconds = match not_after.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(d) => d.as_secs_f64(),
+            Err(e) => -e.duration().as_secs_f64(),
+        };
+        CERTIFICATE_NOT_AFTER_SECONDS
+            .with_label_values(&[use_name])
+            .set(seconds);
+    }
+
+    pub fn record_reload_failure(use_name: &str) {
+        RELOAD_FAILURES_TOTAL.with_label_values(&[use_name]).inc();
+    }
+}

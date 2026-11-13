@@ -41,6 +41,11 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case _ => report.errorAndAbort(s"Invalid $what: expected one type argument in ${ty.show}")
       }
 
+    // A pattern such as `'[Map[k, v]]` also matches subtypes, which the concrete codec rejects.
+    def exact[C](ty: TypeRepr, what: String)(using Type[C]): Unit =
+      if (ty.typeSymbol != TypeRepr.of[C].typeSymbol)
+        report.errorAndAbort(s"Unsupported wire type ${ty.show}: use $what instead")
+
     def body(tpe: TypeRepr): SchemaType = {
       val ty = tpe.dealias
       if (ty.typeSymbol.fullName == "golem.schema.GuestSecretHandle")
@@ -91,6 +96,11 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         return Unstructured.textType(allowList(ty, "UnstructuredText language type"))
       if (ty.typeSymbol.fullName == "golem.schema.UnstructuredBinary")
         return Unstructured.binaryType(allowList(ty, "UnstructuredBinary MIME type"))
+      if (ty.typeSymbol.fullName == "golem.schema.Quantity")
+        return QuantityUnitMacro.spec(using q)(ty.typeArgs.head) match {
+          case Right(spec) => SchemaType(SchemaTypeBody.QuantityType(spec))
+          case Left(error) => report.errorAndAbort(error)
+        }
       ty.asType match {
         case '[Unit]                               => t.tuple(Nil)
         case '[Boolean]                            => t.bool
@@ -107,26 +117,25 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
         case '[golem.UInt]                         => t.u32
         case '[golem.ULong]                        => t.u64
         case '[GolemPath]                          => SchemaType(SchemaTypeBody.PathType(GolemPath.defaultSpec))
-        case '[Url]                                => SchemaType(SchemaTypeBody.UrlType(Url.defaultRestrictions))
+        case '[java.net.URI]                       => SchemaType(SchemaTypeBody.UrlType(UrlRestrictions.empty))
+        case '[golem.schema.Text]                  => SchemaType(SchemaTypeBody.TextType(golem.schema.Text.defaultRestrictions))
         case '[java.time.Instant]                  => SchemaType(SchemaTypeBody.DatetimeType)
         case '[java.time.Duration]                 => SchemaType(SchemaTypeBody.DurationType)
-        case '[golem.Uuid]                         =>
-          builder.register(
-            "uuid.Uuid",
-            () => t.record(List(t.field("high-bits", t.u64), t.field("low-bits", t.u64))),
-            Some("uuid")
-          )
-        case '[Array[Byte]]    => t.list(t.u8)
-        case '[Option[a]]      => t.option(body(TypeRepr.of[a]))
-        case '[Either[e, a]]   => t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
-        case '[Map[k, v]]      => t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
-        case '[List[a]]        => t.list(body(TypeRepr.of[a]))
+        case '[java.util.UUID]                     => t.uuid
+        case '[Array[Byte]]                        => t.list(t.u8)
+        case '[Option[a]]                          => exact[Option[Any]](ty, "Option[A]"); t.option(body(TypeRepr.of[a]))
+        case '[Either[e, a]]                       =>
+          exact[Either[Any, Any]](ty, "Either[E, A]")
+          t.result(Some(body(TypeRepr.of[a])), Some(body(TypeRepr.of[e])))
+        case '[Map[k, v]]      => exact[Map[Any, Any]](ty, "Map[K, V]"); t.map(body(TypeRepr.of[k]), body(TypeRepr.of[v]))
+        case '[List[a]]        => exact[List[Any]](ty, "List[A]"); t.list(body(TypeRepr.of[a]))
         case '[Vector[a]]      => t.list(body(TypeRepr.of[a]))
-        case '[Seq[a]]         => t.list(body(TypeRepr.of[a]))
+        case '[Set[a]]         => exact[Set[Any]](ty, "Set[A]"); t.list(body(TypeRepr.of[a]))
+        case '[Seq[a]]         => exact[Seq[Any]](ty, "Seq[A], List[A] or Vector[A]"); t.list(body(TypeRepr.of[a]))
         case '[Array[a]]       => t.list(body(TypeRepr.of[a]))
         case '[AgentStream[a]] => SchemaType(SchemaTypeBody.StreamType(Some(body(TypeRepr.of[a]))))
         case _                 =>
-          if (ty <:< TypeRepr.of[Tuple]) t.tuple(ty.typeArgs.map(body))
+          if (ty <:< TypeRepr.of[Tuple]) t.tuple(TupleElements.of(using q)(ty).map(body))
           else {
             val sym = ty.typeSymbol
             builder.register(
@@ -139,7 +148,9 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
                     val child   = if (c.isTerm) c.termRef else c.typeRef
                     val fields  = c.caseFields
                     val payload =
-                      if (c.isTerm || c.flags.is(Flags.Module) || fields.isEmpty) None
+                      if (c.isTerm || c.flags.is(Flags.Module)) None
+                      else if (c.flags.is(Flags.Sealed) && !c.flags.is(Flags.Case)) Some(body(child))
+                      else if (fields.isEmpty) None
                       else if (fields.size == 1 && fields.head.name == "value")
                         Some(body(child.memberType(fields.head)))
                       else Some(body(child))

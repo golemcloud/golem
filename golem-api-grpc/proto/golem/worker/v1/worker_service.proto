@@ -29,6 +29,7 @@ import "golem/worker/worker_id.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/worker_metadata.proto";
+import "golem/worker/scheduled_invocation_cancellation.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerService {
@@ -62,6 +63,9 @@ message LaunchNewWorkerRequest {
   optional golem.worker.InvocationContext context = 7;
   optional golem.component.Principal principal = 8;
   optional string method_name = 9;
+  // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target.
+  optional golem.worker.IdempotencyKey idempotency_key = 10;
+  golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
 }
 
 message LaunchNewWorkerResponse {
@@ -95,6 +99,8 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  // The principal of the fork target's create request. Absent means the account of auth_ctx.
+  optional golem.component.Principal principal = 5;
 }
 
 message ForkWorkerResponse {
@@ -200,6 +206,7 @@ message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
   golem.worker.IdempotencyKey idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
 }
 
 message CancelInvocationResponse {

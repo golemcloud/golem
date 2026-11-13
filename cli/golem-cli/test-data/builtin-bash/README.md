@@ -17,7 +17,9 @@ named errors, shared owner files, filesystem denial, discovery isolation, fresh 
 only the passed cwd (and settings brought back from a file), invalid-cwd rejection, local HTTP
 requests, streaming (an endless response piped into
 `head -c 5` must end, which only a client that forwards each chunk allows), completed-call crash
-recovery, idempotency, and subsequent clean invocations. Each invocation prints its elapsed time. Its stderr
+recovery, idempotency, subsequent clean invocations, and, last, a sibling that crashes after it
+writes (`fixture crash`): its output stays, and one plain line names the command before the crash
+text. Each invocation prints its elapsed time. Its stderr
 assertions concern the shell's captured stderr; the commands it calls declare no stderr of their own.
 
 `app::builtin_bash::bound_bash_routes_a_siblings_stderr` calls the fixture's `interleave`, which

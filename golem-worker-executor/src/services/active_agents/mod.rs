@@ -56,7 +56,7 @@ use tracing::{Instrument, debug, info, warn};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
-use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
+use crate::services::agent_filesystem::{AgentFilesystems, FilesystemSetupError};
 use crate::services::card_interest::{
     CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize, CardInterestIndex,
 };
@@ -65,7 +65,7 @@ use crate::services::golem_config::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::entity_invocation::{
-    EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
+    EntityBodyOutcome, EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
     start_native_entity_invocation, start_pre_acquired_entity_invocation,
     start_registered_entity_invocation, start_registered_native_entity_invocation,
 };
@@ -76,10 +76,10 @@ use crate::worker::instance::{
 };
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
+use crate::worker::{CreateIntent, RetirementReason, Worker, WorkerCreationMode};
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
-use crate::worker::{RetirementReason, Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -165,6 +165,8 @@ pub struct InvocationLoops {
     tracker: TaskTracker,
     owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
     construction_admission: Arc<Mutex<bool>>,
+    drain: Arc<tokio::sync::Mutex<()>>,
+    exit_stage: Arc<Mutex<String>>,
     _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
 }
 
@@ -173,6 +175,7 @@ struct InvocationLoopWatcherLifetime(CancellationToken);
 #[derive(Clone)]
 struct RegisteredOwnerOplog {
     oplog: Weak<dyn crate::services::oplog::Oplog>,
+    label: String,
     tasks: Option<crate::worker::tasks::WorkerTasks>,
     shutdown: crate::services::oplog::OplogShutdownHandle,
 }
@@ -233,7 +236,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Result<Self, FilesystemStorageError> {
+    ) -> Result<Self, FilesystemSetupError> {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
@@ -262,7 +265,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Result<Self, FilesystemStorageError> {
+    ) -> Result<Self, FilesystemSetupError> {
         let agent_filesystems =
             Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
@@ -345,6 +348,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
     }
@@ -360,6 +364,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -379,6 +384,38 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 principal,
                 freshness_disposition,
                 WorkerCreationMode::ComponentAgent,
+                create_intent,
+            )
+            .in_current_span()
+            .await?;
+        Ok(active_agent.primary())
+    }
+
+    pub(crate) async fn get_or_add_oplog_processor<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        OwnerKind::OplogProcessor
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+        active_agent
+            .primary
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                InvocationContextStack::fresh(),
+                Principal::anonymous(),
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::OplogProcessor,
+                CreateIntent::UNKEYED_INVOCATION,
             )
             .in_current_span()
             .await?;
@@ -454,6 +491,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 principal,
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
+                CreateIntent::Create {
+                    exclusive: false,
+                    idempotency_key: Some(idempotency_key.clone()),
+                },
             )
             .in_current_span()
             .await?;

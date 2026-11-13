@@ -63,6 +63,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
+            TrapType::Interrupt(InterruptKind::EntityCancellation) => {
+                unreachable!("entity cancellation must settle at its invocation boundary")
+            }
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
@@ -431,7 +434,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             .as_ref()
             .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
         {
-            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+            return Some(InterruptKind::EntityCancellation);
         }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
@@ -556,7 +559,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
         hydrated: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
             payload,
@@ -610,8 +613,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let start_index = self
                 .public_state
                 .worker()
-                .oplog()
-                .add_agent_invocation_started_from_pending(
+                .start_pending_invocation(
                     idempotency_key,
                     payload,
                     stack,
@@ -624,22 +626,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         scope_card_id: scope_card.map(|card| card.scope_card_id),
                     },
                 )
-                .await
-                .map_err(|err| match err.into_refusal() {
-                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
-                    Err(err) => panic!(
-                        "could not encode agent invocation on {}: {err}",
-                        self.agent_id()
-                    ),
-                })?;
-            self.primary_invocation_start_index = Some(start_index);
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
+            let Some(start_index) = start_index else {
+                return Ok(false);
+            };
+            self.primary_invocation_start_index = Some(start_index);
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn on_agent_invocation_finished(&mut self) {
@@ -823,6 +816,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         };
 
         let oplog_entry = match trap_type {
+            TrapType::Interrupt(InterruptKind::EntityCancellation) => {
+                unreachable!("entity cancellation must settle at its invocation boundary")
+            }
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
             TrapType::Interrupt(InterruptKind::Jump) => None,
@@ -877,7 +873,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state.event_service().emit_invocation_finished(
                     full_function_name,
                     &idempotency_key,
-                    self.is_live() || self.state.authoritative_replay_failure,
+                    self.is_live()
+                        || self
+                            .state
+                            .authoritative_replay_failure
+                            .load(Ordering::Acquire),
                 );
             }
         }
@@ -975,7 +975,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live && !self.state.durability_is_suppressed() {
-            if self.state.entity_execution_mode.is_none() {
+            if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
                 self.state
                     .replay_state
                     .release_retained_starts_at_live_invocation_end()

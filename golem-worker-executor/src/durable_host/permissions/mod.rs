@@ -101,14 +101,14 @@ use crate::preview2::golem::permissions::types as permissions_types;
 use crate::preview2::golem::permissions::wallet as permissions_wallet;
 use crate::services::HasWorker;
 use crate::services::card::{CardRevokeResult, CardState, RuntimeCardCreation};
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{DateTime, TimeDelta, Utc};
 use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::{RecipientOwnerContext, RecipientPattern};
 use golem_common::model::card::{

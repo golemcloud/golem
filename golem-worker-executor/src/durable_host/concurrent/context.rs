@@ -13,8 +13,175 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
+
+/// The caller's real replay and liveness handles, retained independently of its Store.
+/// This is deliberately not a `DurableContext`: it cannot drain ambient caller resources or
+/// manufacture a context window. Entity settlement owns only its accepted call.
+pub(crate) struct EntitySettlementContext<Ctx: WorkerCtx> {
+    pub(crate) replay: ReplayState,
+    pub(crate) oplog: Arc<dyn Oplog>,
+    pub(crate) settlement_activity: Option<Arc<crate::worker::suspension::ExternalActivity>>,
+    pub(super) counter: Arc<AtomicUsize>,
+    pub(super) authoritative_failure: Arc<std::sync::atomic::AtomicBool>,
+    linear_memory: crate::services::linear_memory::LinearMemoryTracker,
+    public_state: PublicDurableWorkerState<Ctx>,
+    store_replay_state: StoreReplayState,
+    tool_entity: bool,
+    operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
+    suppressed: bool,
+    replay_application: Option<
+        tokio::sync::mpsc::UnboundedSender<oneshot::Sender<Result<(), WorkerExecutorError>>>,
+    >,
+}
+
+struct ApplyEntityReplay<T: 'static, Ctx: WorkerCtx> {
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    settlement_activity: Option<Arc<crate::worker::suspension::ExternalActivity>>,
+    requests:
+        tokio::sync::mpsc::UnboundedReceiver<oneshot::Sender<Result<(), WorkerExecutorError>>>,
+}
+
+impl<T: 'static, Ctx: WorkerCtx> ApplyEntityReplay<T, Ctx> {
+    async fn run<D: HasData + ?Sized>(mut self, store: &Accessor<T, D>) -> wasmtime::Result<()> {
+        let runtime =
+            store.with(|mut access| (self.get_ctx)(access.data_mut()).runtime_suspension.clone());
+        loop {
+            let neutral = runtime.as_ref().and_then(|runtime| {
+                runtime.neutral_externals(
+                    store.runtime_activity()?,
+                    std::iter::once(self.settlement_activity.as_deref()?),
+                )
+            });
+            let ack = self.requests.recv().await;
+            drop(neutral);
+            let Some(ack) = ack else { break };
+            let result = process_pending_replay_events_access(store, self.get_ctx).await;
+            let _ = ack.send(result);
+        }
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
+    pub(crate) fn capture<T: 'static, D: HasData + ?Sized>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> wasmtime::Result<Self> {
+        let mut captured = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            Self {
+                replay: ctx.state.replay_state.clone(),
+                oplog: ctx.state.oplog.clone(),
+                settlement_activity: ctx
+                    .runtime_suspension
+                    .as_ref()
+                    .map(|runtime| Arc::new(runtime.external_activity())),
+                counter: ctx.state.live_host_call_counter(),
+                authoritative_failure: ctx.state.authoritative_replay_failure.clone(),
+                linear_memory: ctx.linear_memory.clone(),
+                public_state: ctx.public_state.clone(),
+                store_replay_state: ctx.state.store_replay_state.clone(),
+                tool_entity: matches!(
+                    ctx.runtime,
+                    OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+                ),
+                operation: ctx.entity_tool_operation(),
+                suppressed: ctx.state.durability_is_suppressed(),
+                replay_application: None,
+            }
+        });
+        if captured.store_replay_state.role() == ReplayToLiveRole::PrimaryAgent
+            && !captured.suppressed
+        {
+            let (sender, requests) = tokio::sync::mpsc::unbounded_channel();
+            let task = ApplyEntityReplay {
+                get_ctx,
+                settlement_activity: captured.settlement_activity.clone(),
+                requests,
+            };
+            store.spawn(async move |store| task.run(store).await)?;
+            captured.replay_application = Some(sender);
+        }
+        Ok(captured)
+    }
+
+    pub(super) async fn publish_live(
+        &self,
+        start: OplogIndex,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        let pending = match crate::durable_host::begin_replay_to_live(
+            &self.store_replay_state,
+            self.tool_entity,
+            self.operation.clone(),
+            &self.public_state,
+            &self.linear_memory,
+            &self.replay,
+        )
+        .await?
+        {
+            BeginReplayToLive::Pending(pending) => pending,
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while an incomplete entity call was settling",
+                ));
+            }
+        };
+        let outcome = pending
+            .finish_at(Some(
+                SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: start.into(),
+                },
+            ))
+            .await?;
+        if outcome == FinishReplayToLive::Live
+            && let Some(sender) = &self.replay_application
+        {
+            let (ack, received) = oneshot::channel();
+            sender.send(ack).map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "caller Store closed before applying entity replay events",
+                )
+            })?;
+            received.await.map_err(|_| {
+                WorkerExecutorError::runtime(
+                    "caller Store closed without acknowledging entity replay events",
+                )
+            })??;
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn coordinate<F: Future>(
+        &self,
+        invocation: &golem_common::model::entity::EntityInvocationId,
+        future: F,
+    ) -> F::Output {
+        match &self.settlement_activity {
+            Some(activity) => activity.coordinate_entity(invocation, future).await,
+            None => future.await,
+        }
+    }
+
+    pub(crate) async fn coordinate_after<F: Future>(
+        &self,
+        invocation: &golem_common::model::entity::EntityInvocationId,
+        enabled: &std::sync::atomic::AtomicBool,
+        future: F,
+    ) -> F::Output {
+        match &self.settlement_activity {
+            Some(activity) => {
+                activity
+                    .coordinate_entity(invocation, future)
+                    .after(enabled)
+                    .await
+            }
+            None => future.await,
+        }
+    }
+}
 
 /// Synchronous access to real context data. The closure cannot return a borrow of the data,
 /// so neither a Store window nor a mutex guard can escape into an asynchronous operation.
@@ -24,7 +191,7 @@ pub(crate) trait DurableAccess<T: 'static, D: HasData + ?Sized>: Sync {
     fn custom_invocation_scope(&self)
     -> Result<Option<CustomInvocationScope>, WorkerExecutorError>;
 
-    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+    fn call_invocation_id<Ctx: WorkerCtx>(
         &self,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
@@ -60,16 +227,12 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
             .and_then(CustomInvocationContext::current))
     }
 
-    fn reserve_call_invocation_id<Ctx: WorkerCtx>(
+    fn call_invocation_id<Ctx: WorkerCtx>(
         &self,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
-        super::call::reserve_guest_import_invocation_id(
-            self,
-            get_ctx,
-            observed_by_custom_invocation,
-        )
+        super::call::guest_import_invocation_id(self, get_ctx, observed_by_custom_invocation)
     }
 }
 
@@ -137,7 +300,7 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
         Ok(self.custom_invocation_scope)
     }
 
-    fn reserve_call_invocation_id<C: WorkerCtx>(
+    fn call_invocation_id<C: WorkerCtx>(
         &self,
         get_ctx: fn(&mut Ctx) -> &mut DurableWorkerCtx<C>,
         observed_by_custom_invocation: bool,
@@ -146,8 +309,7 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
             return Ok(None);
         }
         self.with_worker_ctx(|ctx| {
-            super::call::reserve_import_invocation_id(get_ctx(ctx), None)
-                .map(|source| source.reserved())
+            super::call::import_invocation_id(get_ctx(ctx), None).map(|source| source.reserved())
         })
     }
 }
@@ -168,15 +330,13 @@ pub(crate) trait DurableContext<Ctx: WorkerCtx> {
     fn finish_scope(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send {
-        self.finish_scope_with_commit(function_type, begin_index, false)
+        self.finish_scope_with_commit(function_type, false)
     }
 
     fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
@@ -249,17 +409,9 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx, A: DurableAccess<T, D> + ?
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        end_durable_function_access(
-            self.store,
-            self.get_ctx,
-            function_type,
-            begin_index,
-            forced_commit,
-        )
-        .await
+        end_durable_function_access(self.store, self.get_ctx, function_type, forced_commit).await
     }
 
     async fn process_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -300,14 +452,12 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for SharedDurableContext<Ctx> {
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         end_durable_function_access(
             self,
             |ctx| ctx.durable_ctx_mut(),
             function_type,
-            begin_index,
             forced_commit,
         )
         .await
@@ -354,10 +504,9 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for DurableWorkerCtx<Ctx> {
     async fn finish_scope_with_commit(
         &mut self,
         function_type: DurableFunctionType,
-        begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.end_durable_function(&function_type, begin_index, forced_commit)
+        self.end_durable_function(&function_type, forced_commit)
             .await
     }
 

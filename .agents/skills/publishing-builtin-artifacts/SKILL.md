@@ -41,7 +41,9 @@ system Python. The protected publisher installs this version explicitly.
 
 1. Use a clean exact release-tag checkout with full history. Push the tag and
    create a draft Golem GitHub release first. The tag must identify the exact
-   head of a PR merged into public `main`, not its squash commit. Use an
+   head of a PR merged into public `main` or the maintenance branch matching the
+   tag version, not its squash commit. The merge commit must remain reachable
+   from that public target branch. Use an
    authenticated `gh` session with pull requests read access for source validation.
 2. Run `BUILTIN_VERSION=<version> cargo make validate-builtin-release` for
    source validation. Add `BUILTIN_DRY_RUN=1` to `cargo make publish-builtin-artifacts`
@@ -53,7 +55,9 @@ system Python. The protected publisher installs this version explicitly.
 4. The task verifies public bytes, generates
    `builtin-artifacts.release.json`, and uploads it to the Golem release without
    replacement. Wait for preparation to attach all native binaries before human
-   draft publication. That event starts Docker publication without repeating full
+   draft publication with `--latest=false` (or uncheck **Set as latest release**
+   in GitHub). Leave Latest promotion to the publication workflow.
+   That event starts Docker publication without repeating full
    CI. Both native and Docker builds fetch the manifest and set
    `GOLEM_BUILTIN_RELEASE=1` before compilation. Do not commit the generated manifest.
 

@@ -287,7 +287,7 @@ fn call_agent_route(
         route_match: test_route_match(method),
         path,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
-            route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+            route_mode: golem_service_base::custom_api::AgentRouteMode::Plain,
             base_path_variables: 0,
             durable_streams: None,
             component_id: ComponentId::new(),
@@ -981,8 +981,13 @@ fn durable_stream_routes_do_not_break_rest_openapi() {
     }
     let spec = spec_for(routes);
     assert!(spec["paths"]["/rest"]["get"].is_object());
+    assert_eq!(spec["paths"]["/rest"]["get"]["x-golem-route-mode"], "plain");
     assert!(spec["paths"]["/rest"]["options"].is_object());
     assert!(spec["paths"]["/rest"]["put"].is_object());
+    assert_eq!(
+        spec["paths"]["/rest"]["put"]["x-golem-route-mode"],
+        "durableStreams"
+    );
     assert!(spec["paths"]["/stream"]["put"].is_object());
     assert!(spec["paths"]["/stream"]["options"].is_null());
 }
@@ -1100,9 +1105,10 @@ fn durable_stream_operations_have_concrete_typed_slots() {
     }
     let mut ids = std::collections::HashSet::new();
     for item in paths.values() {
-        assert_eq!(item["x-golem-route-mode"], "durable-streams");
+        assert_eq!(item["x-golem-route-mode"], "durableStreams");
         for method in ["put", "get", "head", "post", "delete"] {
             if let Some(operation) = item.get(method) {
+                assert_eq!(operation["x-golem-route-mode"], "durableStreams");
                 assert!(ids.insert(operation["operationId"].as_str().unwrap()));
                 assert!(operation["responses"]["503"]["headers"]["Retry-After"].is_object());
             }
@@ -1752,7 +1758,7 @@ fn durable_stream_concrete_slot_yields_to_explicit_rest_route() {
         );
         let item = &spec["paths"][&canonical];
         assert_eq!(item["get"]["description"], "Explicit REST route");
-        assert_eq!(item["get"]["x-golem-route-mode"], "rest");
+        assert_eq!(item["get"]["x-golem-route-mode"], "plain");
         assert_eq!(item["get"]["parameters"][0]["name"], "session");
         assert!(item["get"]["responses"]["204"].is_object());
         assert!(item["get"]["responses"]["200"].is_null());
@@ -1791,8 +1797,9 @@ fn document_is_openapi_3_1_with_servers() {
         json!("Managed api provided by Golem")
     );
     assert_eq!(spec["servers"], json!([{"url":"https://example.com"}]));
-    // No named types in these routes → components has no schemas.
-    assert!(spec["components"].get("schemas").is_none());
+    let schemas = spec["components"]["schemas"].as_object().unwrap();
+    assert_eq!(schemas.len(), 1);
+    assert!(schemas["ErrorsBody"].is_object());
 }
 
 #[test]
@@ -2582,6 +2589,107 @@ fn json_request_body_renders_application_json() {
         body["content"]["application/json"]["schema"]["properties"]["name"]["type"],
         json!("string")
     );
+}
+
+#[test]
+async fn request_validation_errors_are_documented_with_the_returned_json_body() {
+    use crate::api::common::ApiEndpointError;
+    use crate::custom_api::RichRequest;
+    use poem::IntoResponse;
+
+    let body_schema = json_body(record(vec![field("email", str())]));
+    let spec = spec_for(vec![call_agent_route(
+        Method::POST,
+        vec![PathSegment::Literal {
+            value: "email".into(),
+        }],
+        body_schema.clone(),
+        vec![],
+        unit_response(),
+        None,
+    )]);
+    let response = &spec["paths"]["/email"]["post"]["responses"]["400"];
+    let schema_ref = response["content"]["application/json"]["schema"]["$ref"]
+        .as_str()
+        .expect("400 response references its JSON schema");
+    let schema = spec.pointer(schema_ref.strip_prefix('#').unwrap()).unwrap();
+    assert_eq!(schema["properties"]["code"]["type"], "string");
+    assert_eq!(schema["properties"]["errors"]["items"]["type"], "string");
+    assert_eq!(schema["required"], json!(["code", "errors"]));
+    assert!(schema["properties"].get("cause").is_none());
+    let validator = jsonschema::validator_for(schema).unwrap();
+
+    for (body, code, detail) in [
+        (
+            r#"{"email":"ada@example.com","additionalProp1":{}}"#,
+            "REQUEST_JSON_BODY_PARSING_FAILED",
+            "additionalProp1",
+        ),
+        (
+            r#"{"email":"ada@example.com""#,
+            "REQUEST_BODY_INVALID_JSON",
+            "Request body was not valid json",
+        ),
+    ] {
+        let mut request = RichRequest::new(
+            poem::Request::builder()
+                .content_type("application/json")
+                .body(body),
+        );
+        let error = request.parse_request_body(&body_schema).await.unwrap_err();
+        let response = ApiEndpointError::from(error).into_response();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        assert!(
+            response.headers()[http::header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json")
+        );
+        let body: Value = response.into_body().into_json().await.unwrap();
+        assert_eq!(body["code"], code);
+        assert!(
+            body["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains(detail))
+        );
+        assert!(validator.is_valid(&body), "{body}");
+    }
+}
+
+#[test]
+fn request_validation_errors_are_documented_without_a_request_body() {
+    let operation = get_operation(unit_response());
+    assert!(operation["responses"]["400"]["content"]["application/json"].is_object());
+    assert!(operation["responses"]["204"].get("content").is_none());
+}
+
+#[test]
+fn head_request_validation_errors_do_not_advertise_a_body() {
+    use golem_common::model::agent::{CustomHttpMethod, HttpMethod};
+
+    for custom in [false, true] {
+        let mut route = call_agent_route(
+            Method::HEAD,
+            vec![PathSegment::Literal {
+                value: "head".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        if custom {
+            route.route_match = HttpMethod::Custom(CustomHttpMethod {
+                value: "HEAD".into(),
+            })
+            .into();
+        }
+        let operation = operation_for(route, "/head", "head");
+        assert!(operation["responses"]["400"].is_object());
+        assert!(operation["responses"]["400"].get("content").is_none());
+    }
 }
 
 #[test]

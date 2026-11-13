@@ -1,6 +1,25 @@
 {
   "components": {
     "schemas": {
+      "ErrorsBody": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "errors"
+        ],
+        "title": "ErrorsBody",
+        "type": "object"
+      },
       "Input_golem_it_agent_sdk_rust.http.model.JsonBodyResponse": {
         "additionalProperties": false,
         "properties": {
@@ -550,9 +569,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       },
       "options": {
         "responses": {
@@ -692,9 +722,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/cors-agents/{agent-name}/wildcard": {
@@ -724,9 +765,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       },
       "options": {
         "responses": {
@@ -876,9 +928,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/multi-path-vars/{first}/{second}": {
@@ -930,9 +993,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/path-and-header/{resource-id}": {
@@ -984,9 +1058,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/path-and-query/{item-id}": {
@@ -1043,9 +1128,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resource/{id}": {
@@ -1106,9 +1202,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resource/{id}/partial": {
@@ -1149,9 +1256,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/binary": {
@@ -1195,9 +1313,20 @@
                 "style": "simple"
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/guarded-binary/{state}": {
@@ -1253,6 +1382,16 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           },
@@ -1267,7 +1406,8 @@
             "description": "Response 500"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/guarded-text/{state}": {
@@ -1335,6 +1475,16 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           },
@@ -1349,7 +1499,8 @@
             "description": "Response 500"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/json": {
@@ -1379,9 +1530,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/no-content": {
@@ -1404,9 +1566,20 @@
         "responses": {
           "204": {
             "description": "Response 204"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/optional-binary/{found}": {
@@ -1462,11 +1635,22 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/optional/{found}": {
@@ -1508,11 +1692,22 @@
             },
             "description": "Response 200"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "404": {
             "description": "Response 404"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/result-json-json/{ok}": {
@@ -1554,6 +1749,16 @@
             },
             "description": "Response 200"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -1565,7 +1770,8 @@
             "description": "Response 500"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/result-json-void": {
@@ -1596,11 +1802,22 @@
             },
             "description": "Response 200"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "500": {
             "description": "Response 500"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/resp/result-void-json": {
@@ -1624,6 +1841,16 @@
           "204": {
             "description": "Response 204"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          },
           "500": {
             "content": {
               "application/json": {
@@ -1635,7 +1862,8 @@
             "description": "Response 500"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/rest/{tail}": {
@@ -1677,9 +1905,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/restricted-unstructured-binary/{bucket}": {
@@ -1736,9 +1975,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/string-path-var/{path-var}": {
@@ -1779,9 +2029,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
@@ -1838,9 +2099,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/webhook-agents/{agent-name}/set-test-server-url": {
@@ -1883,9 +2155,20 @@
         "responses": {
           "204": {
             "description": "Response 204"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/webhook-agents/{agent-name}/test-webhook": {
@@ -1915,9 +2198,20 @@
               }
             },
             "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
           }
         },
-        "security": []
+        "security": [],
+        "x-golem-route-mode": "plain"
       }
     },
     "/webhooks/cors-agent/{promise-id}": {

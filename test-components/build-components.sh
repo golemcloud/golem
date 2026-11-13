@@ -5,7 +5,7 @@ IFS=$'\n\t'
 # Spread the multi-component applications across chunks to balance compilation cost.
 rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
-effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect")
+effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect")
 scala_test_apps=("tool-streaming-scala")
 moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
 go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go")
@@ -133,7 +133,7 @@ resolve_target_dir() {
   local repo_root="$1"
   local target_dir=""
   if command -v cargo >/dev/null 2>&1; then
-    target_dir=$(cargo metadata --no-deps --format-version 1 --manifest-path "${repo_root}/Cargo.toml" 2>/dev/null \
+    target_dir=$( (cd "$repo_root" && cargo metadata --no-deps --format-version 1 2>/dev/null) \
       | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
   fi
   if [ -z "$target_dir" ]; then
@@ -209,8 +209,7 @@ clean_current_app() {
   esac
 
   local clean_failed=false
-  # The Cargo target resolved above is the only intentional cleanup path outside the repository.
-  if ! CARGO_TARGET_DIR="$TARGET_DIR" "$GOLEM_CLI" clean; then
+  if ! "$GOLEM_CLI" clean --yes; then
     clean_failed=true
   fi
 
@@ -223,6 +222,20 @@ clean_current_app() {
     fi
   fi
 }
+
+if [ "$clean_only" = true ] && [ "$single_group" = false ]; then
+  for app_manifest in "$SCRIPT_DIR"/*/golem.yaml; do
+    [ -f "$app_manifest" ] || continue
+    pushd "$(dirname "$app_manifest")"
+    clean_current_app
+    popd
+  done
+  if [ "$clean_failures" -gt 0 ]; then
+    echo "Failed to clean ${clean_failures} test component application(s)" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 build_rust_apps() {
   local apps=("$@")
@@ -275,7 +288,7 @@ build_go_apps() {
 
     if should_clean; then
       echo "Cleaning $subdir..."
-      "$GOLEM_CLI" clean
+      clean_current_app
     fi
 
     if [ "$check_only" = true ]; then
@@ -435,9 +448,9 @@ if [ "$group" = "benchmarks" ]; then
     echo "Building benchmark tool-streaming components..."
     "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
       golem-it:tool-streaming-rust-caller --yes --skip-check
-    cp golem-temp/agents/golem_it_tool_streaming_rust_provider_release.wasm \
+    cp "$(resolve_target_dir "$PWD/rust-provider")/wasm32-wasip2/release/golem_it_tool_streaming_rust_provider.wasm" \
       ../golem_it_tool_streaming_rust_provider_release.wasm
-    cp golem-temp/agents/golem_it_tool_streaming_rust_caller_release.wasm \
+    cp "$(resolve_target_dir "$PWD/rust-caller")/wasm32-wasip2/release/golem_it_tool_streaming_rust_caller.wasm" \
       ../golem_it_tool_streaming_rust_caller_release.wasm
   fi
   popd || exit
@@ -453,7 +466,7 @@ if [ "$group" = "benchmarks" ]; then
   elif [ "$clean_only" = false ]; then
     echo "Building golem-it:agent-rpc-rust..."
     "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
-    cp golem-temp/agents/golem_it_agent_rpc_rust_release.wasm \
+    cp "$(resolve_target_dir "$PWD/golem-it-agent-rpc-rust")/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm" \
       ../golem_it_agent_rpc_rust_release.wasm
   fi
   popd || exit

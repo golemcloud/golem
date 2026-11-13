@@ -30,7 +30,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
@@ -55,6 +55,55 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 
+impl<Ctx: WorkerCtx> super::Worker<Ctx> {
+    pub(crate) async fn start_pending_invocation(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: golem_common::model::oplog::OplogPayload<
+            golem_common::model::AgentInvocationPayload,
+        >,
+        context: golem_common::model::invocation_context::InvocationContextStack,
+        wallet_pin: golem_common::model::card::InvocationWalletPin,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        use crate::services::oplog::{CommitLevel, OplogOps};
+
+        // The running loop must not wait for a stopping instance to join this loop.
+        let instance = self.instance.lock().await;
+        if !matches!(instance.state(), super::WorkerInstance::Running(_))
+            || self.owner_retirement_requested.is_cancelled()
+        {
+            return Ok(None);
+        }
+        let status = self.get_repaired_status().await?;
+        if !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            return Ok(None);
+        }
+        let index = self
+            .oplog
+            .add_agent_invocation_started_from_pending(
+                idempotency_key,
+                payload,
+                context,
+                wallet_pin,
+            )
+            .await
+            .map_err(|err| match err.into_refusal() {
+                Ok(refusal) => self.refused_by(refusal),
+                Err(err) => panic!(
+                    "could not encode agent invocation on {}: {err}",
+                    self.agent_id()
+                ),
+            })?;
+        self.commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        Ok(Some(index))
+    }
+}
+
 /// Grows smaller native thread stacks for worker construction and nested invocation futures.
 /// The temporary stack is released after each poll, before the future yields. A poll must not
 /// suspend a Wasmtime fiber while on the temporary stack. Remaining-stack estimation uses native
@@ -69,13 +118,38 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
     .await
 }
 
-/// Describes how an invocation is being executed with respect to the oplog.
-#[allow(clippy::large_enum_variant)]
-pub enum InvocationMode {
-    /// The invocation is happening live and should write oplog markers.
-    Live(crate::worker::HydratedInvocation),
-    /// The invocation is being replayed from the oplog; no markers need to be written.
-    Replay,
+/// Admits a pending invocation before executing it. `None` means admission declined to start.
+pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
+    lowered: LoweredInvocation,
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    invocation: crate::worker::HydratedInvocation,
+    stream_session: Option<&IdempotencyKey>,
+) -> Result<Option<InvokeResult>, WorkerExecutorError> {
+    let mut store = store.as_context_mut();
+    let was_live_before = store.data().is_live();
+    let started = async {
+        store
+            .data_mut()
+            .on_agent_invocation_started(invocation)
+            .await
+    }
+    .instrument(span!(Level::INFO, "on_agent_invocation_started"))
+    .await;
+    match started {
+        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance, stream_session)
+            .await
+            .map(Some),
+        Ok(false) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            Ok(None)
+        }
+        Err(error) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            record_invocation(was_live_before, "failed");
+            Err(error)
+        }
+    }
 }
 
 /// Invokes a function on a worker.
@@ -87,17 +161,20 @@ pub enum InvocationMode {
 /// - `lowered`: the lowered invocation describing what to invoke
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
-/// - `mode`: whether this is a live invocation or a replay
+/// - `stream_session`: the session to materialize before ending the invocation scope
+///
+/// Pending live invocations must first pass admission through
+/// [`invoke_live_observed_and_traced`]. Replay and snapshot calls need no pending admission.
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    mode: InvocationMode,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance, mode).await;
+    let result = invoke_observed(lowered, &mut store, instance, stream_session).await;
 
     match &result {
         Err(_) => {
@@ -143,7 +220,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    mode: InvocationMode,
+    stream_session: Option<&IdempotencyKey>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -154,21 +231,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     } = lowered;
     let operator_authorized_oplog_processor =
         matches!(&call, LoweredCall::ProcessOplogEntries { .. });
-
-    if let InvocationMode::Live(invocation) = mode {
-        let started = async {
-            store
-                .data_mut()
-                .on_agent_invocation_started(invocation)
-                .await
-        }
-        .instrument(span!(Level::INFO, "on_agent_invocation_started"))
-        .await;
-        if let Err(error) = started {
-            store.data_mut().on_agent_invocation_finished().await;
-            return Err(error);
-        }
-    }
 
     // The invocation start records the authority that admits any secret handles
     // carried by the input. Materialize those handles only after that admission.
@@ -224,7 +286,16 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .data_mut()
         .durable_ctx_mut()
         .set_invocation_principal(invocation_principal);
-    let call_future = dispatch_call(&mut store, instance, call, &display_name);
+    let call_future = async {
+        let result = dispatch_call(&mut store, instance, call, &display_name).await;
+        // Returning a stream handle does not end its producer's invocation. Keep its
+        // authority and lane registration until production and tail work settle.
+        if let Some(idempotency_key) = stream_session {
+            materialize_streaming_result(&mut store, result, &display_name, idempotency_key).await
+        } else {
+            result
+        }
+    };
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
@@ -260,34 +331,39 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .as_ref()
         .and_then(|primary_body| primary_body.invocation().cloned())
     {
-        if let Err(error) =
+        for error in
             crate::durable_host::tool::prepare_tool_parent_end(&mut store, parent.clone()).await
         {
-            call_result = Err(error);
-        }
-        if let Some(primary_body) = primary_body {
-            primary_body.complete();
-        }
-        if let Err(error) =
-            crate::durable_host::tool::settle_tool_children(&mut store, parent).await
-        {
-            call_result = Err(error);
-        }
-        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
             let consumed_fuel = call_result
                 .as_ref()
                 .map(InvokeResult::consumed_fuel)
                 .unwrap_or_default();
-            call_result = match owner_failure {
-                OwnerFailureWinner::Trap(trap) => {
-                    Ok(InvokeResult::from_trap_type(consumed_fuel, trap))
-                }
-                OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
-                    consumed_fuel,
-                    interrupt_kind,
-                }),
-                OwnerFailureWinner::Infrastructure(error) => Err(error),
-            };
+            let failure = invoke_result_from_trap(
+                &mut store,
+                consumed_fuel,
+                wasmtime::Error::from_anyhow(error),
+            )
+            .await;
+            retain_invocation_failure(&mut call_result, failure);
+        }
+        if let Some(primary_body) = primary_body {
+            primary_body.complete();
+        }
+        for error in crate::durable_host::tool::settle_tool_children(&mut store, parent).await {
+            let consumed_fuel = call_result
+                .as_ref()
+                .map(InvokeResult::consumed_fuel)
+                .unwrap_or_default();
+            let failure = invoke_result_from_trap(
+                &mut store,
+                consumed_fuel,
+                wasmtime::Error::from_anyhow(error),
+            )
+            .await;
+            retain_invocation_failure(&mut call_result, failure);
+        }
+        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+            apply_selected_owner_failure(&mut call_result, owner_failure);
         }
     }
 
@@ -296,9 +372,72 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     apply_invocation_deadline(&mut store, deadline, call_result).await
 }
 
+fn apply_selected_owner_failure(
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+    owner_failure: OwnerFailureWinner,
+) {
+    if matches!(
+        result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::ShardLost,
+            ..
+        }) | Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        } | WorkerExecutorError::OplogFenced { .. })
+    ) {
+        return;
+    }
+    let consumed_fuel = result
+        .as_ref()
+        .map(InvokeResult::consumed_fuel)
+        .unwrap_or_default();
+    *result = match owner_failure {
+        OwnerFailureWinner::Trap(trap) => Ok(InvokeResult::from_trap_type(consumed_fuel, trap)),
+        OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
+            consumed_fuel,
+            interrupt_kind,
+        }),
+        OwnerFailureWinner::Infrastructure(error) => Err(error),
+    };
+}
+
+fn retain_invocation_failure(
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+    failure: Result<InvokeResult, WorkerExecutorError>,
+) {
+    let shard_lost = matches!(
+        result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::ShardLost,
+            ..
+        }) | Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        } | WorkerExecutorError::OplogFenced { .. })
+    );
+    // Lifecycle interruption must stop the generation even after a body failure;
+    // retaining that failure must not keep a stopped or fenced generation running.
+    if !shard_lost
+        && (matches!(
+            result,
+            Ok(InvokeResult::Succeeded { .. } | InvokeResult::Exited { .. })
+        ) || matches!(
+            &failure,
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::ShardLost,
+                ..
+            }) | Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            } | WorkerExecutorError::OplogFenced { .. })
+        ) || (matches!(&failure, Ok(InvokeResult::Interrupted { .. }))
+            && !matches!(result, Ok(InvokeResult::Interrupted { .. }))))
+    {
+        *result = failure;
+    }
+}
+
 /// Publishes the early stream-bearing result and drives its producers to completion.
 /// Live execution and replay use the same trap classification as the guest export.
-pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
+async fn materialize_streaming_result<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     result: Result<InvokeResult, WorkerExecutorError>,
     display_name: &str,
@@ -487,6 +626,49 @@ pub(crate) enum GuestCallSettlementError {
     Infrastructure(WorkerExecutorError),
 }
 
+/// Permanent guest instruction failures that a tool boundary can record as its own terminal.
+/// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
+/// does not establish guest origin. Keep the allowlist aligned with `TrapType::from_error`.
+pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
+    if error.chain().any(|cause| {
+        cause.is::<GolemSpecificWasmTrap>()
+            || cause.is::<ClassifiedHostError>()
+            || cause.is::<SemanticTrapRetryOverrideMarker>()
+            || cause.is::<DurableCallTrapContextMarker>()
+            || cause.is::<DurableRecoveryFailure>()
+            || cause.is::<UnreadableOplog>()
+            || cause.is::<WorkerExecutorError>()
+            || cause.is::<InterruptKind>()
+            || cause.is::<wasmtime_wasi::I32Exit>()
+    }) {
+        return None;
+    }
+
+    match error.root_cause().downcast_ref::<wasmtime::Trap>() {
+        Some(
+            wasmtime::Trap::StackOverflow
+            | wasmtime::Trap::UnreachableCodeReached
+            | wasmtime::Trap::MemoryOutOfBounds
+            | wasmtime::Trap::TableOutOfBounds
+            | wasmtime::Trap::IndirectCallToNull
+            | wasmtime::Trap::BadSignature
+            | wasmtime::Trap::IntegerOverflow
+            | wasmtime::Trap::IntegerDivisionByZero
+            | wasmtime::Trap::BadConversionToInteger
+            | wasmtime::Trap::HeapMisaligned
+            | wasmtime::Trap::NullReference
+            | wasmtime::Trap::AtomicWaitNonSharedMemory,
+        ) => Some(
+            error
+                .chain()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(": "),
+        ),
+        _ => None,
+    }
+}
+
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     let chain_contains = |predicate: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool| {
         error.chain().any(predicate)
@@ -673,11 +855,13 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     let fun = {
         let drain_started = drain_started.clone();
         let runtime = runtime.clone();
+        let finalization = store.data().durable_ctx().entity_body_finalization.clone();
         async move |accessor: &Accessor<Ctx>| {
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
             }
             let result = fun(accessor).await;
+            finalization.begin();
             // The root future has completed: everything from here on is the (bounded) drain
             // phase. Arm the timeout here rather than in the settlement predicate — the
             // predicate is only consulted at idle observation points, which are never reached
@@ -1629,7 +1813,7 @@ fn materialize_call<Ctx: WorkerCtx>(
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     match invocation {
         AgentInvocation::AgentInitialization {
@@ -1783,7 +1967,7 @@ pub fn lower_invocation(
 
 pub fn validate_agent_method_invocation(
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
     method_name: &str,
     input: &SchemaValue,
 ) -> Result<bool, WorkerExecutorError> {
@@ -1808,7 +1992,7 @@ pub fn validate_agent_method_invocation(
 pub(crate) fn invocation_uses_streams(
     invocation: &AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> bool {
     if matches!(invocation, AgentInvocation::ExternalTool { .. }) {
         return true;
@@ -1862,7 +2046,7 @@ fn validate_method_invocation(
 /// component declares zero or multiple types and no id was provided).
 fn resolve_agent_type<'a>(
     component_metadata: &'a ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> Result<&'a AgentTypeSchema, WorkerExecutorError> {
     match agent_id {
         Some(id) => component_metadata
@@ -1904,6 +2088,152 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    async fn finalization_selected_owner_failure_cannot_replace_later_shard_loss() {
+        let operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+        assert!(
+            operations
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("earlier failure")
+                ))
+                .await
+        );
+        let mut result = Ok(InvokeResult::Interrupted {
+            consumed_fuel: 41,
+            interrupt_kind: InterruptKind::ShardLost,
+        });
+        apply_selected_owner_failure(&mut result, operations.selected_owner_failure().unwrap());
+        assert!(matches!(
+            result,
+            Ok(InvokeResult::Interrupted {
+                consumed_fuel: 41,
+                interrupt_kind: InterruptKind::ShardLost
+            })
+        ));
+
+        let mut ordinary = Err(WorkerExecutorError::unexpected_oplog_entry(
+            "expected", "actual",
+        ));
+        apply_selected_owner_failure(&mut ordinary, operations.selected_owner_failure().unwrap());
+        assert!(matches!(ordinary, Err(WorkerExecutorError::Runtime { .. })));
+    }
+
+    #[test]
+    fn finalization_preserves_original_failure_and_semantic_retry_fields() {
+        use crate::durable_host::durability::{
+            SemanticTrapRetryOverride, SemanticTrapRetryVerdict,
+        };
+        use golem_common::model::RetryPolicyState;
+
+        let mut result = Ok(InvokeResult::Failed {
+            consumed_fuel: 42,
+            timed_out: true,
+            error: OplogAgentError::InternalError("original".into()),
+            retry_from: OplogIndex::from_u64(17),
+            semantic_trap_retry_override: Some(SemanticTrapRetryOverride {
+                retry_from: OplogIndex::from_u64(19),
+                policy_name: "selected".into(),
+                verdict: SemanticTrapRetryVerdict::GiveUp,
+                retry_policy_state: RetryPolicyState::Counter(3),
+            }),
+        });
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
+        let Ok(InvokeResult::Failed {
+            consumed_fuel,
+            timed_out,
+            error,
+            retry_from,
+            semantic_trap_retry_override: Some(policy),
+        }) = result
+        else {
+            panic!("cleanup replaced the original failure");
+        };
+        assert_eq!(consumed_fuel, 42);
+        assert!(timed_out);
+        assert_eq!(error, OplogAgentError::InternalError("original".into()));
+        assert_eq!(retry_from, OplogIndex::from_u64(17));
+        assert_eq!(policy.retry_from, OplogIndex::from_u64(19));
+        assert_eq!(policy.policy_name, "selected");
+        assert_eq!(policy.verdict, SemanticTrapRetryVerdict::GiveUp);
+        assert_eq!(policy.retry_policy_state, RetryPolicyState::Counter(3));
+    }
+
+    #[test]
+    fn finalization_preserves_divergence_but_not_over_shard_loss() {
+        let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+            "observation",
+            "disposal",
+        ));
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+        retain_invocation_failure(
+            &mut result,
+            Ok(InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::ShardLost,
+            }),
+        );
+        retain_invocation_failure(
+            &mut result,
+            Err(WorkerExecutorError::runtime("later cleanup")),
+        );
+        assert!(matches!(
+            result,
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::ShardLost,
+                ..
+            })
+        ));
+
+        for failure in [
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            },
+            WorkerExecutorError::OplogFenced {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "fenced".into(),
+                },
+                expected_epoch: 1,
+                actual_epoch: Some(2),
+            },
+        ] {
+            let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+                "observation",
+                "disposal",
+            ));
+            retain_invocation_failure(&mut result, Err(failure.clone()));
+            retain_invocation_failure(
+                &mut result,
+                Ok(InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+            );
+            assert_eq!(result.unwrap_err(), failure);
+        }
+    }
+
+    #[test]
+    fn finalization_failure_replaces_only_a_successful_body() {
+        let mut result = Ok(InvokeResult::Exited { consumed_fuel: 7 });
+        retain_invocation_failure(
+            &mut result,
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "observation",
+                "disposal",
+            )),
+        );
+        retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("settlement")));
+        assert!(matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ));
+    }
 
     #[test]
     fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {
@@ -2141,19 +2471,17 @@ mod tests {
         ComponentMetadata::from_parts(
             KnownExports::default(),
             Vec::new(),
-            None,
-            None,
             vec![at],
             BTreeMap::new(),
         )
     }
 
-    fn agent_id() -> ParsedAgentId {
+    fn agent_id() -> ParsedAgentKey {
         let parameters = TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::record(Vec::new())),
             SchemaValue::Record { fields: Vec::new() },
         );
-        ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
@@ -2744,6 +3072,145 @@ mod tests {
             ),
             Err(GuestCallSettlementError::Interrupted(_))
         ));
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_accepts_only_fixed_instruction_traps() {
+        use wasmtime::Trap;
+
+        for trap in [
+            Trap::StackOverflow,
+            Trap::UnreachableCodeReached,
+            Trap::MemoryOutOfBounds,
+            Trap::TableOutOfBounds,
+            Trap::IndirectCallToNull,
+            Trap::BadSignature,
+            Trap::IntegerOverflow,
+            Trap::IntegerDivisionByZero,
+            Trap::BadConversionToInteger,
+            Trap::HeapMisaligned,
+            Trap::NullReference,
+            Trap::AtomicWaitNonSharedMemory,
+        ] {
+            let error = wasmtime::Error::from_anyhow(trap.into());
+            assert_eq!(
+                permanent_tool_guest_trap(&error),
+                Some(format!("{error:#}"))
+            );
+        }
+        for trap in [Trap::AsyncDeadlock, Trap::Interrupt, Trap::OutOfFuel] {
+            assert_eq!(permanent_tool_guest_trap(&trap.into()), None);
+        }
+
+        let error = wasmtime::Error::from_anyhow(
+            anyhow::Error::new(Trap::UnreachableCodeReached)
+                .context("guest-requested trap: invalid tool input"),
+        );
+        assert_eq!(
+            permanent_tool_guest_trap(&error),
+            Some(format!(
+                "guest-requested trap: invalid tool input: {}",
+                Trap::UnreachableCodeReached
+            ))
+        );
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_details_repeat_across_stores() {
+        let engine = wasmtime::Engine::default();
+        for instruction in ["unreachable", "i32.const 1 i32.const 0 i32.div_s drop"] {
+            let module = wasmtime::Module::new(
+                &engine,
+                format!("(module (func (export \"run\") {instruction}))"),
+            )
+            .unwrap();
+            let run = || {
+                let mut store = wasmtime::Store::new(&engine, ());
+                let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+                let error = instance
+                    .get_typed_func::<(), ()>(&mut store, "run")
+                    .unwrap()
+                    .call(&mut store, ())
+                    .unwrap_err();
+                assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+                permanent_tool_guest_trap(&error).expect("guest instruction trap")
+            };
+            assert_eq!(run(), run());
+        }
+    }
+
+    #[test]
+    fn permanent_tool_guest_trap_rejects_host_failures_with_backtraces() {
+        use crate::durable_host::durability::{
+            DurableCallTrapContext, HostFailureKind, SemanticTrapRetryOverride,
+            SemanticTrapRetryVerdict, mark_durable_call_trap_context,
+        };
+        use golem_common::model::RetryPolicyState;
+
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (import "host" "fail" (func $fail))
+                (func (export "run") call $fail))"#,
+        )
+        .unwrap();
+        let instruction_trap = || anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached);
+        for failure in [
+            anyhow::anyhow!("unclassified host failure"),
+            anyhow::Error::new(ClassifiedHostError {
+                kind: HostFailureKind::Permanent,
+                message: "permanent host failure".into(),
+            }),
+            mark_durable_call_trap_context(
+                instruction_trap(),
+                DurableCallTrapContext {
+                    retry_from: OplogIndex::from_u64(17),
+                },
+            ),
+            anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                payload: SemanticTrapRetryOverride {
+                    retry_from: OplogIndex::from_u64(17),
+                    policy_name: "never".into(),
+                    verdict: SemanticTrapRetryVerdict::GiveUp,
+                    retry_policy_state: RetryPolicyState::Counter(1),
+                },
+                inner: instruction_trap(),
+            }),
+            anyhow::Error::new(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Permanent,
+                instruction_trap(),
+            )),
+            WorkerExecutorError::recovery_required("payload unavailable").into(),
+            WorkerExecutorError::unexpected_oplog_entry("expected", "actual").into(),
+            WorkerExecutorError::runtime("persistence failed").into(),
+            GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
+            GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into(),
+            GolemSpecificWasmTrap::WorkerExceededTableLimit.into(),
+            GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted.into(),
+            GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted.into(),
+            InterruptKind::Restart.into(),
+            wasmtime_wasi::I32Exit(0).into(),
+        ] {
+            let failure = std::sync::Mutex::new(Some(failure.context("host call context")));
+            let mut linker = wasmtime::Linker::new(&engine);
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(
+                        failure.lock().unwrap().take().unwrap(),
+                    ))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &module).unwrap();
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap_err();
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+            assert_eq!(permanent_tool_guest_trap(&error), None, "{error:#}");
+        }
     }
 
     #[test]

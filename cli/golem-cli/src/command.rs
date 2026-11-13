@@ -1067,9 +1067,7 @@ pub mod shared_args {
         ///                 cargo, npm, scala-cli, moon are installed and the
         ///                 expected versions are available).
         ///   build         Run the per-language build for each selected
-        ///                 component (produces the component WASM).
-        ///   add-metadata  Attach Golem-specific metadata to the built WASM
-        ///                 components (agent types, secrets, resource limits).
+        ///                 component to produce its componentWasm artifact.
         ///   gen-bridge    Generate language-specific Bridge SDK client code
         ///                 from agent type interfaces, so other components in
         ///                 the application can call this component as a typed
@@ -3235,6 +3233,7 @@ mod test {
     };
     use crate::error::ShowClapHelpTarget;
     use crate::model::agent::AgentUpdateMode;
+    use crate::model::format::Format;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
@@ -3282,6 +3281,29 @@ mod test {
         assert_eq!(parsed, std::time::Duration::from_secs(2));
 
         assert!(parse_agent_stream_ping_interval("not-a-duration").is_err());
+    }
+
+    #[test]
+    fn format_flag_accepts_the_names_profile_config_accepts() {
+        for (name, expected) in [
+            ("pretty", Format::PrettyJson),
+            ("pretty-json", Format::PrettyJson),
+            ("pretty-yaml", Format::PrettyYaml),
+            ("toon", Format::Toon),
+        ] {
+            let command = GolemCliCommand::try_parse_from(["golem", "--format", name, "build"])
+                .unwrap_or_else(|error| panic!("--format {name}: {error}"));
+            assert_eq!(
+                command.global_flags.format,
+                Some(expected),
+                "--format {name}"
+            );
+            let config: Format = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(config, expected, "profile default format {name}");
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(["golem", "--format", "pretty-text", "build"]).is_err()
+        );
     }
 
     #[test]

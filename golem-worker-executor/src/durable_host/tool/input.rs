@@ -18,6 +18,7 @@ use crate::preview2::golem::tool::host::ByteStreamFailure;
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::StreamConsumerObservation;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::oplog::attachment::{
@@ -33,7 +34,7 @@ use std::task::{Context, Poll};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use wasmtime::AsContextMut;
 use wasmtime::component::{
-    Accessor, AccessorTask, Destination, StreamProducer, StreamResult, TerminalConsumption,
+    Accessor, Destination, StreamProducer, StreamResult, TerminalConsumption,
 };
 
 struct PreparedRead {
@@ -204,7 +205,9 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                     oplog: ctx.state.oplog.clone(),
                     result,
                 };
-                store.as_context_mut().spawn(task);
+                store
+                    .as_context_mut()
+                    .spawn(async move |store| task.run(store).await)?;
                 self.pending = Some(pending);
             }
             let prepared = std::task::ready!(Pin::new(self.pending.as_mut().unwrap()).poll(cx));
@@ -300,8 +303,8 @@ struct PrepareAttachmentObservation<Ctx: WorkerCtx> {
     result: oneshot::Sender<Result<PreparedRead, WorkerExecutorError>>,
 }
 
-impl<U: 'static, Ctx: WorkerCtx> AccessorTask<U> for PrepareAttachmentObservation<Ctx> {
-    async fn run(self, _accessor: &Accessor<U>) -> wasmtime::Result<()> {
+impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
+    async fn run<U: 'static>(self, _accessor: &Accessor<U>) -> wasmtime::Result<()> {
         self.prepare().await
     }
 }
@@ -406,6 +409,13 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
                 .filter(|(_, boundary)| boundary.is_none())
                 .map(|(original, _)| original),
         };
+        // A durable owner's guest read needs only its ordered position: any later durable entry
+        // commits it as part of the oplog prefix, and settlement commits the remainder. Host reads
+        // hand bytes to a transport outside the oplog, so they still commit before delivery.
+        // Ephemeral owners keep their eager read commit; their attachment writes never committed
+        // eagerly, because `DurableOnly` does not commit an ephemeral oplog.
+        let commit_eagerly = self.observation == StreamConsumerObservation::Host
+            || self.worker.agent_mode() != AgentMode::Durable;
         let prepare_live = async move {
             let enqueue: EnqueueInputObservation = Box::new(move || {
                 let mut observation = observation;
@@ -418,9 +428,11 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
                 });
                 Ok(Box::pin(async move {
                     receipt.await?;
-                    self.worker
-                        .commit_oplog_and_update_state(CommitLevel::Always)
-                        .await?;
+                    if commit_eagerly {
+                        self.worker
+                            .commit_oplog_and_update_state(CommitLevel::Always)
+                            .await?;
+                    }
                     Ok(())
                 }))
             });

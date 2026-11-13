@@ -121,9 +121,9 @@ the prepared callee fingerprint differs from the new owner: output materializati
 fork's own oplog without waiting for the original consumer to attach. It grants no inherited
 attachment authority and does not reactivate the source's topology.
 
-When the retained history ends at `AgentInvocationStarted`, `resume_replay` completes the
-guarded replay-to-live transition before entering the guest. It keeps `InvocationMode::Replay`
-to reuse that start record, but publishes stderr and handles traps as live execution even if
+When the retained history ends at `AgentInvocationStarted`, `replay` completes the
+guarded replay-to-live transition before entering the guest. It invokes the guest without pending
+admission to reuse that start record, but publishes stderr and handles traps as live execution even if
 the guest makes no positional host call. Cursor exhaustion alone does not publish liveness.
 
 The export creation receipt also records the original request, resolved anchor and initial-body
@@ -144,6 +144,15 @@ fork tests, and the CLI `reference_client_export_protocol_compatibility` scenari
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
+For an ephemeral target, the first live preparation after the caller's `Start` commit uses
+`KnownFresh` with the call's derived idempotency key. Preparation validates the key-derived
+phantom identity and skips the creation-time existence lookup. Both remote routing layers
+downgrade preparation retries to `MayExist`; replay repair also prepares with `MayExist`.
+The subsequent streaming invocation always uses `MayExist`, since preparation has already
+created the target whose fingerprint it carries. No second fresh creation is authorized.
+Attachment probes resolve each owner's actual agent mode and inspect that mode's session
+and consumer journals. Ephemeral owners retain the same fingerprint, epoch, mapping and
+cancellation authority checks as durable owners; attachment authorization never restarts them.
 
 ### Public session identity and expiry
 
@@ -269,6 +278,8 @@ are still being produced and consumed. Three crash windows follow:
    runs inside the Store event loop, including after replay reaches live: unfinished host stream
    operations can hold producer/session locks across pending polls, so awaiting cleanup outside
    the event loop can deadlock and prevent the next queued invocation from starting.
+
+Live and replay materialize streaming results inside `invoke_observed`, before clearing the principal, read-only mode and deadline or ending the primary owner-lane registration. Returning a stream handle is not parent completion: its producer can still admit and await tools. After production and positional tail work settle, prepare parent end, release the primary permit, then settle children; holding that permit through child settlement blocks capable children. Materialization failures use the existing invocation cleanup and failure selection. Keep schema-level `uses_streams` detection for input-only methods and absent optional outputs; snapshot calls pass no stream session.
 
 Provider reconstruction drains terminal outputs against their committed records without waiting
 for a consumer attachment; the consumer may already have finished and detached permanently.

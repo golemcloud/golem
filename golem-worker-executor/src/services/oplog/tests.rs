@@ -73,6 +73,9 @@ macro_rules! create_oplog_entry {
      $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
      $memory_size:expr, $plugins:expr, $config:expr, $phantom_id:expr, $instance_id:expr $(,)?) => {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            component_id: $agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_id: $agent_id,
             owner_kind: OwnerKind::ComponentAgent,
             agent_mode: $agent_mode,
@@ -87,6 +90,12 @@ macro_rules! create_oplog_entry {
             local_agent_config: $config,
             original_phantom_id: $phantom_id,
             instance_id: $instance_id,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }))
     };
 }
@@ -270,6 +279,9 @@ pub(super) fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         agent_id,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
@@ -283,6 +295,12 @@ pub(super) fn make_agent_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
 }
 
@@ -1589,6 +1607,7 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1695,6 +1714,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1825,6 +1845,7 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1900,6 +1921,7 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -1966,6 +1988,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             1,
             1,
             16,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -2219,6 +2242,7 @@ async fn missing_external_payload_is_classified_as_corrupt_history(_tracing: &Tr
         1,
         1,
         16,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -2255,6 +2279,7 @@ async fn a_layered_oplog_length_counts_every_layer(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -2338,6 +2363,7 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
         100,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -2395,6 +2421,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -2485,6 +2512,7 @@ async fn append_reconciliation_service(
             100,
             100,
             100,
+            32,
             append_reconciliation_retry_config(),
         )
         .await,
@@ -2542,6 +2570,7 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -2656,6 +2685,7 @@ async fn stopped_actor_failure_does_not_poison_reopen(_tracing: &Tracing) {
         100,
         100,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -2728,6 +2758,7 @@ async fn reopened_oplog_joins_old_root_children_before_stopping_its_writer(_trac
                 100,
                 100,
                 100,
+                32,
                 RetryConfig::default(),
             )
             .await,
@@ -2847,6 +2878,7 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -2909,6 +2941,7 @@ async fn synchronously_enqueued_pair_is_atomic_ordered_and_independent_of_receip
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -2978,6 +3011,7 @@ async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_repor
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -3060,6 +3094,84 @@ async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_repor
 }
 
 #[test]
+async fn report_only_returns_retained_threshold_commits_without_reading_storage(
+    _tracing: &Tracing,
+) {
+    const RETAINED_BATCHES: usize = 4;
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RETAINED_BATCHES,
+        RetryConfig::default(),
+    )
+    .await;
+    let oplog = create_append_reconciliation_oplog(&service, "report-only-threshold-commits").await;
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let listener: Arc<dyn Fn() + Send + Sync> = {
+        let notifications = notifications.clone();
+        Arc::new(move || {
+            notifications.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    oplog.set_auto_commit_listener(Arc::downgrade(&listener));
+    indexed_storage.reset();
+
+    // A threshold of one commits every second add; the fifth entry stays buffered.
+    let mut entries = BTreeMap::new();
+    for delta in 1..=5 {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    let fifth = *entries.keys().nth(4).unwrap();
+    let buffered = entries.split_off(&fifth);
+    assert_eq!(notifications.load(Ordering::SeqCst), 2);
+
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert_eq!(indexed_storage.reads(), 0);
+    assert!(
+        oplog
+            .commit(CommitLevel::ReportOnly)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(oplog.commit(CommitLevel::Always).await.unwrap(), buffered);
+
+    // Beyond the retention bound the oldest commits are read back, and the report stays complete.
+    let mut entries = BTreeMap::new();
+    for delta in 0..(2 * (RETAINED_BATCHES as u64 + 3)) {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert!(indexed_storage.reads() > 0);
+
+    // Without a live listener nothing is retained, and the report reads the range back.
+    drop(listener);
+    let mut entries = BTreeMap::new();
+    for delta in 0..4 {
+        let entry = OplogEntry::grow_memory(delta).rounded();
+        entries.insert(oplog.add(entry.clone()).await.unwrap(), entry);
+    }
+    let reads = indexed_storage.reads();
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        entries
+    );
+    assert!(indexed_storage.reads() > reads);
+}
+
+#[test]
 async fn wait_for_replicas_does_not_consume_explicit_commit_report(_tracing: &Tracing) {
     let service = PrimaryOplogService::new(
         Arc::new(InMemoryIndexedStorage::new()),
@@ -3067,6 +3179,7 @@ async fn wait_for_replicas_does_not_consume_explicit_commit_report(_tracing: &Tr
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -3389,6 +3502,7 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -3484,6 +3598,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -3561,6 +3676,7 @@ async fn primary_read_range_overflow_fails_without_storage_io(_tracing: &Tracing
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -3604,6 +3720,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -3674,6 +3791,7 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         retry_config,
     )
     .await;
@@ -3713,6 +3831,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
         100,
         100,
         1000,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -3889,6 +4008,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             100,
             0,
             usize::MAX,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4041,6 +4161,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
             0,
             0,
             512,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4294,6 +4415,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         100,
         100,
         128,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -4348,6 +4470,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         100,
         100,
         128,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -4428,6 +4551,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         100,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -4538,6 +4662,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4640,6 +4765,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4720,6 +4846,7 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4792,6 +4919,7 @@ async fn ephemeral_read_exact_uncommitted_only(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4861,6 +4989,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -4975,6 +5104,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -5111,6 +5241,7 @@ async fn ephemeral_read_exact_zero_returns_empty(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -5168,6 +5299,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -5387,6 +5519,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -5477,6 +5610,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -5589,6 +5723,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -5647,6 +5782,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             100,
             1,
             inline_limit,
+            32,
             RetryConfig::default(),
         )
         .await;
@@ -5695,6 +5831,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let pending_spans = pending_context.to_oplog_data();
         let pending = oplog
             .add(OplogEntry::pending_agent_invocation(
+                None,
                 key.clone(),
                 payload,
                 pending_context.trace_id,
@@ -5797,6 +5934,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -6071,6 +6209,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -6264,6 +6403,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -6444,6 +6584,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -6501,14 +6642,18 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
     let timestamp = Timestamp::now_utc();
+    let create_component_id = ComponentId(Uuid::new_v4());
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
+                component_id: create_component_id,
                 agent_id: "test".to_string(),
             },
+            component_id: create_component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: vec![],
@@ -6521,6 +6666,12 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             initial_active_plugins: HashSet::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     }
     .rounded();
@@ -6615,6 +6766,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -6662,14 +6814,18 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
     let timestamp = Timestamp::now_utc();
+    let create_component_id = ComponentId(Uuid::new_v4());
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
+                component_id: create_component_id,
                 agent_id: "test".to_string(),
             },
+            component_id: create_component_id,
+            agent_type_name: None,
+            canonical_key: None,
             agent_mode: AgentMode::Ephemeral,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: vec![],
@@ -6682,6 +6838,12 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             initial_active_plugins: HashSet::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     }
     .rounded();
@@ -7143,6 +7305,7 @@ async fn background_archive_failure_isolated_from_other_open_agent_oplogs(_traci
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -7241,6 +7404,7 @@ async fn primary_archive_drop_failure_does_not_stop_the_agent_oplog(_tracing: &T
         1,
         1,
         100,
+        32,
         immediate_archive_retry_config(1),
     )
     .await;
@@ -7292,6 +7456,7 @@ async fn primary_length_failure_during_open_does_not_fail_the_agent(_tracing: &T
             1,
             100,
             100,
+            32,
             retry_config.clone(),
         )
         .await,
@@ -8275,6 +8440,7 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -8584,6 +8750,7 @@ async fn corrupt_compressed_chunk_fails_the_read_without_a_panic(_tracing: &Trac
             1,
             1,
             16,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -8751,6 +8918,7 @@ async fn archive_open_service(storage: Arc<ReadCountingIndexedStorage>) -> Multi
             1,
             1,
             16,
+            32,
             immediate_archive_retry_config(1),
         )
         .await,
@@ -8948,6 +9116,7 @@ async fn a_redis_archive_last_index_lost_in_transport_requires_a_recovery(_traci
             1,
             1,
             16,
+            32,
             immediate_archive_retry_config(2),
         )
         .await,
@@ -9185,6 +9354,7 @@ async fn a_blob_archive_epoch_record_that_fails_fails_the_open(_tracing: &Tracin
             1,
             1,
             16,
+            32,
             immediate_archive_retry_config(1),
         )
         .await,
@@ -9546,6 +9716,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -9693,6 +9864,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -9821,6 +9993,7 @@ async fn saved_executor_fence_stops_keep_alive_transfer_after_outer_handle_drops
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -9943,6 +10116,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -10088,6 +10262,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 1,
                 1,
                 100,
+                32,
                 RetryConfig::default(),
             )
             .await,
@@ -10198,6 +10373,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 1,
                 1,
                 100,
+                32,
                 RetryConfig::default(),
             )
             .await,
@@ -10349,6 +10525,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -10516,6 +10693,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -10735,6 +10913,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -10894,6 +11073,7 @@ async fn multilayer_scan_propagates_lower_layer_exists_failure(_tracing: &Tracin
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -10970,6 +11150,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -11105,6 +11286,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
             100,
             100,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -11372,6 +11554,7 @@ async fn oplog_services_reject_invalid_cursor_layers(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -11450,6 +11633,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -11629,6 +11813,7 @@ async fn scan_for_component_only_returns_matching_mode_when_specified(_tracing: 
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -11698,6 +11883,7 @@ async fn scan_for_component_paginates_across_mode_boundary(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -11801,6 +11987,7 @@ async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tr
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -11849,6 +12036,7 @@ async fn owned_payload_upload_preserves_allocation_at_inline_threshold_and_round
         1,
         1,
         max_payload_size,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -11951,6 +12139,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
         1,
         1,
         max_payload_size,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -12093,6 +12282,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -12187,6 +12377,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
         1,
         1,
         100,
+        32,
         RetryConfig::default(),
     )
     .await;
@@ -12306,6 +12497,7 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -12402,6 +12594,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -12620,6 +12813,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -12782,6 +12976,7 @@ async fn fencing_oplog_service(tempdir: &tempfile::TempDir, name: &str) -> Prima
         100,
         1,
         128,
+        32,
         RetryConfig::default(),
     )
     .await
@@ -13637,6 +13832,9 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: agent_id.clone(),
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_mode: AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
@@ -13650,6 +13848,12 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
     .rounded();
 
@@ -13828,6 +14032,9 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
     let create_entry = || {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: agent_id.clone(),
+            component_id: agent_id.component_id,
+            agent_type_name: None,
+            canonical_key: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
@@ -13841,6 +14048,12 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
             local_agent_config: Vec::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }))
         .rounded()
     };
@@ -13954,6 +14167,7 @@ async fn archiving_executor(
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -15043,6 +15257,7 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await

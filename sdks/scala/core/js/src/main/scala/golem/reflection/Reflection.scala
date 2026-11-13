@@ -13,16 +13,9 @@ package golem.reflection
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.SchemaWireInterop
 import golem.host.js.{JsComponentId, JsUuid}
-import golem.host.js.schema.{
-  JsInputSchema,
-  JsNamedField,
-  JsOutputSchema,
-  JsSchemaValueTree,
-  JsTypedSchemaValue,
-  JsUuid => JsSchemaUuid
-}
+import golem.host.js.schema.{JsInputSchema, JsNamedField, JsOutputSchema, JsSchemaValueTree, JsTypedSchemaValue}
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
-import golem.runtime.rpc.{CancellationToken, InvocationReceipt}
+import golem.runtime.rpc.{AgentIdentity, CancellationToken, InvocationReceipt}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
@@ -30,9 +23,10 @@ import golem.schema.validation.ValueValidation
 import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
 import golem.config.ConfigOverride
 import golem.tool.{ToolGraphs, ToolRpcFailure}
-import golem.{Datetime, FutureInterop, Uuid}
+import golem.{Datetime, FutureInterop}
 import zio.blocks.schema.json.Json
 
+import java.util.UUID
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
@@ -48,14 +42,14 @@ object AgentMode {
   case object Ephemeral extends AgentMode
 }
 
-final case class ComponentId(uuid: Uuid) {
+final case class ComponentId(uuid: UUID) {
   private[golem] def toJs: JsComponentId =
-    JsComponentId(JsUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString)))
+    JsComponentId(JsUuid.fromUuid(uuid))
 }
 
 object ComponentId {
   private[golem] def fromJs(value: JsComponentId): ComponentId =
-    ComponentId(Uuid(BigInt(value.uuid.highBits.toString), BigInt(value.uuid.lowBits.toString)))
+    ComponentId(JsUuid.toUuid(value.uuid))
 }
 
 final case class ParsedAgentId(value: String) {
@@ -82,25 +76,25 @@ final case class ParsedAgentId(value: String) {
     definition.bindWithConfig(this, config)
 }
 
-final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
+final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[UUID])
 
 object ParsedAgentId {
   def create(
     typeName: String,
     constructorValue: SchemaValue,
-    phantomId: Option[Uuid] = None
+    phantomId: Option[UUID] = None
   ): Either[GolemReflectError, ParsedAgentId] =
     encode(constructorValue).flatMap(payload =>
-      AgentHostApi
-        .makeAgentId(typeName, payload, phantomId)
+      AgentIdentity
+        .make(typeName, payload, phantomId)
         .left
         .map(GolemReflectError.Identity.apply)
         .map(ParsedAgentId(_))
     )
 
   def parse(agentId: ParsedAgentId): Either[GolemReflectError, ParsedAgentIdParts] =
-    AgentHostApi
-      .parseAgentId(agentId.value)
+    AgentIdentity
+      .parse(agentId.value)
       .left
       .map(GolemReflectError.Identity.apply)
       .flatMap { parts =>
@@ -175,14 +169,14 @@ final class AgentType private[reflection] (
 
   def method(name: String): Option[AgentMethod] = methods.find(_.name == name)
 
-  def agentId(input: Json, phantomId: Option[Uuid] = None): Either[GolemReflectError, ParsedAgentId] =
+  def agentId(input: Json, phantomId: Option[UUID] = None): Either[GolemReflectError, ParsedAgentId] =
     constructorInput
       .packJson(input)
       .left
       .map(error => GolemReflectError.Validation(error.message))
       .flatMap(agentIdValue(_, phantomId))
 
-  def agentIdValue(input: SchemaValue, phantomId: Option[Uuid] = None): Either[GolemReflectError, ParsedAgentId] =
+  def agentIdValue(input: SchemaValue, phantomId: Option[UUID] = None): Either[GolemReflectError, ParsedAgentId] =
     validate(constructorInput, input).flatMap(_ => ParsedAgentId.create(name, input, phantomId))
 
   def bind(
@@ -332,7 +326,7 @@ object Reflection {
     }
 }
 
-final case class ReflectedPhantomClient(agentId: ParsedAgentId, phantomId: Uuid, client: ReflectedAgentClient)
+final case class ReflectedPhantomClient(agentId: ParsedAgentId, phantomId: UUID, client: ReflectedAgentClient)
 
 final class ReflectedAgentClientFactory private[reflection] (agentType: AgentType) {
   def get(input: Json, config: List[ReflectedConfigJson] = Nil): Either[GolemReflectError, ReflectedAgentClient] =
@@ -351,7 +345,7 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
 
   def getPhantom(
     input: Json,
-    phantomId: Uuid,
+    phantomId: UUID,
     config: List[ReflectedConfigJson] = Nil
   ): Either[GolemReflectError, ReflectedAgentClient] =
     for {
@@ -362,7 +356,7 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
 
   def getPhantomValue(
     input: SchemaValue,
-    phantomId: Uuid,
+    phantomId: UUID,
     config: List[ConfigOverride] = Nil
   ): Either[GolemReflectError, ReflectedAgentClient] =
     createValue(input, Some(phantomId), config)
@@ -383,7 +377,7 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
   ): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
     if (agentType.mode == AgentMode.Ephemeral) createValue(input, None, config).map(Left(_))
     else {
-      val phantom = Uuid.random()
+      val phantom = UUID.randomUUID()
       for {
         id     <- agentType.agentIdValue(input, Some(phantom))
         client <- createValue(input, Some(phantom), config)
@@ -392,7 +386,7 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
 
   private[reflection] def createValue(
     input: SchemaValue,
-    phantomId: Option[Uuid],
+    phantomId: Option[UUID],
     config: List[ConfigOverride] = Nil
   ): Either[GolemReflectError, ReflectedAgentClient] =
     validate(agentType.constructorInput, input)
@@ -612,23 +606,20 @@ private[reflection] object Transport {
   def create(
     typeName: String,
     constructor: SchemaValue,
-    phantom: Option[Uuid]
+    phantom: Option[UUID]
   ): Either[GolemReflectError, Transport] =
     create(typeName, constructor, phantom, Nil)
 
   def create(
     typeName: String,
     constructor: SchemaValue,
-    phantom: Option[Uuid],
+    phantom: Option[UUID],
     config: List[golem.config.ConfigOverride]
   ): Either[GolemReflectError, Transport] =
     encode(constructor).flatMap { payload =>
       try {
-        val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
-          JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
-        )
-        WasmRpcApi
-          .createClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
+        AgentIdentity
+          .createConnection(typeName, payload, phantom, config)
           .left
           .map(error => GolemReflectError.Remote(decodeRpcError(error)))
           .map(new Transport(_))

@@ -34,7 +34,7 @@ invent a separate client helper.
 
 ## Semantics
 
-`remote.method.trigger(input)` returns `Effect.Effect<void, RemoteCallError>`:
+For a durable target, `remote.method.trigger(input)` returns `Effect.Effect<void, RemoteCallError>`:
 
 - success means the Golem host accepted the invocation;
 - it does not wait for the remote method to finish or return its success value;
@@ -42,9 +42,15 @@ invent a separate client helper.
 - request encoding or submission can still fail with `RemoteCallError`;
 - after acceptance, there is no caller-side cancellation handle.
 
+Ephemeral targets return invocation metadata from `trigger`, rather than `void`. Stream-bearing
+methods (streams in either inputs or outputs) are awaited-only: trigger and schedule reject them.
+Use the normal awaited call to consume or supply streams.
+
 Handle the client and submission errors when the calling method exposes a matching typed error. If
-an infrastructure failure should fail and durably retry a caller method whose contract has no error
-schema, convert those errors to defects around the composed operation:
+an unexpected infrastructure failure should fail a caller method whose contract has no error
+schema, convert those errors to defects around the composed operation. `Effect.orDie` does not
+guarantee durable retry: deterministic or permanent traps can bypass retry policy. Configure host
+retry policy for retryable failures, or use explicit guest recovery for application-level attempts.
 
 ```typescript
 runTest: () =>
@@ -52,7 +58,7 @@ runTest: () =>
     const callback = yield* Callback.client.get({ name });
     yield* callback.run.trigger({});
     return yield* incrementLocalState;
-  }).pipe(Effect.orDie),
+  }).pipe(Effect.scoped, Effect.orDie),
 ```
 
 Do not use `Effect.fork` as a substitute for `.trigger()`: an awaited remote invocation forked into
@@ -103,9 +109,13 @@ keep the spec and implementation separate:
 - the hosting component's `src/main.ts` imports `Counter.impl.js` for registration;
 - RPC callers import only `Counter.js`, avoiding implementation side effects.
 
-Use emitted `.js` suffixes for local imports in generated Effect projects. There is no public SDK
-helper that creates this typed client from a component URI or an arbitrary `AgentId`; use the
-imported agent definition's `.client`.
+Use emitted `.js` suffixes for local imports in generated Effect projects. To bind an encoded
+identity, use `AgentIdentity.parse` followed by `identity.client(Target)` or
+`Client.bind(identity, Target)`. Binding validates a full definition's type name and constructor
+schema and rejects existing-identity binding for ephemeral definitions. Handle binding errors too.
+For a separately deployed component, declare `dependencies.agents` in `golem.yaml`, run
+`golem build`, and import its generated Effect guest client; see
+[`golem-call-another-agent-effect`](../golem-call-another-agent-effect/SKILL.md).
 
 ## When to Use
 

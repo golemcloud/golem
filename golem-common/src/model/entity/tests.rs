@@ -935,3 +935,34 @@ fn activation_rejects_executable_that_differs_from_binding_source() {
         "Entity executable does not match the tool binding source"
     );
 }
+
+#[test]
+fn entity_tool_middleware_name_desert_decodes_and_re_encodes_stored_names() {
+    // Older versions stored names as sent, so a stored name may break the rules.
+    assert!(ToolMiddlewareName::try_from("Audit_Log").is_err());
+    let stored = desert_rust::serialize_to_byte_vec(&"Audit_Log".to_string()).unwrap();
+    let decoded = desert_rust::deserialize::<ToolMiddlewareName>(&stored).unwrap();
+    assert_eq!(decoded.as_str(), "Audit_Log");
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&decoded).unwrap(),
+        stored
+    );
+
+    let valid = ToolMiddlewareName::try_from("audit-log").unwrap();
+    let valid_bytes = desert_rust::serialize_to_byte_vec(&"audit-log".to_string()).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<ToolMiddlewareName>(&valid_bytes).unwrap(),
+        valid
+    );
+    assert_eq!(
+        desert_rust::serialize_to_byte_vec(&valid).unwrap(),
+        valid_bytes
+    );
+
+    let entity = AgentEntity::ToolMiddleware(valid);
+    let bytes = desert_rust::serialize_to_byte_vec(&entity).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<AgentEntity>(&bytes).unwrap(),
+        entity
+    );
+}

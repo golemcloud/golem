@@ -33,7 +33,7 @@ use send::*;
 #[allow(unused_imports)]
 use serialization::*;
 
-pub(crate) use request_body::PendingHttpRequestBodyTransmission;
+pub(crate) use request_body::HttpTransmissionRegistry;
 pub(crate) use response_body::OpenP3HttpResponseState;
 
 use wasmtime_wasi::TrappableError;

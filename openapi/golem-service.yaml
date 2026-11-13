@@ -18029,11 +18029,12 @@ components:
         Authoritative kind of an execution owner.
 
         This is persisted at creation time. In particular, an instance name that
-        happens to look like an external-tool owner never grants that authority.
+        happens to use a reserved owner namespace never grants that authority.
       type: string
       enum:
       - component-agent
       - ephemeral-external-tool
+      - oplog-processor
     PathDirection:
       type: string
       enum:
@@ -18756,6 +18757,7 @@ components:
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
           SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
+          SpanClosed: '#/components/schemas/PublicOplogEntry_r#SpanClosedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -18814,6 +18816,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SpanClosedParams'
     PublicOplogEntryAttribution:
       discriminator:
         propertyName: type
@@ -19415,6 +19418,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SnapshotParams'
+    PublicOplogEntry_r#SpanClosedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SpanClosed
+            type: string
+            enum:
+            - SpanClosed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#SpanClosedParams'
     PublicOplogEntry_r#StartParams:
       allOf:
       - type: object
@@ -22978,6 +22993,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
       required:
       - timestamp
       - invocation
@@ -23129,6 +23147,21 @@ components:
       required:
       - timestamp
       - data
+    r#SpanClosedParams:
+      title: r#SpanClosedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        resourceStartIndex:
+          type: integer
+          format: uint64
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+      required:
+      - timestamp
+      - spanFinished
     r#StartParams:
       title: r#StartParams
       type: object
@@ -24257,6 +24290,21 @@ components:
       required:
       - import
       - callback
+    ComponentAgentTypeDto:
+      title: ComponentAgentTypeDto
+      type: object
+      properties:
+        declaration:
+          $ref: '#/components/schemas/AgentTypeSchema'
+        typeId:
+          nullable: true
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          type: integer
+          format: uint32
+      required:
+      - declaration
     ComponentConfigSchema:
       type: object
       properties:
@@ -24374,7 +24422,7 @@ components:
           type: integer
           format: uint64
         metadata:
-          $ref: '#/components/schemas/ComponentMetadata'
+          $ref: '#/components/schemas/ComponentMetadataDto'
         createdAt:
           type: string
           format: date-time
@@ -24393,8 +24441,9 @@ components:
       - metadata
       - createdAt
       - wasmHash
-    ComponentMetadata:
-      title: ComponentMetadata
+    ComponentMetadataDto:
+      title: ComponentMetadataDto
+      description: Component metadata projected for REST responses, with identities beside declarations.
       type: object
       properties:
         knownExports:
@@ -24407,10 +24456,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        rootPackageName:
-          type: string
-        rootPackageVersion:
-          type: string
         configSchema:
           default:
             schema:
@@ -24432,30 +24477,24 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/AgentTypeSchema'
+            $ref: '#/components/schemas/ComponentAgentTypeDto'
         agentMethodStreams:
-          description: Server-derived streaming classification for each declared agent method.
           type: object
           additionalProperties:
             type: object
             additionalProperties:
               $ref: '#/components/schemas/AgentMethodStreamMetadata'
         agentTypeProvisionConfigs:
-          description: |-
-            Per-agent-type provisioning configuration: env, config, plugins, files.
-            Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
         tools:
-          description: Complete deployment input for every tool implemented by this component.
           default: {}
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ToolDeploymentMetadata'
+            $ref: '#/components/schemas/ComponentToolDto'
         toolMiddlewares:
-          description: Complete deployment input for every tool middleware implemented by this component.
           default: {}
           type: object
           additionalProperties:
@@ -24522,6 +24561,21 @@ components:
             $ref: '#/components/schemas/AgentFileOptions'
       required:
       - initialPermissions
+    ComponentToolDto:
+      title: ComponentToolDto
+      type: object
+      properties:
+        declaration:
+          $ref: '#/components/schemas/ToolDeploymentMetadata'
+        typeId:
+          nullable: true
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          description: Registry-assigned identity when available for this declaration.
+          type: integer
+          format: uint32
+      required:
+      - declaration
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -24691,6 +24745,7 @@ components:
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
           McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+          IncompatibleConstructorChange: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
@@ -24698,6 +24753,7 @@ components:
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
       - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+      - $ref: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -24722,6 +24778,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_IncompatibleConstructorChange:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: IncompatibleConstructorChange
+            type: string
+            enum:
+            - IncompatibleConstructorChange
+        required:
+        - type
+      - $ref: '#/components/schemas/IncompatibleConstructorChange'
     DeployValidationWarning_McpImportDiscovery:
       allOf:
       - type: object
@@ -24765,6 +24833,11 @@ components:
         Deployment related information can only be safely used if it is information of the _currently deployed_ component revision.
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         agentType:
           $ref: '#/components/schemas/AgentTypeSchema'
         implementedBy:
@@ -24772,12 +24845,18 @@ components:
         webhookPrefixAuthorityAndPath:
           type: string
       required:
+      - typeId
       - agentType
       - implementedBy
     DeployedRegisteredTool:
       title: DeployedRegisteredTool
       type: object
       properties:
+        typeId:
+          example: 1
+          title: Environment-local identity shared by agent types and tools. Zero is reserved.
+          type: integer
+          format: uint32
         deploymentRevision:
           type: integer
           format: uint64
@@ -24799,6 +24878,7 @@ components:
           type: string
           format: hash
       required:
+      - typeId
       - deploymentRevision
       - definition
       - source
@@ -25315,12 +25395,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
       required:
@@ -26147,6 +26221,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
@@ -26250,6 +26326,27 @@ components:
       - staticBindings
       - filesystemBindings
       - fileResponseHeaders
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
+    IncompatibleConstructorChange:
+      title: IncompatibleConstructorChange
+      type: object
+      properties:
+        agentType:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - agentType
+      - path
+      - reason
     InitialAgentFile:
       title: InitialAgentFile
       type: object

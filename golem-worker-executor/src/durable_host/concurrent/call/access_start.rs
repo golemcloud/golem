@@ -27,6 +27,7 @@ impl AccessCallIdentity {
     fn capture<T, D, Ctx>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        host_function: &str,
         function_type: &DurableFunctionType,
         claim_options: &AccessClaimOptions,
     ) -> Result<Self, WorkerExecutorError>
@@ -44,10 +45,12 @@ impl AccessCallIdentity {
         let invocation_id = resolve_access_invocation_id(
             store,
             get_ctx,
-            function_type,
             claim_options,
             custom_invocation_scope.is_some(),
-        )?;
+        )
+        .map_err(|error| {
+            WorkerExecutorError::runtime(format!("durable call {host_function}: {error}"))
+        })?;
         Ok(Self {
             custom_invocation_scope,
             invocation_id,
@@ -55,15 +58,14 @@ impl AccessCallIdentity {
     }
 }
 
-impl<Pair, P, T, D, Ctx, E> wasmtime::component::AccessorTask<T, D>
-    for OwnedAccessStart<Pair, P, T, D, Ctx, E>
+impl<Pair, P, T, D, Ctx, E> OwnedAccessStart<Pair, P, T, D, Ctx, E>
 where
     Pair: HostPayloadPair,
     P: DropPolicy,
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
-    E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
+    E: DurableCallTrapError + Send + 'static,
 {
     async fn run(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
         let Self {
@@ -118,16 +120,14 @@ where
     }
 }
 
-impl<Pair, P, T, D, Ctx> wasmtime::component::AccessorTask<T, D>
-    for OwnedReplayClaim<Pair, P, T, Ctx>
+impl<Pair, P, T, Ctx> OwnedReplayClaim<Pair, P, T, Ctx>
 where
     Pair: HostPayloadPair,
     P: DropPolicy,
     T: 'static,
-    D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    async fn run(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
+    async fn run<D: HasData + ?Sized>(self, accessor: &Accessor<T, D>) -> wasmtime::Result<()> {
         let Self {
             identity,
             function_type,
@@ -170,9 +170,25 @@ where
 {
     let interrupt =
         accessor.with(|mut access| get_ctx(access.data_mut()).create_interrupt_signal());
+    tokio::pin!(start);
     let result = tokio::select! {
-        result = start => result,
+        result = &mut start => result,
         interruption = interrupt => {
+            // Classify the selected disposal before dropping the metadata receiver. Its
+            // independently owned Start may be accepted after this task unwinds.
+            accessor.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                match interruption {
+                    InterruptKind::EntityCancellation => {
+                        ctx.tool_trap_disposal.store(true, Ordering::Release);
+                    }
+                    InterruptKind::Interrupt(_)
+                    | InterruptKind::Restart
+                    | InterruptKind::Suspend(_)
+                    | InterruptKind::Jump
+                    | InterruptKind::ShardLost => ctx.begin_stream_runtime_teardown(),
+                }
+            });
             let error = WorkerExecutorError::from(interruption);
             let _ = handed.send(Err(error.clone().into()));
             return Err(error.into());
@@ -189,10 +205,9 @@ where
     }
 }
 
-/// Reserves the invocation id of the concurrent guest import that `store` belongs to. Host
-/// functions call it before their first `await` when they `await` before starting their durable
-/// call, or when a task they spawn makes the durable call.
-pub(crate) fn reserve_access_invocation_id<T, D, Ctx>(
+/// The invocation id of the guest import that `store` belongs to, for a task the import spawns
+/// to make its durable calls. A call observed by a custom durable invocation records none.
+pub(crate) fn access_invocation_id<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<InvocationIdSource, WorkerExecutorError>
@@ -207,13 +222,15 @@ where
         .as_deref()
         .and_then(CustomInvocationContext::current)
         .is_some();
-    reserve_guest_import_invocation_id(store, get_ctx, observed_by_custom_invocation)
+    guest_import_invocation_id(store, get_ctx, observed_by_custom_invocation)
         .map(InvocationIdSource::Reserved)
 }
 
 /// Reserves the invocation id of the concurrent guest import that `store` belongs to, for a host
-/// function that `await`s before it starts its first durable call. The durable calls the import
-/// starts later use this id.
+/// function that `await`s before it starts its first durable call. An import reserves its ordinal
+/// lazily, and only while it is the guest's newest import (see
+/// [`crate::durable_host::durability::GuestImportNumbering`]); after an `await` the guest may have
+/// made another import call. The durable calls the import starts later use this id.
 pub(crate) fn reserve_invocation_id_before_await<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -223,27 +240,23 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    reserve_access_invocation_id(store, get_ctx).map(|_| ())
+    access_invocation_id(store, get_ctx).map(|_| ())
 }
 
-/// Reserves the invocation id of a synchronous guest import, which runs to completion inside the
-/// guest's call and so needs no import order check. A task the import spawns passes the result to
-/// its durable call.
-pub(crate) fn reserve_import_invocation_id<Ctx: WorkerCtx>(
+/// The invocation id of a Store-holding guest import, for a task the import spawns to make its
+/// durable calls.
+pub(crate) fn import_invocation_id<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     observational_owner: Option<OplogIndex>,
 ) -> Result<InvocationIdSource, WorkerExecutorError> {
-    if observational_owner.is_some() || ctx.state.snapshotting_mode {
+    if observational_owner.is_some() {
         return Ok(InvocationIdSource::Reserved(None));
     }
-    let Some(anchor) = ctx.invocation_anchor() else {
-        return Ok(InvocationIdSource::Reserved(None));
-    };
-    let invocation_id = reserve_invocation_id(ctx, None, anchor)?;
-    Ok(InvocationIdSource::Reserved(Some(invocation_id)))
+    ctx.direct_call_invocation_id()
+        .map(InvocationIdSource::Reserved)
 }
 
-pub(in crate::durable_host::concurrent) fn reserve_guest_import_invocation_id<T, D, Ctx>(
+pub(in crate::durable_host::concurrent) fn guest_import_invocation_id<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     observed_by_custom_invocation: bool,
@@ -253,7 +266,7 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    if observed_by_custom_invocation || !store.has_guest_visible_subtask() {
+    if observed_by_custom_invocation {
         return Ok(None);
     }
     let activity = store.runtime_activity();
@@ -262,10 +275,9 @@ where
         if ctx.state.snapshotting_mode {
             return Ok(None);
         }
-        let Some(anchor) = ctx.invocation_anchor() else {
-            return Ok(None);
-        };
-        reserve_invocation_id(ctx, activity, anchor).map(Some)
+        ctx.guest_imports
+            .reserve_import_identity(activity)
+            .map(GuestImportIdentity::invocation_id)
     })
 }
 
@@ -277,7 +289,6 @@ where
 fn resolve_access_invocation_id<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    _function_type: &DurableFunctionType,
     claim_options: &AccessClaimOptions,
     observed_by_custom_invocation: bool,
 ) -> Result<Option<DurableInvocationId>, WorkerExecutorError>
@@ -286,16 +297,18 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    if let InvocationIdSource::Reserved(invocation_id) = claim_options.invocation_id {
-        return Ok(invocation_id);
+    match claim_options.invocation_id {
+        InvocationIdSource::Reserved(invocation_id) => Ok(invocation_id),
+        _ if claim_options.host_internal_owner.is_some() => Ok(claim_options
+            .host_internal_owner
+            .as_ref()
+            .and_then(|owner| owner.execution_scope.invocation_id)),
+        InvocationIdSource::HostTask => Ok(None),
+        InvocationIdSource::GuestImport => store.call_invocation_id(
+            get_ctx,
+            observed_by_custom_invocation || claim_options.observational_owner.is_some(),
+        ),
     }
-    if let Some(owner) = &claim_options.host_internal_owner {
-        return Ok(owner.execution_scope.invocation_id);
-    }
-    store.reserve_call_invocation_id(
-        get_ctx,
-        observed_by_custom_invocation || claim_options.observational_owner.is_some(),
-    )
 }
 
 pub(crate) fn resolve_observational_owner<Ctx: WorkerCtx>(
@@ -359,7 +372,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -393,7 +406,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -410,7 +423,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             AccessClaimOptions::default(),
-            AccessRequest::Built(Box::new(build_request)),
+            AccessRequest::<_, T, D, wasmtime::Error>::Built(Box::new(move |context, accessor| {
+                Box::pin(async move { Ok(build_request(context, accessor).await?) })
+            })),
             None,
             None,
         )
@@ -440,7 +455,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         request: Pair::Req,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -451,7 +466,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
+            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
             None,
             None,
         )
@@ -471,7 +486,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mut options: AccessClaimOptions,
         request: Pair::Req,
         targets: Result<Vec<PermissionTarget>, String>,
-    ) -> Result<(Self, Option<Result<LiveAuthorizationPermit, String>>), WorkerExecutorError>
+    ) -> wasmtime::Result<(Self, Option<Result<LiveAuthorizationPermit, String>>)>
     where
         Pair: DeniablePair,
         T: 'static,
@@ -496,7 +511,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         claim_options: AccessClaimOptions,
         request: Pair::Req,
         span_started: golem_common::model::oplog::SpanStarted,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> wasmtime::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized + 'static,
@@ -507,7 +522,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             function_type,
             claim_options,
-            AccessRequest::<_, T, D, WorkerExecutorError>::Ready(request),
+            AccessRequest::<_, T, D, wasmtime::Error>::Ready(request),
             Some(Box::new(move |_| Ok(span_started))),
             None,
         )
@@ -579,9 +594,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         T: 'static,
         D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
-        E: From<WorkerExecutorError> + Send + 'static + Into<anyhow::Error>,
+        E: DurableCallTrapError + Send + 'static,
     {
-        let identity = AccessCallIdentity::capture(store, get_ctx, &function_type, &claim_options)?;
+        let identity = AccessCallIdentity::capture(
+            store,
+            get_ctx,
+            Pair::FQFN,
+            &function_type,
+            &claim_options,
+        )?;
         if !store.has_guest_visible_subtask() || claim_options.host_internal_owner.is_some() {
             return Self::start_identified(
                 store,
@@ -622,7 +643,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let (started, receiver) = oneshot::channel();
         let activity =
             store.with(|mut access| get_ctx(access.data_mut()).tail_work_tracker().activity());
-        store.spawn(OwnedAccessStart {
+        let task = OwnedAccessStart {
             stage,
             get_ctx,
             request,
@@ -630,7 +651,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             span_observer,
             started,
             _activity: activity,
-        });
+        };
+        store
+            .spawn(async move |store| task.run(store).await)
+            .map_err(|error| E::from_durable_call_trap(error.into()))?;
         receiver.await.map_err(|_| {
             WorkerExecutorError::runtime("owned durable call start ended without a result")
         })?
@@ -646,7 +670,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -673,7 +697,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -701,7 +725,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         requires_agent_authority: bool,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -730,7 +754,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         capture: C,
         build_request: F,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -762,7 +786,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         requires_agent_authority: bool,
         capture: Option<C>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> anyhow::Result<Self>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -773,7 +797,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // Capture the immutable task-context snapshot synchronously, before the first await. The
         // store window of the start validates it against worker state and moves the owner into
         // the call's execution scope.
-        let identity = AccessCallIdentity::capture(store, get_ctx, &function_type, &claim_options)?;
+        let identity = AccessCallIdentity::capture(
+            store,
+            get_ctx,
+            Pair::FQFN,
+            &function_type,
+            &claim_options,
+        )?;
         Self::start_identified(
             store,
             get_ctx,
@@ -781,7 +811,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             function_type,
             claim_options,
             requires_agent_authority,
-            build_request,
+            async move |context, captured| Ok(build_request(context, captured).await?),
             build_span,
             span_observer,
             capture,
@@ -808,7 +838,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
-        E: From<WorkerExecutorError>,
+        E: DurableCallTrapError,
     {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
@@ -867,7 +897,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        let identity = AccessCallIdentity::capture(store, get_ctx, &function_type, &claim_options)?;
+        let identity = AccessCallIdentity::capture(
+            store,
+            get_ctx,
+            Pair::FQFN,
+            &function_type,
+            &claim_options,
+        )?;
         let prepared = store.with(|mut access| {
             Self::prepare_access_start(
                 get_ctx(access.data_mut()),
@@ -896,21 +932,30 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        let identity = AccessCallIdentity::capture(store, get_ctx, &function_type, &claim_options)?;
+        let identity = AccessCallIdentity::capture(
+            store,
+            get_ctx,
+            Pair::FQFN,
+            &function_type,
+            &claim_options,
+        )?;
         // A claim made by the guest runs in an owned task for the reason a start does; see
         // [`Self::start_access_with_options`].
         let outcome = if store.has_guest_visible_subtask() {
             let (claimed, receiver) = oneshot::channel();
             let activity =
                 store.with(|mut access| get_ctx(access.data_mut()).tail_work_tracker().activity());
-            store.spawn(OwnedReplayClaim {
+            let task = OwnedReplayClaim {
                 identity,
                 function_type,
                 claim_options,
                 get_ctx,
                 claimed,
                 _activity: activity,
-            });
+            };
+            store
+                .spawn(async move |store| task.run(store).await)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             receiver.await.map_err(|_| {
                 WorkerExecutorError::runtime("owned durable call claim ended without a result")
             })??

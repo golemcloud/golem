@@ -98,16 +98,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         span_attributes: Option<golem_common::model::oplog::SpanAttributes>,
         forced_commit: bool,
     ) -> Result<Pair::Resp, WorkerExecutorError> {
-        debug_assert!(self.is_live, "complete() called on a replay handle");
-        // This is the call's legitimate terminal; mark it finished up front so that a failure of the
+        // This is the call's legitimate terminal; release Drop responsibility so that a failure of the
         // downstream commit / scope close (`?` below) does not drop the handle "unfinished" and trip
         // the drop policy. The host-call `End` is what makes the call durable, not these follow-ups.
-        self.finished = true;
-        let response = if self.persisted {
+        self.state = self
+            .take_executing_call()?
+            .enter_direct_terminal()
+            .into_session();
+        let response = if self.state.is_recorded_execution() {
             let oplog = access.with_ctx(|ctx| ctx.state.oplog.clone());
             let (response, end) = prepare_end_entry::<Pair>(
                 &oplog,
-                &self.request_upload,
+                &self.state.request_upload(),
                 self.start_idx,
                 response,
                 span_finished,
@@ -116,11 +118,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await?;
             oplog.add(end).await?;
             access
-                .finish_scope_with_commit(
-                    self.retry.function_type().clone(),
-                    self.begin_index(),
-                    forced_commit,
-                )
+                .finish_scope_with_commit(self.retry.function_type().clone(), forced_commit)
                 .await?;
             response
         } else {
@@ -246,8 +244,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// while reserving the unpublished effect and invoking `enqueue(reservation)`. Returning
     /// without invoking `enqueue` rejects the candidate. Rejection returns the
     /// unfinished call and response, so the caller can select another terminal or retry.
-    /// Publication owns the reservation until the End append and DurableOnly commit succeed;
-    /// it must be infallible after acceptance.
+    /// Publication owns the reservation until the End append succeeds and, for a `WriteRemote`
+    /// call, its DurableOnly commit; other calls leave the End to the next owner-oplog commit,
+    /// as [`end_durable_function_access`] does. Publication must be infallible after acceptance.
     /// `failed` must synchronously fence observers before returning the owner cleanup future.
     /// The owned coordinator resolves the terminal receipt before polling that future, so
     /// cleanup may join the receipt without depending on itself. Runtime replacement and
@@ -282,7 +281,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         .await
     }
 
-    /// Shared commit-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
+    /// Shared append-before-publication protocol; see [`Self::complete_access_deferred_with_effect`].
     pub(crate) async fn complete_deferred_with_effect<Ctx, R, A, F, E, EF>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
@@ -306,7 +305,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         self.ensure_accessor_terminal_supported("complete_access_deferred_with_effect")
             .map_err(|err| TerminalCallError::new(err, context))?;
-        if !self.is_live || !self.persisted {
+        if !self.state.is_recorded_execution() {
             return Err(TerminalCallError::new(
                 WorkerExecutorError::runtime(
                     "local effect completion requires a persisted live call",
@@ -325,7 +324,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         });
         let prepared = prepare_end_entry::<Pair>(
             &oplog,
-            &self.request_upload,
+            &self.state.request_upload(),
             self.start_idx,
             response,
             None,
@@ -349,13 +348,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ));
         };
         let tasks = worker.tasks.clone();
+        let commits = *self.retry.function_type() == DurableFunctionType::WriteRemote;
         let coordinator = prepare_access_terminal_effect(
             &tasks,
             recording,
             async move {
-                worker
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await?;
+                if commits {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                        .await?;
+                }
                 Ok(())
             },
             publish,
@@ -369,11 +371,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
         };
         let mut guard = AccessTerminalGuard::<P>::new(
-            self.dropped_call_snapshot(self.live_call_permit.clone()),
+            self.dropped_call_snapshot(self.state.clone_permit()),
             self.drop_sink.clone(),
             self.cleanup_sink.clone(),
             self.teardown_probe(),
-        );
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
         let accepted = accept_access_terminal_effect(&response, &oplog, end, accept);
         let (reservation, append) = match accepted {
             Some(accepted) => accepted,
@@ -383,7 +386,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
         };
         // Admission preceded acceptance; the coordinator cannot be cancelled by retirement.
-        self.finished = true;
+        self.state = self
+            .take_executing_call()
+            .map_err(|source| TerminalCallError::new(source, context))?
+            .handoff_terminal_guard()
+            .into_session();
         assert!(handoff.send((reservation, append)).is_ok());
         guard.cleanup_after_terminal(
             terminal,
@@ -493,7 +500,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         destination: AccessResultDestination,
     ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("complete_access")?;
-        if !self.is_live {
+        if !self.is_live() {
             return Err(WorkerExecutorError::runtime(
                 "complete_access called on a replay handle; use replay_access first",
             ));
@@ -509,37 +516,62 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }),
                 )
             });
-            let mut guard = AccessTerminalGuard::<P>::new(
-                self.dropped_call_snapshot(self.live_call_permit.clone()),
-                self.drop_sink.clone(),
-                self.cleanup_sink.clone(),
-                self.teardown_probe(),
-            );
-            self.finished = true;
-            let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
-                Self::persist_access_terminal(
+            let (response, mut guard) = self
+                .persist_guarded_terminal(
                     oplog,
                     completion_marker_recorder,
-                    &mut guard,
-                    self.start_idx,
                     response,
                     span_finished,
                 )
-                .await
-            } else {
-                Ok(response)
-            };
-
-            let response = match persist_result {
-                Ok(response) => response,
-                Err(err) => {
-                    guard.disarm();
-                    return Err(err);
-                }
-            };
+                .await?;
             self.finish_terminal_scope(access, &mut guard).await?;
             Ok((response, guard))
         }
+    }
+
+    /// Common terminal guard ownership for Store-bound and owned internal completions.
+    pub(super) async fn persist_guarded_terminal(
+        &mut self,
+        oplog: Arc<dyn Oplog>,
+        recorder: Option<CompletionMarkerRecorder>,
+        response: Pair::Resp,
+        span: Option<golem_common::model::oplog::SpanFinished>,
+    ) -> Result<(Pair::Resp, AccessTerminalGuard<P>), WorkerExecutorError> {
+        let mut guard = self.terminal_guard()?;
+        let result = if self.state.is_recorded_execution() {
+            Self::persist_access_terminal(
+                oplog,
+                recorder,
+                &mut guard,
+                self.start_idx,
+                response,
+                span,
+            )
+            .await
+        } else {
+            Ok(response)
+        };
+        match result {
+            Ok(response) => Ok((response, guard)),
+            Err(error) => {
+                guard.disarm();
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn terminal_guard(&mut self) -> Result<AccessTerminalGuard<P>, WorkerExecutorError> {
+        let snapshot = self.dropped_call_snapshot(self.state.clone_permit());
+        let executing = self.take_executing_call()?;
+        let guard = AccessTerminalGuard::<P>::new(
+            snapshot,
+            self.drop_sink.clone(),
+            self.cleanup_sink.clone(),
+            self.teardown_probe(),
+        )
+        .with_tool_trap_disposal(self.tool_trap_disposal.clone());
+        self.state = executing.handoff_terminal_guard().into_session();
+        Ok(guard)
     }
 
     async fn finish_terminal_scope<Ctx: WorkerCtx>(
@@ -548,8 +580,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
         let function_type = self.retry.function_type().clone();
-        let begin_index = self.begin_index();
-        let result = access.finish_scope(function_type, begin_index).await;
+        let result = access.finish_scope(function_type).await;
         if result.is_err() {
             // The caller observes this failure; it is not a guest-discarded completion.
             guard.suppress_discard_marker();
@@ -734,6 +765,10 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),
         TypeId::of::<HostResponseGolemApiOplogEntries>(),
+        TypeId::of::<HostResponseToolAttachmentCreated>(),
+        TypeId::of::<HostResponseToolAttachmentWrite>(),
+        TypeId::of::<HostResponseToolAttachmentTerminalResult>(),
+        TypeId::of::<HostResponseToolAttachmentClosed>(),
         TypeId::of::<HostResponseConfigGetResponse>(),
         TypeId::of::<HostResponseConfigGetAllResponse>(),
         TypeId::of::<HostResponseCliEnvironmentGetEnvironment>(),
@@ -761,32 +796,7 @@ pub(crate) async fn end_durable_function_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     function_type: DurableFunctionType,
-    begin_index: OplogIndex,
     forced_commit: bool,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    end_durable_function_access_with_span(
-        store,
-        get_ctx,
-        function_type,
-        begin_index,
-        forced_commit,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn end_durable_function_access_with_span<T, D, Ctx>(
-    store: &(impl DurableAccess<T, D> + ?Sized),
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    function_type: DurableFunctionType,
-    _begin_index: OplogIndex,
-    forced_commit: bool,
-    _span_finished: Option<golem_common::model::oplog::SpanFinished>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
@@ -818,6 +828,37 @@ where
         }
     }
 
+    Ok(())
+}
+
+/// Records that the guest released a host resource whose only durable content is its span
+/// `span_id`. The release is not a durable call: it reserves no invocation id and claims nothing
+/// in replay, so a guest may release the resource at another point when it replays (a garbage
+/// collector, a heap restored from a snapshot). A live Store appends a `SpanClosed` hint when the
+/// `Start` at `resource_start_index` recorded the span; a replaying or snapshotting Store and a
+/// resource without a recorded opening append nothing. The caller finishes the span in memory.
+pub(crate) async fn record_released_resource_span<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource_start_index: Option<OplogIndex>,
+    span_id: &SpanId,
+) -> Result<(), WorkerExecutorError> {
+    if resource_start_index.is_some()
+        && ctx.state.is_live()
+        && !ctx.state.durability_is_suppressed()
+    {
+        let finished_at = Timestamp::now_utc();
+        let entry = OplogEntry::SpanClosed {
+            timestamp: finished_at,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
+            resource_start_index,
+            span_finished: golem_common::model::oplog::SpanFinished {
+                span_id: span_id.clone(),
+                finished_at,
+                outcome: golem_common::model::oplog::SpanOutcome::Completed,
+            },
+        };
+        ctx.state.oplog.add(entry).await?;
+    }
     Ok(())
 }
 

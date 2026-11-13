@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_uuid;
 mod config;
 pub mod extraction;
 mod invocation;
+mod key;
 mod normalisation;
 mod protobuf;
 mod status;
+
+pub use agent_uuid::AgentUuid;
+pub use key::AgentKey;
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
@@ -29,10 +34,10 @@ pub use status::{
     AuthoritativeSnapshotKind, AutomaticSnapshot, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
-    DurableStreamSessionStatus, ExportForkAdmissions, ExportForkReservation, FailedUpdateRecord,
-    InvocationResultBloom, InvocationResultMembership, OplogProcessorCheckpointState,
-    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
+    ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
+    OpenEntityReplayScope, OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind,
+    PendingUpdateRef, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]
@@ -56,27 +61,33 @@ use crate::base_model::IdempotencyKey;
 pub use crate::base_model::agent::*;
 pub use crate::base_model::worker::*;
 use crate::model::account::AccountId;
-use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::component::ComponentId;
 use crate::model::component_metadata::{self, ComponentMetadata};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{AgentFingerprint, AgentId, PromiseId, Timestamp};
 use crate::schema::AgentTypeSchema;
-pub use crate::schema::agent::ParsedAgentId;
+pub use crate::schema::agent::ParsedAgentKey;
 use crate::schema::graph::TypedSchemaValue;
 use crate::schema::render::cli_text::value_to_cli_text;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+/// An invocation or creation address before it resolves to a concrete owner.
+/// `Current` retains today's structural addressing and creation semantics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentTarget {
+    Current(AgentId),
+}
+
 /// Resolved execution-owner context. Consumers must branch on this value
 /// instead of treating failure to parse an agent id as component-wide access.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
-    Agent(Box<ParsedAgentId>),
-    /// A non-agent component's guest worker, using component-level provision policy.
-    ComponentWorker,
+    Agent(Box<ParsedAgentKey>),
     /// An ephemeral external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
+    OplogProcessor,
 }
 
 impl ResolvedOwnerContext {
@@ -88,20 +99,24 @@ impl ResolvedOwnerContext {
         kind.validate_instance_name(raw_agent_id)?;
         match kind {
             OwnerKind::ComponentAgent if metadata.is_agent() => {
-                ParsedAgentId::parse(raw_agent_id, metadata)
+                ParsedAgentKey::parse(raw_agent_id, metadata)
                     .map(Box::new)
                     .map(Self::Agent)
                     .map_err(|error| error.to_string())
             }
-            OwnerKind::ComponentAgent => Ok(Self::ComponentWorker),
+            OwnerKind::ComponentAgent => Err("Component declares no agent types".to_string()),
             OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
+            OwnerKind::OplogProcessor if metadata.has_oplog_processor() => Ok(Self::OplogProcessor),
+            OwnerKind::OplogProcessor => {
+                Err("Component declares no oplog processor export".to_string())
+            }
         }
     }
 
-    pub fn agent(&self) -> Option<&ParsedAgentId> {
+    pub fn agent(&self) -> Option<&ParsedAgentKey> {
         match self {
             Self::Agent(agent) => Some(agent),
-            Self::ComponentWorker | Self::ComponentBaseline => None,
+            Self::ComponentBaseline | Self::OplogProcessor => None,
         }
     }
 }
@@ -254,15 +269,20 @@ impl AgentTypeSchemaResolver for &AgentTypeSchema {
     }
 }
 
-impl ParsedAgentId {
+impl ParsedAgentKey {
     pub fn try_new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, String> {
-        let parsed = Self::new(agent_type, parameters, phantom_id);
-        AgentId::validate_length(&parsed.to_string())?;
-        Ok(parsed)
+        let key = AgentKey::new(agent_type, parameters).map_err(|err| err.to_string())?;
+        let text = match phantom_id {
+            Some(phantom_id) => format!("{key}[{phantom_id}]"),
+            None => key.to_string(),
+        };
+        AgentId::validate_length(&text)?;
+        let (agent_type, parameters) = key.into_parts();
+        Ok(Self::new(agent_type, parameters, phantom_id))
     }
 
     pub fn new_auto_phantom(
@@ -290,42 +310,14 @@ impl ParsedAgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        use crate::model::agent::structural_format::{
-            normalize_structural, parse_structural_typed,
-        };
-        use crate::schema::schema_type::NamedFieldType;
-
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
-        let agent_type_name = AgentTypeName(agent_type_name.to_string());
         let phantom_id = phantom_id_str
             .map(Uuid::parse_str)
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
-        let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let root = SchemaType::record(
-            agent_type
-                .constructor
-                .input_schema
-                .fields()
-                .iter()
-                .filter(|field| {
-                    matches!(
-                        field.source,
-                        crate::schema::agent::FieldSource::UserSupplied
-                    )
-                })
-                .map(|field| NamedFieldType {
-                    name: field.name.clone(),
-                    body: field.schema.clone(),
-                    metadata: field.metadata.clone(),
-                })
-                .collect(),
-        );
-        let value =
-            parse_structural_typed(&normalize_structural(param_list), &agent_type.schema, &root)
-                .map_err(|e| e.to_string())?;
-        let parameters = typed_constructor_parameters(&agent_type, value);
+        let (key, agent_type) = AgentKey::parse_parts(agent_type_name, param_list, resolver)?;
+        let (agent_type_name, parameters) = key.into_parts();
         let agent_id = Self::try_new(agent_type_name, parameters, phantom_id)?;
         Ok((agent_id, agent_type))
     }
@@ -355,7 +347,7 @@ impl ParsedAgentId {
     }
 }
 
-impl Display for ParsedAgentId {
+impl Display for ParsedAgentKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use crate::model::agent::structural_format::format_structural_typed;
         let rendered = format_structural_typed(&self.parameters).map_err(|_| std::fmt::Error)?;
@@ -371,9 +363,19 @@ pub fn typed_constructor_parameters(
     agent_type: &AgentTypeSchema,
     value: SchemaValue,
 ) -> TypedSchemaValue {
+    let root = constructor_parameter_record(agent_type);
+    // The result is a single-root carrier, so project the agent graph's defs to
+    // exactly those reachable from this constructor record instead of cloning
+    // the whole multi-root registry.
+    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+}
+
+/// The record of a constructor's user-supplied parameters: the type of an agent key's
+/// parameters. Agent config fields are not part of it.
+pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType {
     use crate::schema::schema_type::NamedFieldType;
 
-    let root = SchemaType::record(
+    SchemaType::record(
         agent_type
             .constructor
             .input_schema
@@ -391,12 +393,9 @@ pub fn typed_constructor_parameters(
                 metadata: field.metadata.clone(),
             })
             .collect(),
-    );
-    // The result is a single-root carrier, so project the agent graph's defs to
-    // exactly those reachable from this constructor record instead of cloning
-    // the whole multi-root registry.
-    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+    )
 }
+
 /// Status of an idempotency key lookup on a worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
 #[serde(rename_all = "camelCase")]
@@ -428,7 +427,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -443,7 +442,7 @@ impl AgentId {
         agent_id: S,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
+        Self::from_agent_id(component_id, &ParsedAgentKey::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
@@ -483,7 +482,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match ParsedAgentId::normalize_text(id) {
+        match ParsedAgentKey::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(
@@ -583,6 +582,7 @@ pub enum ScheduledAction {
         account_id: AccountId,
         environment_id: EnvironmentId,
         promise_id: PromiseId,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
@@ -595,36 +595,19 @@ pub enum ScheduledAction {
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
-    /// Invoke the given action on the worker. The invocation will only
-    /// be persisted in the oplog when it's actually getting scheduled.
-    ///
-    /// `target_worker_fingerprint` guards against stale invocations: when `Some(fp)`, the
-    /// scheduler compares `fp` against the current worker's `fingerprint` before firing. A
-    /// mismatch means the original worker was deleted and a new one was created with the same
-    /// ID — the invocation is silently dropped. `None` means fire unconditionally (used for
-    /// legacy entries and non-wasm-rpc invocations).
-    Invoke {
-        account_id: AccountId,
+    /// Wakes a scheduled invocation already committed in the target's oplog.
+    /// Delivery requires the existing incarnation identified by `target_worker_fingerprint`.
+    /// A missing agent or a fingerprint mismatch drops the action without creating an agent.
+    WakeInvocation {
         owned_agent_id: OwnedAgentId,
-        invocation: Box<AgentInvocation>,
+        idempotency_key: IdempotencyKey,
         target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
     Resume {
         agent_created_by: AccountId,
         owned_agent_id: OwnedAgentId,
-    },
-    /// Invokes a fresh ephemeral agent without pre-creating it. The scheduler uses the checked
-    /// creation path because delivery may be retried after an ambiguous failure.
-    InvokeEphemeral {
-        account_id: AccountId,
-        owned_agent_id: OwnedAgentId,
-        invocation: Box<AgentInvocation>,
-        component_revision: ComponentRevision,
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-        parent: Option<AgentId>,
-        creation_principal: Box<Principal>,
+        target_worker_fingerprint: AgentFingerprint,
     },
     ExpireDurableStreamSession {
         owned_agent_id: OwnedAgentId,
@@ -644,8 +627,7 @@ impl ScheduledAction {
                 ..
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
-            ScheduledAction::Invoke { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
+            ScheduledAction::WakeInvocation { owned_agent_id, .. }
             | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
                 owned_agent_id.clone()
             }
@@ -663,8 +645,7 @@ impl Display for ScheduledAction {
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
                 write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::Invoke { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
+            ScheduledAction::WakeInvocation { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
             ScheduledAction::ExpireDurableStreamSession {
@@ -691,9 +672,9 @@ impl ScheduleId {
         Self { id: Uuid::now_v7() }
     }
 
-    pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {
+    pub fn for_invocation(fingerprint: AgentFingerprint, key: &IdempotencyKey) -> Self {
         Self {
-            id: Uuid::parse_str(&key.value).expect("derived idempotency key must be a UUID"),
+            id: Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
         }
     }
 }

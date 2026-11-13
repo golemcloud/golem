@@ -174,9 +174,6 @@ http: [Http.post("/events", {
         contentType: "application/vnd.example.events",
       },
     ],
-    allowExternalWrites: true,
-    allowStreamDelete: false,
-    allowInvocationDelete: false,
     load: {
       maxConcurrentReadersPerStream: 8,
       maxAppendRequestsPerSecondPerStream: 25,
@@ -188,8 +185,7 @@ http: [Http.post("/events", {
 - `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
 - `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
 - `contentType` is allowed only for a direct byte stream (`stream<u8>`) and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
-- The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
-- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Reader and append limits must be positive and no greater than the installation maximums. Omitted values use the registry installation defaults.
 - Limits are maintained per route and worker-service node, not as a cluster-wide quota.
 
 ## HTTP Response Mapping
@@ -379,7 +375,7 @@ httpApi:
           TodoAgent: {}
 ```
 
-Current Golem 1.5 manifests contain deployment configuration only. Do not add legacy
+The `httpApi` section in current Golem manifests contains deployment configuration only. Do not add legacy
 `apiDefinitions`, route lists, OpenAPI extension bindings, or Rib response scripts. Route metadata
 comes from `Http.mount(...)` and the method-level `Http.*(...)` declarations. Golem serves the
 generated OpenAPI document at `/openapi.yaml` after deployment.

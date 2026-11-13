@@ -16,7 +16,7 @@
 //!
 //! A durable host call is identified by the [`OplogIndex`] of its `Start` entry. While live,
 //! the call eagerly appends a `Start` (capturing its request) and later an `End` (its response)
-//! or a `Cancelled`. During replay the [`ConcurrentReplayResolver`] matches each completed
+//! or a `Cancelled`. During replay the cursor's per-Start registry matches each completed
 //! `End`/`Cancelled` back to the awaiting [`DurableCallSession`] via a [`ReplayableOneshot`], so the two
 //! halves of a call no longer have to be adjacent in the oplog — which is what lets us track
 //! async, parallel host functions.
@@ -25,7 +25,7 @@
 //! p3 `Accessor` entry points ([`DurableCallSession::start_access_with`] and friends) run concurrently;
 //! host methods still taking `&mut self` remain serialized by the store borrow.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -58,7 +58,7 @@ use crate::durable_host::durable_session::DroppedDurableInput;
 use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole};
 use crate::durable_host::{
     BeginReplayToLive, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
-    PublicDurableWorkerState,
+    PublicDurableWorkerState, StoreReplayState,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
 use crate::services::{HasShutdownToken, HasWorker};
@@ -74,8 +74,8 @@ mod drop_events;
 mod replay;
 
 pub(super) use super::call_coordinator::{
-    DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
-    lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
+    DurableCallAdmission, DurableCallCoordinator, lock_synchronized_card_event_boundary_access,
+    process_pending_replay_events_access,
 };
 pub(crate) use super::call_coordinator::{
     authorize_live_permissions_at_serialized_access, try_agent_auth_ctx_at_serialized_access,
@@ -86,11 +86,13 @@ pub use call::*;
 #[cfg(test)]
 use call::{BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost};
 pub(in crate::durable_host) use context::AccessorContext;
-pub(crate) use context::{DurableAccess, DurableContext, SharedDurableContext};
+pub(crate) use context::{
+    DurableAccess, DurableContext, EntitySettlementContext, SharedDurableContext,
+};
 pub use delivery::*;
 pub(crate) use demand_stream::*;
 #[cfg(test)]
-pub(crate) use drop_events::tests::cleanup_recorder;
+pub(super) use drop_events::tests::{cleanup_recorder, cleanup_recorder_for_store};
 pub use drop_events::*;
 pub use replay::*;
 

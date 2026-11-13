@@ -58,6 +58,7 @@ sealed trait JsPluginInstallationDescription extends js.Object {
 sealed trait JsCreateParameters extends js.Object {
   def timestamp: JsDatetime                                           = js.native
   def agentId: JsAgentId                                              = js.native
+  def ownerKind: String                                               = js.native
   def componentRevision: js.BigInt                                    = js.native
   def env: js.Array[js.Tuple2[String, String]]                        = js.native
   def createdBy: JsAccountId                                          = js.native
@@ -403,8 +404,9 @@ sealed trait JsAgentInvocationFinishedParameters extends js.Object {
 
 @js.native
 sealed trait JsPendingAgentInvocationParameters extends js.Object {
-  def timestamp: JsDatetime         = js.native
-  def invocation: JsAgentInvocation = js.native
+  def timestamp: JsDatetime             = js.native
+  def invocation: JsAgentInvocation     = js.native
+  def notBefore: js.UndefOr[JsDatetime] = js.native
 }
 
 // --- UpdateDescription  –  tagged union ---
@@ -590,6 +592,15 @@ sealed trait JsSnapshotParameters extends js.Object {
 sealed trait JsSnapshotConfirmedParameters extends js.Object {
   def timestamp: JsDatetime      = js.native
   def filesystemSnapshot: String = js.native
+}
+
+// --- SpanClosedParameters ---
+
+@js.native
+sealed trait JsSpanClosedParameters extends js.Object {
+  def timestamp: JsDatetime                     = js.native
+  def resourceStartIndex: js.UndefOr[js.BigInt] = js.native
+  def spanFinished: JsSpanFinished              = js.native
 }
 
 // --- OplogProcessorCheckpointParameters ---

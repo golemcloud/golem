@@ -40,6 +40,7 @@ use golem_common::model::quota::{
 };
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, SqlDateTime};
+use golem_shard_manager::RequestClient;
 use golem_shard_manager::config::QuotaServiceConfig;
 use golem_shard_manager::quota::quota_repo::{
     QuotaLeaseRecord, QuotaRepoError, QuotaResourceRecord, StoredQuotaResource, StoredQuotaState,
@@ -1071,7 +1072,7 @@ async fn quota_writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<Dock
         .await;
     let (_, fence) = store.mint_leader_key().await;
     let repo: Arc<dyn QuotaRepo> = Arc::new(EtcdQuotaRepo::new(
-        request_client(&[etcd.client_url(), DEAD_MEMBER.to_string()]).await,
+        RequestClient::fixed(request_client(&[etcd.client_url(), DEAD_MEMBER.to_string()]).await),
         fence,
         store.read_retry(),
     ));
@@ -1323,7 +1324,8 @@ fn reader_with_a_write_between_pages(
     let written = Arc::new(AtomicI64::new(NO_REVISION));
     let definition = definition.clone();
     let written_at = written.clone();
-    let reader = EtcdQuotaRepo::new(client, fence, read_retry).with_read_pages(2, move || {
+    let handle = RequestClient::fixed(client);
+    let reader = EtcdQuotaRepo::new(handle, fence, read_retry).with_read_pages(2, move || {
         let (writer, definition, fired, written_at, compact) = (
             writer.clone(),
             definition.clone(),

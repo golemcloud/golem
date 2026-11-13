@@ -30,7 +30,7 @@ impl CursorTx<'_> {
     ) -> Result<(), WorkerExecutorError> {
         let start_idx = terminal_start_index(entry).unwrap_or(read_idx);
         debug_assert!(
-            self.st.retained_starts.contains_key(&start_idx),
+            self.st.starts.get_retained(&start_idx).is_some(),
             "retained commits target a retained Start"
         );
         self.commit_entry(read_idx, entry, Some(start_idx)).await
@@ -65,6 +65,47 @@ impl CursorTx<'_> {
         // resolver routing / progress signalling below never run — a partial-publish on the error
         // path. None of these effects depend on the cursor position.
         self.apply_commit_effects(read_idx, entry).await?;
+        if let OplogEntry::Start {
+            parent_start_index,
+            function_name,
+            ..
+        } = entry
+        {
+            let mut entities = parent_start_index
+                .and_then(|parent| self.st.entity_start_routes.get(&parent))
+                .cloned()
+                .unwrap_or_default();
+            if matches!(
+                function_name,
+                HostFunctionName::GolemEntityInvoke | HostFunctionName::GolemToolInvocationRejected
+            ) {
+                entities.push(read_idx);
+            }
+            for entity in &entities {
+                self.st
+                    .entity_route_members
+                    .entry(*entity)
+                    .or_default()
+                    .insert(read_idx);
+            }
+            if !entities.is_empty() {
+                self.st.entity_start_routes.insert(read_idx, entities);
+            }
+        } else if let Some(start) = terminal_start_index(entry)
+            && let Some(members) = self.st.entity_route_members.remove(&start)
+        {
+            for member in members {
+                let entities = self
+                    .st
+                    .entity_start_routes
+                    .get_mut(&member)
+                    .expect("reverse entity routes reference an active forward route");
+                entities.retain(|entity| *entity != start);
+                if entities.is_empty() {
+                    self.st.entity_start_routes.remove(&member);
+                }
+            }
+        }
         // Publish the cursor advance now (and only now): committing is the single point where the
         // speculative read of `read_idx` becomes globally observable. This also performs the
         // skipped-region jump for the next read via `get_out_of_skipped_region`, and must precede
@@ -98,7 +139,7 @@ impl CursorTx<'_> {
     ) -> Result<(), WorkerExecutorError> {
         // Skipping hint entries and recording log entries
         let mut logs: HashMap<(u64, u64), usize> = HashMap::new();
-        while self.cursor.is_replay() {
+        while self.cursor.has_replay_remaining() {
             // Speculative peek: does not advance the published cursor. The cursor is advanced (via
             // `move_replay_idx`) only when a hint entry is actually skipped past below; the first
             // non-hint entry leaves the cursor untouched, so no speculative position is ever
@@ -183,7 +224,7 @@ impl CursorTx<'_> {
                 // Hints can precede even the claim of their future entity Start. Validate the
                 // exact reference before retaining its prefix; a released claim cannot recreate it.
                 if wallet.entity_replay_wallet(parent).is_err()
-                    && !self.st.claimed_starts.contains(&parent)
+                    && !self.st.starts.is_claimed_ahead(&parent)
                     && self.custom_subtree_root(parent).is_none()
                     && self
                         .future_entity_start_can_be_claimed(read_idx, parent)
@@ -424,27 +465,27 @@ impl CursorTx<'_> {
     /// `ReplayFinished` is queued whenever the cursor reaches the target, including when it gets
     /// there via a skip/jump that never consumes the target entry. Consumers withhold the event
     /// until the primary publishes live admission after reconstruction settlement. The forced
-    /// transition in [`Self::switch_to_live`] is the only other path to live and emits its own
-    /// `ReplayFinished`.
+    /// exhaustion in [`Self::exhaust_replay_prefix`] is the only other path to the replay tail
+    /// and emits its own `ReplayFinished`.
     ///
-    /// Exactly-once holds because the `was_replay && is_live` edge is true only on the single advance
-    /// that crosses into live: once live, the replay-driving loops stop and no further
-    /// `move_replay_idx` runs until the replay target is grown (`set_replay_target`) or a new cursor
-    /// is built (`new`), each of which starts a fresh replay epoch that emits its own
-    /// `ReplayFinished` on completion.
+    /// Exactly-once holds because the `was_replay && at_replay_tail` edge is true only on the
+    /// advance that exhausts replay. At the tail, the replay-driving loops stop and no further
+    /// `move_replay_idx` runs until the replay target grows (`set_replay_target`) or a new cursor
+    /// is built (`new`). Each starts a fresh replay epoch that emits its own `ReplayFinished`
+    /// on completion.
     pub(in crate::durable_host::replay_state) async fn move_replay_idx(
         &mut self,
         new_idx: OplogIndex,
     ) -> Result<(), UnreadableOplog> {
-        let was_replay = self.cursor.is_replay();
+        let was_replay = self.cursor.has_replay_remaining();
         self.cursor.position.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await?;
-        if self.cursor.is_live()
+        if self.cursor.at_replay_tail()
             && let Some(wallet) = &self.cursor.wallet
         {
             wallet.finish_replay_prefix();
         }
-        if was_replay && self.cursor.is_live() {
+        if was_replay && self.cursor.at_replay_tail() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
         Ok(())
@@ -456,7 +497,7 @@ impl CursorTx<'_> {
         let initial_snapshot_skip_end = self.st.initial_snapshot_skip_end.take();
         // Loop: after jumping a region, the freshly looked-up next region may start immediately
         // after the jump target (adjacent regions recorded separately), requiring another jump.
-        while self.cursor.is_replay() {
+        while self.cursor.has_replay_remaining() {
             match self.st.next_skipped_region.clone() {
                 Some(region) if region.start == (self.cursor.last_replayed_index().next()) => {
                     let target = region.end.next(); // we want to continue reading _after_ the region
@@ -640,7 +681,7 @@ impl CursorTx<'_> {
         if let Some(start_index) = terminal_start_index(entry) {
             let resolution = self.terminal_resolution(start_index, idx, entry);
             self.st
-                .concurrent_resolver
+                .starts
                 .resolve_if_pending(start_index, idx, resolution);
         }
     }
@@ -668,10 +709,9 @@ impl CursorTx<'_> {
             && !matches!(event, ReplayEvent::ReplayFinished)
         {
             self.st
-                .retained_starts
-                .get_mut(&start_idx)
+                .starts
+                .get_retained_deferred_events_mut(&start_idx)
                 .expect("replay events are deferred to a retained Start")
-                .deferred_events
                 .push((entry_idx, event));
             return;
         }
@@ -689,7 +729,7 @@ impl ReplayState {
         self.take_new_replay_events_for(true)
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn test_stage_replay_events(&self, events: Vec<ReplayEvent>) {
         self.cursor
             .pending_replay_events

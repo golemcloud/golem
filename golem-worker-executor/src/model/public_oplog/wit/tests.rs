@@ -26,7 +26,8 @@ use golem_common::model::card::{
 use golem_common::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
-    AgentInvocationStartedParams, CancelledParams, EndParams, StartParams,
+    AgentInvocationStartedParams, CancelledParams, EndParams, PendingAgentInvocationParams,
+    StartParams,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
@@ -49,6 +50,46 @@ fn test_card(card_id: CardId) -> Card {
         expires_at: None,
         system_card: false,
         managed_by: None,
+    }
+}
+
+#[test]
+fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let encoded = oplog::OplogEntry::try_from(raw.clone()).unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            raw.clone().into()
+        );
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            not_before,
+        });
+        let encoded = oplog::PublicOplogEntry::try_from(public).unwrap();
+        let oplog::PublicOplogEntry::PendingAgentInvocation(params) = encoded else {
+            panic!("expected pending invocation")
+        };
+        assert_eq!(
+            params.not_before.map(super::timestamp_from_datetime),
+            not_before
+        );
     }
 }
 
@@ -126,7 +167,10 @@ fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
     ];
     for entry in raw_entries {
         let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
-        assert_eq!(OplogEntry::try_from(encoded).unwrap(), entry);
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            entry.into()
+        );
     }
 
     let public_started = super::super::public_span_started(started);
@@ -253,12 +297,12 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
     };
 
     let encoded = oplog::OplogEntry::try_from(entry).unwrap();
-    let decoded = OplogEntry::try_from(encoded).unwrap();
-    let OplogEntry::Snapshot {
+    let decoded = golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap();
+    let golem_common::model::oplog::OplogEnrichmentEntry::Other(OplogEntry::Snapshot {
         active_cards,
         wallet_generation,
         ..
-    } = decoded
+    }) = decoded
     else {
         panic!("expected snapshot")
     };
@@ -296,7 +340,10 @@ fn wit_projection_preserves_wallet_generation_outcomes() {
 
     for entry in entries {
         let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
-        assert_eq!(OplogEntry::try_from(encoded).unwrap(), entry);
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            entry.into()
+        );
     }
 
     assert!(
@@ -305,6 +352,7 @@ fn wit_projection_preserves_wallet_generation_outcomes() {
             entity_parent_start_index: None,
             card: Box::new(card.into()),
             wallet_generation: 2,
+            transfer_id: None,
         })
         .is_err()
     );
@@ -338,8 +386,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     };
 
     let encoded = oplog::OplogEntry::try_from(raw_entry).unwrap();
-    match OplogEntry::try_from(encoded).unwrap() {
-        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+    match golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap() {
+        golem_common::model::oplog::OplogEnrichmentEntry::Other(
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. },
+        ) => {
             assert_eq!(
                 wallet_pin,
                 Box::new(InvocationWalletPin {
@@ -509,16 +559,18 @@ fn log_conversions_keep_asymmetric_fields_and_omit_the_raw_parent() {
     assert_eq!(public.context, "public context");
     assert_eq!(public.message, "public message");
 
-    let decoded = OplogEntry::try_from(oplog::OplogEntry::Log(oplog::LogParameters {
-        timestamp: Timestamp::from(1_800_000_321_654).into(),
-        level: oplog::LogLevel::Debug,
-        context: "decoded context".to_string(),
-        message: "decoded message".to_string(),
-        trace_context: Some(oplog::LogTraceContext {
-            trace_id: "22223333444455556666777788889999".to_string(),
-            span_id: "aaaabbbbccccdddd".to_string(),
+    let decoded = golem_common::model::oplog::OplogEnrichmentEntry::try_from(
+        oplog::OplogEntry::Log(oplog::LogParameters {
+            timestamp: Timestamp::from(1_800_000_321_654).into(),
+            level: oplog::LogLevel::Debug,
+            context: "decoded context".to_string(),
+            message: "decoded message".to_string(),
+            trace_context: Some(oplog::LogTraceContext {
+                trace_id: "22223333444455556666777788889999".to_string(),
+                span_id: "aaaabbbbccccdddd".to_string(),
+            }),
         }),
-    }))
+    )
     .unwrap();
     assert_eq!(
         decoded,
@@ -533,6 +585,7 @@ fn log_conversions_keep_asymmetric_fields_and_omit_the_raw_parent() {
                 span_id: SpanId::from_string("aaaabbbbccccdddd").unwrap(),
             }),
         }
+        .into()
     );
 }
 
@@ -557,25 +610,30 @@ fn timestamp_payload_conversions_and_trace_validation_keep_their_contract() {
     assert_eq!(public.timestamp.seconds, 1_700_000_123);
     assert_eq!(public.timestamp.nanoseconds, 456_000_000);
     assert_eq!(
-        OplogEntry::try_from(oplog::OplogEntry::Suspend(oplog::Timestamp {
-            timestamp: Timestamp::from(1_800_000_321_654).into(),
-        }))
+        golem_common::model::oplog::OplogEnrichmentEntry::try_from(oplog::OplogEntry::Suspend(
+            oplog::Timestamp {
+                timestamp: Timestamp::from(1_800_000_321_654).into(),
+            }
+        ))
         .unwrap(),
         OplogEntry::Suspend {
             timestamp: Timestamp::from(1_800_000_321_654)
         }
+        .into()
     );
 
-    let error = OplogEntry::try_from(oplog::OplogEntry::Log(oplog::LogParameters {
-        timestamp: timestamp.into(),
-        level: oplog::LogLevel::Info,
-        context: String::new(),
-        message: String::new(),
-        trace_context: Some(oplog::LogTraceContext {
-            trace_id: "invalid-trace".to_string(),
-            span_id: "invalid-span".to_string(),
-        }),
-    }))
+    let error = golem_common::model::oplog::OplogEnrichmentEntry::try_from(oplog::OplogEntry::Log(
+        oplog::LogParameters {
+            timestamp: timestamp.into(),
+            level: oplog::LogLevel::Info,
+            context: String::new(),
+            message: String::new(),
+            trace_context: Some(oplog::LogTraceContext {
+                trace_id: "invalid-trace".to_string(),
+                span_id: "invalid-span".to_string(),
+            }),
+        },
+    ))
     .unwrap_err();
     assert_eq!(error, TraceId::from_string("invalid-trace").unwrap_err());
 }
@@ -605,93 +663,119 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         ("second".to_string(), "2".to_string()),
         ("first".to_string(), "1".to_string()),
     ];
-    let entry = OplogEntry::Create {
-        timestamp: Timestamp::from(1_700_000_123_456),
-        parameters: Box::new(CreateParameters {
-            agent_id: agent_id.clone(),
-            owner_kind: OwnerKind::EphemeralExternalTool,
-            agent_mode: AgentMode::Ephemeral,
-            component_revision: ComponentRevision::new(23).unwrap(),
-            env: env.clone(),
-            environment_id,
-            created_by,
-            parent: Some(parent.clone()),
-            component_size: 317,
-            initial_total_linear_memory_size: 941,
-            initial_active_plugins: Default::default(),
-            local_agent_config: Vec::new(),
-            original_phantom_id: Some(phantom_id),
-            instance_id,
-        }),
-    };
-    let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap() else {
-        panic!("expected create")
-    };
-    assert_eq!(encoded.timestamp.seconds, 1_700_000_123);
-    assert_eq!(encoded.timestamp.nanoseconds, 456_000_000);
-    assert_eq!(
-        golem_common::model::AgentId::from(encoded.agent_id.clone()),
-        agent_id
-    );
-    assert_eq!(
-        golem_common::model::AgentId::from(encoded.parent.clone().unwrap()),
-        parent
-    );
-    assert!(matches!(
-        encoded.owner_kind,
-        oplog::OwnerKind::EphemeralExternalTool
-    ));
-    assert!(matches!(encoded.agent_mode, oplog::AgentMode::Ephemeral));
-    assert_eq!(encoded.component_revision, 23);
-    assert_eq!(encoded.env, env);
-    assert_eq!(
-        Uuid::from_u64_pair(
-            encoded.environment_id.uuid.high_bits,
-            encoded.environment_id.uuid.low_bits
-        ),
-        environment_id.0
-    );
-    assert_eq!(
-        Uuid::from_u64_pair(
-            encoded.created_by.uuid.high_bits,
-            encoded.created_by.uuid.low_bits
-        ),
-        created_by.0
-    );
-    assert_eq!(encoded.component_size, 317);
-    assert_eq!(encoded.initial_total_linear_memory_size, 941);
-    assert_eq!(
-        Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
-        instance_id
-    );
-    let encoded_phantom = encoded.original_phantom_id.as_ref().unwrap();
-    assert_eq!(
-        Uuid::from_u64_pair(encoded_phantom.high_bits, encoded_phantom.low_bits),
-        phantom_id
-    );
+    for owner_kind in [
+        OwnerKind::ComponentAgent,
+        OwnerKind::EphemeralExternalTool,
+        OwnerKind::OplogProcessor,
+    ] {
+        let entry = OplogEntry::Create {
+            timestamp: Timestamp::from(1_700_000_123_456),
+            parameters: Box::new(CreateParameters {
+                component_id: ComponentId::new(),
+                agent_type_name: None,
+                canonical_key: None,
+                agent_id: agent_id.clone(),
+                owner_kind,
+                agent_mode: AgentMode::Ephemeral,
+                component_revision: ComponentRevision::new(23).unwrap(),
+                env: env.clone(),
+                environment_id,
+                created_by,
+                parent: Some(parent.clone()),
+                component_size: 317,
+                initial_total_linear_memory_size: 941,
+                initial_active_plugins: Default::default(),
+                local_agent_config: Vec::new(),
+                original_phantom_id: Some(phantom_id),
+                instance_id,
+                create_request: golem_common::model::oplog::CreateRequest::new(
+                    golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                    None,
+                    golem_common::model::agent::Principal::anonymous(),
+                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
+                    ),
+                ),
+            }),
+        };
+        let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()
+        else {
+            panic!("expected create")
+        };
+        assert_eq!(encoded.timestamp.seconds, 1_700_000_123);
+        assert_eq!(encoded.timestamp.nanoseconds, 456_000_000);
+        assert_eq!(
+            golem_common::model::AgentId::from(encoded.agent_id.clone()),
+            agent_id
+        );
+        assert_eq!(
+            golem_common::model::AgentId::from(encoded.parent.clone().unwrap()),
+            parent
+        );
+        assert!(matches!(
+            (owner_kind, encoded.owner_kind),
+            (OwnerKind::ComponentAgent, oplog::OwnerKind::ComponentAgent)
+                | (
+                    OwnerKind::EphemeralExternalTool,
+                    oplog::OwnerKind::EphemeralExternalTool
+                )
+                | (OwnerKind::OplogProcessor, oplog::OwnerKind::OplogProcessor)
+        ));
+        assert!(matches!(encoded.agent_mode, oplog::AgentMode::Ephemeral));
+        assert_eq!(encoded.component_revision, 23);
+        assert_eq!(encoded.env, env);
+        assert_eq!(
+            Uuid::from_u64_pair(
+                encoded.environment_id.uuid.high_bits,
+                encoded.environment_id.uuid.low_bits
+            ),
+            environment_id.0
+        );
+        assert_eq!(
+            Uuid::from_u64_pair(
+                encoded.created_by.uuid.high_bits,
+                encoded.created_by.uuid.low_bits
+            ),
+            created_by.0
+        );
+        assert_eq!(encoded.component_size, 317);
+        assert_eq!(encoded.initial_total_linear_memory_size, 941);
+        assert_eq!(
+            Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
+            instance_id
+        );
+        let encoded_phantom = encoded.original_phantom_id.as_ref().unwrap();
+        assert_eq!(
+            Uuid::from_u64_pair(encoded_phantom.high_bits, encoded_phantom.low_bits),
+            phantom_id
+        );
 
-    encoded.component_revision = 29;
-    encoded.component_size = 419;
-    encoded.initial_total_linear_memory_size = 1031;
-    let OplogEntry::Create {
-        timestamp,
-        parameters,
-    } = OplogEntry::try_from(oplog::OplogEntry::Create(encoded)).unwrap()
-    else {
-        panic!("expected decoded create")
-    };
-    assert_eq!(timestamp, Timestamp::from(1_700_000_123_456));
-    assert_eq!(parameters.agent_id, agent_id);
-    assert_eq!(parameters.parent, Some(parent));
-    assert_eq!(
-        parameters.component_revision,
-        ComponentRevision::new(29).unwrap()
-    );
-    assert_eq!(parameters.component_size, 419);
-    assert_eq!(parameters.initial_total_linear_memory_size, 1031);
-    assert_eq!(parameters.env, env);
-    assert_eq!(parameters.environment_id, environment_id);
-    assert_eq!(parameters.created_by, created_by);
-    assert_eq!(parameters.original_phantom_id, Some(phantom_id));
-    assert_eq!(parameters.instance_id, instance_id);
+        encoded.component_revision = 29;
+        encoded.component_size = 419;
+        encoded.initial_total_linear_memory_size = 1031;
+        let golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
+            timestamp,
+            parameters,
+        } = golem_common::model::oplog::OplogEnrichmentEntry::try_from(oplog::OplogEntry::Create(
+            encoded,
+        ))
+        .unwrap()
+        else {
+            panic!("expected decoded create")
+        };
+        assert_eq!(timestamp, Timestamp::from(1_700_000_123_456));
+        assert_eq!(parameters.agent_id, agent_id);
+        assert_eq!(parameters.owner_kind, owner_kind);
+        assert_eq!(parameters.parent, Some(parent.clone()));
+        assert_eq!(
+            parameters.component_revision,
+            ComponentRevision::new(29).unwrap()
+        );
+        assert_eq!(parameters.component_size, 419);
+        assert_eq!(parameters.initial_total_linear_memory_size, 1031);
+        assert_eq!(parameters.env, env);
+        assert_eq!(parameters.environment_id, environment_id);
+        assert_eq!(parameters.created_by, created_by);
+        assert_eq!(parameters.original_phantom_id, Some(phantom_id));
+        assert_eq!(parameters.instance_id, instance_id);
+    }
 }

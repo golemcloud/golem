@@ -22,6 +22,7 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
 
@@ -114,21 +115,20 @@ func (r AgentType) hostGet(ctorArgs map[string]any, opts ...ClientOpt) (*AgentCl
 	if cfgErr != nil {
 		return nil, cfgErr
 	}
-	resolved := host.MakeAgentId(r.Name(), ctor, o.phantomID)
-	if resolved.IsErr() {
-		return nil, fmt.Errorf("golem: %s: %w", r.Name(), link.AgentError(resolved.Err()))
-	}
 	// The fallible form is the reflective one: a caller that built its
 	// constructor from a snapshot should get an error, not a trap, when the
 	// deployment has moved on.
-	created := host.WasmRpcCreate(r.Name(), ctor, o.phantomID, agentConfig)
-	if created.Tag() == witTypes.ResultErr {
-		return nil, link.RemoteCallError(r.Name(), "<constructor>", created.Err())
+	connected, failure := identity.Construct(r.Name(), ctor, o.phantomID, agentConfig)
+	if failure != nil {
+		if failure.Stage == identity.ConstructStage {
+			return nil, fmt.Errorf("golem: %s: %w", r.Name(), link.AgentError(failure.AgentError))
+		}
+		return nil, link.RemoteCallError(r.Name(), "<constructor>", failure.RPCError)
 	}
 	return &AgentClient{
 		agentType: r,
-		agentID:   resolved.Ok(),
-		rpc:       witRPC{rpc: created.Ok(), target: r.Name()},
+		agentID:   connected.AgentID,
+		rpc:       witRPC{rpc: connected.RPC, target: r.Name()},
 	}, nil
 }
 
@@ -155,7 +155,7 @@ func (r AgentType) hostBind(agentID string, opts ...ClientOpt) (*AgentClient, er
 	if err != nil {
 		return nil, err
 	}
-	rpc, err := bindRPC(parsed, agentConfig)
+	rpc, err := bindRPC(agentID, parsed, agentConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -177,16 +177,15 @@ func reflectedAgentConfig(r AgentType, o clientOpts) ([]common.TypedAgentConfigV
 }
 
 func hostParseRawAgentID(agentID string) (RawAgentID, error) {
-	res := host.ParseAgentId(agentID)
-	if res.IsErr() {
-		return RawAgentID{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, link.AgentError(res.Err()))
+	parsed, failure := identity.Parse(agentID)
+	if failure != nil {
+		return RawAgentID{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, link.AgentError(failure.AgentError))
 	}
-	t := res.Ok()
 	phantom := golem.None[golem.UUID]()
-	if t.F2.IsSome() {
-		phantom = golem.Some(engine.UUIDFromWit(t.F2.Some()))
+	if parsed.PhantomID.IsSome() {
+		phantom = golem.Some(engine.UUIDFromWit(parsed.PhantomID.Some()))
 	}
-	return RawAgentID{TypeName: t.F0, Constructor: link.TypedValue(t.F1).(golem.TypedValue), PhantomID: phantom}, nil
+	return RawAgentID{TypeName: parsed.TypeName, Constructor: link.TypedValue(parsed.Constructor).(golem.TypedValue), PhantomID: phantom}, nil
 }
 
 func hostBindAgentID(agentID string) (*DynamicAgentClient, error) {
@@ -194,7 +193,7 @@ func hostBindAgentID(agentID string) (*DynamicAgentClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	rpc, err := bindRPC(parsed, nil)
+	rpc, err := bindRPC(agentID, parsed, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -210,23 +209,27 @@ func makeAgentID(typeName string, ctor types.SchemaValueTree, phantom golem.Opti
 	if u, has := phantom.Get(); has {
 		p = witTypes.Some(engine.UUIDToWit(u))
 	}
-	res := host.MakeAgentId(typeName, ctor, p)
-	if res.IsErr() {
-		return "", fmt.Errorf("golem: %s: %w", typeName, link.AgentError(res.Err()))
+	resolved, failure := identity.Render(typeName, ctor, p)
+	if failure != nil {
+		return "", fmt.Errorf("golem: %s: %w", typeName, link.AgentError(failure.AgentError))
 	}
-	return res.Ok(), nil
+	return resolved, nil
 }
 
-func bindRPC(parsed RawAgentID, agentConfig []common.TypedAgentConfigValue) (witRPC, error) {
+func bindRPC(agentID string, parsed RawAgentID, agentConfig []common.TypedAgentConfigValue) (witRPC, error) {
 	phantom := witTypes.None[types.Uuid]()
 	if id, present := parsed.PhantomID.Get(); present {
 		phantom = witTypes.Some(engine.UUIDToWit(id))
 	}
-	created := host.WasmRpcCreate(parsed.TypeName, link.TypedValueWit(parsed.Constructor).Value, phantom, agentConfig)
-	if created.Tag() == witTypes.ResultErr {
-		return witRPC{}, link.RemoteCallError(parsed.TypeName, "<bind>", created.Err())
+	connected, failure := identity.Bind(agentID, identity.Parsed{
+		TypeName:    parsed.TypeName,
+		Constructor: link.TypedValueWit(parsed.Constructor),
+		PhantomID:   phantom,
+	}, agentConfig)
+	if failure != nil {
+		return witRPC{}, link.RemoteCallError(parsed.TypeName, "<bind>", failure.RPCError)
 	}
-	return witRPC{rpc: created.Ok(), target: parsed.TypeName}, nil
+	return witRPC{rpc: connected.RPC, target: parsed.TypeName}, nil
 }
 
 // noScopeCard is the scope card of the invocations that do not wait for their

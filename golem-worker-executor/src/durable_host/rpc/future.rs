@@ -431,7 +431,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // terminal was never written. A read-only `WriteRemote` call is safe to
                             // re-execute, so re-dispatch the RPC now and complete the existing `Start`
                             // (mirrors the synchronous path's `Incomplete` -> re-run).
-                            let retry_point = live.begin_index();
+                            let retry_point = live.start_index();
                             let auth_ctx = live.take_agent_auth_ctx();
                             let mut task = accessor.with(|mut access| {
                                 let ctx = access.get();
@@ -694,10 +694,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 span_id,
             } => {
                 handle.close_span_on_cancellation(span_id.clone());
-                handle
-                    .cancel_access(accessor, accessor.getter(), None)
-                    .await
-                    .map_err(anyhow::Error::from)?;
+                if handle.is_live() {
+                    handle
+                        .cancel_access(accessor, accessor.getter(), None)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                } else {
+                    // The guest may drop the future at another point than the recorded run
+                    // (a garbage collector, a heap restored from a snapshot).
+                    handle
+                        .cancel_access_deferred(accessor, accessor.getter())
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                }
                 accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
             }
             DropPlan::FinishInMemory { span_id } => {

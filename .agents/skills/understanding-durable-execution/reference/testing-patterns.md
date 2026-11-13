@@ -305,28 +305,16 @@ fresh work—not merely that A's operation returned. For executor shutdown, ente
 callback before shutdown, then prove task destruction and callback/oplog-layer joins complete
 without semantic finalization.
 
+After executor drainage, captured oplog actors are closed even when a test retains their Worker
+handles. Check persisted history through `OplogService`, not actor-backed metadata queries such as
+`worker.oplog().current_oplog_index()`. For example, reciprocal-topology shutdown checks compare
+the stored last indexes after joining the reconcilers and executor drain. Retaining a handle is
+not a promise that its actor accepts more queries.
+
 Copy: `tests/tool_streaming/mod.rs::suspended_restart_replays_completed_tool_without_semantic_retry`,
 the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`, and the retained
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
-
-### Replay-resume request acknowledgement
-
-The internal replay-resume method acknowledges an enqueued wake, not the completion of replay. The
-native regression holds the exact uncached input of an original Counter Started/Finished pair during
-real Restart reconstruction. The request must acknowledge while that dependency is still held. Only
-then release it and require the original Counter state plus the next fresh effect, exact keys and
-execution counts, fingerprint, complete raw prefix and original record range without Error or Jump.
-An enqueue acknowledgement is not a startup-ready or physical-cleanup receipt.
-
-Main's coalesced wake and Boolean pending demand replace the unrelated per-command processing reply,
-counter and replay-request vector. Monthly admission still runs before Store access/replay; dequeue
-clears pending demand even when admission refuses. Permit-wait and delayed-retry body tests retain
-the exact accepted interruption, establishment join, cancelled acquisition, deferred wake and actual
-filesystem-limit reply/payload. Only replay-reply assertions retire with that removed protocol. The
-duplicate-wake test exercises the actual capture/apply functions and leaves post-boundary work queued.
-Earlier enqueue-bound, library, native, lint, build and browser results are historical.
-Combined verification after instrumentation removal is pending.
 
 ### Teardown without a private pre-fence pause
 
@@ -679,7 +667,7 @@ Neither silence nor a later result proves a particular proposal's acceptance boo
 or private window identity. Colocated tests exercise exact acceptance results and
 literal target identity through the existing production guard.
 `matches_running_owner` matches the outer `WorkerInstance::Running` before loading generation or held-permit
-atomics or locking the current target. It never unwraps `deletion_runtime`. The actual path keeps
+atomics or locking the current target. It never reads the runtime that a deletion retains. The actual path keeps
 cached-owner lookup before the instance mutex, then retains that guard through the predicate, active
 recheck, interrupt try-lock, capacity sample, queue and dispatch. Existing short-circuiting stays lazy.
 
@@ -846,14 +834,15 @@ no CI job runs it, so run it locally after a change to APFS capture or restore. 
 `test-components/it_initial_file_system_release.wasm` fixture:
 
 ```shell
-cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- sandbox_filesystem:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
-RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- :tag:local_filesystem --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- filesystem::sandbox:: filesystem::volume:: services::agent_filesystem::lifecycle:: services::agent_filesystem_snapshots:: --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor-tests --test integration -- :tag:local_filesystem --test-threads 1 --report-time
 cargo test --locked -j 4 --profile dev-ci -p golem --lib -- filesystem_config:: command_handler:: launch:: --test-threads 1 --report-time
 ```
 
 The library module filters automatically select every portable and macOS seed helper test
 in those modules, without a naming prefix or a per-test filter edit. They cover the clone test
-in `sandbox_filesystem::apfs::tests`, the startup probe, conservative filename coordination,
+in `filesystem::volume::apfs::tests` and `filesystem::sandbox::host_adapter::tree_copy::tests`,
+the startup probe, conservative filename coordination,
 the configuration round trip and the capture pressure check.
 The portable seed tests also run their APFS branches. They check file attributes and temporary-file
 cleanup, symlink times and cleanup, and merging an unreadable empty directory without a sync-only

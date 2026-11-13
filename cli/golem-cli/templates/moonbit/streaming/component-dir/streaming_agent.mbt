@@ -122,7 +122,6 @@ pub fn StreamingAgent::status(self : Self) -> String {
 #derive.endpoint(put="/echo")
 #derive.durable_stream_slot(input="input")
 #derive.durable_stream_slot(output="$result")
-#derive.durable_streams(allow_external_writes=true)
 pub fn StreamingAgent::durable_echo(
   self : Self,
   input : @schema.AgentStream[String],
@@ -193,9 +192,4 @@ pub async fn StreamingAgent::read_external(
       None => return values
     }
   }
-}
-
-///|
-fn main {
-
 }

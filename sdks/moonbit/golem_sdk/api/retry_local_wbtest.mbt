@@ -582,8 +582,8 @@ test "retry decisions allow eventual success after the expected attempt count" {
   )
   let mut state = policy.initial_state()
   let sleeps : Array[UInt64] = []
-  let attempts : Array[Result[String, Int]] = [Err(1), Err(2), Ok("done")]
-  let mut result : Result[String, Int] = Err(0)
+  let attempts : Array[Result[String, Int32]] = [Err(1), Err(2), Ok("done")]
+  let mut result : Result[String, Int32] = Err(0)
   for _, attempt in attempts {
     match attempt {
       Ok(value) => {

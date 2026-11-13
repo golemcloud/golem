@@ -24,21 +24,20 @@ pub async fn load(
   let agent_id = get_golem_agent_id() catch {
     SnapshotLoadError(msg) => return Err(msg)
   }
-  match @agentHost.parse_agent_id(agent_id) {
-    Err(e) => Err("Failed to parse agent ID: \{Repr(e)}")
-    Ok((agent_type, identity, phantom_id)) => {
-      let identity_fields = @agents.decode_snapshot_identity(identity.value) catch {
-        e => return Err("Failed to decode agent identity: \{Repr(e)}")
-      }
-      @agents.restore_and_set_instance(agent_type, state_bytes, {
-        agent_id,
-        agent_type,
-        identity_fields,
-        phantom_id,
-        principal,
-      })
-    }
+  let identity = @identity.parse(agent_id) catch {
+    e => return Err("Failed to parse agent ID: \{Repr(e)}")
   }
+  let identity_fields = @agents.decode_snapshot_identity(identity.input.value) catch {
+    e => return Err("Failed to decode agent identity: \{Repr(e)}")
+  }
+  let agent_type = identity.type_name
+  @agents.restore_and_set_instance(agent_type, state_bytes, {
+    agent_id,
+    agent_type,
+    identity_fields,
+    phantom_id: identity.phantom_id,
+    principal,
+  })
 }
 
 ///|
@@ -53,7 +52,7 @@ fn get_golem_agent_id() -> String raise SnapshotLoadError {
 }
 
 ///|
-fn slice_fixedarray_to_bytes(arr : FixedArray[Byte], start : Int) -> Bytes {
+fn slice_fixedarray_to_bytes(arr : FixedArray[Byte], start : Int32) -> Bytes {
   let slice : Array[Byte] = []
   for i in start..<arr.length() {
     slice.push(arr[i])

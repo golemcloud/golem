@@ -14,7 +14,7 @@ pub(all) enum ResourceKind {
 /// is guest-boundary plumbing, not an authoring API.
 pub struct ResourceCandidate {
   priv kind : ResourceKind
-  priv raw_index : Int
+  priv raw_index : Int32
   priv drop_raw : () -> Unit
 }
 
@@ -22,7 +22,7 @@ pub struct ResourceCandidate {
 #doc(hidden)
 pub fn resource_candidate(
   kind : ResourceKind,
-  raw_index : Int,
+  raw_index : Int32,
   drop_raw : () -> Unit,
 ) -> ResourceCandidate {
   { kind, raw_index, drop_raw, }
@@ -34,8 +34,8 @@ pub fn resource_candidate(
 /// the identity even though the token's fields remain private.
 pub struct ResourceAcquisitionToken {
   priv kind : ResourceKind
-  priv raw_index : Int
-  priv generation : Int
+  priv raw_index : Int32
+  priv generation : Int32
 } derive(Eq, Debug)
 
 ///|
@@ -56,10 +56,10 @@ priv struct ResourceAcquisition {
 
 ///|
 priv struct InvocationOwnershipState {
-  mut active_calls : Int
+  mut active_calls : Int32
   mut revoked : Bool
   mut raw_dropped : Bool
-  mut next_generation : Int
+  mut next_generation : Int32
   drop_raw : () -> Unit
   acquisitions : Array[ResourceAcquisition]
   cleanups : Array[() -> Unit]
@@ -151,7 +151,7 @@ fn OwnershipContext::find_exact_acquisition(
 fn OwnershipContext::find_available_acquisition(
   self : OwnershipContext,
   kind : ResourceKind,
-  raw_index : Int,
+  raw_index : Int32,
 ) -> ResourceAcquisition? {
   for acquisition in self.state.val.acquisitions {
     if acquisition.token.kind == kind &&
@@ -167,7 +167,7 @@ fn OwnershipContext::find_available_acquisition(
 fn contains_resource_key(
   tokens : Array[ResourceAcquisitionToken],
   kind : ResourceKind,
-  raw_index : Int,
+  raw_index : Int32,
 ) -> Bool {
   for token in tokens {
     if token.kind == kind && token.raw_index == raw_index {
@@ -533,10 +533,7 @@ fn transfer_aware_output(
 ) -> @async-core.Stream[Byte] {
   @async-core.Stream::produce(
     async fn(sink) {
-      defer @async-core.protect_from_cancel(
-        async fn() { source.drop() },
-        resume_on_cancel=true,
-      )
+      defer @async-core.protect_from_cancel(async fn() { source.drop() })
       for ;; {
         match source.read(64) {
           Some(data) => if !sink.write_all(data[:]) { break }

@@ -2,7 +2,7 @@
 pub(all) struct WireTypeEncoder {
   nodes : Array[@types.SchemaTypeNode]
   defs : Array[@types.SchemaTypeDef]
-  ids : Map[String, Int]
+  ids : Map[String, Int32]
   active : Map[String, Unit]
 }
 
@@ -20,7 +20,7 @@ pub fn empty_wire_metadata() -> @types.MetadataEnvelope {
 pub fn WireTypeEncoder::push(
   self : WireTypeEncoder,
   body : @types.SchemaTypeBody,
-) -> Int {
+) -> Int32 {
   let index = self.nodes.length()
   self.nodes.push({ body, metadata: empty_wire_metadata(), })
   index
@@ -31,7 +31,7 @@ pub fn WireTypeEncoder::push_with_metadata(
   self : WireTypeEncoder,
   body : @types.SchemaTypeBody,
   metadata : @types.MetadataEnvelope,
-) -> Int {
+) -> Int32 {
   let index = self.nodes.length()
   self.nodes.push({ body, metadata, })
   index
@@ -41,9 +41,9 @@ pub fn WireTypeEncoder::push_with_metadata(
 pub fn WireTypeEncoder::named(
   self : WireTypeEncoder,
   id : String,
-  build : () -> Int,
-  name? : String? = None,
-) -> Int {
+  build : () -> Int32,
+  name~ : String? = None,
+) -> Int32 {
   match self.ids.get(id) {
     Some(definition) => {
       if !self.active.contains(id) {
@@ -73,15 +73,15 @@ pub fn WireTypeEncoder::named(
 ///|
 fn WireTypeEncoder::same_type(
   self : WireTypeEncoder,
-  left : Int,
-  right : Int,
+  left : Int32,
+  right : Int32,
 ) -> Bool {
   let left = self.nodes[left]
   let right = self.nodes[right]
   if left.metadata != right.metadata {
     return false
   }
-  let children : Array[Int] = []
+  let children : Array[Int32] = []
   let left_body = map_wire_type_children(left.body, index => {
     let position = children.length()
     children.push(index)
@@ -104,7 +104,7 @@ fn WireTypeEncoder::same_type(
 ///|
 fn map_wire_type_children(
   body : @types.SchemaTypeBody,
-  f : (Int) -> Int,
+  f : (Int32) -> Int32,
 ) -> @types.SchemaTypeBody {
   match body {
     @types.RecordType(fields) =>
@@ -139,8 +139,8 @@ fn map_wire_type_children(
 
 ///|
 pub(open) trait WireSchema {
-  fn append_wire_type(WireTypeEncoder) -> Int
-  fn append_result_type(WireTypeEncoder) -> Int? = _
+  fn append_wire_type(WireTypeEncoder) -> Int32
+  fn append_result_type(WireTypeEncoder) -> Int32? = _
 }
 
 ///|
@@ -152,7 +152,7 @@ impl WireSchema with fn append_result_type(encoder) {
 pub fn[T : WireSchema] append_wire_type_with(
   encoder : WireTypeEncoder,
   _tag : TypeTag[T],
-) -> Int {
+) -> Int32 {
   T::append_wire_type(encoder)
 }
 
@@ -174,8 +174,13 @@ pub impl WireSchema for Bool with fn append_wire_type(encoder) {
 }
 
 ///|
-pub impl WireSchema for Int with fn append_wire_type(encoder) {
+pub impl WireSchema for Int32 with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::S32Type(None))
+}
+
+///|
+pub impl WireSchema for Int16 with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::S16Type(None))
 }
 
 ///|
@@ -184,7 +189,7 @@ pub impl WireSchema for UInt16 with fn append_wire_type(encoder) {
 }
 
 ///|
-pub impl WireSchema for UInt with fn append_wire_type(encoder) {
+pub impl WireSchema for UInt32 with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::U32Type(None))
 }
 
@@ -276,13 +281,8 @@ pub impl WireSchema for Bytes with fn append_wire_type(encoder) {
 }
 
 ///|
-pub impl WireSchema for @types.Uuid with fn append_wire_type(encoder) {
+pub impl WireSchema for Uuid with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::UuidType)
-}
-
-///|
-pub impl WireSchema for @types.Datetime with fn append_wire_type(encoder) {
-  encoder.push(@types.SchemaTypeBody::DatetimeType)
 }
 
 ///|

@@ -25,6 +25,7 @@ golem-mcp-import = { workspace = true }
 golem-schema = { workspace = true, features = ["protobuf"] }
 
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 applying = { workspace = true }
 async-fs = { workspace = true }
 async-trait = { workspace = true }
@@ -66,6 +67,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
 rustc-hash = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
@@ -89,6 +91,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-metrics = { workspace = true }
+tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true, features = [ "_tls-any" ] }
@@ -97,6 +100,7 @@ tower = { workspace = true }
 tracing = { workspace = true }
 typed-path = { workspace = true }
 url = { workspace = true }
+x509-parser = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
@@ -108,9 +112,9 @@ aws-smithy-runtime-api = { workspace = true }
 criterion = { workspace = true }
 pretty_assertions = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
-rustls = { workspace = true, features = ["ring"] }
 tempfile = { workspace = true }
 test-r = { workspace = true }
+tonic-health = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 

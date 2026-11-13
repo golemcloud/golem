@@ -28,7 +28,6 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use wit_parser::PackageName;
 
 pub enum TaskResultMarkerHashSourceKind {
     // The string will be hashed
@@ -105,19 +104,19 @@ impl TaskResultMarkerHashSource for NpmInstallDepsMarkerHash<'_> {
 }
 
 #[derive(Serialize)]
-pub struct MoonInstallDepsMarkerHash<'a> {
+pub struct MoonSyncDepsMarkerHash<'a> {
     pub moon_module_root: &'a Path,
-    pub moon_mod_json_hash: &'a str,
+    pub inputs_hash: &'a str,
 }
 
-impl TaskResultMarkerHashSource for MoonInstallDepsMarkerHash<'_> {
+impl TaskResultMarkerHashSource for MoonSyncDepsMarkerHash<'_> {
     fn kind() -> &'static str {
-        "MoonInstallDepsMarkerHash"
+        "MoonSyncDepsMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
-            "moon-install-deps:{}",
+            "moon-sync-deps:{}",
             self.moon_module_root.display()
         )))
     }
@@ -269,25 +268,6 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
             "{}-{}",
             self.component_name, self.generator_kind
         )))
-    }
-}
-
-pub struct AddMetadataMarkerHash<'a> {
-    pub component_name: &'a ComponentName,
-    pub root_package_name: PackageName,
-}
-
-impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "AddMetadataMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(self.component_name.to_string()))
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(self.root_package_name.to_string()))
     }
 }
 
@@ -1021,24 +1001,24 @@ mod tests {
     }
 
     #[test]
-    fn moon_install_markers_do_not_collide_for_distinct_module_roots_with_identical_manifests() {
+    fn moon_sync_markers_do_not_collide_for_distinct_module_roots_with_identical_manifests() {
         let marker_dir = tempfile::tempdir().unwrap();
         let module_parent = tempfile::tempdir().unwrap();
         let manifest_hash = "identical-manifest-hash";
 
         let left_marker = TaskResultMarker::new(
             marker_dir.path(),
-            MoonInstallDepsMarkerHash {
+            MoonSyncDepsMarkerHash {
                 moon_module_root: &module_parent.path().join("left"),
-                moon_mod_json_hash: manifest_hash,
+                inputs_hash: manifest_hash,
             },
         )
         .unwrap();
         let right_marker = TaskResultMarker::new(
             marker_dir.path(),
-            MoonInstallDepsMarkerHash {
+            MoonSyncDepsMarkerHash {
                 moon_module_root: &module_parent.path().join("right"),
-                moon_mod_json_hash: manifest_hash,
+                inputs_hash: manifest_hash,
             },
         )
         .unwrap();

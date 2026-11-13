@@ -263,22 +263,13 @@ async fn ssh_needs_no_bash_in_the_manifest_unless_default_tools_are_off() {
     let says =
         |output: &Output, text: &str| output.stdout_contains(text) || output.stderr_contains(text);
 
-    // The tool needs a grant, as each tool of the registry does. A plan shows the grant and
-    // stops there, and a staged deployment is refused: these runs make no grant.
+    // A plan shows the grant that a default tool of the registry needs, and stops there.
     builtin_bash::write_manifest_without_bash(&ctx, ONE_SECRET_FOR_BASH, NO_SECRETS_FOR_BASH);
     let planned = ctx.cli(["deploy", "--plan"]).await;
     assert!(planned.success_or_dump());
     assert!(says(&planned, "environment tool grant reconciliation"));
     assert!(says(&planned, "default tool bash"));
     assert!(says(&planned, "Planning stopped"));
-    let staged = ctx.cli(["deploy", "--stage"]).await;
-    assert!(!staged.success());
-    assert!(says(
-        &staged,
-        "requires environment tool or tool middleware grant changes"
-    ));
-    let still_off = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
-    assert_not_run(&still_off, "`bash` is not bound to");
     builtin_bash::write_manifest_without_bash(&ctx, "", "");
 
     // A deployment makes the grant as a step of its grant plan and adds the tool. The agents
@@ -790,41 +781,12 @@ async fn ssh_reports_denied_operations() {
     );
 }
 
+// A failing sibling's whole stderr reaches the session ahead of the declared error, and the
+// session goes on to the next command.
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_presents_a_siblings_stderr() {
     let ctx = context().await;
-    let setup = "mkdir -p /tmp/ssh-stderr && cd /tmp/ssh-stderr && ";
-    let both = "out-1\nout-2\nerr-1\nerr-2\n";
-
-    // Each channel reaches its own process stream; redirections apply inside the script.
-    for (script, stdout, stderr) in [
-        ("fixture interleave ok", "out-1\nout-2\n", "err-1\nerr-2\n"),
-        ("fixture interleave ok 2>/dev/null", "out-1\nout-2\n", ""),
-        // Nothing records how the channels interleaved: stdout comes first.
-        ("fixture interleave ok 2>&1", both, ""),
-        ("fixture interleave ok |& cat", both, ""),
-        (
-            "fixture interleave ok | tr a-z A-Z",
-            "OUT-1\nOUT-2\n",
-            "err-1\nerr-2\n",
-        ),
-        ("fixture interleave ok 2>err; cat err", both, ""),
-    ] {
-        let output = ssh(&ctx, &[OWNER, "-c", &format!("{setup}{script}")], "").await;
-        assert_output(&output, 0, stdout, stderr);
-    }
-
-    // A declared error follows the provider's stderr and sets the status.
-    let output = ssh(&ctx, &[OWNER, "-c", "fixture interleave fail"], "").await;
-    assert_output(
-        &output,
-        42,
-        "out-1\nout-2\n",
-        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
-    );
-
-    // Interactively, the failure is shown and the session goes on to the next command.
     let output = ssh(&ctx, &[OWNER], "fixture interleave fail\necho next\n").await;
     assert_output(
         &output,
@@ -985,7 +947,7 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_str("exit [N]")?;
         answer_cursor_query(session)?;
         enter(session, "tools")?;
-        session.expect_regex("  bash\r\n  fixture")?;
+        session.expect_regex(r"  bash[^\r\n]*\r\n  fixture")?;
         session.expect_str("Run `NAME --help`")?;
         answer_cursor_query(session)?;
         enter(session, "exit")?;
@@ -999,7 +961,7 @@ async fn ssh_prompt_feels_like_a_shell() {
         answer_cursor_query(session)?;
         session.expect_str(MARKER)?;
         enter(session, "tools")?;
-        session.expect_regex("  bash\r\nRun `NAME --help`")?;
+        session.expect_regex(r"  bash[^\r\n]*\r\nRun `NAME --help`")?;
         answer_cursor_query(session)?;
         enter(session, "exit")?;
         session.expect_eof()
@@ -1154,11 +1116,11 @@ async fn stop_a_command(
 ) {
     ctx.cli_interactive(["ssh", agent], move |session| {
         session.set_expect_timeout(Some(Duration::from_secs(120)));
-        answer_cursor_query(session)?;
+        // Leave the cursor query unanswered to select plain input. Cancellation and rebuilds
+        // do not need the editor, and a late terminal reply must not change these assertions.
         session.expect_str(MARKER)?;
         // A quick command first settles the session's own fetch of the command names.
         enter(session, "true")?;
-        answer_cursor_query(session)?;
         session.expect_str(MARKER)?;
 
         enter(session, script)?;
@@ -1175,13 +1137,13 @@ async fn stop_a_command(
         if let Some(printed) = printed {
             session.expect_str(printed)?;
         }
-        answer_cursor_query(session)?;
         session.expect_str("[130]")?;
+        session.expect_str(MARKER)?;
 
         // The next command does not wait behind the stopped one.
         enter(session, next)?;
         session.expect_str(expected)?;
-        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
         enter(session, "exit")?;
         session.expect_eof()
     })

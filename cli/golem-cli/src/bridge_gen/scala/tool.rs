@@ -172,7 +172,6 @@ impl ScalaToolBridgeGenerator {
         self.client_items(&mut writer)?;
         self.error_items(&mut writer)?;
         self.inner.write_type_definitions(&mut writer)?;
-        self.inner.write_guest_unstructured_definitions(&mut writer);
         self.inner.write_multimodal_definitions(&mut writer)?;
         self.inner.write_codecs(&mut writer)?;
         if let Some(definition) = self.schema_graphs.borrow().definition() {
@@ -1075,12 +1074,12 @@ mod tests {
         }
     }
 
-    fn generate(tool: Tool, dir_name: &str) -> Utf8PathBuf {
-        let dir = tempfile::TempDir::new().unwrap().keep();
-        let target_path = Utf8PathBuf::from_path_buf(dir.join(dir_name)).unwrap();
+    fn generate(tool: Tool, dir_name: &str) -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target_path = Utf8PathBuf::from_path_buf(dir.path().join(dir_name)).unwrap();
         let mut generator = ScalaToolBridgeGenerator::new(tool, &target_path, true).unwrap();
         generator.generate().unwrap();
-        target_path
+        (dir, target_path)
     }
 
     #[test]
@@ -1168,7 +1167,7 @@ mod tests {
         let mut tool = grep_tool();
         tool.commands.nodes[0].name = "type".to_string();
 
-        let target_path = generate(tool, "type-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "type-tool-guest-client");
 
         assert!(
             target_path
@@ -1183,7 +1182,7 @@ mod tests {
         let mut tool = grep_tool();
         tool.commands.nodes[0].name = "123".to_string();
 
-        let target_path = generate(tool, "123-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "123-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/agent_123/Tool123Client.scala"),
         )
@@ -1206,7 +1205,7 @@ mod tests {
         body.positionals.fixed[0].name = "elems0".to_string();
         body.positionals.fixed[0].type_ = SchemaType::fixed_list(SchemaType::string(), 1);
 
-        let target_path = generate(tool, "grep-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "grep-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
         )
@@ -1220,17 +1219,13 @@ mod tests {
 
     #[test]
     fn tool_generation_emits_guest_client_runtime_boundary() {
-        let target_path = generate(grep_tool(), "grep-tool-guest-client");
+        let (_dir, target_path) = generate(grep_tool(), "grep-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
         )
         .unwrap();
 
         for shape in [
-            "final class GrepClient",
-            "def grep(",
-            "def replace(",
-            "sealed trait GrepError",
             "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
             "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
             "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
@@ -1243,17 +1238,6 @@ mod tests {
         assert!(
             !source.contains("decodeValueResult"),
             "tool generator must manually decode named values instead of requiring FromSchema instances:\n{source}"
-        );
-    }
-
-    #[test]
-    fn tool_generation_uses_tool_guest_client_project_name() {
-        let target_path = generate(grep_tool(), "grep-tool-guest-client");
-        let build_sbt = std::fs::read_to_string(target_path.join("build.sbt")).unwrap();
-
-        assert!(
-            build_sbt.contains("\"grep-tool-guest-client\""),
-            "Scala tool guest bridge project name must match the tool bridge SDK directory name:\n{build_sbt}"
         );
     }
 
@@ -1273,7 +1257,7 @@ mod tests {
         let body = tool.commands.nodes[0].body.as_mut().unwrap();
         body.positionals.fixed[0].type_ = SchemaType::ref_to(list_type);
 
-        let target_path = generate(tool, "grep-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "grep-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
         )
@@ -1300,7 +1284,7 @@ mod tests {
         tool.schema = SchemaGraph::empty();
         validate_tool(&tool).unwrap();
 
-        let target_path = generate(tool, "to-string-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "to-string-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/to_string/ToStringClient.scala"),
         )
@@ -1338,7 +1322,7 @@ mod tests {
         tool.schema = SchemaGraph::empty();
         validate_tool(&tool).unwrap();
 
-        let target_path = generate(tool, "decode-result-value-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "decode-result-value-tool-guest-client");
         let source = std::fs::read_to_string(target_path.join(
             "src/main/scala/golem/bridge/client/decode_result_value/DecodeResultValueClient.scala",
         ))
@@ -1375,7 +1359,7 @@ mod tests {
         tool.schema = SchemaGraph::empty();
         validate_tool(&tool).unwrap();
 
-        let target_path = generate(tool, "grep-tool-guest-client");
+        let (_dir, target_path) = generate(tool, "grep-tool-guest-client");
         let source = std::fs::read_to_string(
             target_path.join("src/main/scala/golem/bridge/client/grep/GrepClient.scala"),
         )

@@ -47,6 +47,8 @@ Running `golem new` deploys a large number of agent skills into the new project'
 | TypeScript | `ts` |
 | Effect | `effect` |
 | Scala | `scala` |
+| MoonBit | `moonbit` |
+| Go | `go` |
 
 ## Examples
 

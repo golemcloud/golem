@@ -912,6 +912,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: cors.into_iter().map(|s| s.to_string()).collect(),
             },
+            mode: None,
             durable_streams: None,
         }
     }

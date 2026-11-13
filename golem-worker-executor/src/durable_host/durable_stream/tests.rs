@@ -257,6 +257,8 @@ struct TestOplogState {
     refused_adds: Option<crate::services::oplog::OplogFence>,
     /// The fence a primary oplog latches when the storage refuses one of its commits.
     fence: Option<crate::services::oplog::OplogFence>,
+    /// Entries another writer adds just after the next `current_oplog_index` samples the horizon.
+    added_after_next_horizon: Vec<OplogEntry>,
 }
 
 #[derive(Default)]
@@ -309,6 +311,12 @@ impl TestOplog {
 
     pub(crate) fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
         self.state.lock().unwrap().fence = Some(fence);
+    }
+
+    /// Adds `entries` just after the next `current_oplog_index` call samples the horizon, as a
+    /// concurrent writer that commits between a reader's horizon sample and its next read.
+    pub(crate) fn add_after_next_horizon(&self, entries: Vec<OplogEntry>) {
+        self.state.lock().unwrap().added_after_next_horizon = entries;
     }
 }
 
@@ -371,12 +379,17 @@ impl Oplog for TestOplog {
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        self.state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        let horizon = state
             .entries
             .last_key_value()
-            .map_or(OplogIndex::NONE, |(index, _)| *index)
+            .map_or(OplogIndex::NONE, |(index, _)| *index);
+        let mut next = horizon;
+        for entry in std::mem::take(&mut state.added_after_next_horizon) {
+            next = next.next();
+            state.entries.insert(next, entry);
+        }
+        horizon
     }
 
     async fn raw_durable_stream_session_status(
@@ -4199,6 +4212,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
 
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             IdempotencyKey::new("pending-before-consumer-journal".to_string()),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -6125,6 +6139,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
         role: SessionStreamRole::Output,
     });
     let pending = OplogEntry::pending_agent_invocation(
+        None,
         IdempotencyKey::new("durable-session".to_string()),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
@@ -6321,6 +6336,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
         stream_mappings: vec![StreamBindingRecord::foreign(&mapping)],
     };
     let pending = OplogEntry::pending_agent_invocation(
+        None,
         identity.invocation.idempotency_key.clone(),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
@@ -8337,7 +8353,9 @@ async fn remote_cancellation_releases_durable_activity_but_retains_owned_admissi
             );
         }
         tokio::time::timeout(Duration::from_secs(5), async {
-            while live.lifecycle_operations.available_permits() != 16 {
+            while live.lifecycle_operations.available_permits() != 16
+                || live.lifecycle_operation_bytes.available_permits() != 256 * 1024 * 1024
+            {
                 tokio::task::yield_now().await;
             }
         })

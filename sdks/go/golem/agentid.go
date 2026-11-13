@@ -20,7 +20,7 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
-	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
@@ -51,22 +51,21 @@ type ParsedAgentID[Id any] struct {
 // [DefineAgent]/[AgentDefinition.Get] — so the constructor parameters decode back into it.
 // It calls the host, so it must run inside an invocation.
 func ParseAgentID[Id any](agentID string) (ParsedAgentID[Id], error) {
-	res := host.ParseAgentId(agentID)
-	if res.IsErr() {
-		return ParsedAgentID[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(res.Err()))
+	t, failure := identity.Parse(agentID)
+	if failure != nil {
+		return ParsedAgentID[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(failure.AgentError))
 	}
-	t := res.Ok()
 
-	id, err := decodeAgentIDParams[Id](t.F1.Value)
+	id, err := decodeAgentIDParams[Id](t.Constructor.Value)
 	if err != nil {
 		return ParsedAgentID[Id]{}, fmt.Errorf("golem: agent id %q: %w", agentID, err)
 	}
 
 	phantom := None[UUID]()
-	if t.F2.IsSome() {
-		phantom = Some(uuidFromWit(t.F2.Some()))
+	if t.PhantomID.IsSome() {
+		phantom = Some(uuidFromWit(t.PhantomID.Some()))
 	}
-	return ParsedAgentID[Id]{TypeName: t.F0, ID: id, PhantomID: phantom}, nil
+	return ParsedAgentID[Id]{TypeName: t.TypeName, ID: id, PhantomID: phantom}, nil
 }
 
 // decodeAgentIDParams decodes a constructor-parameter value tree into the Id

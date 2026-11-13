@@ -132,7 +132,10 @@ fn tool_attachment_read_contract_roundtrips() {
         let restored = OplogEntry::try_from(proto).unwrap();
         assert_eq!(restored, raw);
         let wire: oplog::OplogEntry = restored.try_into().unwrap();
-        assert_eq!(OplogEntry::try_from(wire).unwrap(), raw);
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap(),
+            raw.clone().into()
+        );
         let mut wrong_ownership = raw.clone();
         let OplogEntry::ToolAttachmentRead {
             payload: wrong_payload,
@@ -150,7 +153,7 @@ fn tool_attachment_read_contract_roundtrips() {
             wrong_ownership.clone().try_into().unwrap();
         assert!(OplogEntry::try_from(proto).is_err());
         let wire: oplog::OplogEntry = wrong_ownership.try_into().unwrap();
-        assert!(OplogEntry::try_from(wire).is_err());
+        assert!(golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).is_err());
         if payload.is_some() {
             let mut external = raw.clone();
             let OplogEntry::ToolAttachmentRead { payload, .. } = &mut external else {
@@ -165,7 +168,10 @@ fn tool_attachment_read_contract_roundtrips() {
                 external.clone().try_into().unwrap();
             let restored = OplogEntry::try_from(proto).unwrap();
             let wire: oplog::OplogEntry = restored.try_into().unwrap();
-            assert_eq!(OplogEntry::try_from(wire).unwrap(), external);
+            assert_eq!(
+                golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap(),
+                external.into()
+            );
         }
 
         let public = PublicOplogEntry::ToolAttachmentRead(
@@ -190,14 +196,19 @@ fn tool_attachment_read_contract_roundtrips() {
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
             wrong_ownership.clone().try_into().unwrap();
         assert!(PublicOplogEntry::try_from(proto).is_err());
-        assert!(OplogEntry::try_from(wrong_ownership).is_err());
-        let public_raw = OplogEntry::try_from(public.clone()).unwrap();
-        let OplogEntry::ToolAttachmentRead {
-            observation: restored_observation,
-            payload: restored_payload,
-            entity_parent_start_index,
-            ..
-        } = public_raw
+        assert!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(wrong_ownership).is_err()
+        );
+        let public_raw =
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(public.clone()).unwrap();
+        let golem_common::model::oplog::OplogEnrichmentEntry::Other(
+            OplogEntry::ToolAttachmentRead {
+                observation: restored_observation,
+                payload: restored_payload,
+                entity_parent_start_index,
+                ..
+            },
+        ) = public_raw
         else {
             panic!("wrong raw variant")
         };
@@ -269,7 +280,7 @@ fn tool_attachment_read_rejects_invalid_observation_schema() {
         observation: golem_schema::schema::wit::encode_typed(&invalid).unwrap(),
         payload: None,
     });
-    assert!(OplogEntry::try_from(raw).is_err());
+    assert!(golem_common::model::oplog::OplogEnrichmentEntry::try_from(raw).is_err());
 }
 
 #[test]
@@ -341,8 +352,9 @@ fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
                 stored.try_into().unwrap();
             let stored = OplogEntry::try_from(proto).unwrap();
             let wire: oplog::OplogEntry = stored.try_into().unwrap();
-            let restored = OplogEntry::try_from(wire).unwrap();
-            assert_eq!(restored, entry);
+            let restored =
+                golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap();
+            assert_eq!(restored, entry.into());
         }
     }
 }
@@ -369,7 +381,41 @@ fn raw_log_trace_context_survives_wit_roundtrip() {
             trace_context,
         };
         let wire: oplog::OplogEntry = entry.clone().try_into().unwrap();
-        assert_eq!(OplogEntry::try_from(wire).unwrap(), entry);
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap(),
+            entry.into()
+        );
+    }
+}
+
+fn span_closed(
+    entity_parent_start_index: Option<OplogIndex>,
+    resource_start_index: OplogIndex,
+) -> OplogEntry {
+    let timestamp = Timestamp::now_utc().rounded();
+    OplogEntry::SpanClosed {
+        timestamp,
+        entity_parent_start_index,
+        resource_start_index: Some(resource_start_index),
+        span_finished: SpanFinished {
+            span_id: SpanId::generate(),
+            finished_at: timestamp,
+            outcome: SpanOutcome::Completed,
+        },
+    }
+}
+
+#[test]
+fn raw_span_closed_survives_wit_roundtrip() {
+    use crate::preview2::golem_api_1_x::oplog;
+
+    for entity_parent_start_index in [None, Some(OplogIndex::from_u64(4))] {
+        let entry = span_closed(entity_parent_start_index, OplogIndex::from_u64(9));
+        let wire: oplog::OplogEntry = entry.clone().try_into().unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(wire).unwrap(),
+            entry.into()
+        );
     }
 }
 
@@ -428,6 +474,9 @@ fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
@@ -441,7 +490,256 @@ fn make_agent_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }
+}
+
+#[test]
+async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_create_projection() {
+    use golem_common::base_model::component_metadata::{ComponentProvisionConfig, KnownExports};
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::model::oplog::{CreateProjectionParameters, OplogEnrichmentEntry};
+    use golem_common::model::plugin_registration::PluginRegistrationId;
+
+    struct MetadataComponentService(Component);
+
+    #[async_trait]
+    impl ComponentService for MetadataComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            panic!("enrichment must not load executable components")
+        }
+
+        async fn get_metadata(
+            &self,
+            component_id: ComponentId,
+            forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            assert_eq!(component_id, self.0.id);
+            assert_eq!(forced_revision, Some(self.0.revision));
+            Ok(self.0.clone())
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: golem_common::model::application::ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            panic!("enrichment must use the supplied component identity")
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    let component_id = ComponentId::new();
+    let grant_id = EnvironmentPluginGrantId::new();
+    let revision = ComponentRevision::INITIAL;
+    let environment_id = EnvironmentId::new();
+    let owner = OwnedAgentId::new(
+        environment_id,
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
+        },
+    );
+    let components = Arc::new(MetadataComponentService(Component {
+        id: component_id,
+        revision,
+        environment_id,
+        component_name: ComponentName("processor".to_string()),
+        hash: golem_common::model::diff::Hash::empty(),
+        application_id: golem_common::model::application::ApplicationId::new(),
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("test@golem"),
+        application_name: golem_common::model::application::ApplicationName::try_from("test-app")
+            .unwrap(),
+        environment_name: golem_common::model::environment::EnvironmentName::try_from("test-env")
+            .unwrap(),
+        component_size: 100,
+        metadata: ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+                ..Default::default()
+            },
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_component_config(
+            Default::default(),
+            ComponentProvisionConfig {
+                plugins: vec![InstalledPlugin {
+                    environment_plugin_grant_id: grant_id,
+                    priority: golem_common::model::component::PluginPriority(0),
+                    parameters: BTreeMap::new(),
+                    plugin_registration_id: PluginRegistrationId::new(),
+                    plugin_name: "component-plugin".to_string(),
+                    plugin_version: "1.0".to_string(),
+                    oplog_processor_component_id: Some(ComponentId::new()),
+                    oplog_processor_component_revision: Some(revision),
+                }],
+                ..Default::default()
+            },
+        ),
+        created_at: chrono::Utc::now(),
+        wasm_hash: golem_common::model::diff::Hash::empty(),
+        object_store_key: String::new(),
+    }));
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let timestamp = Timestamp::now_utc();
+    for owner_kind in [OwnerKind::OplogProcessor, OwnerKind::EphemeralExternalTool] {
+        let updated = PublicOplogEntry::from_oplog_entry(
+            OplogIndex::INITIAL,
+            OplogEntry::SuccessfulUpdate {
+                timestamp,
+                target_revision: revision,
+                new_component_size: 101,
+                new_total_linear_memory_size: Some(0),
+                new_active_plugins: [grant_id].into_iter().collect(),
+                snapshot_assisted_details: None,
+            },
+            oplog_service.clone(),
+            components.clone(),
+            &owner,
+            AgentMode::Durable,
+            component_id,
+            owner_kind,
+            None,
+            revision,
+        )
+        .await
+        .unwrap();
+        let PublicOplogEntry::SuccessfulUpdate(updated) = updated else {
+            panic!("expected update")
+        };
+        assert_eq!(
+            updated.new_active_plugins.len(),
+            usize::from(owner_kind == OwnerKind::EphemeralExternalTool)
+        );
+
+        let activated = PublicOplogEntry::from_oplog_entry(
+            OplogIndex::INITIAL,
+            OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_grant_id: grant_id,
+            },
+            oplog_service.clone(),
+            components.clone(),
+            &owner,
+            AgentMode::Durable,
+            component_id,
+            owner_kind,
+            None,
+            revision,
+        )
+        .await;
+        assert_eq!(
+            activated.is_ok(),
+            owner_kind == OwnerKind::EphemeralExternalTool
+        );
+    }
+
+    let projection = CreateProjectionParameters {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "observed-create".to_string(),
+        },
+        owner_kind: OwnerKind::EphemeralExternalTool,
+        agent_mode: AgentMode::Ephemeral,
+        component_revision: revision,
+        env: vec![("observed".to_string(), "value".to_string())],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        parent: Some(owner.agent_id.clone()),
+        component_size: 73,
+        initial_total_linear_memory_size: 41,
+        initial_active_plugins: [grant_id].into_iter().collect(),
+        local_agent_config: Vec::new(),
+        original_phantom_id: Some(Uuid::new_v4()),
+        instance_id: Uuid::new_v4(),
+    };
+    let public = PublicOplogEntry::from_enrichment_entry(
+        OplogIndex::INITIAL,
+        OplogEnrichmentEntry::CreateProjection {
+            timestamp,
+            parameters: Box::new(projection.clone()),
+        },
+        oplog_service,
+        components,
+        &owner,
+        AgentMode::Durable,
+        component_id,
+        OwnerKind::OplogProcessor,
+        None,
+        ComponentRevision::new(9).unwrap(),
+    )
+    .await
+    .unwrap();
+    let PublicOplogEntry::Create(public) = public else {
+        panic!("expected create")
+    };
+    assert_eq!(public.timestamp, timestamp);
+    assert_eq!(public.agent_id, projection.agent_id);
+    assert_eq!(public.owner_kind, projection.owner_kind);
+    assert_eq!(public.agent_mode, projection.agent_mode);
+    assert_eq!(public.component_revision, projection.component_revision);
+    assert_eq!(public.environment_id, projection.environment_id);
+    assert_eq!(public.created_by, projection.created_by);
+    assert_eq!(public.parent, projection.parent);
+    assert_eq!(public.env, projection.env.into_iter().collect());
+    assert_eq!(public.component_size, projection.component_size);
+    assert_eq!(
+        public.initial_total_linear_memory_size,
+        projection.initial_total_linear_memory_size
+    );
+    assert_eq!(public.original_phantom_id, projection.original_phantom_id);
+    assert_eq!(public.instance_id, projection.instance_id);
+    assert_eq!(public.initial_active_plugins.len(), 1);
+    assert_eq!(
+        public.initial_active_plugins.first().unwrap().plugin_name,
+        "component-plugin"
+    );
+    let wire = crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::try_from(
+        PublicOplogEntry::Create(CreateParams {
+            owner_kind: OwnerKind::OplogProcessor,
+            ..public
+        }),
+    )
+    .unwrap();
+    let crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::Create(wire) = wire else {
+        panic!("expected wire create")
+    };
+    assert!(matches!(
+        wire.owner_kind,
+        crate::preview2::golem_api_1_x::oplog::OwnerKind::OplogProcessor
+    ));
 }
 
 fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
@@ -596,6 +894,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -635,6 +934,8 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
         OplogIndex::NONE,
@@ -663,6 +964,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -742,6 +1044,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             None,
             "test-policy".to_string(),
         ))
+        .await
+        .unwrap();
+    let agent_span_closed = oplog
+        .add(span_closed(None, observational_owner))
         .await
         .unwrap();
     let child_start = oplog
@@ -855,6 +1161,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             kind: HostStreamKind::P3HttpRequestBody,
             payload: OplogPayload::Inline(Box::new(HostRequestNoInput {}.into())),
         })
+        .await
+        .unwrap();
+    let entity_span_closed = oplog
+        .add(span_closed(Some(tool_start), tool_start))
         .await
         .unwrap();
 
@@ -1050,6 +1360,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
@@ -1081,6 +1393,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         observational_start,
         observational_log,
         observational_end,
+        agent_span_closed,
     ] {
         assert!(matches!(
             chunk.entries[index.as_u64() as usize - 1].attribution,
@@ -1106,6 +1419,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         entity_marker,
         log_index,
         stream_frame_index,
+        entity_span_closed,
         reveal_start,
         reveal_end,
         transaction_start,
@@ -1140,6 +1454,17 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             PublicOplogEntryAttribution::Agent(_)
         ));
     }
+
+    let PublicOplogEntry::SpanClosed(span_closed_params) =
+        &chunk.entries[entity_span_closed.as_u64() as usize - 1].entry
+    else {
+        panic!("expected SpanClosed");
+    };
+    assert_eq!(span_closed_params.resource_start_index, Some(tool_start));
+    assert_eq!(
+        span_closed_params.span_finished.outcome,
+        PublicSpanOutcome::Completed
+    );
 
     let tool = &chunk.entries[tool_start.as_u64() as usize - 1];
     let PublicOplogEntry::Start(tool_params) = &tool.entry else {
@@ -1218,6 +1543,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
         log_index,
@@ -1237,6 +1564,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
@@ -1265,6 +1594,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1384,6 +1714,8 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
         valid,
@@ -1409,6 +1741,8 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
             index,
@@ -1442,6 +1776,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -1781,6 +2116,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             components.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             ComponentRevision::new(1).unwrap(),
         )
@@ -1982,6 +2319,7 @@ async fn open_test_oplog(
             1,
             1,
             100,
+            32,
             RetryConfig::default(),
         )
         .await,
@@ -2074,6 +2412,8 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         page_revision,
         OplogIndex::INITIAL,
@@ -2102,6 +2442,8 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             omitted.oplog_index,
             Some(omitted.component_revision),
@@ -2126,6 +2468,8 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
         None,
         snapshot_index,
         None,
@@ -2152,6 +2496,8 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             oplog_service,
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             large_log_index.next(),
             None,
@@ -2176,6 +2522,8 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
             from,
@@ -2229,6 +2577,8 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
             from,

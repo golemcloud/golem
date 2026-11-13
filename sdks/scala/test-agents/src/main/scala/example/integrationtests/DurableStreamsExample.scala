@@ -17,10 +17,10 @@ import scala.concurrent.{ExecutionContext, Future}
 trait DurableStreamsExample extends BaseAgent {
   class Id(val url: String, val producerId: String)
 
-  def readJson(offset: String): Future[golem.schema.AgentStream[Long]]
-  def readBytes(offset: String): Future[golem.schema.AgentStream[Byte]]
-  def nested(offset: String): Future[golem.schema.AgentStream[golem.schema.AgentStream[Long]]]
-  def consume(input: golem.schema.AgentStream[Long]): Future[Vector[Long]]
+  def readJson(offset: String): Future[AgentStream[Long]]
+  def readBytes(offset: String): Future[AgentStream[Byte]]
+  def nested(offset: String): Future[AgentStream[AgentStream[Long]]]
+  def consume(input: AgentStream[Long]): Future[Vector[Long]]
   def forward(targetUrl: String, targetProducer: String, offset: String): Future[Vector[Long]]
   def appendJson(values: Vector[Long], close: Boolean): Future[Option[String]]
   def appendBytes(values: Vector[Byte], close: Boolean): Future[Option[String]]

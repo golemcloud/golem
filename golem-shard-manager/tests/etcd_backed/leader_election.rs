@@ -67,6 +67,7 @@ fn election_config(etcd: &DockerEtcd) -> EtcdConfig {
         password: None,
         password_file: None,
         test_version: None,
+        test_tls_reload_interval: None,
     }
 }
 

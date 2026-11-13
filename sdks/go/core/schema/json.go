@@ -114,13 +114,13 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		return string(n.Value), err
 	case StringType:
 		n, err := expect[StringValue](v, path, "string")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 	case PathType:
 		n, err := expect[PathValue](v, path, "path")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 	case UrlType:
 		n, err := expect[UrlValue](v, path, "url")
-		return n.Value, err
+		return utf8Rendered(n.Value, path, err)
 
 	case DatetimeType:
 		n, err := expect[DatetimeValue](v, path, "datetime")
@@ -153,6 +153,9 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 	case TextType:
 		n, err := expect[TextValue](v, path, "text")
 		if err != nil {
+			return nil, err
+		}
+		if err := checkUTF8(n.Text, path); err != nil {
 			return nil, err
 		}
 		out := map[string]any{"text": n.Text}
@@ -200,6 +203,10 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		}
 		declared := b.Cases[n.Case]
 		if n.Payload == nil {
+			if declared.Payload != nil {
+				return nil, fmt.Errorf("%s: variant case %q declares a payload but carries none",
+					pathOrRoot(path), declared.Name)
+			}
 			// A payload-less case is just its name.
 			return declared.Name, nil
 		}
@@ -315,15 +322,19 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		if n.IsErr {
 			arm, declared = "err", b.Err
 		}
-		out := map[string]any{arm: nil}
-		if declared != nil && n.Value != nil {
-			rendered, err := u.render(*declared, *n.Value, child(path, arm))
-			if err != nil {
-				return nil, err
-			}
-			out[arm] = rendered
+		switch {
+		case declared == nil && n.Value != nil:
+			return nil, fmt.Errorf("%s: result arm %q carries a payload but declares none", pathOrRoot(path), arm)
+		case declared != nil && n.Value == nil:
+			return nil, fmt.Errorf("%s: result arm %q declares a payload but carries none", pathOrRoot(path), arm)
+		case declared == nil:
+			return map[string]any{arm: nil}, nil
 		}
-		return out, nil
+		rendered, err := u.render(*declared, *n.Value, child(path, arm))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{arm: rendered}, nil
 
 	case UnionType:
 		// A union is written as its branch body: the tag is recovered by the
@@ -347,6 +358,19 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 		return nil, fmt.Errorf("%s: streams and futures have no JSON representation", pathOrRoot(path))
 	}
 	return nil, fmt.Errorf("%s: unsupported schema type %T", pathOrRoot(path), body)
+}
+
+// utf8Rendered is a string rendered for canonical JSON, refused when it is not
+// valid UTF-8: encoding/json would send it with U+FFFD in place of each invalid
+// byte.
+func utf8Rendered(s, path string, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	if err := checkUTF8(s, path); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (u *unpacker) renderItems(elem SchemaType, items []SchemaValue, path string) (any, error) {
@@ -1005,6 +1029,15 @@ func jsonInt(value any, path string, min, max int64) (int64, error) {
 	case int64:
 		return boundsCheck(v, min, max, path)
 	case int:
+		return boundsCheck(int64(v), min, max, path)
+	case int32:
+		return boundsCheck(int64(v), min, max, path)
+	// UnpackJSON renders an unsigned integer as uint64, which PackJSON takes
+	// back.
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0, fmt.Errorf("%s: %d is outside the range [%d, %d]", pathOrRoot(path), v, min, max)
+		}
 		return boundsCheck(int64(v), min, max, path)
 	default:
 		return 0, typeErr(path, "integer", value)

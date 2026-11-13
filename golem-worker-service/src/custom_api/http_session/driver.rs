@@ -218,7 +218,13 @@ pub(super) async fn run_session(
                 recovery.pending.as_mut().unwrap().operation = operation as i32;
                 continue;
             }
-            invocation_response::Response::Rejected(_) => {
+            invocation_response::Response::Rejected(rejected) => {
+                tracing::warn!(
+                    reason = rejected.reason,
+                    error = %rejected.error,
+                    worker_error = ?rejected.worker_error,
+                    "HTTP invocation session was rejected"
+                );
                 send_error(&events, HttpSessionError::Rejected).await;
                 return;
             }
@@ -420,6 +426,11 @@ pub(super) async fn run_session(
                         invocation_response::Response::OutputError(error) => {
                             let id = uuid_pair(error.durable_stream_id.as_ref().unwrap());
                             output.terminal(error.transport_stream_id, id, error.durable_offset.clone());
+                            tracing::warn!(
+                                transport_stream_id = error.transport_stream_id,
+                                error = %error.details,
+                                "HTTP response stream producer failed"
+                            );
                             permit.send(HttpSessionEvent::OutputError(error));
                         }
                         invocation_response::Response::Result(result) => {
@@ -447,6 +458,15 @@ pub(super) async fn run_session(
                         }
                         invocation_response::Response::Finished(finished) => {
                             completed.store(true, Ordering::Release);
+                            if let Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Failure(failure)) = &finished.outcome {
+                                tracing::warn!(
+                                    kind = failure.kind,
+                                    code = %failure.code,
+                                    error = %failure.message,
+                                    worker_error = ?failure.worker_error,
+                                    "HTTP invocation session finished with failure"
+                                );
+                            }
                             let category = if matches!(finished.outcome, Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Success(_))) { "success" } else { "invocation_failure" };
                             debug!(category, "HTTP session terminated");
                             crate::metrics::record_http_session_terminal_cause(category);

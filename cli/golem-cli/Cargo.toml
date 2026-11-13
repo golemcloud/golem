@@ -131,7 +131,6 @@ walkdir = { workspace = true }
 wax = { workspace = true }
 webbrowser = { workspace = true }
 which = { workspace = true }
-wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
@@ -166,3 +165,4 @@ wat = { workspace = true }
 lenient_bool = { workspace = true }
 serde_json = { workspace = true }
 shadow-rs = { workspace = true }
+toml = { workspace = true }

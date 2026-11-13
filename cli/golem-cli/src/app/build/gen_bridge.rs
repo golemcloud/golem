@@ -317,7 +317,7 @@ pub(crate) async fn collect_custom_targets_lenient(
     let mut agent_type_names = custom_target.agent_type_names.clone();
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        if !component.agent_type_extraction_source_wasm().exists() {
+        if !component.wasm().exists() {
             continue;
         }
 
@@ -486,12 +486,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             for provider in
                 local_tool_middleware_components(ctx, bindings.get(rpc_name.as_str()), &metadata)?
             {
-                if ctx
-                    .application()
-                    .component(&provider)
-                    .agent_type_extraction_source_wasm()
-                    .exists()
-                {
+                if ctx.application().component(&provider).wasm().exists() {
                     extract_and_store_component_metadata(ctx, &provider).await?;
                 }
             }
@@ -573,26 +568,20 @@ async fn collect_agent_manifest_targets_for_entry(
     }
 
     let is_matching_all = matchers.remove("*");
+    // An agent type matcher reads the metadata of every source component, also after a match,
+    // so that the metadata index rejects an agent type that two components define.
+    let has_agent_type_matchers = matchers
+        .iter()
+        .any(|matcher| !application_component_names.contains(matcher.as_str()));
 
     for component_name in source_component_names {
-        if skip_missing_sources
-            && !ctx
-                .application()
-                .component(component_name)
-                .agent_type_extraction_source_wasm()
-                .exists()
-        {
+        if skip_missing_sources && !ctx.application().component(component_name).wasm().exists() {
             continue;
         }
 
         let is_matching_component = matchers.remove(component_name.as_str());
 
-        if !is_matching_all
-            && !is_matching_component
-            && matchers
-                .iter()
-                .all(|matcher| application_component_names.contains(matcher.as_str()))
-        {
+        if !is_matching_all && !is_matching_component && !has_agent_type_matchers {
             continue;
         }
 
@@ -721,13 +710,7 @@ async fn collect_tool_manifest_targets_for_entry(
     )?;
 
     for component_name in source_component_names {
-        if skip_missing_sources
-            && !ctx
-                .application()
-                .component(component_name)
-                .agent_type_extraction_source_wasm()
-                .exists()
-        {
+        if skip_missing_sources && !ctx.application().component(component_name).wasm().exists() {
             continue;
         }
 
@@ -934,12 +917,7 @@ async fn collect_dependency_guest_bridge_targets(
     let mut extracted = BTreeMap::new();
 
     for component_name in source_component_names {
-        if ctx
-            .application()
-            .component(component_name)
-            .agent_type_extraction_source_wasm()
-            .exists()
-        {
+        if ctx.application().component(component_name).wasm().exists() {
             extracted.insert(
                 component_name.clone(),
                 extract_and_store_component_metadata(ctx, component_name).await?,
@@ -1770,7 +1748,7 @@ async fn gen_bridge_sdk_target(
 ) -> anyhow::Result<()> {
     let freshness_source = match &target.source {
         BridgeSdkTargetSource::Local { component_name } => {
-            ctx.application().component(component_name).final_wasm()
+            ctx.application().component(component_name).wasm()
         }
         BridgeSdkTargetSource::RemoteRelease {
             manifest_source, ..

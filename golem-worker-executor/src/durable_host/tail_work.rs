@@ -15,7 +15,7 @@
 //! Activity tracking for Golem-spawned store background tasks ("tail work").
 //!
 //! Durable host operations spawn background tasks onto the wasmtime store
-//! (`store.spawn(AccessorTask)`): HTTP body recorders, TCP send/receive
+//! (`store.spawn(async move |accessor| ...)`): HTTP body recorders, TCP send/receive
 //! drivers, filesystem/stdio stream consumers, blobstore/keyvalue value
 //! consumers. `run_concurrent` returns as soon as the invocation's root
 //! future resolves, leaving these tasks suspended wherever their last poll
@@ -39,11 +39,19 @@
 //!   only guest progress can admit this delivery, and no durable effect remains;
 //! * passive replay-progress notification for a markerless completion whose
 //!   durable finalization is finished. No recorded entry depends on that
-//!   unobserved delivery, and invocation settlement may own the remaining tail.
+//!   unobserved delivery, and invocation settlement may own the remaining tail;
+//! * a destructor's passive wait for sibling history or the natural replay tail.
+//!   Its cursor transactions stay active, and it cannot perform a missing live
+//!   effect until the normal replay-to-live transition authorizes continuation;
+//! * passive replay-progress notification for a recorded delivery marker while an
+//!   `AgentInvocationFinished` lies between the cursor and the marker. A reader
+//!   retained across invocations is consumed in a later invocation, which cannot
+//!   replay until this one settles.
 //!
 //! Waits whose completion is *not* guest-driven — durable oplog appends,
-//! live network / file I/O, replay-resolver waits, queued or running cursor
-//! transactions, and recorded delivery-marker waits — keep the task active:
+//! live network / file I/O, ordinary replay-resolver waits, queued or running cursor
+//! transactions, and waits for a delivery marker recorded in the current
+//! invocation — keep the task active:
 //! the completion path waits for them (bounded by the invocation tail-drain
 //! timeout).
 

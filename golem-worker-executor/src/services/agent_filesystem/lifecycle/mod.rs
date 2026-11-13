@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
-use crate::metrics::agent_filesystem::{self, StorageRefusal};
+use crate::filesystem::errors::OperationContext;
+use crate::filesystem::host_directories::HostDirectory;
+use crate::filesystem::host_directories::HostDirectoryError;
 #[cfg(test)]
-use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
-use crate::sandbox_filesystem::{
-    AgentAccounting, FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits,
-    LinkGroup, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
-    SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
-    SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
-    SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
-    SandboxOpenOptions, SandboxOpened, SandboxPath, SandboxReadRange,
-    SandboxResolvedNamespaceTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
+use crate::filesystem::sandbox::ScriptedSandboxFilesystem;
+use crate::filesystem::sandbox::{
+    FilesystemStorageError, InstalledLimits, LinkGroup, SandboxAccessMode, SandboxAttributes,
+    SandboxDirectoryId, SandboxFile, SandboxFileDisposition, SandboxFilesystem,
+    SandboxFilesystemAdapter, SandboxFilesystemName, SandboxFilesystemProvisioning,
+    SandboxFlushLevel, SandboxFollow, SandboxHandle, SandboxNameComparisonKey, SandboxObjectId,
+    SandboxObjectKind, SandboxOpenOptions, SandboxPath, SandboxReadRange,
+    SandboxResolvedPathTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
     SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
     TreeExclusions,
 };
+use crate::filesystem::volume::AgentAccounting;
+use crate::filesystem::volume::FilesystemLimits;
+use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
+use crate::metrics::agent_filesystem::{self, StorageRefusal};
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{
     FileLoader, InitialFileLoadError, InitialFileLoadFailure, InitialFileSource,
@@ -52,6 +56,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 
+mod admission;
 mod attributes;
 mod effects;
 mod handles;
@@ -59,6 +64,7 @@ mod namespace;
 mod operations;
 mod registry;
 mod transitions;
+use admission::{Admission, AdmissionTransition};
 use attributes::read_sandbox_attributes;
 #[cfg(test)]
 use attributes::resize_postcondition_evidence;
@@ -99,7 +105,7 @@ use namespace::refuse_read_only_change;
 #[cfg(test)]
 use namespace::remove_postcondition_evidence;
 #[cfg(test)]
-use namespace::resolve_namespace_target;
+use namespace::resolve_path_target;
 use operations::agent_object_kind;
 pub(crate) use operations::attributes;
 use operations::execute_open;
@@ -301,7 +307,26 @@ pub(crate) struct FilesystemGenerationHandle<Adapter: SandboxFilesystemAdapter =
 {
     generation: Weak<FilesystemGeneration<Adapter>>,
     phase: GenerationHandlePhase,
+    invocation: Option<FilesystemInvocation>,
 }
+
+/// Tracks backend work, including calls and descriptor closes whose observer was dropped.
+#[derive(Clone)]
+pub(crate) struct FilesystemInvocation {
+    activity: Arc<InvocationActivity>,
+}
+
+struct InvocationActivity {
+    state: Mutex<InvocationActivityState>,
+    changed: tokio::sync::Notify,
+}
+
+struct InvocationActivityState {
+    closed: bool,
+    active: usize,
+}
+
+struct InvocationLease(FilesystemInvocation);
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResidentFilesystemActivity {
@@ -444,9 +469,8 @@ impl Debug for DeleteFailure {
 impl DeleteFailure {
     fn unverified(operation: &'static str) -> Self {
         Self {
-            source: Arc::new(FilesystemStorageError::verification(
-                operation,
-                std::path::Path::new("<agent-filesystem>"),
+            source: Arc::new(FilesystemStorageError::from(
+                OperationContext::verification(operation, None),
             )),
             retry: None,
         }
@@ -477,6 +501,9 @@ pub(crate) enum Error {
         refusal: BlobRefusal,
         source: FilesystemStorageError,
     },
+    /// The initial-file declarations or their sources are invalid. Retrying the same
+    /// declarations and content cannot repair them.
+    InitialFileFailed(FilesystemStorageError),
     /// An install of initial files found something other than what the old declarations left at a
     /// path. The install changed nothing, and the generation stays valid.
     InitialFileConflict(Box<InitialFileConflict>),
@@ -493,6 +520,7 @@ impl Display for Error {
             Self::Sandbox(error)
             | Self::InitialFileUnavailable(error)
             | Self::InitialFileRefused { source: error, .. }
+            | Self::InitialFileFailed(error)
             | Self::AgentQuota(error)
             | Self::PhysicalCapacity(error) => Display::fmt(error, formatter),
             Self::InitialFileConflict(error) => Display::fmt(error, formatter),
@@ -507,6 +535,12 @@ impl std::error::Error for Error {}
 impl From<FilesystemStorageError> for Error {
     fn from(source: FilesystemStorageError) -> Self {
         Self::Sandbox(source)
+    }
+}
+
+impl From<HostDirectoryError> for Error {
+    fn from(source: HostDirectoryError) -> Self {
+        Self::Sandbox(source.into())
     }
 }
 
@@ -546,7 +580,7 @@ struct GenerationUsageReader<Reader> {
 }
 
 impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
-    fn begin_transition(&self) -> Result<(), AccessError> {
+    fn begin_transition(&self) -> Result<AdmissionTransition, AccessError> {
         self.registry.begin_transition()
     }
 
@@ -558,10 +592,10 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         let _lease = self.registry.lease_internal_call();
         let sandbox = self.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or_else(|| {
-            FilesystemStorageError::verification(
+            FilesystemStorageError::from(OperationContext::verification(
                 "observe deleted agent filesystem",
-                std::path::Path::new("<agent-filesystem>"),
-            )
+                None,
+            ))
         })?;
         match sandbox.observe_allocation().await {
             Ok(allocation) => Ok(FilesystemUsage::Authoritative {
@@ -583,14 +617,6 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
     fn invalidate(&self) {
         self.registry.invalidate();
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AdmissionState {
-    Open,
-    Transitioning,
-    Sealed,
-    Invalidated,
 }
 
 struct GenerationRegistry {
@@ -702,8 +728,9 @@ pub(crate) struct TreeMark {
 static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 struct RegistryState {
-    admission: AdmissionState,
-    replay_access: bool,
+    admission: Admission,
+    /// Outstanding leases, including replay calls and internal cleanup. Sealing or invalidating
+    /// admission does not release them; they must drain before the generation is deleted.
     calls: usize,
     nodes: usize,
     /// The number of the generation, unique in the process.
@@ -713,6 +740,7 @@ struct RegistryState {
 
 struct CallLease {
     registry: Arc<GenerationRegistry>,
+    invocation: Option<InvocationLease>,
 }
 
 struct NodeLease {
@@ -738,8 +766,8 @@ struct ActiveNamespaceEdit {
 
 #[derive(Clone, Default)]
 struct NamespaceCoordinationKeys {
-    namespace: Vec<SandboxNamespaceCoordinationKey>,
-    directories: Vec<SandboxDirectoryCoordinationKey>,
+    namespace: Vec<SandboxNameComparisonKey>,
+    directories: Vec<SandboxDirectoryId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -798,15 +826,16 @@ pub(crate) struct Directory {
 }
 
 struct NodeOwnership {
-    sandbox: Option<SandboxNode>,
+    sandbox: Option<SandboxHandle>,
     generation_id: usize,
     access: AccessMode,
     node_lease: Option<NodeLease>,
-    close: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemClose + Send>>,
+    invocation: Option<InvocationLease>,
+    close: Option<Box<dyn FnOnce(SandboxHandle, NodeLease) -> FilesystemClose + Send>>,
 }
 
 impl NodeOwnership {
-    fn sandbox(&self) -> &SandboxNode {
+    fn sandbox(&self) -> &SandboxHandle {
         self.sandbox
             .as_ref()
             .expect("filesystem node already closed")
@@ -819,6 +848,7 @@ impl NodeOwnership {
             .take()
             .expect("filesystem node lease missing");
         self.close.take().expect("filesystem node close missing")(sandbox, node_lease)
+            .retain_invocation(self.invocation.take())
     }
 }
 
@@ -864,7 +894,7 @@ impl PathTarget {
         let generation_id = directory.ownership.generation_id;
         let access = directory.ownership.access;
         let path = path.into();
-        let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
+        let SandboxHandle::Directory(directory) = directory.ownership.sandbox() else {
             unreachable!("directory wrapper must contain a sandbox directory")
         };
         Self {
@@ -882,7 +912,7 @@ pub(crate) enum Target<'a> {
 
 #[derive(Clone)]
 enum AttributeTarget {
-    Open(SandboxNode),
+    Open(SandboxHandle),
     Path {
         target: SandboxPath,
         follow: SandboxFollow,
@@ -1049,24 +1079,24 @@ pub(crate) struct WriteResult {
 /// A namespace entry under coordination, with a resolution of the entry.
 struct CoordinatedTarget {
     coordination: NamespaceCoordination,
-    resolved: SandboxResolvedNamespaceTarget,
+    resolved: SandboxResolvedPathTarget,
 }
 
 enum ResolvedNamespaceEdit {
     Insert {
-        destination: SandboxResolvedNamespaceTarget,
+        destination: SandboxResolvedPathTarget,
         object: NewObject,
     },
     Link {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Move {
-        source: SandboxResolvedNamespaceTarget,
-        destination: SandboxResolvedNamespaceTarget,
+        source: SandboxResolvedPathTarget,
+        destination: SandboxResolvedPathTarget,
     },
     Remove {
-        target: SandboxResolvedNamespaceTarget,
+        target: SandboxResolvedPathTarget,
         expected: ObjectKind,
     },
 }

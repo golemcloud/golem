@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use super::call::live_unfinished_handle;
+use super::call::live_unfinished_handle_with_counter;
 use super::*;
+use crate::durable_host::replay_state::ReplayStarts;
 use crate::services::oplog::UnreadableOplog;
 use std::collections::BTreeMap;
 
@@ -47,14 +50,14 @@ fn completed(end_idx: u64) -> Resolution {
     }
 }
 
-// ---- ConcurrentReplayResolver ----
+// ---- ReplayStarts ----
 
 #[test]
 fn resolver_out_of_order_completion() {
     // [S1, S2, E2, E1]: claim both, then resolve E2 before E1.
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1), None);
-    let mut rx2 = resolver.register(idx(2), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx1 = resolver.register(idx(1), None).unwrap();
+    let mut rx2 = resolver.register(idx(2), None).unwrap();
     assert!(rx1.try_recv().is_err());
     assert!(rx2.try_recv().is_err());
 
@@ -79,8 +82,8 @@ fn resolver_out_of_order_completion() {
 #[test]
 fn resolver_cancelled() {
     // [S1, Cancelled1]
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(resolver.resolve_if_pending(
         idx(1),
         idx(2),
@@ -98,25 +101,11 @@ fn resolver_cancelled() {
 }
 
 #[test]
-fn resolver_resolve_before_register_buffers() {
-    let mut resolver = ConcurrentReplayResolver::default();
-    resolver.resolve(idx(1), completed(2));
-    assert!(!resolver.is_pending(idx(1)));
-    let mut rx = resolver.register(idx(1), None);
-    match rx.try_recv() {
-        Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
-            assert_eq!(end_idx, idx(2))
-        }
-        other => panic!("expected pre-resolved receiver, got {other:?}"),
-    }
-}
-
-#[test]
 fn resolver_missing_pending_is_dropped_not_buffered() {
-    let mut resolver = ConcurrentReplayResolver::default();
+    let mut resolver = ReplayStarts::default();
     // No registration: resolve_if_pending must not buffer (this is the unregistered-End case).
     assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
-    let mut rx = resolver.register(idx(1), None);
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(rx.try_recv().is_err());
 }
 
@@ -124,9 +113,9 @@ fn resolver_missing_pending_is_dropped_not_buffered() {
 fn resolver_fail_all_pending_incomplete_wakes_everyone() {
     // End-of-replay must wake every still-suspended awaiter as Incomplete, not leave them
     // hanging. A resolved awaiter is already gone and is unaffected.
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx1 = resolver.register(idx(1), None);
-    let mut rx2 = resolver.register(idx(2), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx1 = resolver.register(idx(1), None).unwrap();
+    let mut rx2 = resolver.register(idx(2), None).unwrap();
     assert!(resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
 
     resolver.fail_all_pending_incomplete();
@@ -146,8 +135,8 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
 
 #[test]
 fn resolver_duplicate_resolution_is_ignored() {
-    let mut resolver = ConcurrentReplayResolver::default();
-    let mut rx = resolver.register(idx(1), None);
+    let mut resolver = ReplayStarts::default();
+    let mut rx = resolver.register(idx(1), None).unwrap();
     assert!(resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     // Second resolution: no longer pending.
     assert!(!resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
@@ -161,98 +150,21 @@ fn resolver_duplicate_resolution_is_ignored() {
 
 // ---- DurableCallSession drop policy ----
 
-fn live_unfinished_handle<P: DropPolicy>(
-    start_idx: OplogIndex,
-    sink: mpsc::UnboundedSender<DropEvent>,
-) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
-    use crate::durable_host::durability::DurableExecutionState;
-    use std::time::Duration;
-    let durable_execution_state = DurableExecutionState {
-        is_live: true,
-        snapshotting_mode: false,
-        max_in_function_retry_delay: Duration::ZERO,
-    };
-    DurableCallSession {
-        start_idx,
-        boundary: DurableCallBoundary::from_begin_index(start_idx),
-        is_live: true,
-        persisted: true,
-        request_upload: PendingUpload::already_durable(),
-        replay: None,
-        finished: false,
-        scope_replay_recovery: ScopeReplayRecovery::default().into(),
-        cancellation_span_id: None,
-        span_observer: None,
-        parked_undelivered_replay: false,
-        host_internal_calls: false,
-        execution_scope: CallExecutionScope {
-            retry_from: start_idx,
-            durable_scope: None,
-            observational_owner: None,
-            entity_parent_start_index: None,
-            invocation_id: None,
-        },
-        retry: InFunctionRetryController::new(
-            DurableFunctionType::ReadLocal,
-            durable_execution_state,
-            "test:monotonic_clock::now",
-        ),
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
-        runtime_teardown: Arc::new(|| false),
-        requires_agent_authority: false,
-        agent_auth_ctx: None,
-        drop_sink: Some(sink),
-        cleanup_sink: None,
-        live_call_permit: None,
-        _phantom: PhantomData,
-    }
-}
-
 /// A synthetic, already-finished handle carrying an arbitrary [`CallExecutionScope`]. Used by the
 /// Terminal-failure tests use this to drive `trap_context()` (the call-owned classification a
 /// terminal-step failure attaches) for a call initiated in a specific scope, without standing up
-/// a full `DurableWorkerCtx`. `finished` is set so dropping the handle is a no-op (no drop
-/// event), and no `drop_sink` is attached. `start_idx` and the boundary lease are set from
+/// a full `DurableWorkerCtx`. Drop responsibility is released so dropping the handle is a no-op
+/// (no drop event), and no `drop_sink` is attached. `start_idx` and the boundary lease are set from
 /// `scope.retry_from` only so the struct is well-formed; the tests read nothing but the scope.
 fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     scope: CallExecutionScope,
 ) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
-    use crate::durable_host::durability::DurableExecutionState;
-    use std::time::Duration;
-    let durable_execution_state = DurableExecutionState {
-        is_live: true,
-        snapshotting_mode: false,
-        max_in_function_retry_delay: Duration::ZERO,
-    };
-    let start_idx = scope.retry_from;
-    DurableCallSession {
-        start_idx,
-        boundary: DurableCallBoundary::from_begin_index(start_idx),
-        is_live: true,
-        persisted: true,
-        request_upload: PendingUpload::already_durable(),
-        replay: None,
-        finished: true,
-        scope_replay_recovery: ScopeReplayRecovery::default().into(),
-        cancellation_span_id: None,
-        span_observer: None,
-        parked_undelivered_replay: false,
-        host_internal_calls: false,
-        execution_scope: scope,
-        retry: InFunctionRetryController::new(
-            DurableFunctionType::ReadLocal,
-            durable_execution_state,
-            "test:monotonic_clock::now",
-        ),
-        executor_shutdown: tokio_util::sync::CancellationToken::new(),
-        runtime_teardown: Arc::new(|| false),
-        requires_agent_authority: false,
-        agent_auth_ctx: None,
-        drop_sink: None,
-        cleanup_sink: None,
-        live_call_permit: None,
-        _phantom: PhantomData,
-    }
+    let (sink, _) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<P>(scope.retry_from, sink);
+    handle.execution_scope = scope;
+    handle.drop_sink = None;
+    handle.abandon_for_trap();
+    handle
 }
 
 #[test]
@@ -296,7 +208,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
         let mut guard = AccessTerminalGuard::<NotCancellable>::new(
             DroppedCall {
                 start_idx: idx(5),
-                begin_index: idx(4),
+                entity_admission: false,
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -829,7 +741,7 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
         let mut guard = AccessTerminalGuard::<NotCancellable>::new(
             DroppedCall {
                 start_idx: idx(1),
-                begin_index: idx(1),
+                entity_admission: false,
                 function_type: DurableFunctionType::ReadLocal,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -1095,7 +1007,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
         token.is_live_armed(),
         "the tail-gated token must convert to live-armed after the tail exhausts"
     );
-    assert!(replay_state.is_live());
+    assert!(replay_state.at_replay_tail());
 
     token.delivered();
     // With no cleanup sink the marker append is only settlement-tracked via the drain queue;
@@ -1656,7 +1568,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let mut guard = AccessTerminalGuard::<NotCancellable>::new(
         DroppedCall {
             start_idx,
-            begin_index: start_idx,
+            entity_admission: false,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
@@ -1800,8 +1712,8 @@ fn dropped_unfinished_call_keeps_live_permit_until_drop_event_is_consumed() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
-        let mut handle = live_unfinished_handle::<Cancellable>(idx(5), tx);
-        handle.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
+        let _handle =
+            live_unfinished_handle_with_counter::<Cancellable>(idx(5), tx, counter.clone());
         assert_eq!(counter.load(Ordering::Acquire), 1);
     }
     // The handle is gone, but the queued drop event now owns the permit: an in-flight check
@@ -1933,15 +1845,19 @@ fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
 }
 
 #[test]
-fn drop_after_finish_is_noop() {
+fn drop_after_abandonment_is_noop() {
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let counter = Arc::new(AtomicUsize::new(0));
     {
-        let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
-        handle.finished = true;
+        let mut handle =
+            live_unfinished_handle_with_counter::<Cancellable>(idx(9), tx, counter.clone());
+        handle.abandon_for_trap();
+        assert_eq!(counter.load(Ordering::Acquire), 1);
     }
+    assert_eq!(counter.load(Ordering::Acquire), 0);
     assert!(
         rx.try_recv().is_err(),
-        "finished handle must not emit a drop event"
+        "abandoned handle must not emit a drop event"
     );
 }
 
@@ -2058,6 +1974,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2074,6 +1991,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -2099,6 +2017,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2106,6 +2025,7 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
 
     let error_a = {
@@ -2161,6 +2081,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
     let terminal_error: anyhow::Error = TerminalCallError::new(
@@ -2211,6 +2132,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
@@ -2218,6 +2140,7 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -2251,7 +2174,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     // `TerminalCallError`.
     let dropped_a = DroppedCall {
         start_idx: idx(5),
-        begin_index: idx(4),
+        entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
@@ -2261,7 +2184,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     };
     let dropped_b = DroppedCall {
         start_idx: idx(8),
-        begin_index: idx(8),
+        entity_admission: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
@@ -2297,6 +2220,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         observational_owner: None,
         invocation_id: None,
         entity_parent_start_index: None,
+        logical_key_position: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2312,6 +2236,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         observational_owner: None,
         invocation_id: None,
         entity_parent_start_index: None,
+        logical_key_position: None,
     };
 
     let scope = begun.finish(idx(12));
@@ -2327,6 +2252,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         observational_owner: Some(idx(7)),
         invocation_id: None,
         entity_parent_start_index: None,
+        logical_key_position: None,
     };
 
     let scope = begun.finish(idx(11));
@@ -2345,6 +2271,7 @@ fn call_execution_scope_owns_call_retry_point() {
         observational_owner: None,
         entity_parent_start_index: None,
         invocation_id: None,
+        logical_key_position: None,
     };
 
     assert_eq!(scope.retry_from, idx(42));

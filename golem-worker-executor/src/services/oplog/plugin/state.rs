@@ -168,7 +168,7 @@ impl ForwardingOplogState {
     async fn get_component_metadata(&self, status: &AgentStatusRecord) -> Option<Component> {
         match self
             .while_forwarding(self.components.get_metadata(
-                self.initial_worker_metadata.owned_agent_id().component_id(),
+                self.initial_worker_metadata.component_id,
                 Some(status.component_revision),
             ))
             .await?
@@ -200,12 +200,12 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
-                .ok();
         let plugin = match component_metadata
             .metadata
-            .owner_plugins(self.initial_worker_metadata.owner_kind, agent_type.as_ref())
+            .owner_plugins(
+                self.initial_worker_metadata.owner_kind,
+                self.initial_worker_metadata.agent_type_name.as_ref(),
+            )
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -351,6 +351,9 @@ impl ForwardingOplogState {
 
         let metadata = AgentMetadata {
             agent_id: self.initial_worker_metadata.agent_id.clone(),
+            component_id: self.initial_worker_metadata.component_id,
+            agent_type_name: self.initial_worker_metadata.agent_type_name.clone(),
+            canonical_key: self.initial_worker_metadata.canonical_key.clone(),
             owner_kind: self.initial_worker_metadata.owner_kind,
             env: self.initial_worker_metadata.env.clone(),
             environment_id: self.initial_worker_metadata.environment_id,
@@ -363,6 +366,7 @@ impl ForwardingOplogState {
             original_phantom_id: self.initial_worker_metadata.original_phantom_id,
             fingerprint: self.initial_worker_metadata.fingerprint,
             agent_mode: self.initial_worker_metadata.agent_mode,
+            create_request: self.initial_worker_metadata.create_request.clone(),
         };
 
         let Some(result) = self
@@ -756,13 +760,12 @@ impl ForwardingOplogState {
                 }
             }
 
-            let agent_type = ParsedAgentId::parse_agent_type_name(
-                &self.initial_worker_metadata.agent_id.agent_id,
-            )
-            .ok();
             let plugin = match component_metadata
                 .metadata
-                .owner_plugins(self.initial_worker_metadata.owner_kind, agent_type.as_ref())
+                .owner_plugins(
+                    self.initial_worker_metadata.owner_kind,
+                    self.initial_worker_metadata.agent_type_name.as_ref(),
+                )
                 .and_then(|plugins| {
                     plugins
                         .iter()

@@ -31,9 +31,9 @@ dependency must therefore be compatible with both the Rollup build and the Quick
    point. Use a bare package specifier for npm packages; the emitted `.js` suffix is required for
    local source imports, not package imports.
 
-3. Preserve the generated versions of `effect` and `@golemcloud/effect-golem`. They are
-   externalized from the application bundle and supplied by the SDK's base Wasm, so upgrading one
-   independently can create an incompatible or duplicate Effect runtime.
+3. Preserve the generated versions of `effect` and `@golemcloud/effect-golem`. The base Wasm
+   supplies the embedded Effect runtime; the component builder bundles and tree-shakes the Golem
+   SDK source. Upgrading independently can create a runtime mismatch.
 
 4. Build through Golem:
 
@@ -93,8 +93,11 @@ compatibility unless application source imports them into the component bundle.
 
 The generated build uses Rollup to resolve npm modules, convert CommonJS dependencies, support JSON
 imports, inline dynamic imports, and emit one ESM module. Ordinary third-party dependencies are
-bundled into that module. `effect`, `@golemcloud/effect-golem`, the SDK database subpaths, and Golem
-or WASI host modules remain external because the base Wasm provides them.
+bundled into that module, including `@golemcloud/effect-golem` and its database adapters. The
+template externalizes `effect`, `effect/http`, `agent-guest`, `node:sqlite`, and host modules with
+`golem:`, `wasi:`, or `wasm-rquickjs:` prefixes. The SDK component builder resolves other Effect
+subpaths against the embedded runtime while bundling and tree-shaking the SDK source. Do not
+externalize all SDK imports or add a second Effect runtime to the component.
 
 If the build fails, check the package's exports and prefer its ESM or runtime-compatible entry
 point. If the component fails only when invoked, look for a native addon, an unresolved Node

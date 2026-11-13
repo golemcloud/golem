@@ -28,6 +28,10 @@ mod wallet_recovery;
 
 const MARKER: &[u8] = b"marker:";
 
+// Tests change only this data byte when loading a fresh Store to model collection timing.
+#[used]
+static DISPOSAL_SCHEDULE: [u8; 25] = *b"tool-gc-schedule-marker:0";
+
 // Polls `call` once, lets the host run for `turns` turns, and drops `call` while it is pending.
 // Then it makes the host call of `checkpoint`, which a test can observe: the test knows that the
 // guest dropped `call` when the checkpoint call starts.
@@ -831,9 +835,53 @@ impl SecretPolicyProbe for SecretPolicyProbeImpl {
 
 struct MiddlewareProbeImpl;
 
+struct TrapIsolationMiddleware;
+
+impl TrapIsolationMiddleware {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[golem_rust::tool_middleware(name = "nested-trap-isolation", constructor = TrapIsolationMiddleware::new)]
+impl MiddlewareProbeMiddleware for TrapIsolationMiddleware {
+    async fn apply(
+        &self,
+        underlying: &MiddlewareProbeUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        if value == "parent-trap" {
+            let first = underlying
+                .start_apply("cascade-blocked(first)".to_string())
+                .await?;
+            let second = underlying
+                .start_apply("cascade-blocked(second)".to_string())
+                .await?;
+            wait_at_promise_checkpoint("parent-descendants-admitted").await;
+            drop((first, second));
+            panic!("deterministic middleware parent trap");
+        }
+        let failure = underlying
+            .apply("nested-permanent-trap".to_string())
+            .await
+            .expect_err("child must trap without destroying its middleware Store");
+        assert!(matches!(
+            failure,
+            golem_rust::tool::ToolInvokeError::InternalError(ref message)
+                if message.contains("unreachable")
+        ));
+        let first = underlying.apply("healthy-first".to_string()).await?;
+        let second = underlying.apply("healthy-second".to_string()).await?;
+        Ok(format!("handled[{first}|{second}]"))
+    }
+}
+
 #[tool_implementation]
 impl MiddlewareProbe for MiddlewareProbeImpl {
     async fn apply(&self, value: String) -> String {
+        if value == "nested-permanent-trap" {
+            panic!("deterministic nested child trap");
+        }
         if value.starts_with("early-child(")
             || value.starts_with("race-cancelled(")
             || value.starts_with("race-detached(")
@@ -1455,6 +1503,60 @@ async fn run_nested(
     })
 }
 
+// Inside this tool entity, holds a nested `marker-echo` call whose stdin is still open while the
+// entity waits for that stdin to close, and pauses at a crash checkpoint. The recovered entity
+// writes the rest of the input; the wait reports how the stdin really closed, and the output
+// carries that cause followed by the nested echo.
+async fn run_nested_open_stdin_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (writer, nested_stdin, closed) = tool_host::create_stdin();
+    let (nested_target, mut nested_stdout) = tool_host::create_output();
+    let nested = rpc.async_invoke_and_await(
+        &["run".to_string()],
+        raw_run_input("marker-echo"),
+        Some(nested_stdin),
+        Some(nested_target),
+        None,
+    );
+    writer
+        .write(b"open".to_vec())
+        .await
+        .expect("write nested stdin before the checkpoint");
+    let writes = async {
+        wait_at_crash_checkpoint(&(), "nested-stdin-closed-wait-pending").await;
+        writer
+            .write(b"-recovered".to_vec())
+            .await
+            .expect("write nested stdin after recovery");
+        writer.finish().await.expect("finish nested stdin");
+    };
+    let echoed = async move {
+        let mut output = Vec::new();
+        while let Some(item) = nested_stdout.next().await {
+            output.extend(item.expect("nested marker-echo stdout failed"));
+        }
+        output
+    };
+    let ((cause, ()), echoed, nested_result) =
+        ((closed.wait(), writes).join(), echoed, nested.get())
+            .join()
+            .await;
+    nested_result.expect("nested marker-echo result");
+    let mut output = format!("{cause:?}:").into_bytes();
+    output.extend(echoed);
+    let output_closed = !write_chunk(&mut stdout, output).await;
+    let _ = stdout.finish().await;
+    Ok(StreamSummary {
+        chunks_read: 0,
+        bytes_read: 0,
+        output_closed,
+    })
+}
+
 async fn run_nested_capable_parent_end(
     stdin: InputStream,
     mut stdout: OutputStream,
@@ -1710,6 +1812,30 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         principal: golem_rust::agentic::Principal,
     ) -> Result<StreamSummary, StreamingError> {
+        if let Some(arguments) = mode.strip_prefix("rdbms-drop-trap:") {
+            use golem_rust::bindings::golem::rdbms::postgres::DbConnection;
+            let (address, table) = arguments.split_once('|').expect("database and table");
+            let connection = DbConnection::open(address).expect("open postgres");
+            let transaction = connection.begin_transaction().expect("begin transaction");
+            transaction
+                .execute(
+                    &format!("INSERT INTO {table} VALUES (nextval('{table}_effects'))"),
+                    vec![],
+                )
+                .expect("insert uncommitted row");
+            let schedule = unsafe { std::ptr::read_volatile(&DISPOSAL_SCHEDULE[24]) };
+            let mut transaction = Some(transaction);
+            if schedule == b'1' {
+                drop(transaction.take());
+            }
+            connection
+                .query("SELECT 1", vec![])
+                .expect("intervening recorded query");
+            // The live trapped Store owns the handle until disposal. Replay can collect it
+            // earlier, but must retain the same rollback terminal through Store destruction.
+            std::mem::forget(transaction);
+            panic!("transaction drop followed by isolated tool trap");
+        }
         if mode.starts_with("http-") {
             return stream_through_http(mode, stdin, stdout).await;
         }
@@ -1744,6 +1870,9 @@ impl Streaming for StreamingImpl {
         }
         if mode == "nested" {
             return run_nested(stdin, stdout).await;
+        }
+        if mode == "nested-open-stdin-wait" {
+            return run_nested_open_stdin_wait(stdout).await;
         }
         if mode == "nested-capable-parent-end" {
             return run_nested_capable_parent_end(stdin, stdout).await;
@@ -1912,7 +2041,23 @@ impl Streaming for StreamingImpl {
                     .expect("fail stdout explicitly");
                 return Ok(summary);
             }
-            "writer-abandonment" => return Ok(summary),
+            "writer-abandonment" => {
+                // Exercise resource disposal as well as closing the ordinary stdout stream.
+                let (unconfigured, unread) = tool_host::create_output();
+                let schedule = unsafe { std::ptr::read_volatile(&DISPOSAL_SCHEDULE[24]) };
+                let mut unconfigured = Some(unconfigured);
+                if schedule == b'0' {
+                    drop(unconfigured.take());
+                }
+                let _ = wasi::random::random::get_random_u64();
+                if schedule == b'1' {
+                    drop(unconfigured.take());
+                }
+                // A resource that is never collected survives until Store teardown.
+                std::mem::forget(unconfigured);
+                std::mem::forget(unread);
+                return Ok(summary);
+            }
             "finish-after-reader-drop" => {
                 while stdin.next().await.is_some() {}
                 summary.output_closed = stdout.finish().await.is_err();
@@ -2063,11 +2208,20 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         mut diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError> {
-        if mode == "redaction-terminals" {
-            for byte in MARKER {
+        if mode == "redaction-terminals" || mode == "utf8-terminals" {
+            let (output, error): (&[u8], &[u8]) = if mode == "utf8-terminals" {
+                // Distinct 2/3/4-byte code points and incomplete EOF tails.
+                (
+                    b"stdout:\xc2\xa2\xe2\x82\xac\xf0\x9f\x98\x80\xe2",
+                    b"stderr:\xc3\xa9\xf0\x9f\xa6\x80\xf0\x9f",
+                )
+            } else {
+                (MARKER, b"stderr-visible")
+            };
+            for byte in output {
                 stdout.write(vec![*byte]).await.unwrap();
             }
-            for byte in b"stderr-visible" {
+            for byte in error {
                 diagnostics.write(vec![*byte]).await.unwrap();
             }
             stdout.finish().await.unwrap();
@@ -2239,6 +2393,23 @@ impl CapableStreaming for CapableStreamingImpl {
         } else if let Some(path) = path.strip_prefix("stdout-over:") {
             write_owner_file(path, &bytes).expect("capable tool must share the owner filesystem");
             vec![b'x'; 65]
+        } else if let Some(path) = path
+            .strip_prefix("permanent-trap:")
+            .or_else(|| path.strip_prefix("allocation-permanent-trap:"))
+        {
+            let allocation = if path == "/allocation-permanent-trap-state" {
+                Some(vec![0x5au8; 40 * 1024 * 1024])
+            } else {
+                None
+            };
+            std::hint::black_box(&allocation);
+            write_owner_file(path, &bytes).expect("persist state before permanent tool trap");
+            stdout
+                .write(bytes.clone())
+                .await
+                .expect("publish partial output before permanent tool trap");
+            announce_middleware_probe_effect("permanent-tool-trap").await;
+            panic!("deterministic capable streaming tool trap");
         } else if let Some(path) = path.strip_prefix("trap-once:") {
             write_owner_file(path, &bytes)
                 .expect("capable trap marker must share the owner filesystem");

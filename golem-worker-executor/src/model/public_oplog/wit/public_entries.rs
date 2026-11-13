@@ -66,6 +66,9 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             golem_common::model::agent::OwnerKind::EphemeralExternalTool => {
                 oplog::OwnerKind::EphemeralExternalTool
             }
+            golem_common::model::agent::OwnerKind::OplogProcessor => {
+                oplog::OwnerKind::OplogProcessor
+            }
         },
         agent_mode: match agent_mode {
             golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
@@ -160,6 +163,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     Exited { override (PublicOplogEntry::Exited(ExitedParams { timestamp })) => Ok(Self::Exited(timestamp.into())) }
     PendingAgentInvocation { record PendingAgentInvocationParams => PendingAgentInvocationParameters {
         timestamp: timestamp.into(),
+        not_before: not_before.map(Into::into),
         invocation: invocation.try_into()?,
     } }
     PendingUpdate { record PendingUpdateParams => PendingUpdateParameters {
@@ -402,6 +406,11 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     SnapshotConfirmed { record SnapshotConfirmedParams => SnapshotConfirmedParameters {
         timestamp: timestamp.into(),
         filesystem_snapshot: filesystem_snapshot,
+    } }
+    SpanClosed { record SpanClosedParams => SpanClosedParameters {
+        timestamp: timestamp.into(),
+        resource_start_index: resource_start_index.map(Into::into),
+        span_finished: public_span_finished_to_wit(span_finished),
     } }
 });
 

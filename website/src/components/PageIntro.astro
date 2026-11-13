@@ -1,0 +1,56 @@
+---
+interface Props {
+  eyebrow: string;
+  heading: string;
+  lead: string;
+  headingId: string;
+}
+
+const { eyebrow, heading, lead, headingId } = Astro.props;
+---
+
+<header class="page-intro">
+  <span class="eyebrow">{eyebrow}</span>
+  <h1 id={headingId}>{heading}</h1>
+  <p class="lede">{lead}</p>
+</header>
+
+<style>
+  .page-intro {
+    max-width: 760px;
+    padding-top: 3.5rem;
+    margin-bottom: 2rem;
+  }
+  .eyebrow {
+    display: block;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.8rem;
+  }
+  h1 {
+    font-size: clamp(2.25rem, 5vw, 3.5rem);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.1;
+    margin-bottom: 1rem;
+    text-wrap: balance;
+  }
+  .lede {
+    max-width: 620px;
+    color: var(--text-secondary);
+    font-size: 1.15rem;
+    line-height: 1.65;
+  }
+  @media (max-width: 600px) {
+    .page-intro {
+      padding-top: 2.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .lede {
+      font-size: 1.02rem;
+    }
+  }
+</style>

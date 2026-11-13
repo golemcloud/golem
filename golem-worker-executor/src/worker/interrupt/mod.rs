@@ -274,7 +274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
     ) -> Option<Receiver<()>> {
         let instance_guard = self.instance.lock().await;
-        if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
+        if let Some(running) = instance_guard.running_runtime() {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
         drop(instance_guard);
@@ -319,8 +319,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     reacquire_permits,
                     UnloadRequest::ordinary(unload_reason),
                 )?;
-                let was_running =
-                    matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
+                let was_running = lifecycle.running_runtime().is_some();
                 return Some((pending, was_running));
             }
             drop(lifecycle);
@@ -348,41 +347,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         self.set_interrupting_internal(interrupt_kind, false, unload_reason, false)
             .await
-    }
-    /// Requests replay resumption. Success acknowledges enqueue, not replay completion.
-    /// The invocation loop owns processing and monthly admission.
-    pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
-        let lifecycle = self.lock_non_stopping_worker().await;
-        lifecycle.ensure_not_deleting()?;
-        match &*lifecycle {
-            WorkerInstance::Running(running) => {
-                running.resume_replay_pending.store(true, Ordering::Release);
-                if running.sender.send(WorkerCommand::ResumeReplay).is_err() {
-                    running
-                        .resume_replay_pending
-                        .store(false, Ordering::Release);
-                    return Err(WorkerExecutorError::runtime(
-                        "worker stopped before accepting the resume request",
-                    ));
-                }
-                Ok(())
-            }
-            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
-                Err(WorkerExecutorError::invalid_request(
-                    "Explicit resume is not supported for uninitialized workers",
-                ))
-            }
-            WorkerInstance::CleanupFailed(error) => Err(error.clone()),
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
-                Err(WorkerExecutorError::invalid_request(
-                    "Explicit resume is not supported for deleting workers",
-                ))
-            }
-            WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => Err(
-                WorkerExecutorError::runtime("Worker initialization has not completed"),
-            ),
-            WorkerInstance::Stopping(_) => panic!("impossible"),
-        }
     }
     /// A receiver of whether a terminal interrupt request waits for this worker.
     pub fn terminal_interrupt(&self) -> tokio::sync::watch::Receiver<bool> {
@@ -465,6 +429,9 @@ impl PendingWorkerInterrupt {
             RetryDecision::ReacquirePermits
         } else {
             match self.kind {
+                InterruptKind::EntityCancellation => {
+                    unreachable!("entity cancellation cannot interrupt the owner")
+                }
                 InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
                 InterruptKind::Interrupt(_) | InterruptKind::ShardLost => RetryDecision::None,
                 InterruptKind::Suspend(timestamp) => RetryDecision::TryStop(timestamp),

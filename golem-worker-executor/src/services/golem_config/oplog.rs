@@ -23,6 +23,10 @@ pub struct OplogConfig {
     pub max_operations_before_commit: u64,
     pub max_operations_before_commit_ephemeral: u64,
     pub max_payload_size: usize,
+    /// Maximum number of batches of entries that the primary oplog committed by itself, on its
+    /// commit threshold, kept in memory until the status fold reads them. The fold reads the
+    /// batches beyond it back from storage.
+    pub max_retained_auto_commit_batches: usize,
     pub indexed_storage_layers: usize,
     pub blob_storage_layers: usize,
     pub entry_count_limit: u64,
@@ -60,6 +64,11 @@ impl SafeDisplay for OplogConfig {
             self.max_operations_before_commit_ephemeral
         );
         let _ = writeln!(&mut result, "max payload size: {}", self.max_payload_size);
+        let _ = writeln!(
+            &mut result,
+            "max retained auto-commit batches: {}",
+            self.max_retained_auto_commit_batches
+        );
         let _ = writeln!(
             &mut result,
             "indexed storage layers: {}",
@@ -199,6 +208,7 @@ impl Default for OplogConfig {
             max_operations_before_commit: 128,
             max_operations_before_commit_ephemeral: 1024,
             max_payload_size: 64 * 1024,
+            max_retained_auto_commit_batches: 32,
             indexed_storage_layers: 2,
             blob_storage_layers: 1,
             entry_count_limit: 1024,

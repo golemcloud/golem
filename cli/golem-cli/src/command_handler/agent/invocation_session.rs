@@ -29,8 +29,8 @@ use anyhow::{Context as _, anyhow, bail};
 use golem_client::invocation_session::{
     AdmittedInput, DeliveryTracker, InputReplayBuffer, InvocationSession,
     InvocationSessionRequestProvider, InvocationSessionSender, InvocationSessionStateObserver,
-    InvocationSessionStateSnapshot, ReplayableInput, ServerFrame, SessionTransportError,
-    StableStreamIdentity, send_replayable_input,
+    InvocationSessionStateSnapshot, ReconnectPolicy, ReplayableInput, ServerFrame,
+    SessionTransportError, StableStreamIdentity, send_replayable_input,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -41,7 +41,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
 };
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
+    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -229,7 +229,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentId,
+    pub parsed_agent_id: ParsedAgentKey,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -446,6 +446,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         result = InvocationSession::open(
             request_provider,
             connector,
+            ReconnectPolicy::Unlimited,
             initial_state,
             pending_operation_is_retry,
             checkpoint_observer,

@@ -372,13 +372,13 @@ test "tool snapshot accessors cannot mutate later command lookup" {
 }
 
 ///|
-extern "wasm" fn set_reflection_tool_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+extern "wasm" fn set_reflection_tool_host_mode(mode : Int32) = "golem:test" "set-tool-host-mode"
 
 ///|
 extern "wasm" fn reset_reflection_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
 
 ///|
-extern "wasm" fn reflection_resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+extern "wasm" fn reflection_resource_drop_count(kind : Int32) -> Int32 = "golem:test" "resource-drop-count"
 
 ///|
 fn run_reflection_tool_async(body : async () -> Unit) -> Unit raise {
@@ -475,7 +475,7 @@ test "tool constraint references use flag defaults and nested values" {
 }
 
 ///|
-fn bash_tool(repeatables? : Bool = false) -> ToolType raise {
+fn bash_tool(repeatables~ : Bool = false) -> ToolType raise {
   let doc : @toolCommon.Doc = { summary: "", description: "", examples: [], }
   let encoder = @model.GraphEncoder::new([])
   let string = encoder.encode_type(@model.schema_type(String))
@@ -606,13 +606,13 @@ fn bash_tool(repeatables? : Bool = false) -> ToolType raise {
 
 ///|
 fn bash_input(
-  script? : String = "echo ok",
-  cwd? : String = "",
-  timeout? : UInt = 600U,
-  label? : String? = None,
-  shell? : String? = Some("bash"),
-  login? : Bool = false,
-  verbose? : UInt = 0U,
+  script~ : String = "echo ok",
+  cwd~ : String = "",
+  timeout~ : UInt32 = 600U,
+  label~ : String? = None,
+  shell~ : String? = Some("bash"),
+  login~ : Bool = false,
+  verbose~ : UInt32 = 0U,
 ) -> @model.SchemaValue {
   Record([
     String(script),

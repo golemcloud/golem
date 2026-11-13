@@ -14,6 +14,7 @@
 
 pub mod election_watch;
 pub mod error;
+pub mod etcd_clients;
 pub mod etcd_connection;
 pub mod etcd_retry;
 pub mod healthcheck;

@@ -461,6 +461,42 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// The execution-begun bit is set by a `Restart` and survives later folds without one.
+#[test]
+fn restart_sets_ephemeral_execution_begun_permanently() {
+    let retry = RetryConfig::default();
+    let baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(2),
+        ..AgentStatusRecord::default()
+    };
+    let before = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        baseline,
+        BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(!before.ephemeral_execution_begun);
+
+    let begun = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        before,
+        BTreeMap::from([(OplogIndex::from_u64(4), OplogEntry::restart())]),
+        &retry,
+    )
+    .unwrap();
+    assert!(begun.ephemeral_execution_begun);
+
+    let later = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        begun,
+        BTreeMap::from([(OplogIndex::from_u64(5), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(later.ephemeral_execution_begun);
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }
@@ -4110,6 +4146,9 @@ impl TestCaseBuilder {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
                         agent_id: owned_agent_id.agent_id(),
+                        component_id: owned_agent_id.agent_id.component_id,
+                        agent_type_name: None,
+                        canonical_key: None,
                         owner_kind: OwnerKind::ComponentAgent,
                         agent_mode: AgentMode::Durable,
                         component_revision,
@@ -4123,6 +4162,13 @@ impl TestCaseBuilder {
                         local_agent_config: Vec::new(),
                         original_phantom_id: None,
                         instance_id,
+                        create_request: golem_common::model::oplog::CreateRequest::new(
+                            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                            None,
+                            golem_common::model::agent::Principal::anonymous(),
+                            &golem_common::model::invocation_context::InvocationContextStack::fresh(
+                            ),
+                        ),
                     },
                 )),
                 expected_status: status.clone(),
@@ -4425,6 +4471,7 @@ impl TestCaseBuilder {
         let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
         let entry = OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key,
             OplogPayload::Inline(Box::new(invocation_payload)),
             invocation_context.trace_id.clone(),
@@ -4441,6 +4488,7 @@ impl TestCaseBuilder {
         self.add(entry.clone(), move |mut status| {
             status.pending_invocations.push(PendingInvocationRef {
                 timestamp: entry.timestamp(),
+                not_before: None,
                 oplog_index: oplog_idx,
                 idempotency_key: ref_idempotency_key.clone(),
                 manual_update_target_revision,
@@ -4455,6 +4503,11 @@ impl TestCaseBuilder {
             status
                 .pending_invocations
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
+            if status.current_idempotency_key.as_ref() != Some(&idempotency_key) {
+                status
+                    .invocation_results
+                    .insert(idempotency_key.clone(), status.oplog_idx);
+            }
             status.cancelled_idempotency_key = Some(idempotency_key);
             status
         })
@@ -6277,6 +6330,176 @@ fn polymorphic_transfer_confirmation_matches_source_and_installed_child_ids() {
 }
 
 #[test]
+fn source_card_transfer_records_fold_across_a_cached_baseline() {
+    use golem_common::model::Timestamp;
+    use golem_common::model::card::{
+        AgentCardHolder, CardHolder, SourceCardTransferConfirmed, SourceCardTransferRecords,
+        SourceCardTransferStarted, SourceCardTransferState, StoredCard,
+    };
+
+    let holder = |name: &str| {
+        CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        })
+    };
+    let source_holder = holder("source");
+    let target_holder = holder("target");
+    let source_card_id = golem_common::model::card::CardId::new();
+    let child = StoredCard::from(test_card(golem_common::model::card::CardId::new()));
+    let unrelated = StoredCard::from(test_card(golem_common::model::card::CardId::new()));
+    let transfer_id = uuid::Uuid::new_v4();
+    let derived = |card: &StoredCard, transfer_id| OplogEntry::CardDerived {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        card: Box::new(card.clone()),
+        wallet_generation: 0,
+        transfer_id,
+    };
+    let queued = OplogEntry::card_event_queued(
+        None,
+        Box::new(QueuedCardEvent::transfer_started_with_source(
+            transfer_id,
+            source_card_id,
+            child.clone(),
+            target_holder.clone(),
+        )),
+    );
+
+    // The baseline ends between the derived child and the queued retry payload, so the tail
+    // fold must attach the later records to the transfer that the baseline already holds.
+    let baseline = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        BTreeMap::from([
+            (OplogIndex::from_u64(1), derived(&unrelated, None)),
+            (OplogIndex::from_u64(2), derived(&child, Some(transfer_id))),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(baseline.source_card_transfers.iter().count(), 1);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        baseline,
+        BTreeMap::from([
+            (OplogIndex::from_u64(3), queued.clone()),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::card_transfer_started(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    source_holder.clone(),
+                    target_holder.clone(),
+                    1,
+                ),
+            ),
+            // An equal second record of a kind is not a conflict.
+            (OplogIndex::from_u64(5), queued),
+            (
+                OplogIndex::from_u64(6),
+                OplogEntry::card_transfer_confirmed(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    child.card_id(),
+                    target_holder.clone(),
+                ),
+            ),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status.source_card_transfers.get(&transfer_id),
+        Some(&SourceCardTransferState::Recorded(
+            SourceCardTransferRecords {
+                derived_card: Some(child.clone()),
+                queued: Some(golem_common::base_model::oplog::QueuedCardEventTransfer {
+                    transfer_id,
+                    card_id: source_card_id,
+                    card: Some(child.clone()),
+                    target_holder: target_holder.clone(),
+                }),
+                started: Some(SourceCardTransferStarted {
+                    card_id: source_card_id,
+                    source_holder,
+                    target_holder: target_holder.clone(),
+                }),
+                confirmed: Some(SourceCardTransferConfirmed {
+                    source_card_id,
+                    installed_card_id: child.card_id(),
+                    target_holder,
+                }),
+            }
+        ))
+    );
+    assert_eq!(status.source_card_transfers.iter().count(), 1);
+    assert!(status.pending_card_events.is_empty());
+}
+
+#[test]
+fn source_card_transfer_with_two_distinct_records_of_a_kind_stays_in_conflict() {
+    use golem_common::model::card::{AgentCardHolder, CardHolder, SourceCardTransferState};
+
+    let holder = |name: &str| {
+        CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        })
+    };
+    let target_holder = holder("target");
+    let source_card_id = golem_common::model::card::CardId::new();
+    let card = test_card(source_card_id);
+    let transfer_id = uuid::Uuid::new_v4();
+    let queued = |target_holder: &CardHolder| {
+        OplogEntry::card_event_queued(
+            None,
+            Box::new(QueuedCardEvent::transfer_started_with_source(
+                transfer_id,
+                source_card_id,
+                card.clone(),
+                target_holder.clone(),
+            )),
+        )
+    };
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        BTreeMap::from([
+            (OplogIndex::from_u64(1), queued(&target_holder)),
+            (OplogIndex::from_u64(2), queued(&holder("other-target"))),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_transfer_started(
+                    None,
+                    transfer_id,
+                    source_card_id,
+                    holder("source"),
+                    target_holder,
+                    1,
+                ),
+            ),
+        ]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status.source_card_transfers.get(&transfer_id),
+        Some(&SourceCardTransferState::Conflict)
+    );
+}
+
+#[test]
 fn polymorphic_transfer_confirmation_with_conflicting_source_keeps_pending_intent() {
     use golem_common::model::card::{AgentCardHolder, CardHolder};
 
@@ -7266,6 +7489,7 @@ mod region_fold {
     pub(super) fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
@@ -7803,6 +8027,7 @@ mod invocation_payload_decodes {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload: OplogPayload::Inline(payload),
                 trace_id,
@@ -7810,6 +8035,7 @@ mod invocation_payload_decodes {
                 invocation_context,
             } => OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload: OplogPayload::SerializedInline {
                     bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
@@ -7826,6 +8052,7 @@ mod invocation_payload_decodes {
     fn method_invocation() -> OplogEntry {
         serialized(OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
+            not_before: None,
             idempotency_key: IdempotencyKey::fresh(),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "a".to_string(),
@@ -7855,6 +8082,47 @@ mod invocation_payload_decodes {
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(0));
         fold();
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.get())
+    }
+
+    #[test]
+    fn pending_invocation_deadline_survives_serialization_and_incremental_status_fold() {
+        let deadline = Timestamp::from(123_456);
+        let mut scheduled = method_invocation();
+        let OplogEntry::PendingAgentInvocation { not_before, .. } = &mut scheduled else {
+            unreachable!()
+        };
+        *not_before = Some(deadline);
+        assert!(scheduled.is_hint());
+
+        let bytes = golem_common::serialization::serialize(&scheduled).unwrap();
+        let scheduled: OplogEntry = golem_common::serialization::deserialize(&bytes).unwrap();
+        let entries = BTreeMap::from([(idx(2), scheduled), (idx(3), method_invocation())]);
+        let fold = |initial, entries| {
+            super::super::update_status_with_new_entries(
+                AgentMode::Durable,
+                initial,
+                entries,
+                &RetryConfig::default(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let full = fold(AgentStatusRecord::default(), entries.clone());
+        let prefix = fold(
+            AgentStatusRecord::default(),
+            BTreeMap::from([(idx(2), entries[&idx(2)].clone())]),
+        );
+        let bytes = golem_common::serialization::serialize(&prefix).unwrap();
+        let restored = golem_common::serialization::deserialize(&bytes).unwrap();
+        let incremental = fold(
+            restored,
+            BTreeMap::from([(idx(3), entries[&idx(3)].clone())]),
+        );
+
+        assert_eq!(full.pending_invocations, incremental.pending_invocations);
+        assert_eq!(full.pending_invocations.len(), 2);
+        assert_eq!(full.pending_invocations[0].not_before, Some(deadline));
+        assert_eq!(full.pending_invocations[1].not_before, None);
     }
 
     #[test]

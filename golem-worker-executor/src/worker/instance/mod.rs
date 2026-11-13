@@ -19,6 +19,7 @@ use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
 use super::tasks::RuntimeAppendTasks;
 use super::{ObservedPrimaryStore, Worker};
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -38,18 +39,20 @@ use golem_common::model::entity::{
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+#[cfg(any(test, feature = "test-utils"))]
+use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContext, AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
 fn resource_capacity_trap(
     agent_mode: golem_common::model::agent::AgentMode,
@@ -102,6 +105,10 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
         self.settle();
         self.store.take().unwrap()
     }
+
+    fn into_data(self) -> ObservedPrimaryStore<Ctx> {
+        self.into_inner().map(Store::into_data)
+    }
 }
 
 impl<Ctx: crate::workerctx::FuelManagement + 'static> Deref for StoreFuelGuard<Ctx> {
@@ -141,7 +148,7 @@ pub struct OwnerExecution {
     primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
     tool_operations: Arc<OwnerToolOperations>,
     deferred_tool_admission: Arc<DeferredAdmissionTable>,
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
 
@@ -150,20 +157,20 @@ struct OwnerReplayGeneration {
     wallet: Arc<OwnerWallet>,
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 struct ClockNowGate {
     entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
     abort_as_restart: AtomicBool,
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct ClockNowGateHandle {
     entered: tokio::sync::oneshot::Receiver<()>,
     gate: Arc<ClockNowGate>,
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl ClockNowGateHandle {
     pub async fn entered(&mut self) {
         (&mut self.entered)
@@ -181,7 +188,7 @@ impl ClockNowGateHandle {
     }
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for ClockNowGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
@@ -212,7 +219,7 @@ impl OwnerExecution {
             tool_operations: OwnerToolOperations::new(),
             primary_tail_work,
             deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
-            #[cfg(feature = "test-utils")]
+            #[cfg(any(test, feature = "test-utils"))]
             monotonic_clock_start_gate: Mutex::new(None),
         }
     }
@@ -305,6 +312,7 @@ impl OwnerExecution {
         self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
+        let status = self.commit.repaired_status().await?;
         let mut generation = self.generation.write().await;
         wallet.activate_interest().await;
         if let Some(old) = generation.as_ref() {
@@ -321,6 +329,10 @@ impl OwnerExecution {
         )
         .await
         .inspect_err(|_| wallet.retire())?;
+        replay
+            .install_entity_replay_progress(&status, horizon)
+            .await
+            .inspect_err(|_| wallet.retire())?;
         *generation = Some(OwnerReplayGeneration { replay, wallet });
         *self.append_tasks.lock().unwrap() = append_tasks;
         // Observation state follows the existing replay generation. Old Store callbacks retain
@@ -330,7 +342,7 @@ impl OwnerExecution {
     }
 
     /// Claims a staged entity boundary through the production replay claim path.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub async fn test_claim_entity_boundary(
         &self,
         parent: OplogIndex,
@@ -358,7 +370,7 @@ impl OwnerExecution {
     }
 
     /// Settles a staged claim with the production terminal resolver, retaining its fence.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub async fn test_settle_entity_boundary(
         &self,
         mut handle: crate::durable_host::TestEntityBoundaryClaim,
@@ -376,7 +388,7 @@ impl OwnerExecution {
         Ok(())
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn replay(&self) -> Result<ReplayState, WorkerExecutorError> {
         self.generation
             .read()
@@ -411,13 +423,13 @@ impl OwnerExecution {
             .ok_or_else(|| WorkerExecutorError::runtime("owner replay generation is not installed"))
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.is_live_published())
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_pending_card_derivation(
         &self,
@@ -439,13 +451,13 @@ impl OwnerExecution {
         ))
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.test_is_settling())
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub async fn test_wait_for_tool_owner_failure(
         &self,
@@ -454,7 +466,7 @@ impl OwnerExecution {
         self.tool_operation_metadata()
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     pub fn test_gate_next_monotonic_clock_start(&self) -> ClockNowGateHandle {
         let (entered_tx, entered) = tokio::sync::oneshot::channel();
@@ -467,7 +479,7 @@ impl OwnerExecution {
         ClockNowGateHandle { entered, gate }
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn test_after_monotonic_clock_start(&self) -> Result<(), InterruptKind> {
         let gate = self.monotonic_clock_start_gate.lock().unwrap().take();
         if let Some(gate) = gate {
@@ -497,10 +509,7 @@ impl OwnerExecution {
     }
 
     pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
-        self.commit
-            .commit_and_update_state(level)
-            .await
-            .map(|(index, _)| index)
+        self.commit.commit_and_update_state(level).await
     }
 }
 
@@ -769,27 +778,51 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
-        let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
+        let guest_imports = store.data().durable_ctx().guest_imports.clone();
+        let runtime = super::suspension::RuntimeStore::with_guest_imports(
+            self.owner_execution.suspension(),
+            guest_imports.clone(),
+        );
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
         store
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
-        if store.data().fuel_metering_enabled() {
-            store.call_hook(|mut store, boundary| {
-                let current = store.get_fuel()?;
+        let fuel_metering = store.data().fuel_metering_enabled();
+        store.call_hook(move |mut store, boundary| {
+            // Wasmtime reports the import's runtime activity right after `CallingHost`, before
+            // the import's host code runs; see `GuestImportNumbering`.
+            match boundary {
+                CallHook::CallingHost => {
+                    let custom_invocation_scope = store
+                        .as_context()
+                        .guest_task_context::<CustomInvocationContext>()?
+                        .as_deref()
+                        .and_then(CustomInvocationContext::current);
+                    guest_imports.number_next_import(
+                        store
+                            .data()
+                            .durable_ctx()
+                            .guest_import_numbering(custom_invocation_scope),
+                    );
+                }
+                CallHook::ReturningFromHost => guest_imports.host_call_returned(),
+                CallHook::CallingWasm | CallHook::ReturningFromWasm => {}
+            }
+            if fuel_metering {
+                let current = store.as_context().get_fuel()?;
                 if store
                     .data_mut()
                     .observe_fuel_execution(current, boundary.exiting_host())
                 {
                     store.set_epoch_deadline(0);
                 }
-                Ok(())
-            });
-        }
+            }
+            Ok(())
+        });
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
+            let current_level = store.as_context().get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
             if let Err(error) = data_mut.ensure_fuel(current_level) {
                 warn!(error = ?error, "Resource capacity check failed");
@@ -918,19 +951,38 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
     }
 
     pub async fn instantiate_entity(&self) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        self.instantiate_entity_with_scope(None).await
+        let (filesystem, _) = self.create_entity_filesystem()?;
+        self.instantiate_entity_with_scope(None, filesystem).await
     }
 
     pub async fn instantiate_entity_scoped(
         &self,
         scope: &EntityInvocationScope,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        self.instantiate_entity_with_scope(Some(scope)).await
+        let (filesystem, _) = self.create_entity_filesystem()?;
+        self.instantiate_entity_with_scope(Some(scope), filesystem)
+            .await
     }
 
-    async fn instantiate_entity_with_scope(
+    pub(crate) fn create_entity_filesystem(
+        &self,
+    ) -> Result<
+        (
+            FilesystemGenerationHandle,
+            crate::services::agent_filesystem::FilesystemInvocation,
+        ),
+        WorkerExecutorError,
+    > {
+        Ok(self
+            .owner_resources
+            .filesystem_generation_handle()?
+            .for_invocation())
+    }
+
+    pub(crate) async fn instantiate_entity_with_scope(
         &self,
         scope: Option<&EntityInvocationScope>,
+        filesystem: FilesystemGenerationHandle,
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
         if !matches!(&self.runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -981,6 +1033,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     .expect("Entity instance host must pin its owner component metadata"),
                 authority_wallet,
                 scope.map(|scope| scope.invocation_id().start_index()),
+                filesystem,
             )
             .await?;
         if let Some(scope) = scope {
@@ -1032,7 +1085,17 @@ pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
         self,
         instance: &'a Instance,
         store: &'a mut Store<Ctx>,
-    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        super::entity_invocation::EntityBodyOutcome<R>,
+                        WorkerExecutorError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 }
 
 pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
@@ -1040,6 +1103,7 @@ pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
 impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
 where
     Ctx: WorkerCtx,
+    R: Send + 'static,
     F: Send + 'static,
     F: for<'a> FnOnce(
         &'a Instance,
@@ -1051,12 +1115,45 @@ where
         self,
         instance: &'a Instance,
         store: &'a mut Store<Ctx>,
-    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
-        self.0(instance, store)
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        super::entity_invocation::EntityBodyOutcome<R>,
+                        WorkerExecutorError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.0(instance, store)
+                .await
+                .map(super::entity_invocation::EntityBodyOutcome::Completed)
+        })
     }
 }
 
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
+    pub(crate) fn set_entity_body_finalization(
+        &mut self,
+        finalization: super::entity_invocation::EntityBodyFinalization,
+    ) {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .entity_body_finalization = finalization;
+    }
+
+    pub(crate) fn into_cleanup_context(self) -> ObservedPrimaryStore<Ctx> {
+        self.store
+            .data()
+            .durable_ctx()
+            .tool_trap_disposal
+            .store(true, Ordering::Release);
+        self.store.into_data()
+    }
+
     pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
@@ -1065,22 +1162,48 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         &mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
-            .await
+        let errors = crate::durable_host::tool::prepare_tool_parent_end(
+            &mut self.store.as_context_mut(),
+            parent,
+        )
+        .await;
+        self.classify_finalization_errors(errors).await
+    }
+
+    async fn classify_finalization_errors(
+        &mut self,
+        errors: Vec<anyhow::Error>,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::durability::native_finalization_failures(
+            self.store.data().durable_ctx(),
+            errors,
+        )
+        .await
     }
 
     pub(crate) async fn settle_tool_children(
         mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        let result = crate::durable_host::tool::settle_tool_children(
+        let errors = crate::durable_host::tool::settle_tool_children(
             &mut self.store.as_context_mut(),
             parent,
         )
         .await;
+        let result = self.classify_finalization_errors(errors).await;
         // A trapped Store is disposed of, not driven to normal guest EXIT.
         drop(self);
         result
+    }
+
+    pub(crate) fn filesystem_invocation(
+        &self,
+    ) -> Option<crate::services::agent_filesystem::FilesystemInvocation> {
+        self.store
+            .data()
+            .durable_ctx()
+            .filesystem_generation_handle()
+            .invocation()
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
@@ -1113,7 +1236,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                     scope,
                     &registration,
                     ClosureEntityInvocationBody(invoke),
-                ) => result,
+                ) => result?.completed(),
                 _ = cancellation.cancelled() => {
                     Err(WorkerExecutorError::runtime("Entity body was cancelled"))
                 }
@@ -1134,7 +1257,10 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> (Result<R, WorkerExecutorError>, Self)
+    ) -> (
+        Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>,
+        Self,
+    )
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1150,7 +1276,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1164,7 +1290,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> Result<super::entity_invocation::EntityBodyOutcome<R>, WorkerExecutorError>
     where
         R: Send + 'static,
         F: EntityInvocationBody<Ctx, R>,
@@ -1219,7 +1345,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
             hook.before_completion(execution_mode).await;
         }
         if execution_mode == InvocationExecutionMode::ReplayingCompleted
-            && let Ok(Ok(response)) = &mut result
+            && let Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) =
+                &mut result
             && let Some(response) = (response as &mut dyn std::any::Any)
                 .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
             )
@@ -1227,7 +1354,16 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         {
             hook.mutate_completed_reconstruction_response(response);
         }
-        let cleanup = self.finish_scoped_invocation();
+        // A trapped or cancelled body keeps its scope through original-context host-only cleanup.
+        let retained_cleanup = matches!(
+            &result,
+            Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled))
+        ) || matches!(&result, Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) if super::entity_invocation::is_trapped_tool_response(response));
+        let cleanup = if retained_cleanup {
+            Ok(())
+        } else {
+            self.finish_scoped_invocation()
+        };
 
         match result {
             Ok(result) => {
@@ -1446,6 +1582,60 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn trapped_store_into_data_retains_original_context_after_runtime_disposal()
+    -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init unreachable) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
+        let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+            &engine,
+            FuelTestContext {
+                borrowed: true,
+                returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
+            },
+            None,
+        ));
+        store.as_context_mut().set_runtime_observer(runtime)?;
+        store.set_fuel(123)?;
+        store.set_epoch_deadline(1);
+        let error = Linker::new(&engine)
+            .instantiate_pre(&component)?
+            .instantiate_async(&mut *store)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+        let remaining = store.get_fuel()?;
+        let mut context = store.into_data();
+        assert!(
+            observer.upgrade().is_none(),
+            "the runtime must already be destroyed"
+        );
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&context.returned_at, &returned_at));
+        assert_eq!(returned_at.load(Ordering::Acquire), remaining);
+        context.borrowed = false;
+        drop(context);
         assert!(dropped.load(Ordering::Acquire));
         Ok(())
     }

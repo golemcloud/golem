@@ -157,7 +157,8 @@ object CodegenPipeline {
           )
         ),
         configFields =
-          t.configFields.map(cf => AgentSurfaceIR.ConfigFieldSurface(path = cf.path, typeExpr = cf.typeExpr))
+          t.configFields.map(cf => AgentSurfaceIR.ConfigFieldSurface(path = cf.path, typeExpr = cf.typeExpr)),
+        sourceScopes = t.sourceScopes.map(scope => AgentSurfaceIR.SourceScopeSurface(scope.packageRef, scope.imports))
       )
     }.toList
 }

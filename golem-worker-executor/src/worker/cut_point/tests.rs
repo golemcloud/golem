@@ -279,6 +279,7 @@ fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_
             idx(2),
             OplogEntry::PendingAgentInvocation {
                 timestamp: Timestamp::now_utc(),
+                not_before: None,
                 idempotency_key: golem_common::model::IdempotencyKey::fresh(),
                 payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
                     golem_common::model::AgentInvocationPayload::ManualUpdate { target_revision },
@@ -307,6 +308,7 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
     let update = snapshot_update(2);
     let admission = OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         idempotency_key: golem_common::model::IdempotencyKey::fresh(),
         payload: OplogPayload::Inline(Box::new(
             golem_common::model::AgentInvocationPayload::ManualUpdate {
@@ -415,6 +417,29 @@ async fn durable_call_cuts_use_the_retained_prefix_not_future_completion() {
         for cut in [2, 4, 5, 7, 8] {
             assert_eq!(scan(&entries, cut, 8, &deleted(vec![])).await, None);
         }
+    }
+}
+
+#[test]
+async fn span_closed_on_either_side_of_the_cut_is_accepted() {
+    let span_closed = OplogEntry::SpanClosed {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        resource_start_index: Some(idx(2)),
+        span_finished: golem_common::model::oplog::SpanFinished {
+            span_id: golem_common::model::invocation_context::SpanId::generate(),
+            finished_at: Timestamp::now_utc(),
+            outcome: golem_common::model::oplog::SpanOutcome::Completed,
+        },
+    };
+    let entries = HashMap::from([
+        (3, OplogEntry::end(idx(2), None, false, None, None)),
+        (5, span_closed),
+    ]);
+    // The hint closes the span of the call at 2; it pairs with nothing, so a cut just before
+    // or just after it (or between the call and the hint) is clean.
+    for cut in [3, 4, 5, 6] {
+        assert_eq!(scan(&entries, cut, 6, &deleted(vec![])).await, None);
     }
 }
 

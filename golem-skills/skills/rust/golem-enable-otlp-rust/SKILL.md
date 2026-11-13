@@ -16,7 +16,7 @@ components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.5.0"
+        version: "1.5.8"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
@@ -84,33 +84,35 @@ debug!("This is a debug log entry");
 
 ### Metrics
 
-When `metrics` is included in `signals`, the following metrics are exported:
+When `metrics` is included in `signals`, exported metrics include the following non-exhaustive list:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `golem_invocation_count` | Counter | Number of agent method invocations |
-| `golem_invocation_duration_ns` | Counter | Invocation duration |
-| `golem_invocation_fuel_consumed` | Counter | Fuel consumed by invocations |
-| `golem_invocation_pending_count` | Counter | Number of pending invocations |
-| `golem_host_call_count` | Counter | Number of internal host calls |
-| `golem_log_count` | Counter | Number of log entries emitted |
-| `golem_memory_initial_bytes` | Gauge | Initially allocated memory |
-| `golem_memory_total_bytes` | Gauge | Total allocated memory |
-| `golem_memory_growth_bytes` | Counter | Memory growth since start |
-| `golem_component_size_bytes` | Gauge | Component size in bytes |
-| `golem_error_count` | Counter | Number of recorded errors |
-| `golem_interruption_count` | Counter | Number of interrupt requests |
-| `golem_exit_count` | Counter | Number of process exit signals |
-| `golem_restart_count` | Counter | Number of times a fresh state was created |
-| `golem_resources_created` | Counter | Number of internal resources created |
-| `golem_resources_dropped` | Counter | Number of internal resources dropped |
-| `golem_resources_active` | Gauge | Number of active internal resources |
-| `golem_update_success_count` | Counter | Number of successful updates |
-| `golem_update_failure_count` | Counter | Number of failed updates |
-| `golem_transaction_committed` | Counter | Number of committed database transactions |
-| `golem_transaction_rolled_back` | Counter | Number of rolled back database transactions |
-| `golem_snapshot_size_bytes` | Counter | Snapshot size in bytes |
-| `golem_oplog_processor_lag` | Gauge | Oplog processor delivery lag |
+| `golem.invocation.count` | Counter | Number of agent method invocations |
+| `golem.invocation.duration_ns` | Counter | Invocation duration |
+| `golem.invocation.fuel_consumed` | Counter | Fuel consumed by invocations |
+| `golem.invocation.pending_count` | Counter | Number of invocation requests queued (not current queue depth) |
+| `golem.host_call.count` | Counter | Number of internal host calls |
+| `golem.log.count` | Counter | Number of log entries emitted |
+| `golem.memory.initial_bytes` | Gauge | Initially allocated memory |
+| `golem.memory.total_bytes` | Gauge | Total allocated memory |
+| `golem.memory.growth_bytes` | Counter | Memory growth since start |
+| `golem.component.size_bytes` | Gauge | Component size in bytes |
+| `golem.error.count` | Counter | Number of recorded errors |
+| `golem.interruption.count` | Counter | Number of interrupt requests |
+| `golem.exit.count` | Counter | Number of process exit signals |
+| `golem.restart.count` | Counter | Number of times a fresh state was created |
+| `golem.resources.created` | Counter | Number of internal resources created |
+| `golem.resources.dropped` | Counter | Number of internal resources dropped |
+| `golem.resources.active` | Gauge | Number of active internal resources |
+| `golem.update.success_count` | Counter | Number of successful updates |
+| `golem.update.failure_count` | Counter | Number of failed updates |
+| `golem.transaction.committed` | Counter | Number of committed remote transaction events |
+| `golem.transaction.rolled_back` | Counter | Number of rolled back remote transaction events |
+| `golem.snapshot.size_bytes` | Counter | Snapshot size in bytes |
+| `golem.oplog_processor.lag` | Gauge | Oplog processor delivery lag |
+
+These are emitted OTLP names. A backend such as Prometheus may normalize dots to underscores and add suffixes; use that backend's mapping when writing queries.
 
 Each metric includes `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version` attributes.
 
@@ -143,21 +145,24 @@ Configure the plugin with `endpoint: "http://localhost:4318"` to use this stack.
 
 Use presets to vary the endpoint across environments:
 
+Use the environment selector `app-env:production`. A plain `production` custom preset can become
+the default custom preset when it is the only one, applying the production endpoint in every environment.
+
 ```yaml
 components:
   my-app:service:
     plugins:
       - name: golem-otlp-exporter
-        version: "1.5.0"
+        version: "1.5.8"
         parameters:
           endpoint: "http://localhost:4318"
           signals: "traces,logs,metrics"
     presets:
-      production:
+      app-env:production:
         pluginsMergeMode: replace
         plugins:
           - name: golem-otlp-exporter
-            version: "1.5.0"
+            version: "1.5.8"
             parameters:
               endpoint: "https://otel.prod.example.com:4318"
               headers: "x-api-key={{ OTLP_API_KEY }}"

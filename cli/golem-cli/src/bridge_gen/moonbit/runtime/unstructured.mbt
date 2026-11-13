@@ -13,23 +13,6 @@
 // limitations under the License.
 
 ///|
-/// Wrapper for the rich `text` schema scalar: a string with an optional BCP-47
-/// language code. Carries the language metadata the bare `String` mapping would
-/// drop.
-pub(all) struct Text {
-  text : String
-  language : String?
-} derive(Debug, Eq)
-
-///|
-/// Wrapper for the rich `binary` schema scalar: bytes with an optional MIME
-/// type. Carries the MIME metadata the bare `Bytes` mapping would drop.
-pub(all) struct Binary {
-  bytes : Bytes
-  mime_type : String?
-} derive(Debug, Eq)
-
-///|
 /// Ergonomic wrapper for the role-marked unstructured-text schema type
 /// (`variant { inline: text<restrictions>, url: url }`). A value is either
 /// inline text (with an optional language code) or a URL reference.
@@ -37,6 +20,12 @@ pub(all) enum UnstructuredText {
   TextInline(String, String?)
   TextUrl(String)
 } derive(Debug, Eq)
+
+///|
+pub extend UnstructuredText with Debug::{to_repr}
+
+///|
+pub extend UnstructuredText with Eq::{equal, not_equal}
 
 ///|
 /// Ergonomic wrapper for the role-marked unstructured-binary schema type
@@ -47,13 +36,22 @@ pub(all) enum UnstructuredBinary {
   BinaryUrl(String)
 } derive(Debug, Eq)
 
+///|
+pub extend UnstructuredBinary with Debug::{to_repr}
+
+///|
+pub extend UnstructuredBinary with Eq::{equal, not_equal}
+
 // Variant case indices of the canonical role-marked unstructured wrappers:
 // `variant { inline, url }`.
 
 ///|
-pub fn unstructured_text_to_schema_value(input : UnstructuredText) -> SchemaValue {
+pub fn unstructured_text_to_schema_value(
+  input : UnstructuredText,
+) -> SchemaValue {
   match input {
-    TextInline(value, language) => VariantValue(0, Some(TextValue(value, language)))
+    TextInline(value, language) =>
+      VariantValue(0, Some(TextValue(value, language)))
     TextUrl(url) => VariantValue(1, Some(UrlValue(url)))
   }
 }
@@ -86,7 +84,9 @@ pub fn unstructured_text_from_schema_value(
 }
 
 ///|
-pub fn unstructured_binary_to_schema_value(input : UnstructuredBinary) -> SchemaValue {
+pub fn unstructured_binary_to_schema_value(
+  input : UnstructuredBinary,
+) -> SchemaValue {
   match input {
     BinaryInline(bytes, mime_type) =>
       VariantValue(0, Some(BinaryValue(bytes, mime_type)))

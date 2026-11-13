@@ -567,8 +567,6 @@ impl ComponentService for FakeComponentService {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![],
                 provision_configs,
             ),
@@ -747,8 +745,12 @@ impl Oplog for InMemoryOplog {
 
     async fn commit(
         &self,
-        _level: CommitLevel,
+        level: CommitLevel,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        // This oplog never commits by itself, so there is nothing to report.
+        if level == CommitLevel::ReportOnly {
+            return Ok(BTreeMap::new());
+        }
         if let Some(fence) = self.latched_fence.get() {
             return Err(OplogError::Fenced(fence.clone()));
         }
@@ -862,6 +864,11 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+            "TestPlugin".into(),
+        )),
+        canonical_key: Some(agent_id.agent_id.clone()),
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
@@ -875,6 +882,12 @@ fn test_worker_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     };
 
     let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
@@ -1417,6 +1430,29 @@ async fn test_forwarding_oplog(
     )
     .await;
     (oplog, inner, recording_plugin, status_writer)
+}
+
+/// A report commits nothing, so it must not start the plugin flush either: that flush commits the
+/// buffered entries of the worker. A commit count of zero puts every commit over the limit, as a
+/// flush that skipped its reset leaves it.
+#[test]
+async fn report_only_commit_does_not_start_a_plugin_flush() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (oplog, inner, recording_plugin, _status_writer) =
+        test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 0).await;
+
+    let index = oplog.add(grow_memory(1)).await.unwrap();
+    assert!(
+        oplog
+            .commit(CommitLevel::ReportOnly)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(recording_plugin.sends().await.is_empty());
+
+    let committed = inner.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(committed.keys().copied().collect::<Vec<_>>(), vec![index]);
 }
 
 #[test]

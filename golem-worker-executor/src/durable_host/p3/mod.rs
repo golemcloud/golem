@@ -51,7 +51,7 @@ use wasmtime::component::{HasData, Linker};
 use wasmtime_wasi::cli::{WasiCliCtxView, WasiCliView};
 use wasmtime_wasi::clocks::{WasiClocksCtxView, WasiClocksView};
 use wasmtime_wasi::sockets::{WasiSocketsCtxView, WasiSocketsView};
-use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpView};
+use wasmtime_wasi_http::{WasiHttpCtxView, WasiHttpView};
 
 mod cli;
 mod clocks;
@@ -221,8 +221,7 @@ where
         request.clone(),
         targets,
     )
-    .await
-    .map_err(wasmtime::Error::from)?;
+    .await?;
     let denied = decision
         .as_ref()
         .and_then(|decision| decision.as_ref().err())

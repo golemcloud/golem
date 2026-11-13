@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::identity::parse_agent_id;
 use crate::agentic::{
     agent_registry, get_principal, get_resolved_agent, register_initialized_agent,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
@@ -199,6 +199,10 @@ impl Guest for AgentRuntime {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
+        // Snapshot load reads the agent ID through libc's environment cache. Populate
+        // it during recorded initialization too, before any snapshot can be saved.
+        let _ = std::env::vars_os().count();
+
         let agent_type_name = AgentTypeName(agent_type.clone());
         if !agent_registry::has_registered_agent_type(&agent_type_name) {
             let agent_types = agent_registry::get_all_agent_types();
@@ -285,10 +289,6 @@ impl SaveSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-        // Loading a snapshot initializes libc's environment cache when reading the agent ID.
-        // Initialize it before saving too, so suffix replay makes the same host calls.
-        let _ = std::env::vars_os().count();
-
         with_agent_instance_async(|resolved_agent| async move {
             let snapshot_data = resolved_agent
                 .agent
