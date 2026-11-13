@@ -122,6 +122,7 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::Promise { agent_id, .. } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
+            KeyValueStorageNamespace::PromiseRemovals => "kv-promise_removals".to_string(),
             KeyValueStorageNamespace::Schedule => "kv-schedule.db".to_string(),
             KeyValueStorageNamespace::UserDefined { .. } => "kv-user-defined.db".to_string(),
         }

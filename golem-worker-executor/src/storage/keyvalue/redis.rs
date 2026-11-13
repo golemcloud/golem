@@ -132,6 +132,7 @@ impl RedisKeyValueStorage {
                 "promises:{}:{fingerprint}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::PromiseRemovals => None,
             KeyValueStorageNamespace::Schedule => None,
             KeyValueStorageNamespace::UserDefined {
                 environment_id,

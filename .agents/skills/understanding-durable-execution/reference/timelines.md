@@ -575,11 +575,23 @@ the revert gives `OplogFenced`, deletes nothing, and the caller retries on the n
 
 ```
 remove: cached status, indexes, stream sessions    (derived state first)
+remove: PromiseRemovals[shard] += (id, F)            member names F's promise namespace
+          ✕ crash here leaves the member; the oplog of F stays, so recovery keeps F's promises
 remove: oplog delete                                 oplog of fingerprint F gone
           after_oplog_delete(F) → delete_all_snapshots(AgentSnapshots::agent(id, F))
+          ✕ crash here leaves F's promises and the member (id, F)
+remove: promises of F, then PromiseRemovals[shard] -= (id, F)
           ✕ crash here leaves the RunningWorkers member (id, F)
 remove: RunningWorkers member (id, F)
 ```
+
+A crash or a storage failure between the oplog delete and the promise removal leaves F's promises
+and the member `(id, F)` in `PromiseRemovals`. A later delete does not reach the executor, because
+the public delete of a missing agent answers not found. The next shard assignment of the shard, at
+start or on reassignment, runs `remove_promises_of_deleted_incarnations_in_shards`: it removes F's
+promises and the member. The drain is best-effort: a member that it fails to remove only logs a
+warning and waits for the next assignment or restart. A member whose incarnation still has its
+oplog stays until that incarnation's delete removes it.
 
 A crash between the oplog delete and the member removal leaves the member. The next recovery scan
 finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the

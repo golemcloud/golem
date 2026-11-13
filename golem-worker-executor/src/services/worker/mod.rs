@@ -59,7 +59,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 pub(crate) const DERIVED_CACHE_EXPIRY: std::time::Duration =
     std::time::Duration::from_secs(7 * 24 * 60 * 60);
@@ -169,6 +169,13 @@ struct RunningWorker {
     fingerprint: AgentFingerprint,
 }
 
+/// An agent incarnation whose promises a delete removes.
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+struct PromiseRemoval {
+    owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
+}
+
 /// Requests the delete of the filesystem snapshots of a dead incarnation of an agent, whose
 /// recovery-index member is stale.
 pub type OnStale<'a> = &'a (dyn Fn(&OwnedAgentId, AgentFingerprint) + Send + Sync);
@@ -222,6 +229,17 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
         after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
+    ) -> Result<(), WorkerExecutorError>;
+
+    /// Removes the promises of each deleted incarnation that a delete in one of this executor's
+    /// shards added to the promise removals and did not finish removing, because the executor
+    /// stopped between the oplog delete and the promise delete. An incarnation whose oplog still
+    /// exists keeps its promises and its member. Shard-assignment recovery calls this, so the
+    /// next owner of the shard finishes the promise removal of a delete that a crash stopped. A
+    /// member that fails is logged and kept for the next call; only a failure to read a shard's
+    /// members is returned.
+    async fn remove_promises_of_deleted_incarnations_in_shards(
+        &self,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Runs `operation` while no [`remove`](Self::remove) of the agent runs on this executor:
@@ -633,15 +651,74 @@ impl DefaultWorkerService {
         fingerprint.0.to_string()
     }
 
+    fn promise_removals_in_shard_key(shard_id: &ShardId) -> String {
+        format!("worker:promise_removals_in_shard:{shard_id}")
+    }
+
+    /// Removes the promise namespace of the incarnation, then its member of the promise removals.
+    async fn remove_promises(
+        &self,
+        shard_key: &str,
+        removal: &PromiseRemoval,
+    ) -> Result<(), WorkerExecutorError> {
+        self.remove_all_fields(
+            "remove_promises",
+            &removal.owned_agent_id,
+            crate::services::promise::promise_namespace_of(
+                &removal.owned_agent_id.agent_id,
+                removal.fingerprint,
+            ),
+            "promises",
+        )
+        .await?;
+        self.key_value_storage
+            .with_entity("worker", "remove_promise_removal", "promise_removal")
+            .remove_from_set(
+                KeyValueStorageNamespace::PromiseRemovals,
+                shard_key,
+                removal,
+            )
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to remove the promise removal of {}: {err}",
+                    removal.owned_agent_id
+                ))
+            })
+    }
+
+    /// Removes the promises and the member of the incarnation when its oplog is gone, and keeps
+    /// both when its oplog still exists, because its delete stopped before the oplog delete.
+    async fn remove_promises_if_deleted(
+        &self,
+        shard_key: &str,
+        removal: &PromiseRemoval,
+    ) -> Result<(), WorkerExecutorError> {
+        let agent_id = &removal.owned_agent_id.agent_id;
+        // The same order as a delete: the oplog lifecycle guard, then the gate.
+        let _lifecycle = self.oplog_service.lock_lifecycle(agent_id).await;
+        let lifecycle_gate = self.lifecycle_gate(agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.write().await;
+        let live = self
+            .read_agent_identity_for_deletion(&removal.owned_agent_id, AgentMode::Durable)
+            .await?
+            .map(|identity| identity.fingerprint);
+        if live == Some(removal.fingerprint) {
+            return Ok(());
+        }
+        self.remove_promises(shard_key, removal).await
+    }
+
     async fn remove_all_fields(
         &self,
+        api_name: &'static str,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
         description: &str,
     ) -> Result<(), WorkerExecutorError> {
         let fields = self
             .key_value_storage
-            .with("worker", "remove")
+            .with("worker", api_name)
             .keys(namespace.clone())
             .await
             .map_err(|err| {
@@ -651,7 +728,7 @@ impl DefaultWorkerService {
             })?;
         if !fields.is_empty() {
             self.key_value_storage
-                .with("worker", "remove")
+                .with("worker", api_name)
                 .del_many(namespace, fields.into())
                 .await
                 .map_err(|err| {

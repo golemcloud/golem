@@ -88,6 +88,12 @@ impl WorkerService for RecordingWorkerService {
         Ok(())
     }
 
+    async fn remove_promises_of_deleted_incarnations_in_shards(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn run_excluding_removal<'a>(
         &self,
         _agent_id: &AgentId,

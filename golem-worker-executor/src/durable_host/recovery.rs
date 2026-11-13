@@ -727,6 +727,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             }
         }
 
+        // No agent needs this to resume, so a failure leaves the promise removals for the next
+        // assignment instead of failing this one.
+        if let Err(error) = this
+            .worker_service()
+            .remove_promises_of_deleted_incarnations_in_shards()
+            .await
+        {
+            warn!(%error, "Failed to remove the promises of deleted agent incarnations");
+        }
+
         Ok(())
     }
 }

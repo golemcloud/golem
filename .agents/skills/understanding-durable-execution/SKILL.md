@@ -133,8 +133,17 @@ indexes of the deleted incarnation; an ID of the deleted incarnation finds no en
 `PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
 Delete removes the deleted incarnation's promise namespace after its oplog, because promises
 cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
-promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
-holds the agent's lifecycle gate exclusively, and ordinary promise completion
+promises. Before the oplog delete, `remove` adds the incarnation `(agent, fingerprint)` to the
+shard-keyed set `KeyValueStorageNamespace::PromiseRemovals`, and after the promise delete it removes
+the member. A crash or a storage failure between the oplog delete and the promise delete leaves the
+member, and no later delete reaches the executor: the public delete of a missing agent answers not
+found. So every shard assignment, at start and on reassignment, drains the members of its shards
+(`WorkerService::remove_promises_of_deleted_incarnations_in_shards`). Under the agent's oplog
+lifecycle guard and gate, it removes the promises and the member of each incarnation whose oplog is
+gone, and keeps the member of an incarnation whose oplog still exists, because its delete stopped
+before the oplog delete. The drain is best-effort: a member that it cannot remove, or that a delete
+leaves while the assignment does not change, waits for the next assignment or restart.
+`WorkerService::remove` holds the agent's lifecycle gate exclusively, and ordinary promise completion
 (`PromiseService::complete`) makes its existence check and its result write while it holds the
 gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
 removal, which removes its row too, or finds the promise gone; it cannot write a row after the

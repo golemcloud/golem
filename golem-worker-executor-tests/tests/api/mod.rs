@@ -4124,6 +4124,133 @@ async fn promise_completion_racing_agent_deletion_leaves_no_row_of_the_deleted_i
     Ok(())
 }
 
+/// A delete that stops right after its oplog delete, as an executor crash can stop it, leaves the
+/// deleted incarnation's promises behind. After a restart nothing remembers the deletion, the
+/// agent no longer exists, and the public delete of a missing agent never reaches the executor.
+/// The restarted executor's shard-assignment recovery must still remove those promises.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn restart_after_a_stopped_delete_removes_the_promises_it_left(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::promise::promise_namespace_of;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::storage::keyvalue::{
+        KeyValueStorage, KeyValueStorageError, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let storage: Arc<Mutex<Option<Arc<dyn KeyValueStorage + Send + Sync>>>> = Arc::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                let storage = storage.clone();
+                move |inner| {
+                    *storage.lock().unwrap() = Some(inner.clone());
+                    Arc::new(FaultInjectingKeyValueStorage::new(inner, faults.clone()))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let storage = storage
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the executor uses key-value storage");
+    let keys = |namespace: KeyValueStorageNamespace| {
+        let storage = storage.clone();
+        async move {
+            storage
+                .with("test", "keys")
+                .keys(namespace)
+                .await
+                .map_err(|e| anyhow!(e))
+        }
+    };
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "restart-after-a-stopped-delete");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let promise_id = promise_id_from_value(
+        &executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?,
+    );
+    let promises = promise_namespace_of(&worker_id, promise_id.fingerprint);
+
+    // The member is recorded before the oplog delete, so a failure to record it keeps the agent.
+    faults.fail(
+        "record_promise_removal",
+        1,
+        KeyValueStorageError::other("injected failure to record the promise removal"),
+    );
+    assert!(executor.delete_worker(&worker_id).await.is_err());
+    assert_eq!(faults.calls("record_promise_removal"), 1);
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_some(),
+        "a delete that cannot record the promise removal keeps the oplog"
+    );
+
+    // The promise removal runs right after the oplog delete; failing it stops the attempt there.
+    faults.fail(
+        "remove_promises",
+        1,
+        KeyValueStorageError::other("injected stop after the oplog delete"),
+    );
+    assert!(executor.delete_worker(&worker_id).await.is_err());
+    assert_eq!(faults.calls("remove_promises"), 1);
+    assert_eq!(
+        keys(promises.clone()).await?.len(),
+        1,
+        "the stopped attempt leaves the promise behind"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none(),
+        "the stopped attempt has already deleted the oplog"
+    );
+    drop(executor);
+
+    // The start returns after the recovery of the initial shard assignment.
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        keys(promises).await?,
+        Vec::<String>::new(),
+        "the restarted executor must remove the promises of the stopped delete"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn p3_promise_suspend_survives_executor_restart(

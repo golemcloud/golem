@@ -2167,8 +2167,10 @@ impl OplogService for FakeOplogService {
         unimplemented!()
     }
 
-    async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
-        unreachable!()
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        crate::services::oplog::OpenOplogs::new("fake-oplog-service")
+            .lock_lifecycle(agent_id)
+            .await
     }
 
     fn set_stream_session_index(&self, _index: Arc<StreamSessionIndexService>) {}
@@ -3007,6 +3009,106 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         .unwrap();
     assert_eq!(oplog_service.delete_attempts.load(Ordering::Relaxed), 2);
     assert!(promise_keys().await.is_empty());
+}
+
+#[test]
+async fn promise_removals_remove_the_promises_of_deleted_incarnations_only() {
+    // The live incarnation is found in either mode, as a delete finds it.
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let owned_agent_id = test_owned_agent_id(&format!("promise-removals-{mode:?}"));
+        // `stopped` was deleted, but its delete stopped after its oplog delete. `live` still has its
+        // oplog: its own delete stopped before its oplog delete and left its member behind.
+        let stopped = AgentFingerprint(Uuid::from_u128(1));
+        let live = AgentFingerprint(Uuid::from_u128(2));
+        let oplog_service = Arc::new(FakeOplogService {
+            initial_entries: HashMap::from([(
+                (owned_agent_id.clone(), mode),
+                test_create_entry(&owned_agent_id, mode, live),
+            )]),
+            hide_identity_after_delete_attempt: true,
+            ..FakeOplogService::default()
+        });
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let service = test_worker_service(storage.clone(), oplog_service);
+        let shard_key = DefaultWorkerService::promise_removals_in_shard_key(
+            &ShardId::from_agent_id(&owned_agent_id.agent_id, 1),
+        );
+        let removal = |fingerprint| PromiseRemoval {
+            owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
+        };
+        for fingerprint in [stopped, live] {
+            storage
+                .with_entity("test", "seed_promise", "entry")
+                .set_raw(
+                    crate::services::promise::promise_namespace_of(
+                        &owned_agent_id.agent_id,
+                        fingerprint,
+                    ),
+                    "promise",
+                    b"value",
+                )
+                .await
+                .unwrap();
+            storage
+                .with_entity("test", "seed_promise_removal", "entry")
+                .add_to_set(
+                    KeyValueStorageNamespace::PromiseRemovals,
+                    &shard_key,
+                    &removal(fingerprint),
+                )
+                .await
+                .unwrap();
+        }
+        let promise_keys = |fingerprint| {
+            let storage = storage.clone();
+            let agent_id = owned_agent_id.agent_id.clone();
+            async move {
+                storage
+                    .with("test", "read_promises")
+                    .keys(crate::services::promise::promise_namespace_of(
+                        &agent_id,
+                        fingerprint,
+                    ))
+                    .await
+                    .unwrap()
+            }
+        };
+        let removals = || async {
+            storage
+                .with_entity("test", "read_promise_removals", "entry")
+                .members_of_set::<PromiseRemoval>(
+                    KeyValueStorageNamespace::PromiseRemovals,
+                    &shard_key,
+                )
+                .await
+                .unwrap()
+        };
+
+        service
+            .remove_promises_of_deleted_incarnations_in_shards()
+            .await
+            .unwrap();
+        assert!(promise_keys(stopped).await.is_empty());
+        assert_eq!(promise_keys(live).await, vec!["promise".to_string()]);
+        assert_eq!(removals().await, vec![removal(live)]);
+
+        service
+            .remove(
+                &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                    .lock_lifecycle(&owned_agent_id.agent_id)
+                    .await,
+                &owned_agent_id,
+                mode,
+                live,
+                None,
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert!(promise_keys(live).await.is_empty());
+        assert!(removals().await.is_empty());
+    }
 }
 
 #[test]

@@ -995,6 +995,10 @@ pub enum KeyValueStorageNamespace {
         agent_id: AgentId,
         fingerprint: AgentFingerprint,
     },
+    /// Shard-keyed sets of the agent incarnations whose promises a delete removes. Delete adds
+    /// the member before the oplog delete and removes it after the promise namespace, so a crash
+    /// between the two leaves the member, and the next shard assignment removes the promises.
+    PromiseRemovals,
     Schedule,
     UserDefined {
         environment_id: EnvironmentId,

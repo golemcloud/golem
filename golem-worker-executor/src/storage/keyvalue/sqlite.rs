@@ -122,6 +122,7 @@ impl SqliteKeyValueStorage {
                 agent_id,
                 fingerprint,
             } => format!("promises:{}:{fingerprint}", agent_id.to_redis_key()),
+            KeyValueStorageNamespace::PromiseRemovals => "promise-removals".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
                 environment_id,

@@ -347,6 +347,7 @@ impl WorkerService for DefaultWorkerService {
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
         self.remove_all_fields(
+            "remove",
             owned_agent_id,
             Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
             "invocation-result index",
@@ -365,6 +366,35 @@ impl WorkerService for DefaultWorkerService {
             .await
             .map_err(WorkerExecutorError::runtime)?;
 
+        let shard_assignment = self
+            .shard_service
+            .current_assignment()
+            .expect("sharding assigment is not ready");
+        let shard_id =
+            ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
+        let promise_removal = PromiseRemoval {
+            owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
+        };
+        let promise_removals_key = Self::promise_removals_in_shard_key(&shard_id);
+
+        // The member names this incarnation's promise namespace while the oplog that names it
+        // goes away, so shard-assignment recovery still finds the promises of a delete that a
+        // crash stops after the oplog delete.
+        self.key_value_storage
+            .with_entity("worker", "record_promise_removal", "promise_removal")
+            .add_to_set(
+                KeyValueStorageNamespace::PromiseRemovals,
+                &promise_removals_key,
+                &promise_removal,
+            )
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to record the promise removal of {owned_agent_id}: {err}"
+                ))
+            })?;
+
         // Only this incarnation's oplog: a recreated agent's is not the deleting one's to remove.
         if delete_current_oplog {
             self.oplog_service
@@ -374,24 +404,11 @@ impl WorkerService for DefaultWorkerService {
         after_oplog_delete(fingerprint);
 
         // Promises live only in key-value storage and nothing rebuilds them, so they go after the
-        // oplog: a delete refused by the fence keeps the agent with its promises. A failure before
-        // this point leaves rows only under the deleted fingerprint, which no promise ID of
-        // another incarnation reaches. An in-process retry removes them; after a crash they stay
-        // orphaned. Ordinary promise completion checks and writes under the lifecycle gate this
-        // holds (`run_excluding_removal`), so no completion on this executor adds a row after it.
-        self.remove_all_fields(
-            owned_agent_id,
-            crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint),
-            "promises",
-        )
-        .await?;
-
-        let shard_assignment = self
-            .shard_service
-            .current_assignment()
-            .expect("sharding assigment is not ready");
-        let shard_id =
-            ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
+        // oplog: a delete refused by the fence keeps the agent with its promises. Ordinary promise
+        // completion checks and writes under the lifecycle gate this holds
+        // (`run_excluding_removal`), so no completion on this executor adds a row after it.
+        self.remove_promises(&promise_removals_key, &promise_removal)
+            .await?;
 
         self.remove_running_worker_member(
             &Self::running_in_shard_key(&shard_id),
@@ -401,6 +418,40 @@ impl WorkerService for DefaultWorkerService {
             },
         )
         .await
+    }
+
+    async fn remove_promises_of_deleted_incarnations_in_shards(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        record_worker_call("remove_promises_of_deleted_incarnations");
+        let Some(shard_assignment) = self.shard_service.try_get_current_assignment() else {
+            return Ok(());
+        };
+        for shard_id in shard_assignment.shard_ids() {
+            let key = Self::promise_removals_in_shard_key(&shard_id);
+            let removals: Vec<PromiseRemoval> = self
+                .key_value_storage
+                .with_entity("worker", "read_promise_removals", "promise_removal")
+                .members_of_set(KeyValueStorageNamespace::PromiseRemovals, &key)
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to read the promise removals of {shard_id}: {err}"
+                    ))
+                })?;
+            for removal in removals {
+                // One member that fails stays for the next assignment and does not stop the rest.
+                if let Err(error) = self.remove_promises_if_deleted(&key, &removal).await {
+                    warn!(
+                        agent_id = %removal.owned_agent_id,
+                        fingerprint = %removal.fingerprint.0,
+                        %error,
+                        "Failed to remove the promises of a deleted agent incarnation"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn run_excluding_removal<'a>(
