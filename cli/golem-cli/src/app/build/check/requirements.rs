@@ -28,6 +28,13 @@ impl VersionRange {
             max_exclusive: None,
         }
     }
+
+    pub const fn between(min_inclusive: &'static str, max_exclusive: &'static str) -> Self {
+        Self {
+            min_inclusive: Some(min_inclusive),
+            max_exclusive: Some(max_exclusive),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,7 +81,10 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "rustc",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least(versions::build_tool::RUSTC_MIN)),
+        version_range: Some(VersionRange::between(
+            versions::build_tool::RUSTC_MIN,
+            versions::build_tool::RUSTC_MAX_EXCLUSIVE,
+        )),
         install_hint: "Install Rust 1.99.1 with rustup and pin it in the application with rust-toolchain.toml; Golem 1.6 does not support agents built with Rust 1.100 or newer (example: rustup toolchain install 1.99.1 --target wasm32-wasip2)",
         severity: ToolRequirementSeverity::Required,
     },
