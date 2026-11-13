@@ -41,7 +41,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
 };
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
+    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -229,7 +229,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentId,
+    pub parsed_agent_id: ParsedAgentKey,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,

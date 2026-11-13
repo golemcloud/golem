@@ -118,8 +118,9 @@ struct Invocation {
 fn parse_args() -> Result<Invocation, Box<dyn std::error::Error>> {
     const USAGE: &str =
         "usage: cooperative [--status-file PATH] [--time-limit SECONDS] [--calls] SCRIPT...";
-    // WASI's exit status only says success or failure, so the shell's own status is written to a
-    // file for the harness. It is an argument, not a variable, so scripts never see it.
+    // Before Rust 1.100, WASI's exit status only says success or failure, so the shell's own
+    // status is written to a file for the harness. It is an argument, not a variable, so scripts
+    // never see it.
     let mut args = std::env::args().skip(1).peekable();
     let mut status_file = None;
     if args.peek().map(String::as_str) == Some("--status-file") {
@@ -173,7 +174,8 @@ where
     Ok((stdout, stderr, status))
 }
 
-/// Writes the output and the status report, and exits with WASI's success or failure.
+/// Writes the output and the status report, and exits with the status. Before Rust 1.100, WASI
+/// reports only whether the status is zero.
 fn finish(invocation: &Invocation, stdout: &[u8], stderr: &[u8], status: u8) -> ! {
     let written = std::io::stdout()
         .write_all(stdout)

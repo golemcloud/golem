@@ -70,7 +70,7 @@ impl AgentMetadata {
     pub fn parse_agent_id(
         &self,
         metadata: &crate::model::component_metadata::ComponentMetadata,
-    ) -> Result<super::ParsedAgentId, String> {
+    ) -> Result<super::ParsedAgentKey, String> {
         let name = self
             .agent_type_name
             .as_ref()
@@ -78,7 +78,7 @@ impl AgentMetadata {
         let agent_type = metadata
             .find_agent_type_by_name_ref(name)
             .ok_or_else(|| format!("Agent type not found: {name}"))?;
-        super::ParsedAgentId::parse(&self.agent_id.agent_id, agent_type)
+        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
     }
 }
 

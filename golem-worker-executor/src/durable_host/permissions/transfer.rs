@@ -17,7 +17,7 @@ use super::{
     AgentCardHolder, AgentId, AgentPermissionMonomorphizationContext, CardHolder, CardId,
     CardManagedBy, CardManagedByRuntimeDerived, CardTransferData, DurableWorkerCtx,
     GolemPermissionsInstallTransfer, HasWorker, HostRequest, HostRequestPermissionCardTransfer,
-    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, ParsedAgentId,
+    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, ParsedAgentKey,
     PendingCardEventRef, PendingSourceCardTransferRetry, PendingSourceTransferProgress,
     PermissionCardDeriveError, QueuedCardEvent, QueuedCardEventTransfer, RecipientOwnerContext,
     RecipientPattern, RuntimeCardCreation, SourceTransferProgress, StoredCard, Timestamp, Uuid,
@@ -114,7 +114,7 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
             .agent_type_name
             .clone()
             .ok_or_else(|| "Owner has no agent type".to_string()),
-        None => ParsedAgentId::parse_agent_type_name(&target.agent_id),
+        None => ParsedAgentKey::parse_agent_type_name(&target.agent_id),
     }
     .map_err(|error| {
         permissions_types::PermissionError::InvalidRecipient(format!(
