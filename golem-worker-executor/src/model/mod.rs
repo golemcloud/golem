@@ -435,6 +435,17 @@ impl TrapType {
                     _ if error.root_cause().is::<wasmtime::ThrownException>() => {
                         make_error(AgentError::DeterministicTrap(format!("{error:#}")))
                     }
+                    _ if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>() => {
+                        use crate::services::linear_memory::MemoryGrowthFailure;
+                        make_error(match error.downcast_ref::<MemoryGrowthFailure>() {
+                            Some(MemoryGrowthFailure::ExceededMemoryLimit) => {
+                                AgentError::ExceededMemoryLimit
+                            }
+                            Some(MemoryGrowthFailure::OutOfMemory) | None => {
+                                AgentError::OutOfMemory
+                            }
+                        })
+                    }
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
                         Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => {
                             make_error(AgentError::OutOfMemory)

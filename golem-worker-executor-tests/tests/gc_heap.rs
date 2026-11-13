@@ -314,6 +314,43 @@ async fn gc_allocation_past_the_memory_limit_fails_like_linear_memory(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn gc_collection_reuses_released_memory_at_the_agent_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("gc_heap")] gc_heap: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_memory_limit(deps, &context, (32 * MIB) as usize).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, gc_heap)
+        .store()
+        .await?;
+    let agent = agent_id!("GcHeapAgent", "released-memory");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    for _ in 0..200 {
+        let retained = executor
+            .invoke_and_await_agent(&component, &agent, "retain", data_value!(8u32 * 1024))
+            .await?;
+        assert_eq!(retained.into_typed::<u32>()?, 8 * 1024);
+        executor
+            .invoke_and_await_agent(&component, &agent, "release", data_value!())
+            .await?;
+    }
+    let retained = executor
+        .invoke_and_await_agent(&component, &agent, "retained_kib", data_value!())
+        .await?;
+    assert_eq!(retained.into_typed::<u32>()?, 0);
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert!(errors(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?).is_empty());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

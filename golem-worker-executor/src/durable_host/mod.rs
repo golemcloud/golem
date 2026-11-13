@@ -304,7 +304,7 @@ use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContext, AsContextMut, Store};
+use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
@@ -432,10 +432,11 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
         let ctx = self.durable_worker_ctx();
         async move {
-            ctx.admit_unshared_memory_growth(current, desired, maximum)
+            ctx.admit_unshared_memory_growth(current, desired, maximum, kind)
                 .await
         }
     }

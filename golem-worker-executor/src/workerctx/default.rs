@@ -765,7 +765,8 @@ impl ResourceLimiterAsync for Context {
             self.get_max_memory()
         );
 
-        self.durable_memory_growing(current, desired, maximum).await
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {

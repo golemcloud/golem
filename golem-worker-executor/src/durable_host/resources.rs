@@ -82,6 +82,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> wasmtime::Result<bool> {
         admit_memory_growth(
             &self.linear_memory,
@@ -89,6 +90,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             current,
             desired,
             maximum,
+            kind,
             |delta| self.try_acquire_linear_memory(delta),
         )
         .await
@@ -105,22 +107,36 @@ pub(crate) async fn admit_memory_growth<F, Fut>(
     current: usize,
     desired: usize,
     maximum: Option<usize>,
+    kind: MemoryKind,
     acquire: F,
 ) -> wasmtime::Result<bool>
 where
     F: FnOnce(u64) -> Fut,
     Fut: Future<Output = Option<MemoryGrant>>,
 {
+    // Only an existing GC heap can reclaim objects instead of growing. Initial allocation
+    // and linear-memory refusal remain immediate traps; Wasmtime must not erase their cause.
+    let can_collect = kind == MemoryKind::GcHeap && current > 0;
     let growth = tracker.prepare_unshared_growth(current, desired);
     let Some(growth) = validate_unshared_memory_growth(growth, worker_limit, desired, maximum)
     else {
-        tracker.memory_grow_failed();
+        tracker.memory_growth_refused(
+            crate::services::linear_memory::MemoryGrowthFailure::ExceededMemoryLimit,
+        );
+        if can_collect {
+            return Ok(false);
+        }
         return Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into());
     };
     if growth.admission_delta > 0 {
         let Some(grant) = acquire(growth.admission_delta).await else {
-            tracker.memory_grow_failed();
+            tracker.memory_growth_refused(
+                crate::services::linear_memory::MemoryGrowthFailure::OutOfMemory,
+            );
             crate::metrics::workers::record_worker_memory_grow_rejected();
+            if can_collect {
+                return Ok(false);
+            }
             return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
         };
         tracker.retain_growth_grant(grant);
@@ -290,7 +306,7 @@ mod tests {
             current: usize,
             desired: usize,
             maximum: Option<usize>,
-            _kind: MemoryKind,
+            kind: MemoryKind,
         ) -> wasmtime::Result<bool> {
             admit_memory_growth(
                 &self.tracker,
@@ -298,6 +314,7 @@ mod tests {
                 current,
                 desired,
                 maximum,
+                kind,
                 |bytes| self.controller.admit(bytes, &NoEvictionSource),
             )
             .await
@@ -328,6 +345,280 @@ mod tests {
         ) -> wasmtime::Result<bool> {
             Ok(true)
         }
+    }
+
+    #[test]
+    async fn gc_exhaustion_uses_only_the_current_growth_refusal() -> anyhow::Result<()> {
+        use crate::model::TrapType;
+        use crate::workerctx::default::Context;
+        use golem_common::model::oplog::{AgentError, OplogIndex};
+
+        const MIB: u64 = 1024 * 1024;
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let module = Module::new(
+            &engine,
+            r#"(module
+                (type $bytes (array (mut i8)))
+                (global $keep (mut (ref null $bytes)) (ref.null $bytes))
+                (func (export "allocate")
+                    (global.set $keep (array.new_default $bytes (i32.const 67108864)))))"#,
+        )?;
+        for (limit, reset, expected) in [
+            (32 * MIB, "none", AgentError::ExceededMemoryLimit),
+            (256 * MIB, "none", AgentError::OutOfMemory),
+            (32 * MIB, "admission", AgentError::OutOfMemory),
+            (32 * MIB, "backing-failure", AgentError::OutOfMemory),
+            (32 * MIB, "growth", AgentError::OutOfMemory),
+            (32 * MIB, "invocation", AgentError::OutOfMemory),
+        ] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(128 * MIB, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let tracker = LinearMemoryTracker::new(
+                0,
+                0,
+                AgentMode::Durable,
+                false,
+                Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
+                Arc::new(Mutex::new(
+                    controller.admit(0, &NoEvictionSource).await.unwrap(),
+                )),
+                Instant::now(),
+            );
+            let mut store = Store::new(
+                &engine,
+                LimitedMemory {
+                    tracker: tracker.clone(),
+                    controller: controller.clone(),
+                    limit,
+                    gc_growths: 0,
+                },
+            );
+            store.limiter_async(|state| state);
+            store.set_fuel(u64::MAX)?;
+            store.set_epoch_deadline(u64::MAX);
+            let instance = Instance::new_async(&mut store, &module, &[]).await?;
+            // Exercise refusal of later growth, rather than the first nonempty heap.
+            store.gc_heap_grow_async(64 * 1024).await?;
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "allocate")?
+                .call_async(&mut store, ())
+                .await
+                .expect_err("the retained allocation exceeds the available capacity");
+            assert!(error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>());
+            match reset {
+                "admission" => {
+                    assert!(tracker.prepare_unshared_growth(0, 0).is_some());
+                }
+                "backing-failure" => tracker.memory_grow_failed(),
+                "growth" => store.gc_heap_grow_async(64 * 1024).await?,
+                "invocation" => tracker.clear_memory_growth_failure(),
+                "none" => {}
+                _ => unreachable!(),
+            }
+            let non_gc =
+                tracker.annotate_gc_heap_error(wasmtime::Trap::UnreachableCodeReached.into());
+            assert!(matches!(
+                TrapType::from_error::<Context>(
+                    &non_gc.into(),
+                    OplogIndex::INITIAL,
+                    AgentMode::Durable,
+                ),
+                TrapType::Error {
+                    error: AgentError::DeterministicTrap(_),
+                    ..
+                }
+            ));
+            let call_retry_from = OplogIndex::from_u64(42);
+            let error = crate::durable_host::durability::mark_durable_call_trap_context(
+                error.context("guest allocation").into(),
+                crate::durable_host::durability::DurableCallTrapContext {
+                    retry_from: call_retry_from,
+                },
+            );
+            let error = tracker.annotate_gc_heap_error(wasmtime::Error::from_anyhow(error));
+            let trap = TrapType::from_error::<Context>(
+                &error.into(),
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            );
+            assert!(
+                matches!(trap, TrapType::Error { error, retry_from, .. }
+                    if error == expected && retry_from == call_retry_from),
+                "{reset}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    async fn gc_exhaustion_stops_the_component_driver_before_settlement() -> anyhow::Result<()> {
+        use crate::model::TrapType;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use wasmtime::AsContextMut;
+        use wasmtime::component::{Component, Linker};
+
+        const KIB: u64 = 1024;
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m
+                    (type $bytes (array (mut i8)))
+                    (memory 1)
+                    (func (export "allocate") (param i32)
+                        (drop (array.new_default $bytes (local.get 0))))
+                    (func (export "grow") (drop (memory.grow (i32.const 1)))))
+                (core instance $i (instantiate $m))
+                (func (export "allocate") (param "bytes" u32)
+                    (canon lift (core func $i "allocate")))
+                (func (export "grow") (canon lift (core func $i "grow"))))"#,
+        )?;
+        for (limit, capacity, expected) in [
+            (256 * KIB, 4096 * KIB, AgentError::ExceededMemoryLimit),
+            (4096 * KIB, 256 * KIB, AgentError::OutOfMemory),
+        ] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(capacity, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let tracker = LinearMemoryTracker::new(
+                0,
+                0,
+                AgentMode::Durable,
+                false,
+                Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
+                Arc::new(Mutex::new(
+                    controller.admit(0, &NoEvictionSource).await.unwrap(),
+                )),
+                Instant::now(),
+            );
+            let mut store = Store::new(
+                &engine,
+                LimitedMemory {
+                    tracker: tracker.clone(),
+                    controller: controller.clone(),
+                    limit,
+                    gc_growths: 0,
+                },
+            );
+            store.limiter_async(|state| state);
+            store.set_fuel(u64::MAX)?;
+            store.set_epoch_deadline(u64::MAX);
+            let instance = Linker::new(&engine)
+                .instantiate_async(&mut store, &component)
+                .await?;
+            let allocate = instance.get_typed_func::<(u32,), ()>(&mut store, "allocate")?;
+            let grow = instance.get_typed_func::<(), ()>(&mut store, "grow")?;
+            for bytes in [1, 1024 * 1024] {
+                let before = tracker.current_bytes();
+                let headroom = controller.headroom_bytes();
+                let root_returned = AtomicBool::new(false);
+                let settled = AtomicBool::new(false);
+                let result = store
+                    .as_context_mut()
+                    .run_concurrent_and_settle(
+                        async |accessor| {
+                            let result = allocate.call_concurrent(accessor, (bytes,)).await;
+                            root_returned.store(true, Ordering::SeqCst);
+                            // This would clear the refusal if a GC trap were a retained inner error.
+                            grow.call_concurrent(accessor, ()).await?;
+                            result
+                        },
+                        &mut |_| {
+                            settled.store(true, Ordering::SeqCst);
+                            true
+                        },
+                    )
+                    .await;
+                if bytes == 1 {
+                    result??;
+                    assert!(root_returned.load(Ordering::SeqCst));
+                    assert!(settled.load(Ordering::SeqCst));
+                    assert!(tracker.current_bytes() > before);
+                } else {
+                    let error = result.expect_err("GC exhaustion must stop the event loop");
+                    assert!(error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>());
+                    assert!(!root_returned.load(Ordering::SeqCst));
+                    assert!(!settled.load(Ordering::SeqCst));
+                    assert_eq!(tracker.current_bytes(), before);
+                    assert_eq!(controller.headroom_bytes(), headroom);
+                    let error = tracker.annotate_gc_heap_error(error);
+                    assert!(matches!(
+                        TrapType::from_error::<crate::workerctx::default::Context>(
+                            &error.into(), OplogIndex::INITIAL, AgentMode::Durable,
+                        ),
+                        TrapType::Error { error, .. } if error == expected
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    async fn gc_initial_allocation_refusal_preserves_its_cause() -> anyhow::Result<()> {
+        use crate::model::TrapType;
+        use wasmtime::component::{Component, Linker};
+
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+            (core module $m
+                (type $bytes (array (mut i8)))
+                (func $start (drop (array.new_default $bytes (i32.const 1))))
+                (start $start))
+            (core instance (instantiate $m)))"#,
+        )?;
+        for (limit, capacity, expected) in [
+            (32 * 1024, 1024 * 1024, AgentError::ExceededMemoryLimit),
+            (1024 * 1024, 32 * 1024, AgentError::OutOfMemory),
+        ] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(capacity, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let tracker = LinearMemoryTracker::new(
+                0,
+                0,
+                AgentMode::Durable,
+                false,
+                Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
+                Arc::new(Mutex::new(
+                    controller.admit(0, &NoEvictionSource).await.unwrap(),
+                )),
+                Instant::now(),
+            );
+            let mut store = Store::new(
+                &engine,
+                LimitedMemory {
+                    tracker: tracker.clone(),
+                    controller: controller.clone(),
+                    limit,
+                    gc_growths: 0,
+                },
+            );
+            store.limiter_async(|state| state);
+            store.set_fuel(u64::MAX)?;
+            store.set_epoch_deadline(u64::MAX);
+            let error = Linker::new(&engine)
+                .instantiate_async(&mut store, &component)
+                .await
+                .expect_err("the first nonempty GC heap exceeds admission");
+            assert!(error.root_cause().is::<GolemSpecificWasmTrap>());
+            assert!(matches!(
+                TrapType::from_error::<crate::workerctx::default::Context>(
+                    &error.into(), OplogIndex::INITIAL, AgentMode::Durable,
+                ).as_golem_error(""),
+                Some(WorkerExecutorError::InvocationFailed { error, .. }) if error == expected
+            ));
+            assert_eq!(tracker.current_bytes(), 0);
+            assert_eq!(tracker.reserved_bytes(), 0);
+            assert_eq!(controller.headroom_bytes(), capacity);
+        }
+        Ok(())
     }
 
     #[test]
@@ -425,11 +716,18 @@ mod tests {
             tracker.reconcile(40, Instant::now());
             let (release, gate) = tokio::sync::oneshot::channel();
             let admission_controller = controller.clone();
-            let admission =
-                admit_memory_growth(&tracker, 200, 40, desired, None, |bytes| async move {
+            let admission = admit_memory_growth(
+                &tracker,
+                200,
+                40,
+                desired,
+                None,
+                MemoryKind::LinearMemory,
+                |bytes| async move {
                     gate.await.unwrap();
                     admission_controller.admit(bytes, &NoEvictionSource).await
-                });
+                },
+            );
             tokio::pin!(admission);
             if desired > 80 {
                 assert!(futures::poll!(&mut admission).is_pending());
@@ -476,9 +774,15 @@ mod tests {
         );
         tracker.reconcile(40, Instant::now());
         tracker.meter().resume(40, Instant::now());
-        let denied = admit_memory_growth(&tracker, 50, 40, 51, None, |bytes| {
-            controller.admit(bytes, &NoEvictionSource)
-        })
+        let denied = admit_memory_growth(
+            &tracker,
+            50,
+            40,
+            51,
+            None,
+            MemoryKind::LinearMemory,
+            |bytes| controller.admit(bytes, &NoEvictionSource),
+        )
         .await;
         assert!(matches!(
             denied.unwrap_err().downcast_ref::<GolemSpecificWasmTrap>(),
@@ -509,9 +813,15 @@ mod tests {
                 Instant::now(),
             );
             tracker.begin_instantiation(false);
-            admit_memory_growth(&tracker, 100, 0, reconstructed, None, |bytes| {
-                controller.admit(bytes, &NoEvictionSource)
-            })
+            admit_memory_growth(
+                &tracker,
+                100,
+                0,
+                reconstructed,
+                None,
+                MemoryKind::LinearMemory,
+                |bytes| controller.admit(bytes, &NoEvictionSource),
+            )
             .await?;
             tracker.grow(reconstructed as u64, Instant::now());
             assert_eq!(
@@ -527,6 +837,7 @@ mod tests {
                 reconstructed,
                 reconstructed + 9,
                 None,
+                MemoryKind::LinearMemory,
                 |bytes| controller.admit(bytes, &NoEvictionSource),
             )
             .await?;
@@ -534,11 +845,16 @@ mod tests {
             assert_eq!(tracker.current_bytes(), reconstructed as u64 + 9);
             assert_eq!(controller.headroom_bytes(), 91 - reconstructed as u64);
             let before = controller.headroom_bytes();
-            let denied =
-                admit_memory_growth(&tracker, 200, reconstructed + 9, 101, None, |bytes| {
-                    controller.admit(bytes, &NoEvictionSource)
-                })
-                .await;
+            let denied = admit_memory_growth(
+                &tracker,
+                200,
+                reconstructed + 9,
+                101,
+                None,
+                MemoryKind::LinearMemory,
+                |bytes| controller.admit(bytes, &NoEvictionSource),
+            )
+            .await;
             assert!(matches!(
                 denied.unwrap_err().downcast_ref::<GolemSpecificWasmTrap>(),
                 Some(GolemSpecificWasmTrap::WorkerOutOfMemory)

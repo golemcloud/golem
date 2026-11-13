@@ -41,7 +41,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 #[cfg(any(test, feature = "test-utils"))]
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -863,6 +863,28 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
             .map_err(|error| match interrupt_kind_in(&error) {
                 Some(kind) => WorkerExecutorError::Interrupted { kind },
+                None if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>()
+                    || matches!(
+                        error.root_cause().downcast_ref::<GolemSpecificWasmTrap>(),
+                        Some(
+                            GolemSpecificWasmTrap::WorkerExceededMemoryLimit
+                                | GolemSpecificWasmTrap::WorkerOutOfMemory
+                        )
+                    ) =>
+                {
+                    let error = store
+                        .data()
+                        .durable_ctx()
+                        .linear_memory_tracker()
+                        .annotate_gc_heap_error(error);
+                    crate::model::TrapType::from_error::<Ctx>(
+                        &error.into(),
+                        OplogIndex::INITIAL,
+                        store.data().agent_mode(),
+                    )
+                    .as_golem_error("")
+                    .expect("memory exhaustion must classify as a memory failure")
+                }
                 None => self.creation_error(error.into()),
             })?;
 

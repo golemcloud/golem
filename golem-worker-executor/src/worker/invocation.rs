@@ -680,6 +680,9 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
         return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
     }
+    if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>() {
+        return true;
+    }
     if chain_contains(&|cause| {
         cause.is::<GolemSpecificWasmTrap>()
             || cause.is::<ClassifiedHostError>()
@@ -1164,6 +1167,11 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
     display_name: &str,
 ) {
     rearm_fuel_check(store);
+    store
+        .data()
+        .durable_ctx()
+        .linear_memory_tracker()
+        .clear_memory_growth_failure();
     store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -1227,6 +1235,11 @@ pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
     let agent_mode = store.data().agent_mode();
+    let err = store
+        .data()
+        .durable_ctx()
+        .linear_memory_tracker()
+        .annotate_gc_heap_error(err);
     let err: anyhow::Error = err.into();
     if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
         return Err(error);
@@ -3000,6 +3013,64 @@ mod tests {
                 WorkerExecutorError::RecoveryRequired { .. }
             ))
         ));
+    }
+
+    #[test]
+    async fn gc_exhaustion_without_backtrace_remains_a_guest_failure() -> anyhow::Result<()> {
+        use wasmtime::{Engine, Instance, Module, Store, StoreLimitsBuilder};
+
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let module = Module::new(
+            &engine,
+            r#"(module
+                (type $bytes (array (mut i8)))
+                (func (export "allocate")
+                    (drop (array.new_default $bytes (i32.const 1048576)))))"#,
+        )?;
+        let mut store = Store::new(
+            &engine,
+            StoreLimitsBuilder::new().memory_size(64 * 1024).build(),
+        );
+        store.limiter(|limits| limits);
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let instance = Instance::new_async(&mut store, &module, &[]).await?;
+        let allocate = instance.get_typed_func::<(), ()>(&mut store, "allocate")?;
+        for outer_failure in [true, false] {
+            let error = allocate.call_async(&mut store, ()).await.unwrap_err();
+            let error =
+                wasmtime::Error::new(error.downcast::<wasmtime::GcHeapOutOfMemory<()>>().unwrap());
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_none());
+            let error = if outer_failure {
+                match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
+                {
+                    Err(GuestCallSettlementError::Trap(error)) => error,
+                    other => panic!("GC exhaustion must remain a resource trap: {other:?}"),
+                }
+            } else {
+                classify_guest_call_settlement(
+                    &own_agent_id(),
+                    Ok::<_, wasmtime::Error>(Err::<(), _>(error)),
+                    None,
+                    false,
+                )
+                .expect("the event loop settled")
+                .expect_err("the nested guest call exhausted GC capacity")
+            };
+            assert!(matches!(
+                TrapType::from_error::<crate::workerctx::default::Context>(
+                    &error.into(),
+                    OplogIndex::INITIAL,
+                    golem_common::model::agent::AgentMode::Durable,
+                ),
+                TrapType::Error {
+                    error: OplogAgentError::OutOfMemory,
+                    ..
+                }
+            ));
+        }
+        Ok(())
     }
 
     #[test]

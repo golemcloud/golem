@@ -4130,7 +4130,8 @@ impl ResourceLimiterAsync for TestWorkerCtx {
                 return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
             }
         }
-        self.durable_memory_growing(current, desired, maximum).await
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
     }
 
     fn memory_grown(&mut self, current: usize, desired: usize, _kind: MemoryKind) {

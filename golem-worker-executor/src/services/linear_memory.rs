@@ -40,8 +40,26 @@ pub(crate) struct UnsharedMemoryGrowth {
     pub protected_total: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MemoryGrowthFailure {
+    ExceededMemoryLimit,
+    OutOfMemory,
+}
+
+impl std::fmt::Display for MemoryGrowthFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExceededMemoryLimit => f.write_str("Exceeded plan memory limit"),
+            Self::OutOfMemory => f.write_str("Worker out of memory"),
+        }
+    }
+}
+
+impl std::error::Error for MemoryGrowthFailure {}
+
 struct Inner {
     bytes: AtomicU64,
+    growth_failure: Mutex<Option<MemoryGrowthFailure>>,
     protected_bytes: AtomicU64,
     persisted_startup_bytes: u64,
     initially_reserved_bytes: u64,
@@ -159,6 +177,7 @@ impl LinearMemoryTracker {
     ) -> Self {
         let inner = Arc::new(Inner {
             bytes: AtomicU64::new(bytes),
+            growth_failure: Mutex::new(None),
             protected_bytes: AtomicU64::new(initially_reserved_bytes),
             persisted_startup_bytes: bytes,
             initially_reserved_bytes,
@@ -200,6 +219,7 @@ impl LinearMemoryTracker {
 
     pub(crate) fn begin_instantiation(&self, historical_admission: bool) {
         let _transition = self.inner.transitions.lock().unwrap();
+        *self.inner.growth_failure.lock().unwrap() = None;
         self.inner.bytes.store(0, Ordering::Release);
         self.inner
             .historical_admission
@@ -499,6 +519,7 @@ impl LinearMemoryTracker {
         record: Option<&dyn Fn(u64)>,
     ) -> (u64, bool) {
         let _transition = self.inner.transitions.lock().unwrap();
+        *self.inner.growth_failure.lock().unwrap() = None;
         self.inner
             .pending_growth_protected_total
             .store(0, Ordering::Release);
@@ -542,8 +563,34 @@ impl LinearMemoryTracker {
         (bytes, reconciling)
     }
 
-    pub fn memory_grow_failed(&self) {
+    pub(crate) fn clear_memory_growth_failure(&self) {
         let _transition = self.inner.transitions.lock().unwrap();
+        *self.inner.growth_failure.lock().unwrap() = None;
+    }
+
+    /// Keeps the refusal as typed context without discarding the GC error or call-owned markers.
+    pub(crate) fn annotate_gc_heap_error(&self, error: wasmtime::Error) -> wasmtime::Error {
+        if !error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>() {
+            return error;
+        }
+        let _transition = self.inner.transitions.lock().unwrap();
+        match self.inner.growth_failure.lock().unwrap().take() {
+            Some(reason) => error.context(reason),
+            None => error,
+        }
+    }
+
+    pub fn memory_grow_failed(&self) {
+        self.fail_memory_growth(None);
+    }
+
+    pub(crate) fn memory_growth_refused(&self, reason: MemoryGrowthFailure) {
+        self.fail_memory_growth(Some(reason));
+    }
+
+    fn fail_memory_growth(&self, reason: Option<MemoryGrowthFailure>) {
+        let _transition = self.inner.transitions.lock().unwrap();
+        *self.inner.growth_failure.lock().unwrap() = reason;
         let initial = self.inner.pending_initial_bytes.swap(0, Ordering::AcqRel);
         self.inner.bytes.fetch_sub(initial, Ordering::AcqRel);
         self.inner
@@ -579,6 +626,7 @@ impl LinearMemoryTracker {
         desired_memory: usize,
     ) -> Option<UnsharedMemoryGrowth> {
         let _transition = self.inner.transitions.lock().unwrap();
+        *self.inner.growth_failure.lock().unwrap() = None;
         self.inner.pending_initial_bytes.store(0, Ordering::Release);
         self.inner
             .growth_has_pending_grant
