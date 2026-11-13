@@ -7661,12 +7661,18 @@ fn first_index_of(
         .oplog_index
 }
 
-/// The durable calls of the core initializer of agent-counters.
+/// The durable calls of the core initializer of agent-counters, in the order the constructors
+/// make them. The core initializer runs every constructor of the component. The first agent
+/// registration draws the keys of `RandomState`, and the memory-growth constructor reads the
+/// environment; the standard library keeps both, so the initializer witness reads only the clock.
 const INITIALIZER_CALLS: [&str; 3] = [
-    "monotonic_clock::now",
     "random::insecure_seed::insecure_seed",
     "cli::environment::get-environment",
+    "monotonic_clock::now",
 ];
+
+/// The last durable call of the core initializer of agent-counters.
+const LAST_INITIALIZER_CALL: &str = INITIALIZER_CALLS[INITIALIZER_CALLS.len() - 1];
 
 /// A snapshot-based update to a target whose core initializer makes durable calls, the
 /// environment read among them. The update appends the calls of the target's initializer after
@@ -8062,14 +8068,14 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;
-    let environment_start = loop {
+    let last_call_start = loop {
         tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
         let start = gate.start_index();
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         if oplog.iter().any(|entry| {
             entry.oplog_index == start
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == INITIALIZER_CALLS[2])
+                    if params.function_name == LAST_INITIALIZER_CALL)
         }) {
             break start;
         }
@@ -8110,18 +8116,18 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         .last()
         .expect("the oplog is not empty")
         .oplog_index;
-    let environment_end = first_index_of(&first_attempt, |entry| match entry {
-        PublicOplogEntry::End(params) => params.start_index == environment_start,
+    let last_call_end = first_index_of(&first_attempt, |entry| match entry {
+        PublicOplogEntry::End(params) => params.start_index == last_call_start,
         _ => false,
     });
-    let first_attempt_clock_start = first_attempt
+    let first_attempt_first_call_start = first_attempt
         .iter()
         .find(|entry| {
             entry.oplog_index > pending_update
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
                     if params.function_name == INITIALIZER_CALLS[0])
         })
-        .expect("the first attempt called the clock")
+        .expect("the first attempt made the first initializer call")
         .oplog_index;
     assert_eq!(
         starts_in(&first_attempt, pending_update.next()..=first_attempt_tip),
@@ -8135,8 +8141,8 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         )),
         "the first attempt was interrupted before its outcome"
     );
-    assert!(pending_update < first_attempt_clock_start);
-    assert_eq!(environment_end, first_attempt_tip);
+    assert!(pending_update < first_attempt_first_call_start);
+    assert_eq!(last_call_end, first_attempt_tip);
 
     let (successful_update, bootstrap) = oplog
         .iter()
@@ -8155,12 +8161,12 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         "no attempt of the update failed"
     );
     assert_eq!(
-        bootstrap.start, first_attempt_clock_start,
+        bootstrap.start, first_attempt_first_call_start,
         "the bootstrap range starts at the first durable call of the interrupted attempt"
     );
     assert!(
-        environment_end <= bootstrap.end && bootstrap.end < successful_update,
-        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {environment_end}"
+        last_call_end <= bootstrap.end && bootstrap.end < successful_update,
+        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {last_call_end}"
     );
     assert_eq!(
         starts_in(&oplog, pending_update.next()..=successful_update.previous()),
@@ -8672,14 +8678,14 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
     executor
         .auto_update_worker(&worker_id, target.revision, false)
         .await?;
-    let environment_start = loop {
+    let last_call_start = loop {
         tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
         let start = gate.start_index();
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         if oplog.iter().any(|entry| {
             entry.oplog_index == start
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == INITIALIZER_CALLS[2])
+                    if params.function_name == LAST_INITIALIZER_CALL)
         }) {
             break start;
         }
@@ -8718,18 +8724,18 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
         .last()
         .expect("the oplog is not empty")
         .oplog_index;
-    let environment_end = first_index_of(&first_attempt, |entry| match entry {
-        PublicOplogEntry::End(params) => params.start_index == environment_start,
+    let last_call_end = first_index_of(&first_attempt, |entry| match entry {
+        PublicOplogEntry::End(params) => params.start_index == last_call_start,
         _ => false,
     });
-    let first_attempt_clock_start = first_attempt
+    let first_attempt_first_call_start = first_attempt
         .iter()
         .find(|entry| {
             entry.oplog_index > strategy
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
                     if params.function_name == INITIALIZER_CALLS[0])
         })
-        .expect("the first attempt called the clock")
+        .expect("the first attempt made the first initializer call")
         .oplog_index;
     assert_eq!(
         starts_in(&first_attempt, strategy.next()..=first_attempt_tip),
@@ -8743,7 +8749,7 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
         )),
         "the first attempt was interrupted before its outcome"
     );
-    assert_eq!(environment_end, first_attempt_tip);
+    assert_eq!(last_call_end, first_attempt_tip);
 
     let (successful_update, bootstrap) = successful_update_with_bootstrap(&oplog);
     let bootstrap = bootstrap.expect("the target initializer made durable calls");
@@ -8759,12 +8765,12 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
         "the next attempt kept the strategy of the interrupted attempt"
     );
     assert_eq!(
-        bootstrap.start, first_attempt_clock_start,
+        bootstrap.start, first_attempt_first_call_start,
         "the bootstrap range starts at the first durable call of the interrupted attempt"
     );
     assert!(
-        environment_end <= bootstrap.end && bootstrap.end < successful_update,
-        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {environment_end}"
+        last_call_end <= bootstrap.end && bootstrap.end < successful_update,
+        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {last_call_end}"
     );
     assert_eq!(
         starts_in(&oplog, strategy.next()..=successful_update.previous()),

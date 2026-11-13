@@ -1498,12 +1498,29 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
+    // A constructor of agent-counters grows the memory of this agent type by 16 pages. The
+    // core initializer runs the constructors, so the growth happens while the component is
+    // instantiated.
+    const INSTANTIATION_GROWTH_BYTES: u64 = 16 * 65536;
+    let control_id = agent_id!("Counter", "memory-growth-control");
+    let control_worker_id = executor
+        .start_agent(&component.id, control_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &control_id, "increment", data_value!())
+        .await?;
+    let control_bytes = executor
+        .worker_memory_requirement(&OwnedAgentId::new(
+            context.default_environment_id,
+            &control_worker_id,
+        ))
+        .await?;
+
     let agent_id = agent_id!("InstantiationGrowthCounter", "memory-growth-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let initial_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
 
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
@@ -1516,8 +1533,8 @@ async fn immediate_recovery_does_not_duplicate_instantiation_memory_growth(
     );
     let canonical_bytes = executor.worker_memory_requirement(&owned_agent_id).await?;
     assert!(
-        canonical_bytes > initial_bytes,
-        "fixture must grow linear memory after instantiation: initial={initial_bytes}, canonical={canonical_bytes}"
+        canonical_bytes >= control_bytes + INSTANTIATION_GROWTH_BYTES,
+        "the memory requirement must include the instantiation growth: control={control_bytes}, canonical={canonical_bytes}"
     );
 
     let executor_clone = executor.clone();
