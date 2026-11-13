@@ -39,7 +39,15 @@ message WorkerExecutionError {
     PermissionDenied permission_denied = 28;
     ComponentServiceUnavailable component_service_unavailable = 29;
     ComponentServiceRefused component_service_refused = 30;
+    StaleCursor stale_cursor = 31;
   }
+}
+
+// An oplog cursor points past the last entry of the agent's oplog.
+message StaleCursor {
+  AgentId agent_id = 1;
+  uint64 next_oplog_index = 2;
+  uint64 last_oplog_index = 3;
 }
 
 message ComponentServiceUnavailable {

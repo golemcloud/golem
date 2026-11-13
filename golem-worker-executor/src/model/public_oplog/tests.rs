@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -27,6 +28,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
     SecretRevealAudit, SerializableDateTime, SerializableEntityBodyExecution,
@@ -1571,6 +1573,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         OplogIndex::INITIAL,
         1,
         "last-entity-attribution-needle",
+        ScanBudget::default(),
     )
     .await
     .unwrap();
@@ -2588,6 +2591,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
                 max_entry_bytes: 1_000_000,
             },
             "needle",
+            ScanBudget::default(),
         )
     };
 
@@ -2651,4 +2655,165 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
         revision_at(OplogIndex::NONE).await.unwrap(),
         ComponentRevision::INITIAL
     );
+}
+
+#[test]
+async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_refused() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("cursor-rule").await;
+    let updated_revision = ComponentRevision::new(7).unwrap();
+    let mut indices = Vec::new();
+    for i in 0..13 {
+        let entry = if i == 1 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: updated_revision,
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+            }
+        } else if i == 9 {
+            OplogEntry::Log {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                level: LogLevel::Stderr,
+                context: "context".to_string(),
+                message: "needle".to_string(),
+                trace_context: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        indices.push(oplog.add(entry).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let last_index = *indices.last().unwrap();
+
+    let budget = ScanBudget {
+        entries: std::num::NonZeroU64::new(5).unwrap(),
+        time: std::time::Duration::from_secs(600),
+    };
+    let search = |start: OplogIndex, revision: ComponentRevision| {
+        search_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            revision,
+            start,
+            PublicOplogPageLimits {
+                count: 3,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            budget,
+        )
+    };
+
+    // A read without a cursor starts after the update, with the revision that the update set.
+    let (start, revision) = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        indices[2],
+    )
+    .await
+    .unwrap();
+    assert_eq!((start, revision), (indices[2], updated_revision));
+
+    // The budget ends the first search after five entries, before the match. The page is empty,
+    // and its cursor points to the first entry it did not read, with the revision.
+    let first = search(start, revision).await.unwrap();
+    assert!(first.entries.is_empty());
+    let cursor = oplog_page_cursor(
+        first.next_oplog_index,
+        first.current_component_revision,
+        first.last_index,
+    )
+    .expect("a page that ends before the last entry has a cursor");
+    assert_eq!(
+        cursor,
+        OplogCursor {
+            next_oplog_index: indices[7].as_u64(),
+            current_component_revision: updated_revision.into(),
+        }
+    );
+
+    // The cursor continues where the first search stopped, with the revision it carries.
+    let (start, revision) = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(cursor),
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap();
+    assert_eq!((start, revision), (indices[7], updated_revision));
+    let second = search(start, revision).await.unwrap();
+    assert_eq!(page_indices(&second.entries), vec![(indices[9], true)]);
+    let second_cursor = oplog_page_cursor(
+        second.next_oplog_index,
+        second.current_component_revision,
+        second.last_index,
+    )
+    .expect("the budget ends the second search before the last entry");
+    assert_eq!(second_cursor.next_oplog_index, indices[12].as_u64());
+    assert_eq!(
+        second_cursor.current_component_revision,
+        u64::from(updated_revision)
+    );
+
+    // A page that reads the last entry has no cursor.
+    let third = search(indices[12], updated_revision).await.unwrap();
+    assert!(third.entries.is_empty());
+    assert_eq!(
+        oplog_page_cursor(
+            third.next_oplog_index,
+            third.current_component_revision,
+            third.last_index
+        ),
+        None
+    );
+
+    // A cursor at the last entry is valid; one past it never came from a page of this oplog.
+    for (next_oplog_index, accepted) in [
+        (last_index.as_u64(), true),
+        (last_index.as_u64() + 1, false),
+        (last_index.as_u64() + 1000, false),
+    ] {
+        let result = oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(OplogCursor {
+                next_oplog_index,
+                current_component_revision: updated_revision.into(),
+            }),
+            OplogIndex::INITIAL,
+        )
+        .await;
+        match result {
+            Ok((start, _)) => {
+                assert!(accepted, "a cursor at {next_oplog_index} must be refused");
+                assert_eq!(start.as_u64(), next_oplog_index);
+            }
+            Err(error) => {
+                assert!(!accepted, "a cursor at {next_oplog_index} must be accepted");
+                assert_eq!(
+                    error,
+                    WorkerExecutorError::StaleCursor {
+                        agent_id: owned_agent_id.agent_id.clone(),
+                        next_oplog_index: OplogIndex::from_u64(next_oplog_index),
+                        last_oplog_index: last_index,
+                    }
+                );
+            }
+        }
+    }
 }

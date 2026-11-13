@@ -166,6 +166,15 @@ pub enum WorkerExecutorError {
         agent_id: AgentId,
         details: String,
     },
+    /// An oplog cursor points past the last entry of the agent's oplog. A page hands out a
+    /// cursor only while the oplog has entries after it, and the oplog only grows, so the cursor
+    /// did not come from a page of this oplog: the agent was deleted and created again since, or
+    /// the cursor was made up. The caller starts again without a cursor.
+    StaleCursor {
+        agent_id: AgentId,
+        next_oplog_index: OplogIndex,
+        last_oplog_index: OplogIndex,
+    },
 }
 
 /// Why the component service refused a request.
@@ -499,6 +508,15 @@ impl Display for WorkerExecutorError {
             Self::OplogFailed { agent_id, details } => {
                 write!(f, "The oplog of {agent_id} failed: {details}")
             }
+            Self::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                last_oplog_index,
+            } => write!(
+                f,
+                "Stale oplog cursor: it points to index {next_oplog_index}, but the oplog of \
+                 {agent_id} ends at index {last_oplog_index}"
+            ),
         }
     }
 }
@@ -547,6 +565,7 @@ impl Error for WorkerExecutorError {
             Self::ComponentServiceUnavailable { .. } => "Component service unavailable",
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
             Self::OplogFailed { .. } => "Oplog failed",
+            Self::StaleCursor { .. } => "Stale oplog cursor",
         }
     }
 }
@@ -587,6 +606,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentServiceUnavailable { .. } => "ComponentServiceUnavailable",
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
             Self::OplogFailed { .. } => "OplogFailed",
+            Self::StaleCursor { .. } => "StaleCursor",
         }
     }
 
@@ -600,6 +620,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::Interrupted { .. }
             | Self::InvalidShardId { .. }
             | Self::OplogFenced { .. }
+            | Self::StaleCursor { .. }
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -686,6 +707,11 @@ impl From<WorkerExecutorError> for Status {
                 let message = error.to_string();
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
                 Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+            }
+            error @ WorkerExecutorError::StaleCursor { .. } => {
+                let message = error.to_string();
+                let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
+                Self::with_details(tonic::Code::InvalidArgument, message, details.into())
             }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
@@ -1031,6 +1057,21 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            WorkerExecutorError::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                last_oplog_index,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::StaleCursor(
+                        golem::worker::v1::StaleCursor {
+                            agent_id: Some(agent_id.into()),
+                            next_oplog_index: next_oplog_index.into(),
+                            last_oplog_index: last_oplog_index.into(),
+                        },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -1254,6 +1295,13 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     details: error.details,
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::StaleCursor(error)) => {
+                Ok(Self::StaleCursor {
+                    agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                    next_oplog_index: OplogIndex::from_u64(error.next_oplog_index),
+                    last_oplog_index: OplogIndex::from_u64(error.last_oplog_index),
+                })
+            }
         }
     }
 }
@@ -1416,6 +1464,32 @@ mod read_only_violation_trap_tests {
         );
         assert!(
             WorkerExecutorError::from_status_details(&Status::internal("plain error")).is_none()
+        );
+    }
+
+    #[test]
+    fn a_stale_cursor_keeps_its_kind_and_indices_through_grpc() {
+        let expected = WorkerExecutorError::StaleCursor {
+            agent_id: AgentId {
+                component_id: ComponentId(uuid::Uuid::nil()),
+                agent_id: "Counter(\"a\")".to_string(),
+            },
+            next_oplog_index: OplogIndex::from_u64(42),
+            last_oplog_index: OplogIndex::from_u64(17),
+        };
+
+        let status: Status = expected.clone().into();
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            WorkerExecutorError::from_status_details(&status),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
+                expected.clone()
+            )),
+            Ok(expected)
         );
     }
 

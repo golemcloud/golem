@@ -29,7 +29,8 @@ use invocation::{
 };
 pub use reading::{
     find_component_revision_at, get_public_oplog_chunk, get_public_oplog_entry,
-    get_public_oplog_page, search_public_oplog, search_public_oplog_page,
+    get_public_oplog_page, oplog_page_cursor, oplog_page_start, search_public_oplog,
+    search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
 
