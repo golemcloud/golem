@@ -35,9 +35,6 @@ error[E0308]: mismatched types
    |
 note: associated function defined here
   --> $RUST/core/src/convert/mod.rs
-   |
-   |     fn from(value: T) -> Self;
-   |        ^^^^
 
 error[E0277]: the trait bound `golem_rust::permissions::PermissionCard: From<ScopeCard>` is not satisfied
   --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:30:10
