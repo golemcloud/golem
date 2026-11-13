@@ -1798,11 +1798,13 @@ fn agent_status_record_agent_mode_is_not_serialized() {
             files: crate::model::SnapshotFiles::Confirmed(
                 crate::model::oplog::FilesystemSnapshotName::periodic(),
             ),
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: Some(crate::model::UsableAutomaticSnapshot {
             index: crate::model::oplog::OplogIndex::from_u64(5),
             component_revision: ComponentRevision::new(7).unwrap(),
             filesystem_snapshot: Some(crate::model::oplog::FilesystemSnapshotName::periodic()),
+            bootstrap: None,
         }),
         export_fork_admissions: ExportForkAdmissions {
             owner_fingerprint: Some(AgentFingerprint(Uuid::new_v4())),
@@ -2038,6 +2040,7 @@ fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
             timestamp: crate::model::Timestamp::from(1_000),
             component_revision: ComponentRevision::new(2).unwrap(),
             files,
+            bootstrap: None,
         }
         .into_usable()
         .map(|usable| usable.filesystem_snapshot)

@@ -478,6 +478,7 @@ impl UpdateFields {
                     target_revision,
                     new_component_size,
                     snapshot_assisted_details,
+                    bootstrap,
                     ..
                 },
                 step,
@@ -512,6 +513,7 @@ impl UpdateFields {
                         self.authoritative_snapshot = Some(AuthoritativeSnapshot {
                             index: *oplog_index,
                             kind: AuthoritativeSnapshotKind::ManualUpdate,
+                            bootstrap: bootstrap.clone(),
                         });
                     }
                     Some(PendingUpdateRef {
@@ -525,6 +527,7 @@ impl UpdateFields {
                             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                                 filesystem_snapshot: snapshot.filesystem_snapshot.clone(),
                             },
+                            bootstrap: bootstrap.clone(),
                         });
                     }
                     Some(PendingUpdateRef {
@@ -538,6 +541,7 @@ impl UpdateFields {
                 OplogEntry::Snapshot {
                     timestamp,
                     filesystem_snapshot,
+                    bootstrap,
                     ..
                 },
                 _,
@@ -557,6 +561,7 @@ impl UpdateFields {
                     timestamp: *timestamp,
                     component_revision: self.component_revision,
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
+                    bootstrap: bootstrap.clone(),
                 });
             }
             (

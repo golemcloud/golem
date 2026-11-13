@@ -10912,6 +10912,8 @@ components:
           $ref: '#/components/schemas/PublicSnapshotData'
         filesystemSnapshot:
           type: string
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SpanClosedParams:
       type: object
       title: r#SpanClosedParams
@@ -11028,6 +11030,8 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

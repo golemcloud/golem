@@ -1797,10 +1797,30 @@ fn successful_update_serialization_poem_serde_equivalence() {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
         }),
+        bootstrap: Some(OplogRegion {
+            start: OplogIndex::from_u64(11),
+            end: OplogIndex::from_u64(17),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+
+    let super::OplogEnrichmentEntry::Other(OplogEntry::SuccessfulUpdate { bootstrap, .. }) =
+        super::OplogEnrichmentEntry::try_from(entry).unwrap()
+    else {
+        panic!("expected a successful update entry");
+    };
+    assert_eq!(
+        bootstrap,
+        Some(OplogRegion {
+            start: OplogIndex::from_u64(11),
+            end: OplogIndex::from_u64(17),
+        })
+    );
 }
 
 #[test]
@@ -2095,6 +2115,7 @@ fn oplog_page_entries_roundtrip_through_serde_and_protobuf() {
             mime_type: "application/octet-stream".to_string(),
         }),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     let page_entries = vec![
         PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
@@ -2149,6 +2170,7 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
             mime_type: "application/octet-stream".to_string(),
         }),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2166,6 +2188,7 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
         active_cards,
         wallet_generation: 73,
         filesystem_snapshot: None,
+        bootstrap: None,
     };
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
@@ -2250,26 +2273,84 @@ fn raw_snapshot_with_filesystem_snapshot_roundtrips() {
         active_cards: Vec::new(),
         wallet_generation: 1,
         filesystem_snapshot: Some(name.clone()),
+        bootstrap: Some(OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        }),
     };
+    let expected = (
+        Some(name),
+        Some(OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        }),
+    );
 
-    fn snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
+    fn snapshot_fields(
+        entry: &OplogEntry,
+    ) -> (Option<FilesystemSnapshotName>, Option<OplogRegion>) {
         match entry {
             OplogEntry::Snapshot {
                 filesystem_snapshot,
+                bootstrap,
                 ..
-            } => filesystem_snapshot.clone(),
+            } => (filesystem_snapshot.clone(), bootstrap.clone()),
             other => panic!("expected snapshot entry, got {other:?}"),
         }
     }
 
     let bytes = crate::serialization::serialize(&entry).unwrap();
     let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
-    assert_eq!(snapshot_name(&binary_decoded), Some(name.clone()));
+    assert_eq!(snapshot_fields(&binary_decoded), expected);
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         entry.clone().try_into().unwrap();
     let decoded = OplogEntry::try_from(proto).unwrap();
-    assert_eq!(snapshot_name(&decoded), Some(name));
+    assert_eq!(snapshot_fields(&decoded), expected);
+}
+
+#[test]
+fn raw_bootstrap_ranges_roundtrip_through_binary_and_protobuf() {
+    let bootstrap = Some(OplogRegion {
+        start: OplogIndex::from_u64(3),
+        end: OplogIndex::from_u64(7),
+    });
+    let entries = [
+        OplogEntry::SuccessfulUpdate {
+            timestamp: Timestamp::now_utc().rounded(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            new_component_size: 100,
+            new_total_linear_memory_size: Some(200),
+            new_active_plugins: Default::default(),
+            snapshot_assisted_details: None,
+            bootstrap: bootstrap.clone(),
+        },
+        OplogEntry::PendingUpdate {
+            timestamp: Timestamp::now_utc().rounded(),
+            description: UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: ComponentRevision::new(2).unwrap(),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(9),
+                snapshot_revision: ComponentRevision::new(1).unwrap(),
+                filesystem_snapshot: Some(FilesystemSnapshotName::periodic()),
+                snapshot_bootstrap: bootstrap,
+            },
+            update_attempt_index: Some(OplogIndex::from_u64(10)),
+        },
+    ];
+
+    for entry in entries {
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+    }
 }
 
 #[test]
@@ -2409,6 +2490,10 @@ fn public_snapshot_with_filesystem_snapshot_roundtrips() {
             mime_type: "application/octet-stream".to_string(),
         }),
         filesystem_snapshot: Some(FilesystemSnapshotName::periodic().into()),
+        bootstrap: Some(OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        }),
     });
 
     let serialized = entry.to_json_string();
@@ -2427,14 +2512,18 @@ fn public_snapshot_with_filesystem_snapshot_roundtrips() {
     match raw {
         OplogEntry::Snapshot {
             filesystem_snapshot,
+            bootstrap,
             ..
-        } => assert_eq!(
-            filesystem_snapshot.map(String::from),
-            match entry {
-                PublicOplogEntry::Snapshot(params) => params.filesystem_snapshot,
-                _ => unreachable!(),
-            }
-        ),
+        } => {
+            let PublicOplogEntry::Snapshot(params) = entry else {
+                unreachable!()
+            };
+            assert_eq!(
+                filesystem_snapshot.map(String::from),
+                params.filesystem_snapshot
+            );
+            assert_eq!(bootstrap, params.bootstrap);
+        }
         other => panic!("expected snapshot entry, got {other:?}"),
     }
 }
@@ -2852,6 +2941,7 @@ fn snapshot_json_serialization_poem_serde_equivalence() {
             data: serde_json::json!({"key": "value", "count": 42}),
         }),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2883,6 +2973,7 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
             ],
         }),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

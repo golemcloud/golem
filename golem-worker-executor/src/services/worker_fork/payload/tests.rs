@@ -180,6 +180,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         OplogEntry::stream_registered(None, external(), None),
         OplogEntry::stream_items(None, external(), None),

@@ -270,6 +270,7 @@ use golem_common::model::oplog::{
     EphemeralCannotSuspendError, LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData,
     SnapshotAssistedUpdateDetails, UpdateDescription,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
@@ -1348,6 +1349,12 @@ struct PrivateDurableWorkerState {
     /// A protocol refusal ended replay without granting live authority.
     authoritative_replay_failure: Arc<AtomicBool>,
 
+    /// The bootstrap phase of the primary Store while its core initializer runs.
+    bootstrap: Option<BootstrapPhase>,
+    /// The bootstrap range of this generation: the first `Start` to the last entry of the
+    /// durable calls that the core initializer appended or claimed. `None` when it made none.
+    bootstrap_range: Option<OplogRegion>,
+
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     http_call_count: u64,
@@ -1366,6 +1373,18 @@ struct PrivateDurableWorkerState {
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
+}
+
+/// The observation of the durable calls that a core initializer makes inside `instantiate`.
+struct BootstrapPhase {
+    /// The main cursor, while a bootstrap cursor stands in its place in `replay_state`.
+    main: Option<ReplayState>,
+    /// The lowest `Start` index that the initializer appended or claimed.
+    first_start: Option<OplogIndex>,
+    /// The last replayed non-hint index of the active cursor when the phase began.
+    replayed_before: OplogIndex,
+    /// The last appended non-hint index of the oplog when the phase began.
+    appended_before: Option<OplogIndex>,
 }
 
 #[derive(Clone)]
@@ -1602,6 +1621,77 @@ impl PrivateDurableWorkerState {
             && (self.store_replay_state.initial_entity_mode()
                 == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.retains_unclaimed_start_charged_to(quota))
+    }
+
+    /// Records that the core initializer appended or claimed the `Start` at `start_index`, while
+    /// a bootstrap phase observes it.
+    fn observe_bootstrap_start(&mut self, start_index: OplogIndex) {
+        if let Some(phase) = &mut self.bootstrap {
+            phase.first_start = Some(
+                phase
+                    .first_start
+                    .map_or(start_index, |first| first.min(start_index)),
+            );
+        }
+    }
+
+    /// Refuses `call` with a divergence while the core initializer runs on a bootstrap cursor,
+    /// which replays its bootstrap block or records the block of an update target. Every later
+    /// start from the restore point that names the block replays it on a strict cursor, which
+    /// holds no invocation and no owner wallet and can only return recorded results.
+    fn refuse_on_bootstrap_cursor(
+        &self,
+        call: impl std::fmt::Display,
+    ) -> Result<(), WorkerExecutorError> {
+        if self
+            .bootstrap
+            .as_ref()
+            .is_some_and(|phase| phase.main.is_some())
+        {
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "a direct read call of the core initializer",
+                format!(
+                    "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
+                ),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Admits a direct durable call of the core initializer while a bootstrap cursor replays its
+    /// bootstrap block: only a read outside the permission-card and fork families, whose replay
+    /// depends on nothing but the block.
+    fn check_bootstrap_admission(
+        &self,
+        function_type: &DurableFunctionType,
+        host_function: &HostFunctionName,
+    ) -> Result<(), WorkerExecutorError> {
+        let read = matches!(
+            function_type,
+            DurableFunctionType::ReadLocal | DurableFunctionType::ReadRemote
+        );
+        let excluded_family = matches!(
+            host_function,
+            HostFunctionName::GolemApiDeriveCard
+                | HostFunctionName::GolemApiInstallCard
+                | HostFunctionName::GolemPermissionsDerivePersist
+                | HostFunctionName::GolemPermissionsRevokePersist
+                | HostFunctionName::GolemPermissionsInstallChildPersist
+                | HostFunctionName::GolemPermissionsInstallTransfer
+                | HostFunctionName::GolemPermissionsInspectDecision
+                | HostFunctionName::GolemPermissionsDeriveDecision
+                | HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+                | HostFunctionName::GolemPermissionsDeriveScopeDecision
+                | HostFunctionName::GolemPermissionsInstallDecision
+                | HostFunctionName::GolemApiFork
+                | HostFunctionName::GolemApiForkWorker
+        );
+        if read && !excluded_family {
+            Ok(())
+        } else {
+            self.refuse_on_bootstrap_cursor(format_args!("{host_function} as {function_type:?}"))
+        }
     }
 
     /// Whether this Store is an incomplete entity that already continued live locally while the

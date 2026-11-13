@@ -114,6 +114,7 @@ fn assisted_pending(
                 index: OplogIndex::from_u64(7),
                 component_revision: source_revision,
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     }
@@ -522,6 +523,7 @@ fn rejected_automatic_snapshot_uses_manual_replay_revision() {
             timestamp: Timestamp::from(1_000),
             component_revision: active_revision,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         ..Default::default()
     };

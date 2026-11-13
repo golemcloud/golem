@@ -635,6 +635,8 @@ impl PrivateDurableWorkerState {
             baseline_role,
             snapshot_replay_purpose,
             authoritative_replay_failure: Arc::new(AtomicBool::new(false)),
+            bootstrap: None,
+            bootstrap_range: None,
             resource_limit_entry,
         })
     }

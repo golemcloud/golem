@@ -766,6 +766,7 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
                 .agent_wallet_cards_snapshot(),
             self.0.store.data().durable_ctx().wallet_generation(),
             name,
+            self.0.store.data().durable_ctx().bootstrap_range(),
         ))
     }
 

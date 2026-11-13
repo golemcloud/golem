@@ -5957,7 +5957,7 @@
     "PublicOplogEntrySuccessfulUpdate": {
       "type": "object",
       "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
-      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntryFailedUpdate": {
@@ -6081,7 +6081,7 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntrySnapshotConfirmed": {

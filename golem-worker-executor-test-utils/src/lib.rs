@@ -61,6 +61,7 @@ use golem_common::model::oplog::{
     types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
     types::SerializableToolOperationTerminal,
 };
+use golem_common::model::regions::OplogRegion;
 mod oplog_fixture;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::plan::PlanId;
@@ -1099,6 +1100,32 @@ impl TestWorkerExecutor {
             )
             .await?;
         Ok(())
+    }
+
+    /// The automatic snapshot entries that a start of the agent rejected and stored for its
+    /// incarnation, so no later start selects them.
+    pub async fn rejected_automatic_snapshots(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<std::collections::BTreeSet<OplogIndex>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        Ok(worker_service
+            .get_rejected_periodic_snapshots(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
+            )
+            .await?
+            .into_iter()
+            .collect())
     }
 
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
@@ -3715,6 +3742,7 @@ impl UpdateManagement for TestWorkerCtx {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
@@ -3722,6 +3750,7 @@ impl UpdateManagement for TestWorkerCtx {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await
     }

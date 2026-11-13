@@ -339,12 +339,17 @@ oplog_entry! {
             new_total_linear_memory_size: Option<u64>,
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
             snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+            /// The bootstrap range of the target revision: the entries of the durable calls that
+            /// its core initializer claimed while the update instantiated it, its own block for a
+            /// snapshot-based update and the selected record's block for a snapshot-assisted one.
+            bootstrap: Option<OplogRegion>,
         }
         public {
             target_revision: ComponentRevision,
             new_component_size: u64,
             new_active_plugins: BTreeSet<PluginInstallationDescription>,
             snapshot_assisted_details: Option<PublicSnapshotAssistedUpdateDetails>,
+            bootstrap: Option<OplogRegion>,
         }
     },
     /// An update failed to be applied
@@ -571,10 +576,15 @@ oplog_entry! {
             /// filesystem snapshot is usable only after a `SnapshotConfirmed` entry with the
             /// same name.
             filesystem_snapshot: Option<FilesystemSnapshotName>,
+            /// The bootstrap range of the generation that took the snapshot: the entries of the
+            /// durable calls that the core initializer of the running revision made, live or in
+            /// replay. `None` when the initializer made no durable call.
+            bootstrap: Option<OplogRegion>,
         }
         public {
             data: PublicSnapshotData,
             filesystem_snapshot: Option<String>,
+            bootstrap: Option<OplogRegion>,
         }
     },
     /// Checkpoint for oplog processor plugin delivery tracking
