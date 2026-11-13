@@ -42,7 +42,7 @@ import golem.runtime.{MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPa
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array

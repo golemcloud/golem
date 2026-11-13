@@ -30,7 +30,7 @@ import golem.schema.{
 import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
 import golem.runtime.WireAgentInputError
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 

@@ -68,16 +68,19 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 - `runtime/rpc/` and `RpcCodegen.scala` for invocation and mode-aware client signatures;
 - `wit/main.wit` for the Preview 3 guest world and current versioned dependencies.
 
-`DurabilityApi.durable` and `durableAsync` support sequential and properly nested custom operations
-only. An async body may await host calls when no unrelated guest work runs during the wait. Do not
-overlap it with other futures or callbacks, including ordinary host calls: sibling effects can
-acquire the wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably
-detected. Await each nested operation; do not detach work. All outstanding work must terminate
-before the body exits, including on failure; a failed Future does not cancel its siblings.
+`DurabilityApi.durableAsync` supports concurrent custom operations within one invocation. It
+builds on the runtime module `wasm-rquickjs:custom-invocation-context` (`golem/concurrent/CustomInvocationContext.scala`)
+and on `golem.concurrent.GolemExecutionContext`, which captures the scope at `ExecutionContext.prepare`
+and runs each task in it. SDK internals and agent code use `golem.concurrent.Implicits.global`; do not
+reintroduce `JSExecutionContext.queue` or `ExecutionContext.global` where callbacks run user code or
+make host calls. A parent waits for its nested operations before finishing. `durable` is for
+synchronous bodies and rejects a nested `durableAsync`. `CustomDurabilityScopesSpec` tests the SDK
+side against a fake runtime module in `core/js/src/test/js/schema-value-stream-module-loader.cjs`;
+`golem-worker-executor-tests/tests/custom_durability_scala.rs` tests it on the executor.
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.15 with TypeScript transformation, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.5.2 or newer (the SDK imports `wasm-rquickjs:custom-invocation-context`) with TypeScript transformation, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

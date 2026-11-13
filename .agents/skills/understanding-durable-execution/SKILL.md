@@ -1785,7 +1785,7 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+**Non-Rust SDK limitation:** TypeScript, Effect, MoonBit, and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1794,7 +1794,12 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations or to the Rust poll/drop scope integration.
+durability outside custom operations, to the Rust poll/drop scope integration, or to Scala
+`durableAsync`. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+`wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
+scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
+completes. A Scala parent finishes only after its nested operations close. Callbacks run by
+other execution contexts, and work escaping an outermost operation, are not attributed to it.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,

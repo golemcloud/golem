@@ -17,7 +17,7 @@
 package golem
 
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 

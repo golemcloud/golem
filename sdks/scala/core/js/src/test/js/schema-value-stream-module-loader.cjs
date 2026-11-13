@@ -44,6 +44,109 @@ function durableStreamResource(kind, method, requestKeys) {
   };
 }
 
+// A model of the runtime's custom invocation context cell. It switches tokens only when SDK code
+// asks it to, so tests observe exactly the switches the SDK makes.
+const customContext = (() => {
+  const root = { name: "root", parent: null, closed: false };
+  const state = { root, current: root, scopes: [], events: [] };
+  const resolve = (token) => {
+    let resolved = token ?? root;
+    while (resolved.closed) resolved = resolved.parent ?? root;
+    return resolved;
+  };
+  state.reset = () => {
+    state.current = root;
+    state.scopes.length = 0;
+    state.events.length = 0;
+  };
+  state.currentName = () => state.current.name;
+  state.module = {
+    capture: () => state.current,
+    run: (token, fn) => {
+      const previous = state.current;
+      state.current = resolve(token);
+      try {
+        return fn();
+      } finally {
+        state.current = previous;
+      }
+    },
+    enterLive: (live) => {
+      live.enter();
+      const token = { name: live.functionName, parent: state.current, closed: false };
+      state.scopes.push(token);
+      state.current = token;
+      return token;
+    },
+    close: (token) => {
+      if (state.scopes.some((scope) => scope.parent === token && !scope.closed)) {
+        throw new Error(`closing ${token.name} with open descendants`);
+      }
+      if (token.closed) throw new Error(`closing ${token.name} twice`);
+      token.closed = true;
+      state.events.push(`close ${token.name}`);
+      if (state.current === token) state.current = resolve(token);
+    },
+  };
+  return state;
+})();
+globalThis.__golemCustomInvocationContext = customContext;
+
+// A durability host whose async admissions are released by the test, in any order.
+const durability = (() => {
+  const state = { pending: [], replayed: {}, events: customContext.events };
+  state.reset = () => {
+    customContext.reset();
+    state.pending.length = 0;
+    state.replayed = {};
+  };
+  state.admit = (functionName) => {
+    const index = state.pending.findIndex((admission) => admission.functionName === functionName);
+    if (index < 0) throw new Error(`no pending admission of ${functionName}`);
+    const [admission] = state.pending.splice(index, 1);
+    admission.resolve();
+  };
+  class LiveCustomDurableInvocation {
+    constructor(functionName) {
+      this.functionName = functionName;
+    }
+    enter() {
+      state.events.push(`enter ${this.functionName} in ${customContext.currentName()}`);
+    }
+    static finish(live) {
+      state.events.push(`finish ${live.functionName} in ${customContext.currentName()}`);
+    }
+    static async finishAsync(live, response) {
+      state.events.push(`finish ${live.functionName} in ${customContext.currentName()}`);
+    }
+    [Symbol.dispose]() {
+      state.events.push(`drop ${this.functionName} in ${customContext.currentName()}`);
+    }
+  }
+  state.module = {
+    LiveCustomDurableInvocation,
+    observeFunctionCall: () => {},
+    beginCustomDurableInvocation: (functionName) => {
+      state.events.push(`begin ${functionName} in ${customContext.currentName()}`);
+      return { tag: "live", val: new LiveCustomDurableInvocation(functionName) };
+    },
+    beginCustomDurableInvocationAsync: (functionName) => {
+      state.events.push(`begin ${functionName} in ${customContext.currentName()}`);
+      return new Promise((resolve) => {
+        state.pending.push({
+          functionName,
+          resolve: () => {
+            const replayed = state.replayed[functionName];
+            resolve(replayed ? { tag: "replayed", val: replayed } : { tag: "live", val: new LiveCustomDurableInvocation(functionName) });
+          },
+        });
+      });
+    },
+  };
+  return state;
+})();
+globalThis.__golemDurability = durability;
+
 const load = Module._load;
 const state = {
   wraps: 0,
@@ -183,6 +286,12 @@ Module._load = function (request) {
       selfVersion: missingHostImport("selfVersion"),
       installCard: missingHostImport("installCard"),
     };
+  }
+  if (request === "wasm-rquickjs:custom-invocation-context") {
+    return customContext.module;
+  }
+  if (request === "golem:durability/durability@1.6.0") {
+    return durability.module;
   }
   if (request === "wasm-rquickjs:execution") {
     return {

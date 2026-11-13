@@ -54,7 +54,7 @@ object Guards {
   def useRetryPolicy(policy: Retry.NamedPolicy): RetryPolicyGuard =
     useRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
-  private implicit val ec: ExecutionContext = ExecutionContext.global
+  private implicit val ec: ExecutionContext = golem.concurrent.GolemExecutionContext.global
 
   private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
     val active = guard

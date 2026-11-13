@@ -21,7 +21,7 @@ import golem.runtime.annotations.agentImplementation
 
 import scala.annotation.unused
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.scalajs.js
 
 @agentImplementation()
