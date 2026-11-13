@@ -20,7 +20,6 @@
 //! exercised through a public tool call without also testing the routing adapter above them.
 
 use crate::Tracing;
-use crate::execution_observations::WorkerObservations;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
@@ -3664,13 +3663,11 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     let principal = Principal::Agent(AgentPrincipal {
         agent_id: owner_id.agent_id.clone(),
     });
+    // No guest call makes these staged scopes, so the owner cannot reconstruct them. Owner
+    // restart and interrupt of nested entity bodies are covered with real guest tool calls by
+    // `owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission`.
     let lane = active_agent.execution().lane();
-    let root_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
+    let root_start = active_agent.execution().oplog().current_oplog_index().await;
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
     let middleware_start = root_start.next();
@@ -3682,22 +3679,16 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         middleware_activation,
         principal.clone(),
     );
+    stage_entity_boundary(&active_agent, &middleware_scope).await?;
     let middleware_invocation = middleware_scope.invocation_id().clone();
-    let nested_start = middleware_start.next();
-    let nested_scope = invocation_scope(
-        &owner_id,
-        &tool_entity,
-        nested_start,
-        middleware_start,
-        tool_activation.clone(),
-        principal,
-    );
     let expected_middleware_scope = middleware_scope.clone();
-    let expected_nested_scope = nested_scope.clone();
     let nested_parent = OwnerInvocationId::Entity(middleware_invocation.clone());
     let nested_parent_for_body = nested_parent.clone();
     let nested_active_agent = active_agent.clone();
     let nested_owner_metadata = owner_metadata.clone();
+    let nested_owner_id = owner_id.clone();
+    let nested_tool_entity = tool_entity.clone();
+    let nested_tool_activation = tool_activation.clone();
     let (nested_started, nested_started_rx) = tokio::sync::oneshot::channel();
     let (release_nested, release_nested_rx) = tokio::sync::oneshot::channel();
     let middleware = active_agent.start_entity_invocation(
@@ -3711,6 +3702,24 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
                     store.data().entity_invocation_scope(),
                     Some(&expected_middleware_scope)
                 );
+                // The middleware Store records the calls of its core initializer before its body
+                // runs, so the nested Start follows them.
+                let nested_start = nested_active_agent
+                    .execution()
+                    .oplog()
+                    .current_oplog_index()
+                    .await
+                    .next();
+                let nested_scope = invocation_scope(
+                    &nested_owner_id,
+                    &nested_tool_entity,
+                    nested_start,
+                    middleware_start,
+                    nested_tool_activation,
+                    principal,
+                );
+                stage_entity_boundary(&nested_active_agent, &nested_scope).await?;
+                let expected_nested_scope = nested_scope.clone();
                 let nested = nested_active_agent.start_entity_invocation(
                     nested_parent_for_body.clone(),
                     nested_scope,
@@ -3724,7 +3733,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
                                 .expect("nested scope must be installed");
                             assert_eq!(installed, &expected_nested_scope);
                             assert_eq!(installed.parent_start_index(), middleware_start);
-                            let _ = nested_started.send(());
+                            let _ = nested_started.send(nested_start);
                             let _ = release_nested_rx.await;
                             Ok(())
                         })
@@ -3737,7 +3746,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         std::future::ready,
     )?;
 
-    tokio::time::timeout(std::time::Duration::from_secs(10), nested_started_rx)
+    let nested_start = tokio::time::timeout(std::time::Duration::from_secs(10), nested_started_rx)
         .await
         .expect("nested tool invocation must start")?;
     let metadata = active_agent.entity_metadata();
@@ -3766,72 +3775,25 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     );
     assert_eq!(active_agent.entity_metadata().slots.len(), 2);
 
-    let restart = tokio::spawn({
-        let worker = active_agent.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
+    release_nested
+        .send(())
+        .expect("nested tool must wait for its release");
+    middleware.await_result(&root_id).await?;
+    drop(root);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while active_agent.entity_metadata().accepting_entities {
+        while active_agent
+            .entity_metadata()
+            .slots
+            .iter()
+            .any(|slot| !slot.invocations.is_empty())
+        {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("owner restart did not fence the nested execution unit");
-    restart.await??;
-    active_agent
-        .primary()
-        .join_accepted_stops_for_test()
-        .await?;
-    assert!(
-        release_nested.send(()).is_err(),
-        "nested tool was still waiting after joined owner restart drain"
-    );
-    assert!(
-        active_agent
-            .entity_metadata()
-            .slots
-            .iter()
-            .all(|slot| slot.invocations.is_empty()),
-        "owner restart did not retire every nested entity body"
-    );
-    assert!(
-        middleware.await_result(&root_id).await.is_err(),
-        "nested middleware execution survived its owner generation"
-    );
-    drop(root);
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
-    assert!(
-        active_agent
-            .entity_metadata()
-            .slots
-            .iter()
-            .all(|slot| slot.invocations.is_empty()),
-        "completed Stores leave only vacant in-memory slots, never durable child status"
-    );
-    assert!(
-        active_agent.entity_metadata().accepting_entities,
-        "a new primary generation must reopen entity admission after an in-place restart"
-    );
-    executor
-        .interrupt_with_optional_recovery(&worker_id, false)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
-    assert!(
-        active_agent.entity_metadata().accepting_entities,
-        "a resumed primary generation must reopen entity admission after a terminal interrupt"
-    );
+    .expect("completed Stores leave only vacant in-memory slots, never durable child status");
 
-    let delete_parent_start = nested_start.next();
+    let delete_parent_start = active_agent.execution().oplog().current_oplog_index().await;
     let delete_parent = OwnerInvocationId::Agent(delete_parent_start);
     let delete_parent_permit = lane.enter_primary(delete_parent_start)?.acquire().await?;
     let delete_start = delete_parent_start.next();
@@ -3845,6 +3807,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
             agent_id: owner_id.agent_id.clone(),
         }),
     );
+    stage_entity_boundary(&active_agent, &delete_scope).await?;
     let (delete_body_started, delete_body_started_rx) = tokio::sync::oneshot::channel();
     let deleting = active_agent.start_entity_invocation(
         delete_parent,
