@@ -15,8 +15,8 @@
 use crate::app::template::AppTemplateName;
 use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
-use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
+use crate::error::{ConfirmationRequired, HintError, NonSuccessfulExit, ShowClapHelpTarget};
+use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln, message_for_output};
 use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
@@ -41,6 +41,7 @@ use std::fmt::{Display, Formatter};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -854,6 +855,15 @@ fn is_interactive_not_available_inquire_error(err: &InquireError) -> bool {
     }
 }
 
+static CONFIRMATIONS_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// Makes every confirmation that is not given in advance fail with [`ConfirmationRequired`],
+/// without asking, for a process that has no user at a terminal, such as `golem mcp serve`.
+/// Asking would read the controlling terminal, which the process does not own.
+pub fn refuse_unconfirmed_confirmations() {
+    CONFIRMATIONS_REFUSED.store(true, Ordering::Relaxed);
+}
+
 fn confirm<M: AsRef<str>>(
     yes: bool,
     default: bool,
@@ -870,6 +880,12 @@ fn confirm<M: AsRef<str>>(
             logln(format!("> {line}"));
         }
         return Ok(true);
+    }
+
+    if CONFIRMATIONS_REFUSED.load(Ordering::Relaxed) {
+        bail!(ConfirmationRequired {
+            question: message_for_output(message.as_ref()),
+        });
     }
 
     let hint = match extra_hint {

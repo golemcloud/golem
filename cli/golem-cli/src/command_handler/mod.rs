@@ -18,6 +18,7 @@ use self::secret::SecretCommandHandler;
 use self::ssh::SshCommandHandler;
 use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
+use crate::command::mcp::McpSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::tool::ToolSubcommand;
@@ -39,7 +40,7 @@ use crate::command_handler::bridge::BridgeCommandHandler;
 use crate::command_handler::card::CardCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
-use crate::command_handler::interactive::InteractiveHandler;
+use crate::command_handler::interactive::{InteractiveHandler, refuse_unconfirmed_confirmations};
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::log::render_structured_document;
 use crate::command_handler::partial_match::ErrorHandler;
@@ -81,6 +82,7 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod log;
+mod mcp;
 mod partial_match;
 mod plugin;
 mod profile;
@@ -156,7 +158,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         hooks: Arc<Hooks>,
     ) -> ExitCode {
         let result = match command_parse_result {
-            GolemCliCommandParseResult::FullMatch(command) => {
+            GolemCliCommandParseResult::FullMatch(mut command) => {
                 // A server must outlive the reader of its console. Any other command ends once
                 // nobody reads its output. The rule is set before anything can write a
                 // diagnostic.
@@ -164,7 +166,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let is_server = matches!(command.subcommand, GolemCliSubcommand::Server { .. });
                 #[cfg(not(feature = "server-commands"))]
                 let is_server = false;
-                if is_server {
+                // The MCP server's stdout carries JSON-RPC, so its own messages go to stderr,
+                // as they do for JSON output, and nothing may wait for an answer at a terminal.
+                let is_mcp_server = matches!(command.subcommand, GolemCliSubcommand::Mcp { .. });
+                if is_mcp_server {
+                    command.global_flags.format = Some(Format::Json);
+                    refuse_unconfirmed_confirmations();
+                }
+                if is_server || is_mcp_server {
                     keep_running_on_closed_output();
                 }
 
@@ -195,7 +204,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
-                if !is_server {
+                if !is_server && !is_mcp_server {
                     watch_for_closed_stdout();
                 }
 
@@ -553,6 +562,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Mcp { subcommand } => match subcommand {
+                    McpSubcommand::Serve => Self::cmd_mcp_serve(ctx).await,
+                },
                 GolemCliSubcommand::OutputSchema { types, output_type } => Self::cmd_output_schema(
                     ctx.global_flags.format.unwrap_or_default(),
                     types,
@@ -561,6 +573,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 GolemCliSubcommand::Completion { shell } => Self::cmd_completion(shell),
             }
         })
+    }
+
+    async fn cmd_mcp_serve(ctx: &mut LazyContext<Hooks>) -> anyhow::Result<()> {
+        mcp::serve(ctx).await
     }
 
     fn cmd_output_schema(
@@ -639,6 +655,18 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
             global_flags,
             hooks,
             ctx: None,
+        }
+    }
+
+    fn with_context(
+        global_flags: GolemCliGlobalFlags,
+        hooks: Arc<Hooks>,
+        ctx: Arc<Context>,
+    ) -> Self {
+        Self {
+            global_flags,
+            hooks,
+            ctx: Some(ctx),
         }
     }
 

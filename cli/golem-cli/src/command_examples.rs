@@ -167,6 +167,13 @@ pub const EXEC: &str = "Examples:
   golem-cli exec test
   golem-cli exec lint";
 
+pub const MCP_SERVE: &str = "Examples:
+  # Serve the management tools in the environment that the application manifest selects
+  golem-cli mcp serve
+
+  # Serve the management tools in the prod environment of the app application
+  golem-cli -E app/prod mcp serve";
+
 pub const OUTPUT_SCHEMA: &str = "Examples:
   # Print the full structured output JSON Schema
   golem-cli output-schema

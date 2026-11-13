@@ -34,7 +34,9 @@ use crate::model::app_raw::{
     Server,
 };
 use crate::model::config::server::ToFormattedServerContext;
-use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, SelectedManifestEnvironment,
+};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::plugin::PluginGrantKey;
@@ -77,6 +79,7 @@ pub struct Context {
     explicit_profile_name: Option<ProfileName>,
     environment_reference: Option<EnvironmentReference>,
     global_environment_selector: Option<GlobalEnvironmentSelector>,
+    pinned_environment: Option<ResolvedEnvironmentIdentity>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
     manifest_version_source: Option<AppVersionSource>,
@@ -108,6 +111,30 @@ impl Context {
     pub async fn new(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+    ) -> anyhow::Result<Self> {
+        Self::init(global_flags, log_output_for_help, None).await
+    }
+
+    /// The context of one tool call of `golem mcp serve`. It works only in `environment`, the
+    /// server's environment, and it confirms only when the call confirms: neither `--yes` nor
+    /// the manifest's `cli.autoConfirm` confirms anything, also not while the context loads the
+    /// manifest.
+    pub async fn new_for_tool_call(
+        global_flags: GolemCliGlobalFlags,
+        confirmed: bool,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Self> {
+        let mut global_flags = global_flags;
+        global_flags.yes = false;
+        let mut ctx = Self::init(global_flags, None, Some(environment)).await?;
+        ctx.yes = confirmed;
+        Ok(ctx)
+    }
+
+    async fn init(
+        global_flags: GolemCliGlobalFlags,
+        log_output_for_help: Option<Output>,
+        pinned_environment: Option<ResolvedEnvironmentIdentity>,
     ) -> anyhow::Result<Self> {
         if matches!(
             global_flags.environment,
@@ -276,7 +303,7 @@ impl Context {
         if let Some(selected_manifest_environment) = &manifest_environment
             && let Some(cli) = selected_manifest_environment.environment.cli.as_ref()
         {
-            if cli.auto_confirm == Some(Marker) {
+            if cli.auto_confirm == Some(Marker) && pinned_environment.is_none() {
                 yes = true;
             }
 
@@ -363,6 +390,7 @@ impl Context {
             auth_token_override: global_flags.auth_token,
             environment_reference,
             global_environment_selector,
+            pinned_environment,
             manifest_environment,
             manifest_environment_deployment_options,
             manifest_version_source,
@@ -447,6 +475,12 @@ impl Context {
 
     pub(crate) fn global_environment_selector(&self) -> Option<&GlobalEnvironmentSelector> {
         self.global_environment_selector.as_ref()
+    }
+
+    /// The only environment that commands may work in, when the process is bound to one, as
+    /// `golem mcp serve` is.
+    pub fn pinned_environment(&self) -> Option<&ResolvedEnvironmentIdentity> {
+        self.pinned_environment.as_ref()
     }
 
     pub fn explicit_profile_name(&self) -> Option<&ProfileName> {
