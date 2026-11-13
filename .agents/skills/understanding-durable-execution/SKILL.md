@@ -1347,7 +1347,10 @@ that, and the unpinned "Worker is being deleted" refusal before then, because th
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
 deletion attempt and a lost-shard retirement keep their own errors. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
-while it runs.
+while it runs. External-tool sessions bind the same way after each acquisition. A call on an
+existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
+owner (`fresh_owner`) has no incarnation a caller can name, so a fingerprint with it is an invalid
+request in every mode.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete

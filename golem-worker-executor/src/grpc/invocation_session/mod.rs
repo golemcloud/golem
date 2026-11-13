@@ -157,13 +157,13 @@ use admission::decode_invocation_freshness_disposition;
 use admission::{AcceptanceRace, publish_acceptance, race_invocation_acceptance};
 
 mod request;
-#[cfg(test)]
-use request::effective_session_identity;
 pub(crate) use request::{build_durable_streaming_request, decode_invocation_input};
 use request::{
-    build_resume_attempt, request_agent_id, request_idempotency_key,
-    require_expected_callee_fingerprint, resumed_input_schema, route_durable_request,
+    build_resume_attempt, request_agent_id, request_idempotency_key, resumed_input_schema,
+    route_durable_request,
 };
+#[cfg(test)]
+use request::{effective_session_identity, require_expected_callee_fingerprint};
 
 mod response;
 use response::{

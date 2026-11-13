@@ -11897,7 +11897,7 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
-// answer from the deleting generation.
+// answer from the deleting generation. A fresh owner cannot be named by a fingerprint.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -11952,6 +11952,30 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
             .await,
     );
     assert!(stale.contains("NOT_FOUND"), "{stale}");
+    // A fresh owner is created for the call, so a fingerprint cannot name it in any mode.
+    for mode in [
+        golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup,
+        golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await,
+    ] {
+        let mut fresh = lookup(fingerprint);
+        fresh.mode = mode as i32;
+        if let Some(tool) = fresh.external_tool.as_mut() {
+            tool.fresh_owner = true;
+        }
+        let fresh = answer(executor.invoke_agent_session(fresh).await);
+        assert!(
+            fresh.contains("VALIDATION") && fresh.contains("fresh external tool owner"),
+            "{mode:?}: {fresh}"
+        );
+    }
+    let mut unnamed = lookup(fingerprint);
+    unnamed.expected_callee_fingerprint = None;
+    let unnamed = answer(executor.invoke_agent_session(unnamed).await);
+    assert!(
+        unnamed.contains("VALIDATION")
+            && unnamed.contains("requires its expected agent fingerprint"),
+        "{unnamed}"
+    );
 
     let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let hook = Arc::new(DeletionStageHook::new(

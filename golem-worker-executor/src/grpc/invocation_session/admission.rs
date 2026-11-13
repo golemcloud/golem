@@ -38,7 +38,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         if request.external_tool.is_some() {
             return self
-                .invoke_external_tool_internal(request, acceptance_committed, accepted)
+                .invoke_external_tool_internal(request, acceptance_committed, accepted, scope)
                 .await;
         }
 
