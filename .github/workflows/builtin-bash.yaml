@@ -55,6 +55,16 @@ jobs:
           cache-shared-key: "workspace"
           install-cargo-make: "false"
 
+      # Build and test with the toolchain that builds bash.wasm, which
+      # builtin-tools/bash/rust-toolchain.toml pins. The cargo calls run from the repository root,
+      # where rustup does not read that file.
+      - name: Use the toolchain of the Bash tool
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' builtin-tools/bash/rust-toolchain.toml)
+          test -n "$toolchain"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy --target wasm32-wasip2 --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
       - name: Check formatting
         run: cargo fmt --manifest-path builtin-tools/bash/Cargo.toml --all -- --check
 
@@ -94,6 +104,16 @@ jobs:
           cache-prefix-key: "v1-builtin-bash"
           cache-shared-key: "pipelines"
 
+      # Build and test with the toolchain that builds bash.wasm, which
+      # builtin-tools/bash/rust-toolchain.toml pins. The cargo calls run from the repository root,
+      # where rustup does not read that file.
+      - name: Use the toolchain of the Bash tool
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' builtin-tools/bash/rust-toolchain.toml)
+          test -n "$toolchain"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy --target wasm32-wasip2 --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
       - name: Install Wasmtime 50.0.1
         uses: bytecodealliance/actions/wasmtime/setup@v1
         with:
@@ -123,6 +143,17 @@ jobs:
           rust-targets: "wasm32-wasip2"
           cache-prefix-key: "v1-builtin-bash"
           cache-shared-key: "sweep"
+
+      # Build and test with the toolchain that builds bash.wasm, which
+      # builtin-tools/bash/rust-toolchain.toml pins. The cargo calls run from the repository root,
+      # where rustup does not read that file.
+      - name: Use the toolchain of the Bash tool
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' builtin-tools/bash/rust-toolchain.toml)
+          test -n "$toolchain"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy --target wasm32-wasip2 --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
       - name: Install Wasmtime 50.0.1
         uses: bytecodealliance/actions/wasmtime/setup@v1
         with:
