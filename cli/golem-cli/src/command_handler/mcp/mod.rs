@@ -22,8 +22,9 @@
 //! tool's result.
 //!
 //! The server works in the one environment that it resolves at start. Every tool call gets a new
-//! [`Context`] that is bound to that environment and that confirms only when the call passes
-//! `confirm`. Calls run one at a time, because the CLI's log state and output are global.
+//! [`Context`], made from the server's context, that is bound to that environment. A destructive
+//! tool runs only when the call passes `confirm: true`. Calls run one at a time, because the CLI's
+//! log state and output are global.
 
 use super::partial_match::ErrorHandler;
 use super::{CommandHandler, CommandHandlerHooks, Handlers, LazyContext};
@@ -46,8 +47,8 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use anyhow::{anyhow, bail};
 use clap::{Arg, ArgAction, Command, CommandFactory};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
     ToolAnnotations,
 };
 use rmcp::service::RequestContext;
@@ -69,8 +70,7 @@ pub enum ResultShape {
     /// Every output type of the command emits one document per run; it is the result.
     Document,
     /// An output type of the command emits a sequence of documents per run (a finite stream, or
-    /// conditional documents); the result is `{"items": [...]}` with every document in order. A
-    /// single-page mode adds the page's cursor next to `items`.
+    /// conditional documents); the result is `{"items": [...]}` with every document in order.
     Documents,
 }
 
@@ -476,11 +476,19 @@ fn argument_values(
     }
 }
 
-/// The error envelope of a tool call that failed: `{"error": {"code", "message"}}`.
+/// The error envelope of a tool call that failed: `{"error": {"code", "message"}}` as JSON text,
+/// with `isError`. It is not `structuredContent`, because it does not match the tool's output
+/// schema, and clients check `structuredContent` against that schema also for an error.
 pub fn error_result(code: &str, message: impl Into<String>) -> CallToolResult {
-    CallToolResult::structured_error(json!({
-        "error": {"code": code, "message": message.into()}
-    }))
+    CallToolResult::error(vec![ContentBlock::text(
+        json!({"error": {"code": code, "message": message.into()}}).to_string(),
+    )])
+}
+
+/// Whether a call of `tool` may run: a destructive tool runs only with `confirm: true`, also when
+/// the CLI would not ask.
+fn confirmed(tool: &ManagementTool, arguments: &JsonObject) -> bool {
+    !tool.row.destructive || arguments.get(CONFIRM_ARGUMENT) == Some(&Value::Bool(true))
 }
 
 struct ToolCall {
@@ -532,11 +540,22 @@ impl ServerHandler for ManagementMcpServer {
                 None,
             ));
         };
-        let argv = match tool_call_argv(&self.tools[index], &request.arguments.unwrap_or_default())
-        {
+        let tool = &self.tools[index];
+        let arguments = request.arguments.unwrap_or_default();
+        let argv = match tool_call_argv(tool, &arguments) {
             Ok(argv) => argv,
             Err(message) => return Ok(error_result("invalid-arguments", message).into()),
         };
+        if !confirmed(tool, &arguments) {
+            return Ok(error_result(
+                "confirmation-required",
+                format!(
+                    "`{}` is destructive and runs only with `{CONFIRM_ARGUMENT}: true`",
+                    tool.name()
+                ),
+            )
+            .into());
+        }
         let (reply, result) = oneshot::channel();
         self.calls
             .send(ToolCall {
@@ -559,6 +578,8 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
 ) -> anyhow::Result<()> {
     let tools = Arc::new(management_tools()?);
     let ctx = lazy.get_or_init().await?;
+    // The questions about the manifest are answered here, once, and every call keeps the answer.
+    drop(ctx.app_context_lock_mut().await?);
     let environment = ctx
         .environment_handler()
         .resolve_environment(EnvironmentResolveMode::Any)
@@ -595,6 +616,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
             let result = run_call(
                 hooks.clone(),
                 &global_flags,
+                &ctx,
                 &environment,
                 &capture,
                 &tools[call.tool],
@@ -617,6 +639,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
 async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     hooks: Arc<Hooks>,
     global_flags: &GolemCliGlobalFlags,
+    server_ctx: &Context,
     environment: &ResolvedEnvironmentIdentity,
     capture: &OutputCapture,
     tool: &ManagementTool,
@@ -636,12 +659,7 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
 
     // Drops what was printed between calls, such as a late log line of the previous call.
     let _ = capture.take();
-    let ctx = match Context::new_for_tool_call(global_flags.clone(), confirmed, environment.clone())
-        .await
-    {
-        Ok(ctx) => Arc::new(ctx),
-        Err(error) => return failure(error, None, global_flags, capture),
-    };
+    let ctx = Arc::new(server_ctx.for_tool_call(confirmed, environment.clone()));
     let mut lazy = LazyContext::with_context(global_flags.clone(), hooks, ctx.clone());
     let result = CommandHandler::<Hooks>::handle_subcommand(&mut lazy, command.subcommand).await;
     match result {
@@ -650,7 +668,7 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
             let (stdout, _) = capture.take();
             success(tool, &stdout)
         }
-        Err(error) => failure(error, Some(&ctx), global_flags, capture),
+        Err(error) => failure(error, &ctx, global_flags, capture),
     }
 }
 
@@ -686,7 +704,7 @@ fn success(tool: &ManagementTool, stdout: &[u8]) -> CallToolResult {
 
 fn failure(
     error: anyhow::Error,
-    ctx: Option<&Arc<Context>>,
+    ctx: &Arc<Context>,
     global_flags: &GolemCliGlobalFlags,
     capture: &OutputCapture,
 ) -> CallToolResult {
@@ -703,9 +721,7 @@ fn failure(
     };
     // A hint error and a context error are explained by the messages that their handlers log, as
     // on the CLI; the log is the message.
-    let logged = if let Some(hint) = error.downcast_ref::<HintError>()
-        && let Some(ctx) = ctx
-    {
+    let logged = if let Some(hint) = error.downcast_ref::<HintError>() {
         let _ = ctx.error_handler().handle_hint_errors(hint);
         true
     } else if let Some(hint) = error.downcast_ref::<ContextInitHintError>() {
