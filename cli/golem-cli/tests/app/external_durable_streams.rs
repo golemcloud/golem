@@ -593,16 +593,24 @@ async fn agent_list_pages_cross_the_components_of_an_application() {
     assert_eq!(second_keys, expected);
     assert!(second.get("cursor").is_none(), "{second}");
 
-    // A cursor of a component that is not selected is refused.
-    for (selection, cursor) in [
-        (vec![flag::COMPONENT_NAME, FIRST], format!("{SECOND}/")),
-        (vec![], "golem-it:missing/".to_string()),
+    // A cursor of a component that is not selected is refused. The CLI wraps the error message
+    // at the width of the terminal, so the check joins its lines.
+    for (selection, component) in [
+        (vec![flag::COMPONENT_NAME, FIRST], SECOND),
+        (vec![], "golem-it:missing"),
     ] {
+        let cursor = format!("{component}/");
         let mut command = vec![cmd::AGENT, cmd::LIST, "--page", "--scan-cursor", &cursor];
         command.extend(selection);
         let output = ctx.cli(command).await;
         assert!(!output.success(), "{cursor} is not refused");
-        assert!(output.stderr_contains("which is not selected"), "{cursor}");
+        let stderr = strip_ansi_escapes::strip_str(output.stderr_text())
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let refusal =
+            format!("The page cursor is for the component {component}, which is not selected");
+        assert!(stderr.contains(&refusal), "{cursor}: {stderr}");
     }
 }
 
