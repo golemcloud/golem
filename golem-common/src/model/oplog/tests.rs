@@ -510,7 +510,10 @@ fn stream_terminal_binary_and_raw_public_protobuf_roundtrip() {
             summary: Some(DurableStreamEventSummary::terminal(&record)),
             record: OplogPayload::Inline(Box::new(record.clone())),
         };
-        assert_eq!(OplogEntry::try_from(public).unwrap(), entry);
+        assert_eq!(
+            super::OplogEnrichmentEntry::try_from(public).unwrap(),
+            super::OplogEnrichmentEntry::Other(entry)
+        );
         let entry = OplogEntry::StreamTerminal {
             timestamp,
             entity_parent_start_index: None,

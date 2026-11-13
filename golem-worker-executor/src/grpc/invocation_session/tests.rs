@@ -157,6 +157,7 @@ async fn routed_stream_session(
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(
                 golem_common::model::AgentInvocationPayload::SaveSnapshot,
