@@ -13,16 +13,17 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
+mod oplog_export;
 pub mod oplog_serve;
 mod stream;
 mod stream_output;
 
 pub(crate) use stream::insecure_connector;
 
-use crate::command::shared_args::OplogViewerArgs;
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
+use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
@@ -269,8 +270,9 @@ impl AgentCommandHandler {
                     query,
                     omit_payloads,
                     viewer,
+                    export,
                 } => {
-                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer)
+                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
                         .await
                 }
                 AgentSubcommand::Revert {
@@ -836,12 +838,35 @@ impl AgentCommandHandler {
         query: Option<String>,
         omit_payloads: bool,
         viewer: OplogViewerArgs,
+        export: OplogExportArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        if export.obfuscate {
+            let options = oplog_export::export_options(&export, from, query, batch_size);
+            if viewer.serve {
+                return oplog_serve::serve_oplog_export_viewer(
+                    self.ctx.clone(),
+                    component.id.0,
+                    agent_id.0.clone(),
+                    options,
+                    viewer.port,
+                    !viewer.no_open,
+                )
+                .await;
+            }
+            return oplog_export::cmd_oplog_export(
+                self.ctx.clone(),
+                component.id.0,
+                agent_id.0.clone(),
+                options,
+                viewer,
+            )
+            .await;
+        }
         let viewer_document =
             |mode: OplogViewerMode, entries: Vec<AgentOplogEntryView>| OplogViewerDocument {
                 mode,
@@ -866,6 +891,7 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
+                    export: None,
                 },
                 viewer.port,
                 !viewer.no_open,

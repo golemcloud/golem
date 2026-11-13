@@ -40,6 +40,12 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .hidden { display: none !important; }
 
 #app { display: grid; grid-template-rows: auto auto 1fr; height: 100%; }
+#app.export { grid-template-rows: auto auto auto 1fr; }
+#exportbanner { background: var(--bg3); border-bottom: 1px solid var(--line); padding: 6px 14px; font-size: 12px; color: var(--fg2); display: flex; flex-direction: column; gap: 3px; max-height: 30vh; overflow: auto; }
+#exportbanner b { color: var(--fg); }
+#exportbanner .err { color: var(--c-error); }
+#exportbanner .cov { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.tree .tok { color: var(--fg3); }
 header { background: var(--bg2); border-bottom: 1px solid var(--line); padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
 header h1 { font-size: 15px; margin: 0; font-weight: 600; display: flex; align-items: baseline; gap: 10px; }
 header h1 .agent { font-family: var(--mono); font-weight: 500; color: var(--accent2); }
@@ -192,6 +198,7 @@ header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
     </div>
   </header>
+  <div id="exportbanner" class="hidden"></div>
   <div id="toolbar">
     <input type="text" id="search" placeholder="Filter loaded entries (text, function, payload…)  /">
     <span id="sq-wrap" class="hidden" title="Lucene query evaluated by the server over the whole oplog"><input type="text" id="squery" placeholder="Server query (Lucene), Enter to run"><button id="btn-sq-clear" title="Clear the server query and load the oplog from the start">✕</button></span>
@@ -315,6 +322,180 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.displa
 // Typed schema value decoding. Values are structural and schema-driven; field
 // and case names come from the schema graph, so we walk both in parallel.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Obfuscated export: report nodes. Customer values are tokens unless a keep flag shows more;
+// a node shows only what it holds.
+// ---------------------------------------------------------------------------
+let EXPORT = false;
+const REPORT_KINDS = new Set(['record', 'tuple', 'case', 'list', 'map', 'bytes', 'scalar', 'quantity', 'str', 'agent', 'redacted', 'typeDescription', 'text', 'number', 'timestamp', 'flag']);
+const isReportNode = v => EXPORT && !!v && typeof v === 'object' && !Array.isArray(v) && typeof v.kind === 'string' && REPORT_KINDS.has(v.kind);
+const isMetaLeaf = v => isReportNode(v) && (v.kind === 'text' || v.kind === 'number' || v.kind === 'timestamp' || v.kind === 'flag');
+// The same text as `ReportAgentRef::pseudonym()`: `agent:`, the first 12 hex chars of the token, `…`.
+function pseudonymOf(ref) { const t = (ref && ref.token) || ''; return 'agent:' + t.slice(t.lastIndexOf(':') + 1).slice(0, 12) + '…'; }
+function tokText(t, full) { if (!t) return ''; if (full) return t; const i = t.lastIndexOf(':'); return t.slice(0, i + 1) + t.slice(i + 1, i + 9) + '…'; }
+function typeDescText(d, depth) {
+  if (!d) return '';
+  depth = depth || 0;
+  let s = d.kind + (d.typeName ? ' ' + d.typeName : '') + (d.role ? ' (' + d.role + ')' : '');
+  if (depth > 6) return s;
+  const named = list => list.map(m => m.name + (m.body ? ': ' + typeDescText(m.body, depth + 1) : ''));
+  if (d.members && d.members.length) s += ' { ' + named(d.members).join(', ') + ' }';
+  if (d.elements && d.elements.length) s += '<' + d.elements.map(x => typeDescText(x, depth + 1)).join(', ') + '>';
+  if (d.names && d.names.length) s += ' [' + d.names.join(', ') + ']';
+  if (d.baseUnit) s += ' unit ' + d.baseUnit;
+  if (d.allowedSuffixes && d.allowedSuffixes.length) s += ' suffixes [' + d.allowedSuffixes.join(', ') + ']';
+  if (d.definitions && d.definitions.length) s += ' where ' + d.definitions.map(m => m.name + (m.body ? ' = ' + typeDescText(m.body, depth + 1) : '')).join('; ');
+  return s;
+}
+// One line of text for a report node. `full` writes whole tokens, as the search index needs.
+function reportNodeText(node, budget, full) {
+  const go = (n, d) => {
+    if (n == null) return '';
+    if (!isReportNode(n)) return typeof n === 'object' ? '' : String(n);
+    if (d > 16) return '…';
+    switch (n.kind) {
+      case 'record': return (n.typeName ? n.typeName + ' ' : '') + '{' + n.fields.map(f => (f.name != null ? f.name + ': ' : '') + go(f.value, d + 1)).join(', ') + '}';
+      case 'tuple': return '(' + n.elements.map(x => go(x, d + 1)).join(', ') + ')';
+      case 'case': { let t = n.case != null ? n.case : n.tagToken ? 'tag ' + tokText(n.tagToken, full) : ''; if (n.caseIndex != null) t = (t ? t + ' ' : '') + '(case ' + n.caseIndex + ')'; if (n.payload) t += '(' + go(n.payload, d + 1) + ')'; if (n.token) t = (t ? t + ' ' : '') + tokText(n.token, full); return t; }
+      case 'list': case 'map': { let t = n.kind + (n.length != null ? '[' + n.length + ']' : '') + ' ' + tokText(n.token, full); if (n.elements) t += ' [' + n.elements.map(x => go(x, d + 1)).join(', ') + ']'; if (n.entries) t += ' {' + n.entries.map(x => go(x.key, d + 1) + ': ' + go(x.value, d + 1)).join(', ') + '}'; return t; }
+      case 'bytes': return 'bytes' + (n.length != null ? '[' + n.length + ']' : '') + ' ' + tokText(n.token, full);
+      case 'scalar': return n.value !== undefined ? String(n.value) : tokText(n.token, full);
+      case 'quantity': return n.mantissa != null ? `quantity ${n.mantissa} scale ${n.scale != null ? n.scale : '?'}` + (n.unit ? ' ' + n.unit : n.unitToken ? ' ' + tokText(n.unitToken, full) : '') : tokText(n.token, full);
+      case 'str': return n.value != null ? JSON.stringify(n.value) : tokText(n.token, full);
+      case 'agent': return full ? n.token + ' ' + pseudonymOf(n) : pseudonymOf(n);
+      case 'redacted': return '‹redacted ' + n.reason + '›';
+      case 'typeDescription': return 'type ' + typeDescText(n.description);
+      case 'text': case 'timestamp': return String(n.value);
+      case 'number': case 'flag': return String(n.value);
+      default: return n.kind;
+    }
+  };
+  const text = go(node, 0);
+  return budget ? trunc(text, budget) : text;
+}
+// The text of an entry field: a plain value as text, a report node through `reportNodeText`.
+function fieldText(v, n) {
+  if (v == null) return '';
+  if (isReportNode(v)) return reportNodeText(v, n || 200);
+  if (typeof v === 'object') return trunc(JSON.stringify(v), n || 200);
+  return n ? trunc(String(v), n) : String(v);
+}
+function numOf(v) {
+  if (typeof v === 'number') return v;
+  if (isReportNode(v) && v.kind === 'number') return v.value;
+  if (isReportNode(v) && v.kind === 'scalar' && typeof v.value === 'number') return v.value;
+  return null;
+}
+function countOf(v) {
+  if (Array.isArray(v)) return v.length;
+  if (isReportNode(v) && (v.kind === 'list' || v.kind === 'map' || v.kind === 'bytes') && v.length != null) return v.length;
+  return null;
+}
+const pathText = v => Array.isArray(v) ? v.join(' ') : fieldText(v);
+// Byte sizes: in export mode only for numbers that the report holds.
+const bytesText = v => EXPORT ? (numOf(v) != null ? fmtBytes(numOf(v)) : '–') : fmtBytes(v || 0);
+
+// The fields of `body` (and of the wrappers below) become plain values when they are kept
+// metadata, so the structure code reads indices, names and cases as before. Every other field
+// keeps its report node. A wrapper record becomes an object and a wrapper case with a kept case
+// `{ type: <case>, …payload fields }`; `$payload` names the field of a payload that is no record.
+const EXPORT_WRAPPERS = {
+  invocation: { snapshot: {} }, result: { result: { $payload: 'result' }, snapshot: {} }, durableFunctionType: {}, jump: {}, droppedRegion: {},
+  plugin: {}, policy: {}, spanFinished: {}, snapshotAssistedDetails: {}, description: {}, event: {}, data: {}, snapshot: {},
+};
+function wrapFields(fields, table) {
+  const o = {};
+  for (const f of fields) if (f.name != null) o[f.name] = wrapField(f.value, table && table[f.name]);
+  return o;
+}
+function wrapField(v, table) {
+  if (isMetaLeaf(v)) return v.value;
+  if (!table || !isReportNode(v)) return v;
+  if (v.kind === 'record') return wrapFields(v.fields, table);
+  if (v.kind === 'case' && v.case != null) {
+    const o = { type: v.case };
+    if (v.payload) { if (v.payload.kind === 'record') Object.assign(o, wrapFields(v.payload.fields, table)); else o[table.$payload || 'value'] = v.payload; }
+    return o;
+  }
+  return v;
+}
+const fieldMap = rec => { const m = {}; for (const f of rec.fields) if (f.name != null) m[f.name] = f.value; return m; };
+function exportEntityInvocation(n) {
+  if (!isReportNode(n) || n.kind !== 'record') return null;
+  const f = fieldMap(n);
+  if (!isReportNode(f.entity) || f.entity.kind !== 'record' || !isMetaLeaf(f.startIndex) || !isMetaLeaf(f.callMode)) return null;
+  const ent = fieldMap(f.entity);
+  if (!isMetaLeaf(ent.kind)) return null;
+  const out = { entity: { kind: ent.kind.value, name: ent.name }, startIndex: f.startIndex.value, callMode: f.callMode.value };
+  if (f.operation) {
+    const op = f.operation;
+    if (!isReportNode(op) || op.kind !== 'case' || op.case == null) return null;
+    out.operation = Object.assign({ type: op.case }, op.payload && op.payload.kind === 'record' ? wrapFields(op.payload.fields, null) : {});
+  }
+  return out;
+}
+// The attribution of an entity, in the shape the structure code reads; `null` when the node
+// does not match that path, so the detail panel shows the node itself.
+function exportAttribution(a) {
+  if (!isReportNode(a) || a.kind !== 'case' || a.case !== 'Entity' || !a.payload || a.payload.kind !== 'record') return null;
+  const f = fieldMap(a.payload);
+  const invocation = exportEntityInvocation(f.invocation);
+  if (!invocation) return null;
+  const ancestors = [];
+  if (f.ancestors) {
+    if (!isReportNode(f.ancestors) || f.ancestors.kind !== 'tuple') return null;
+    for (const x of f.ancestors.elements) { const i = exportEntityInvocation(x); if (!i) return null; ancestors.push(i); }
+  }
+  return { type: 'Entity', invocation, ancestors };
+}
+// Converts report entries into the envelopes that `normalize` and `buildTree` read.
+function exportEntries(list) {
+  return (list || []).filter(r => r && r.kind).map(r => {
+    const env = { index: r.index, report: r, reportBody: r.body, reportAttribution: r.attribution };
+    if (r.omitted) env.entry = { type: 'Omitted', timestamp: r.timestamp, entryType: r.kind, size: r.omitted.size, reason: r.omitted.reason };
+    else env.entry = Object.assign(r.body && r.body.kind === 'record' ? wrapFields(r.body.fields, EXPORT_WRAPPERS) : {}, { type: r.kind, timestamp: r.timestamp });
+    const attribution = r.attribution ? exportAttribution(r.attribution) : null;
+    if (attribution) env.attribution = attribution;
+    return env;
+  });
+}
+function renderReportNode(key, n, open) {
+  if (!isReportNode(n)) return renderJson(key, n, open);
+  const ty = t => h('span', { class: 'ty' }, t);
+  const tok = t => h('span', { class: 'tok', title: t }, tokText(t));
+  const leaf = (...k) => h('div', { class: 'leaf' }, keyLabel(key), ...k);
+  switch (n.kind) {
+    case 'record': return treeDetails(h('span', null, keyLabel(key, n.typeName || null), n.role ? ty(n.role) : null), plural(n.fields.length, 'field'), kids => n.fields.forEach((f, i) => kids.append(renderReportNode(f.name != null ? f.name : '#' + i, f.value, open))), open);
+    case 'tuple': return treeDetails(h('span', null, keyLabel(key)), plural(n.elements.length, 'element'), kids => n.elements.forEach((x, i) => kids.append(renderReportNode(String(i), x, open))), open);
+    case 'case': {
+      const label = h('span', null, keyLabel(key, n.typeName || null), ty(n.caseKind), ' ', n.case != null ? h('span', { class: 'b' }, n.case) : null, n.caseIndex != null ? [' ', h('span', { class: 'n' }, '(case ' + n.caseIndex + ')')] : null, n.tagToken ? [ty('tag'), ' ', tok(n.tagToken)] : null, n.token ? [' ', tok(n.token)] : null);
+      if (!n.payload) return h('div', { class: 'leaf' }, label);
+      return treeDetails(label, null, kids => kids.append(renderReportNode('payload', n.payload, open)), open);
+    }
+    case 'list': case 'map': {
+      const items = n.elements || n.entries;
+      const label = h('span', null, keyLabel(key), ty(n.kind + (n.length != null ? ' · ' + plural(n.length, 'item') : '')), ' ', tok(n.token));
+      if (!items) return h('div', { class: 'leaf' }, label);
+      return treeDetails(label, null, kids => { if (n.elements) n.elements.forEach((x, i) => kids.append(renderReportNode(String(i), x, open))); else n.entries.forEach((x, i) => kids.append(renderReportNode('key ' + i, x.key, open), renderReportNode('value ' + i, x.value, open))); }, open && items.length <= 30);
+    }
+    case 'bytes': return leaf(ty('bytes' + (n.length != null ? ' · ' + fmtBytes(n.length) : '')), ' ', tok(n.token));
+    case 'scalar': return leaf(ty(n.scalarKind), ' ', n.value !== undefined ? h('span', { class: n.scalarKind === 'bool' ? 'b' : 'n' }, String(n.value)) : tok(n.token));
+    case 'quantity': return leaf(ty('quantity'), ' ', n.mantissa != null ? h('span', { class: 'n' }, `${n.mantissa} scale ${n.scale != null ? n.scale : '?'}`) : tok(n.token), n.unit ? ' ' + n.unit : null, n.unitToken ? [' ', tok(n.unitToken)] : null);
+    case 'str': return leaf(ty('str'), ' ', n.value != null ? h('span', { class: 's' }, JSON.stringify(n.value)) : tok(n.token));
+    case 'agent': return leaf(ty('agent'), ' ', h('span', { class: 'cap', title: n.token }, pseudonymOf(n)));
+    case 'redacted': return leaf(h('span', { class: 'secret' }, 'redacted · ' + n.reason));
+    case 'typeDescription': return leaf(ty('type'), ' ', h('span', null, typeDescText(n.description)));
+    case 'text': case 'timestamp': return leaf(h('span', { class: 's' }, String(n.value)));
+    case 'flag': return leaf(h('span', { class: 'b' }, String(n.value)));
+    case 'number': {
+      const el = leaf(h('span', { class: 'n' }, String(n.value)));
+      if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && n.value > 0) el.append(' ', indexLink(n.value));
+      return el;
+    }
+    default: return leaf(ty(n.kind));
+  }
+}
+
 function isTyped(v) { return v && typeof v === 'object' && !Array.isArray(v) && v.graph && typeof v.graph === 'object' && 'root' in v.graph && 'value' in v && Object.keys(v).length === 2; }
 
 function decodeTyped(tsv) {
@@ -484,6 +665,7 @@ function binaryWidget(key, bytes, mime) {
 }
 // Generic JSON renderer for the parts of entries that are not typed payloads.
 function renderJson(key, v, open) {
+  if (isReportNode(v)) return renderReportNode(key, v, open);
   if (isTyped(v)) return renderTypedSection(key, v, open);
   if (v === null || v === undefined) return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'nul' }, 'null'));
   if (typeof v === 'string') {
@@ -525,13 +707,13 @@ function copyText(t) { if (navigator.clipboard) navigator.clipboard.writeText(t)
 // ---------------------------------------------------------------------------
 // Per-entry summaries and detail fields.
 // ---------------------------------------------------------------------------
-const typedText = (v, n) => v == null ? '' : isTyped(v) ? nodeToText(decodeTyped(v), n || 100) : trunc(JSON.stringify(v), n || 100);
+const typedText = (v, n) => v == null ? '' : isReportNode(v) ? reportNodeText(v, n || 100) : isTyped(v) ? nodeToText(decodeTyped(v), n || 100) : trunc(JSON.stringify(v), n || 100);
 function invocationName(inv) {
   if (!inv) return '?';
   switch (inv.type) {
     case 'AgentInitialization': return 'initialize';
-    case 'AgentMethodInvocation': return inv.methodName;
-    case 'ExternalTool': return 'tool ' + inv.toolName + (inv.commandPath && inv.commandPath.length ? ' ' + inv.commandPath.join('/') : '');
+    case 'AgentMethodInvocation': return fieldText(inv.methodName);
+    case 'ExternalTool': { const path = Array.isArray(inv.commandPath) ? inv.commandPath.join('/') : fieldText(inv.commandPath); return 'tool ' + fieldText(inv.toolName) + (path ? ' ' + path : ''); }
     case 'SaveSnapshot': return 'save snapshot';
     case 'LoadSnapshot': return 'load snapshot';
     case 'ProcessOplogEntries': return 'process oplog entries';
@@ -551,12 +733,13 @@ function resultOutput(r) {
 }
 function resultError(r) {
   if (!r) return null;
-  if (r.error) return r.error;
-  if (r.type === 'ExternalTool' && r.result && r.result.type === 'Failure') return JSON.stringify(r.result).slice(0, 200);
+  if (r.error) return fieldText(r.error);
+  if (r.type === 'ExternalTool' && r.result && r.result.type === 'Failure') return EXPORT ? 'failure ' + typedText(r.result.result, 190) : JSON.stringify(r.result).slice(0, 200);
   return null;
 }
 function snapshotText(s) {
   if (!s) return '';
+  if (EXPORT) return [s.type, s.mimeType != null ? fieldText(s.mimeType) : null, s.size != null ? bytesText(s.size) : null].filter(x => x != null).join(' · ');
   if (s.type === 'Raw') return `${s.mimeType} · ${fmtBytes((s.data || []).length)}`;
   if (s.type === 'Json') return trunc(JSON.stringify(s.data), 120);
   if (s.type === 'Multipart') return `${s.mimeType} · ${(s.parts || []).length} parts`;
@@ -569,8 +752,8 @@ const arrow = () => span('arrow', '→');
 function summary(e) {
   const p = e.entry; const t = e.type;
   switch (t) {
-    case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${fmtBytes(p.componentSize || 0)}` + (p.parent ? ` · parent ${p.parent.agentId || ''}` : ''))];
-    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + p.denial) : null];
+    case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${bytesText(p.componentSize)}` + (p.parent ? ` · parent ${EXPORT ? fieldText(p.parent) : (p.parent.agentId || '')}` : ''))];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + fieldText(p.denial)) : null];
     case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
     case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
     case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
@@ -579,32 +762,32 @@ function summary(e) {
     case 'AgentInvocationStarted': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 110) + ')') : null]; }
     case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
     case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
-    case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey))];
-    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
+    case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (EXPORT ? fieldText(p.idempotencyKey) : (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey)))];
+    case 'Error': return [span('err', (p.kind || '') + ': ' + (EXPORT ? fieldText(p.error, 200) : trunc(String(p.error || ''), 200))), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
     case 'Jump': return [span('val', `replay skips #${idxOf(p.jump.start)} … #${idxOf(p.jump.end)}`)];
     case 'Revert': return [span('val', `dropped #${idxOf(p.droppedRegion.start)} … #${idxOf(p.droppedRegion.end)} · reverted to #${idxOf(p.droppedRegion.start) - 1}`)];
-    case 'BeginRemoteTransaction': return [span('val', 'transaction ' + (p.transactionId && p.transactionId.value || p.transactionId))];
+    case 'BeginRemoteTransaction': return [span('val', 'transaction ' + (EXPORT ? fieldText(p.transactionId) : (p.transactionId && p.transactionId.value || p.transactionId)))];
     case 'PreCommitRemoteTransaction': case 'PreRollbackRemoteTransaction': case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': return [span('val', 'begin #' + idxOf(p.beginIndex))];
     case 'PendingUpdate': return [span('fn', '→ revision ' + p.targetRevision), span('val', ' · ' + (p.description && p.description.type || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() + ` · attempt #${idxOf(p.updateAttemptIndex)}`)];
-    case 'SuccessfulUpdate': return [span('ok', 'now at revision ' + p.targetRevision), span('val', ` · ${fmtBytes(p.newComponentSize || 0)}` + (p.snapshotAssistedDetails ? ` · snapshot assisted from #${idxOf(p.snapshotAssistedDetails.snapshotIndex)}` : ''))];
-    case 'FailedUpdate': return [span('err', 'update to revision ' + p.targetRevision + ' failed'), span('val', p.details ? ': ' + trunc(p.details, 150) : '')];
-    case 'GrowMemory': return [span('val', '+' + fmtBytes(p.delta || 0))];
-    case 'CreateResource': case 'DropResource': return [span('fn', p.name || ''), span('val', ` · id ${p.id} · owner ${p.owner || ''}`)];
-    case 'Log': return [span('val', `[${p.level}] `), span(p.level === 'Stderr' ? 'err' : '', trunc(String(p.message || '').replace(/\n+$/, ''), 300)), p.context ? span('val', ' · ' + p.context) : null];
-    case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
-    case 'OplogProcessorCheckpoint': return [span('fn', p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
-    case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
-    case 'Omitted': return [span('val', `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`)];
-    case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
-    case 'SpanClosed': return [span('val', 'span ' + p.spanFinished.spanId + ' closed' + (p.resourceStartIndex != null ? ' · opened at #' + idxOf(p.resourceStartIndex) : ''))];
-    case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
-    case 'RemoveRetryPolicy': return [span('fn', p.name)];
+    case 'SuccessfulUpdate': return [span('ok', 'now at revision ' + p.targetRevision), span('val', ` · ${bytesText(p.newComponentSize)}` + (p.snapshotAssistedDetails ? ` · snapshot assisted from #${idxOf(p.snapshotAssistedDetails.snapshotIndex)}` : ''))];
+    case 'FailedUpdate': return [span('err', 'update to revision ' + p.targetRevision + ' failed'), span('val', p.details ? ': ' + (EXPORT ? fieldText(p.details, 150) : trunc(p.details, 150)) : '')];
+    case 'GrowMemory': return [span('val', '+' + bytesText(p.delta))];
+    case 'CreateResource': case 'DropResource': return [span('fn', p.name || ''), span('val', ` · id ${fieldText(p.id)} · owner ${fieldText(p.owner)}`)];
+    case 'Log': return [span('val', `[${p.level}] `), span(p.level === 'Stderr' ? 'err' : '', EXPORT ? fieldText(p.message, 300) : trunc(String(p.message || '').replace(/\n+$/, ''), 300)), p.context ? span('val', ' · ' + fieldText(p.context)) : null];
+    case 'ActivatePlugin': case 'DeactivatePlugin': if (isReportNode(p.plugin)) return [span('fn', 'plugin'), span('val', ' ' + fieldText(p.plugin))]; return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
+    case 'OplogProcessorCheckpoint': return [span('fn', isReportNode(p.plugin) ? 'plugin ' + fieldText(p.plugin) : p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
+    case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + fieldText(p.filesystemSnapshot)) : null];
+    case 'Omitted': return [span('val', EXPORT ? `${p.entryType} · ${fmtBytes(p.size || 0)} · ${p.reason === 'tooLarge' ? 'too large for --max-entry-bytes' : 'read failed'}` : `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`)];
+    case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + fieldText(p.filesystemSnapshot))];
+    case 'SpanClosed': return [span('val', 'span ' + fieldText(p.spanFinished.spanId) + ' closed' + (p.resourceStartIndex != null ? ' · opened at #' + idxOf(p.resourceStartIndex) : ''))];
+    case 'SetRetryPolicy': return [span('fn', fieldText(p.policy.name)), span('val', ` · priority ${fieldText(p.policy.priority)}`)];
+    case 'RemoveRetryPolicy': return [span('fn', fieldText(p.name))];
     case 'StreamRegistered': case 'StreamItems': case 'StreamEnd': case 'StreamCancel': case 'StreamSession': return [span('val', typedText(p.record, 160))];
-    case 'CardEventQueued': return [span('val', `${p.event.type} · card ${p.event.cardId}`)];
-    case 'CardInstalled': case 'CardRevoked': case 'CardExpired': case 'CardDerived': case 'CardInstallFailed': return [span('val', `card ${p.cardId}` + (p.reason ? ' · ' + p.reason : '') + (p.walletGeneration != null ? ` · wallet generation ${p.walletGeneration}` : ''))];
-    case 'CardTransferStarted': case 'CardTransferred': case 'CardTransferConfirmed': return [span('val', `transfer ${p.transferId} · card ${p.cardId || p.sourceCardId}`)];
-    case 'CardRevokedCascade': return [span('val', `${(p.revokedCardIds || []).length} cards revoked · wallet generation ${p.localWalletGeneration}`)];
-    default: return [span('val', Object.keys(p).filter(k => k !== 'type' && k !== 'timestamp').map(k => `${k}=${trunc(JSON.stringify(p[k]), 40)}`).join(' '))];
+    case 'CardEventQueued': return [span('val', `${p.event.type} · card ${fieldText(p.event.cardId)}`)];
+    case 'CardInstalled': case 'CardRevoked': case 'CardExpired': case 'CardDerived': case 'CardInstallFailed': return [span('val', `card ${fieldText(p.cardId)}` + (p.reason ? ' · ' + fieldText(p.reason) : '') + (p.walletGeneration != null ? ` · wallet generation ${fieldText(p.walletGeneration)}` : ''))];
+    case 'CardTransferStarted': case 'CardTransferred': case 'CardTransferConfirmed': return [span('val', `transfer ${fieldText(p.transferId)} · card ${fieldText(p.cardId || p.sourceCardId)}`)];
+    case 'CardRevokedCascade': return [span('val', `${EXPORT ? (countOf(p.revokedCardIds) != null ? countOf(p.revokedCardIds) : fieldText(p.revokedCardIds, 40)) : (p.revokedCardIds || []).length} cards revoked · wallet generation ${fieldText(p.localWalletGeneration)}`)];
+    default: return [span('val', Object.keys(p).filter(k => k !== 'type' && k !== 'timestamp').map(k => `${k}=${EXPORT ? fieldText(p[k], 40) : trunc(JSON.stringify(p[k]), 40)}`).join(' '))];
   }
 }
 
@@ -616,15 +799,20 @@ function detailFields(e) {
   add('timestamp', h('span', { title: p.timestamp }, fmtDate(e.ts), ' ', h('span', { class: 'muted' }, p.timestamp)));
   if (e.attribution && e.attribution.type === 'Entity') {
     const chain = [...(e.attribution.ancestors || []), e.attribution.invocation];
-    add('owner', h('span', null, 'entity · ', chain.map((inv, i) => h('span', null, i ? ' › ' : '', `${inv.entity.kind} ${inv.entity.name} (`, indexLink(inv.startIndex), `, ${inv.callMode})`))));
+    add('owner', h('span', null, 'entity · ', chain.map((inv, i) => h('span', null, i ? ' › ' : '', `${inv.entity.kind} ${fieldText(inv.entity.name)} (`, indexLink(inv.startIndex), `, ${inv.callMode})`))));
     const op = e.attribution.invocation.operation;
-    if (op && op.type === 'Tool') add('tool command', h('span', null, (op.commandPath || []).join(' '), h('span', { class: 'muted' }, ` · stdin ${op.hasStdin ? 'attached' : 'no'} · stdout ${op.hasStdout ? 'attached' : 'no'}${op.declaresStdout ? ' (declared)' : ''} · stderr ${op.hasStderr ? 'attached' : 'no'}${op.declaresStderr ? ' (declared)' : ''} · stdio bytes are not recorded`)));
-  } else add('owner', 'agent');
+    if (op && op.type === 'Tool' && EXPORT) add('tool command', h('span', null, pathText(op.commandPath), h('span', { class: 'muted' }, ` · stdin ${fieldText(op.hasStdin)} · stdout ${fieldText(op.hasStdout)} (declared ${fieldText(op.declaresStdout)}) · stderr ${fieldText(op.hasStderr)} (declared ${fieldText(op.declaresStderr)}) · stdio bytes are not recorded`)));
+    else if (op && op.type === 'Tool') add('tool command', h('span', null, (op.commandPath || []).join(' '), h('span', { class: 'muted' }, ` · stdin ${op.hasStdin ? 'attached' : 'no'} · stdout ${op.hasStdout ? 'attached' : 'no'}${op.declaresStdout ? ' (declared)' : ''} · stderr ${op.hasStderr ? 'attached' : 'no'}${op.declaresStderr ? ' (declared)' : ''} · stdio bytes are not recorded`)));
+  } else if (e.reportAttribution) add('owner', h('div', { class: 'tree' }, renderReportNode(null, e.reportAttribution, true)));
+  else add('owner', 'agent');
   const el = h('div', { class: 'fields' });
   for (const [k, v] of rows) el.append(h('div', { class: 'k' }, k), h('div', { class: 'v' }, v));
   const tree = h('div', { class: 'tree' });
-  for (const k of Object.keys(p)) if (k !== 'type' && k !== 'timestamp') tree.append(renderJson(k, p[k], true));
-  const rawSec = h('div', { class: 'section' }, h('div', { class: 'sh' }, h('span', { class: 't' }, 'raw entry JSON'), h('button', { class: 'copy', onclick: ev => { ev.stopPropagation(); copyText(JSON.stringify({ index: e.index, attribution: e.attribution, entry: e.entry }, null, 2)); } }, 'copy')), (() => { const b = h('div', { class: 'body' }); const d = h('details', null, h('summary', { class: 'muted', style: 'cursor:pointer' }, 'show')); d.addEventListener('toggle', () => { if (d.open && !d.dataset.b) { d.dataset.b = 1; d.append(h('pre', null, JSON.stringify({ index: e.index, attribution: e.attribution, entry: e.entry }, null, 2))); } }); b.append(d); return b; })());
+  if (EXPORT && e.reportBody && e.reportBody.kind === 'record') { for (const [i, f] of e.reportBody.fields.entries()) tree.append(renderReportNode(f.name != null ? f.name : '#' + i, f.value, true)); }
+  else if (EXPORT && e.reportBody) tree.append(renderReportNode(null, e.reportBody, true));
+  else for (const k of Object.keys(p)) if (k !== 'type' && k !== 'timestamp') tree.append(renderJson(k, p[k], true));
+  const rawJson = () => JSON.stringify(EXPORT && e.report ? e.report : { index: e.index, attribution: e.attribution, entry: e.entry }, null, 2);
+  const rawSec = h('div', { class: 'section' }, h('div', { class: 'sh' }, h('span', { class: 't' }, 'raw entry JSON'), h('button', { class: 'copy', onclick: ev => { ev.stopPropagation(); copyText(rawJson()); } }, 'copy')), (() => { const b = h('div', { class: 'body' }); const d = h('details', null, h('summary', { class: 'muted', style: 'cursor:pointer' }, 'show')); d.addEventListener('toggle', () => { if (d.open && !d.dataset.b) { d.dataset.b = 1; d.append(h('pre', null, rawJson())); } }); b.append(d); return b; })());
   return h('div', { class: 'details' }, el, h('div', { class: 'section' }, h('div', { class: 'sh' }, h('span', { class: 't' }, 'fields')), h('div', { class: 'body' }, tree)), rawSec);
 }
 
@@ -690,7 +878,11 @@ function searchText(e) {
   if (e._s === undefined) {
     const parts = [e.type, kindInfo(e.type)[0]];
     const walk = (v, d) => { if (d > 12 || v == null) return; if (isTyped(v)) { parts.push(nodeToText(decodeTyped(v), 2000)); return; } if (typeof v === 'object') { if (Array.isArray(v)) { if (!looksLikeBytes(v)) v.forEach(x => walk(x, d + 1)); } else for (const [k, x] of Object.entries(v)) { parts.push(k); walk(x, d + 1); } } else parts.push(String(v)); };
-    walk(e.entry, 0); walk(e.attribution, 0);
+    if (EXPORT && e.report) {
+      const plain = (v, d) => { if (d > 12 || v == null || isReportNode(v)) return; if (typeof v === 'object') { if (Array.isArray(v)) v.forEach(x => plain(x, d + 1)); else for (const [k, x] of Object.entries(v)) { parts.push(k); plain(x, d + 1); } } else parts.push(String(v)); };
+      plain(e.entry, 0); plain(e.attribution, 0);
+      parts.push(reportNodeText(e.reportBody, 4000, true), reportNodeText(e.reportAttribution, 1000, true));
+    } else { walk(e.entry, 0); walk(e.attribution, 0); }
     e._s = parts.join(' ').toLowerCase();
   }
   return e._s;
@@ -721,7 +913,7 @@ function rowTime(e, prevTs) {
 }
 function badge(t, c) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(c || cat)}` }, label); }
 function attrTag(e) {
-  if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + inv.entity.name }, inv.entity.name); }
+  if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + fieldText(inv.entity.name) }, fieldText(inv.entity.name, EXPORT ? 40 : undefined)); }
   return null;
 }
 function nodeKey(n) { return n.kind === 'entity' ? 'ent' + idxOf(n.inv.startIndex) : (n.e ? n.e.index : 'root'); }
@@ -732,7 +924,7 @@ function groupHeader(n) {
   if (n.kind === 'invocation') {
     const inv = e.entry.invocation; const inp = invocationInput(inv);
     parts.push(badge(e.type), h('span', { class: 'sum' }, span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, n.end ? (() => { const r = n.end.entry.result; const err = resultError(r); const out = resultOutput(r); return err ? [span('err', ' ✗ ' + trunc(err, 80))] : out ? [arrow(), span('val', typedText(out, 80))] : [arrow(), span('ok', 'ok')]; })() : span(beyondWindow() ? 'val' : 'err', beyondWindow() ? ' · continues past the loaded window' : ' · unfinished')));
-    if (n.end) { right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts))); if (n.end.entry.consumedFuel) right.push(h('span', { class: 'tag fuel', title: 'consumed fuel' }, '⛽ ' + n.end.entry.consumedFuel)); }
+    if (n.end) { right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts))); if (n.end.entry.consumedFuel) right.push(h('span', { class: 'tag fuel', title: 'consumed fuel' }, '⛽ ' + fieldText(n.end.entry.consumedFuel, 40))); }
     const errs = countErrors(n); if (errs) right.push(h('span', { class: 'tag warn' }, errs + ' error' + (errs > 1 ? 's' : '')));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   } else if (n.kind === 'host') {
@@ -743,11 +935,11 @@ function groupHeader(n) {
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
     if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
     if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
-    if (p.denial != null) right.push(h('span', { class: 'tag warn', title: p.denial }, 'denied'));
+    if (p.denial != null) right.push(h('span', { class: 'tag warn', title: fieldText(p.denial) }, 'denied'));
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {
     const inv = n.inv; const op = inv.operation;
-    parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', inv.entity.name), op && op.type === 'Tool' ? span('val', ' ' + (op.commandPath || []).join(' ')) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
+    parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', fieldText(inv.entity.name, EXPORT ? 60 : undefined)), op && op.type === 'Tool' ? span('val', ' ' + (EXPORT ? pathText(op.commandPath) : (op.commandPath || []).join(' '))) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   }
   return { parts, cls, right };
@@ -769,7 +961,7 @@ function renderNodeEl(n, prev) {
   if (isGroup) { const { parts, right } = groupHeader(n); row.append(h('span', { class: 'kind' }, parts[0]), parts[1], h('span', { class: 'right' }, ...right, attrTag(e || { attribution: null }))); }
   else {
     const right = [];
-    if (e.type === 'AgentInvocationFinished' && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + e.entry.consumedFuel));
+    if (e.type === 'AgentInvocationFinished' && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + fieldText(e.entry.consumedFuel, 40)));
     if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
     const a = attrTag(e); if (a) right.push(a);
     if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
@@ -920,18 +1112,18 @@ function setupMinimap() {
 }
 function renderSidebar() {
   // Stats
-  const byType = {}; let fuel = 0; let errors = 0; let invocations = 0; let logs = 0;
-  for (const e of state.entries) { byType[e.type] = (byType[e.type] || 0) + 1; if (e.type === 'AgentInvocationFinished') { fuel += e.entry.consumedFuel || 0; } if (e.type === 'AgentInvocationStarted') invocations++; if (e.type === 'Error') errors++; if (e.type === 'Log') logs++; }
+  const byType = {}; let fuel = 0; let tokenizedFuel = 0; let errors = 0; let invocations = 0; let logs = 0;
+  for (const e of state.entries) { byType[e.type] = (byType[e.type] || 0) + 1; if (e.type === 'AgentInvocationFinished') { const f = numOf(e.entry.consumedFuel); if (f != null) fuel += f; else if (e.entry.consumedFuel != null) tokenizedFuel++; } if (e.type === 'AgentInvocationStarted') invocations++; if (e.type === 'Error') errors++; if (e.type === 'Log') logs++; }
   const first = state.entries[0]; const last = state.entries[state.entries.length - 1];
   const stats = $('#pane-stats'); stats.replaceChildren();
   const tbl = (rows) => { const t = h('table'); for (const [k, v] of rows) t.append(h('tr', null, h('td', null, k), h('td', { class: 'num' }, v))); return t; };
   if (LIVE) stats.append(h('div', { class: 'muted', style: 'margin-top:8px' }, 'Statistics cover the loaded window only.'));
   stats.append(h('h3', null, 'overview'), tbl([
     ['entries', state.entries.length], ['index range', first ? `#${first.index} – #${last.index}` : '–'],
-    ['time span', first ? fmtDur(last.ts - first.ts) : '–'], ['invocations', invocations], ['errors', errors], ['log entries', logs], ['fuel consumed', fuel.toLocaleString()],
+    ['time span', first ? fmtDur(last.ts - first.ts) : '–'], ['invocations', invocations], ['errors', errors], ['log entries', logs], ['fuel consumed', (tokenizedFuel && !fuel ? '–' : fuel.toLocaleString()) + (tokenizedFuel ? ` · ${tokenizedFuel} tokenized` : '')],
   ]));
   const create = state.entries.find(e => e.type === 'Create');
-  if (create) { const p = create.entry; stats.append(h('h3', null, 'agent'), tbl([['mode', p.agentMode || ''], ['owner kind', p.ownerKind || ''], ['initial revision', p.componentRevision], ['component size', fmtBytes(p.componentSize || 0)], ['initial memory', fmtBytes(p.initialTotalLinearMemorySize || 0)], ['env vars', Object.keys(p.env || {}).length], ['plugins', (p.initialActivePlugins || []).length], ['created by', p.createdBy && p.createdBy.value || JSON.stringify(p.createdBy)], ['instance id', p.instanceId || '']])); }
+  if (create) { const p = create.entry; stats.append(h('h3', null, 'agent'), tbl([['mode', p.agentMode || ''], ['owner kind', p.ownerKind || ''], ['initial revision', p.componentRevision], ['component size', bytesText(p.componentSize)], ['initial memory', bytesText(p.initialTotalLinearMemorySize)], ['env vars', EXPORT ? (isReportNode(p.env) && p.env.kind === 'record' ? p.env.fields.length : (countOf(p.env) != null ? countOf(p.env) : '–')) : Object.keys(p.env || {}).length], ['plugins', EXPORT ? (countOf(p.initialActivePlugins) != null ? countOf(p.initialActivePlugins) : '–') : (p.initialActivePlugins || []).length], ['created by', EXPORT ? fieldText(p.createdBy, 40) : (p.createdBy && p.createdBy.value || JSON.stringify(p.createdBy))], ['instance id', EXPORT ? fieldText(p.instanceId, 40) : (p.instanceId || '')]])); }
   stats.append(h('h3', null, 'entries by type · click to filter'));
   const t = h('table');
   for (const [ty, c] of Object.entries(byType).sort((a, b) => b[1] - a[1])) {
@@ -960,12 +1152,12 @@ function renderSidebar() {
   const frags = state.entries.filter(e => e.type === 'Log' && (e.entry.level === 'Stdout' || e.entry.level === 'Stderr'));
   const other = state.entries.filter(e => e.type === 'Log' && e.entry.level !== 'Stdout' && e.entry.level !== 'Stderr');
   if (!frags.length && !other.length) con.append(h('div', { class: 'muted' }, 'No log entries in this dump.'));
-  if (frags.length) { con.append(h('h3', null, 'stdout / stderr · click a fragment to jump')); const box = h('div', { class: 'console' }); for (const e of frags) box.append(h('span', { class: e.entry.level === 'Stderr' ? 'stderr' : '', title: '#' + e.index + ' ' + fmtTime(e.ts), onclick: () => goTo(e.index) }, e.entry.message)); con.append(box); }
-  if (other.length) { con.append(h('h3', null, 'structured logs')); const box = h('div', { class: 'console' }); for (const e of other) box.append(h('span', { class: ['Error', 'Critical'].includes(e.entry.level) ? 'stderr' : '', onclick: () => goTo(e.index) }, `${fmtTime(e.ts)} [${e.entry.level}] ${e.entry.context ? e.entry.context + ': ' : ''}${e.entry.message}\n`)); con.append(box); }
+  if (frags.length) { con.append(h('h3', null, 'stdout / stderr · click a fragment to jump')); const box = h('div', { class: 'console' }); for (const e of frags) box.append(h('span', { class: e.entry.level === 'Stderr' ? 'stderr' : '', title: '#' + e.index + ' ' + fmtTime(e.ts), onclick: () => goTo(e.index) }, fieldText(e.entry.message))); con.append(box); }
+  if (other.length) { con.append(h('h3', null, 'structured logs')); const box = h('div', { class: 'console' }); for (const e of other) box.append(h('span', { class: ['Error', 'Critical'].includes(e.entry.level) ? 'stderr' : '', onclick: () => goTo(e.index) }, `${fmtTime(e.ts)} [${e.entry.level}] ${e.entry.context ? fieldText(e.entry.context) + ': ' : ''}${fieldText(e.entry.message)}\n`)); con.append(box); }
   // About
   const ab = $('#pane-about'); ab.replaceChildren();
   const m = state.meta;
-  ab.append(h('h3', null, 'source'), tbl([['mode', LIVE ? 'live (served by golem-cli, loads pages through the API)' : 'static (entries embedded in the page)'], ['agent', m.agentId || ''], ['component', m.componentName || ''], ['component id', m.componentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || ''], ['--from', m.from != null ? m.from : '–'], ['--query', m.query || '–']]),
+  ab.append(h('h3', null, 'source'), EXPORT ? tbl([['mode', LIVE ? 'live export (obfuscated pages served by golem-cli)' : 'export (obfuscated report)'], ['agent', m.agentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || '']]) : tbl([['mode', LIVE ? 'live (served by golem-cli, loads pages through the API)' : 'static (entries embedded in the page)'], ['agent', m.agentId || ''], ['component', m.componentName || ''], ['component id', m.componentId || ''], ['generated', m.generatedAt ? fmtDate(Date.parse(m.generatedAt)) : ''], ['cli version', m.cliVersion || ''], ['--from', m.from != null ? m.from : '–'], ['--query', m.query || '–']]),
     h('h3', null, 'legend'), h('div', null, CATEGORIES.map(c => h('div', { style: 'margin:2px 0' }, h('span', { class: 'badge', style: `--c:${catColor(c)}` }, c), ' ', h('span', { class: 'muted' }, LEGEND[c])))),
     h('h3', null, 'notes'), h('div', { class: 'muted' }, 'Hint entries are not consumed during replay. Entries struck through lie in a region skipped by a JUMP or dropped by a REVERT. A START row is merged with its END / CANCELLED entry; expand it to see stream frames, the end entry and completion markers. Entries executed by a tool entity are nested under the tool invocation.'));
 }
@@ -974,12 +1166,62 @@ const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'd
 // ---------------------------------------------------------------------------
 // Loading data.
 // ---------------------------------------------------------------------------
-function normalize(doc) {
+function normalize(doc, opts) {
+  const exportMode = !!(opts && opts.exportMode);
   let entries = doc.entries || doc;
   if (!Array.isArray(entries)) entries = [];
-  entries = entries.filter(x => x && x.entry && x.entry.type).map(x => ({ index: Number(idxOf(x.index !== undefined ? x.index : x.oplogIndex)), attribution: x.attribution || { type: 'Agent' }, entry: x.entry, type: x.entry.type, ts: Date.parse(x.entry.timestamp) }));
+  entries = entries.filter(x => x && x.entry && x.entry.type).map(x => {
+    const n = { index: Number(idxOf(x.index !== undefined ? x.index : x.oplogIndex)), attribution: x.attribution || (exportMode ? null : { type: 'Agent' }), entry: x.entry, type: x.entry.type, ts: Date.parse(x.entry.timestamp) };
+    if (exportMode) { n.report = x.report; n.reportBody = x.reportBody; n.reportAttribution = x.reportAttribution; }
+    return n;
+  });
   entries.sort((a, b) => a.index - b.index);
   return entries;
+}
+// Export pages take their identity only from the header: the root reference, never an agent ID.
+function exportMeta(header) { return { agentId: pseudonymOf(header && header.root), generatedAt: header && header.generatedAt, cliVersion: header && header.cliVersion }; }
+const pageEntries = page => EXPORT ? normalize({ entries: exportEntries(page.entries) }, { exportMode: true }) : normalize(page);
+function mergeCoverage(a, b) {
+  if (!a) return b || null; if (!b) return a;
+  const list = (x, y) => ({ shown: x.shown.concat(y.shown).slice(0, 100), discovered: x.discovered + y.discovered });
+  const out = { hydrationFailures: list(a.hydrationFailures, b.hydrationFailures), startUnknown: list(a.startUnknown, b.startUnknown), schemaLessRpcValues: list(a.schemaLessRpcValues, b.schemaLessRpcValues), notes: [...new Set([...(a.notes || []), ...(b.notes || [])])] };
+  out.incomplete = out.hydrationFailures.discovered > 0 || out.startUnknown.discovered > 0;
+  return out;
+}
+// The part of a page's coverage about entries before `lo`. The shown items are the first ones in
+// index order, so items beyond the cap count only when every shown item is before `lo`.
+function coverageBefore(c, lo) {
+  if (!c) return c;
+  const list = x => { const shown = x.shown.filter(i => i.index < lo); return { shown, discovered: shown.length + (shown.length === x.shown.length ? x.discovered - x.shown.length : 0) }; };
+  return { ...c, hydrationFailures: list(c.hydrationFailures), startUnknown: list(c.startUnknown), schemaLessRpcValues: list(c.schemaLessRpcValues) };
+}
+function renderExportBanner(header, coverage) {
+  const b = $('#exportbanner'); b.replaceChildren();
+  $('#app').classList.add('export'); b.classList.remove('hidden');
+  header = header || {};
+  const kept = [header.keepScalars && 'scalars', header.keepShape && 'shape', header.keepErrorText && 'error text'].filter(Boolean);
+  b.append(h('div', null, h('b', null, 'Obfuscated report'), ' · customer values are tokens, equal only inside this ' + (LIVE ? 'viewer process' : 'export') + ' · kept: ' + (kept.length ? kept.join(', ') : 'none') + (header.filtered ? ' · filtered by a query' : '')));
+  if (!coverage) return;
+  const list = (title, l, item) => {
+    const row = h('div', { class: 'cov' }, h('span', null, `${title}: `, h('b', null, l.discovered)));
+    for (const x of l.shown) row.append(item(x));
+    if (l.discovered > l.shown.length) row.append(h('span', { class: 'muted' }, `… ${l.discovered - l.shown.length} more`));
+    return row;
+  };
+  b.append(list(LIVE ? 'omitted entries (loaded pages)' : 'omitted entries', coverage.hydrationFailures, x => h('span', null, indexLink(x.index), ` ${x.kind} · ${fmtBytes(x.size)} · ${x.reason === 'tooLarge' ? 'too large' : 'read failed'}`)),
+    list('results with an unknown Start', coverage.startUnknown, x => h('span', null, indexLink(x.index), ' ← ', indexLink(x.startIndex))),
+    list('RPC values without a schema', coverage.schemaLessRpcValues, x => h('span', null, indexLink(x.index), ' ' + x.path)));
+  for (const note of coverage.notes || []) b.append(h('div', { class: 'muted' }, 'note: ' + note));
+  if (coverage.incomplete) b.append(h('div', { class: 'err' }, 'Some entries are not in the report in full.'));
+}
+function hideExportBanner() { $('#app').classList.remove('export'); $('#exportbanner').classList.add('hidden'); }
+function initExport(doc) {
+  EXPORT = true;
+  state.exportHeader = doc.header || {};
+  state.meta = exportMeta(state.exportHeader);
+  state.openKeys.clear();
+  setEntries(normalize({ entries: exportEntries(doc.entries) }, { exportMode: true }));
+  renderExportBanner(state.exportHeader, doc.coverage || null);
 }
 function docMeta(doc) { return { agentId: doc.agentId, componentName: doc.componentName, componentId: doc.componentId, generatedAt: doc.generatedAt, cliVersion: doc.cliVersion, from: doc.from, query: doc.query }; }
 function load(doc) {
@@ -1061,7 +1303,8 @@ async function loadWindow(params) {
     L.serverQuery = params.query ? params.query : null; $('#squery').value = L.serverQuery || '';
     L.from = params.from || null;
     const page = await fetchPage({ from: L.from, query: L.serverQuery });
-    const entries = normalize(page);
+    const entries = pageEntries(page);
+    if (EXPORT) { L.coverage = page.coverage || null; renderExportBanner(state.exportHeader, L.coverage); }
     L.lo = entries.length ? entries[0].index : (L.from || 1); L.hi = entries.length ? entries[entries.length - 1].index : L.lo - 1;
     updateHasMore(page, entries.length);
     state.openKeys.clear(); state.forceOpen = null;
@@ -1075,7 +1318,8 @@ async function loadMore() {
   setLoading(true);
   try {
     const page = await fetchPage({ from: L.from, cursor: L.next, query: L.serverQuery });
-    const entries = normalize(page).filter(e => e.index > L.hi);
+    const entries = pageEntries(page).filter(e => e.index > L.hi);
+    if (EXPORT) { L.coverage = mergeCoverage(L.coverage, page.coverage); renderExportBanner(state.exportHeader, L.coverage); }
     if (entries.length) L.hi = entries[entries.length - 1].index;
     updateHasMore(page, entries.length);
     if (entries.length) setEntries(state.entries.concat(entries), { keepScroll: true }); else renderLiveBar();
@@ -1091,7 +1335,8 @@ async function loadEarlier() {
     const from = Math.max(1, L.lo - L.pageSize); const collected = []; let cursor = null;
     for (let guard = 0; guard < 50; guard++) {
       const page = await fetchPage({ from, cursor, query: null });
-      const got = normalize(page);
+      const got = pageEntries(page);
+      if (EXPORT) { L.coverage = mergeCoverage(L.coverage, coverageBefore(page.coverage, L.lo)); renderExportBanner(state.exportHeader, L.coverage); }
       collected.push(...got.filter(e => e.index < L.lo));
       cursor = page.next || null;
       if (!cursor || !got.length || got[got.length - 1].index >= L.lo - 1) break;
@@ -1108,7 +1353,8 @@ async function pollNewEntries() {
   setLoading(true);
   try {
     const page = await fetchPage({ from: L.hi + 1, query: null });
-    const entries = normalize(page).filter(e => e.index > L.hi);
+    const entries = pageEntries(page).filter(e => e.index > L.hi);
+    if (EXPORT && entries.length) { L.coverage = mergeCoverage(L.coverage, page.coverage); renderExportBanner(state.exportHeader, L.coverage); }
     if (entries.length) L.hi = entries[entries.length - 1].index;
     updateHasMore(page, entries.length);
     if (entries.length) { setEntries(state.entries.concat(entries), { keepScroll: true }); if (L.follow) $('#sentinel').scrollIntoView({ block: 'end' }); }
@@ -1133,8 +1379,9 @@ function renderLiveBar() {
 }
 function initLive(doc) {
   LIVE = true;
-  state.meta = docMeta(doc);
-  state.live = { pageSize: Math.max(1, Number(doc.pageSize) || 100), lo: 0, hi: 0, from: doc.from || null, next: null, hasMore: false, serverQuery: doc.query || null, loading: false, follow: false, meta: null };
+  if (EXPORT) { state.exportHeader = doc.header || {}; state.meta = exportMeta(state.exportHeader); renderExportBanner(state.exportHeader, null); }
+  else state.meta = docMeta(doc);
+  state.live = { pageSize: Math.max(1, Number(doc.pageSize) || 100), lo: 0, hi: 0, from: doc.from || null, next: null, hasMore: false, serverQuery: doc.query || null, loading: false, follow: false, meta: null, coverage: null };
   $('#livebar').classList.remove('hidden'); $('#sq-wrap').classList.remove('hidden'); $('#btn-load').classList.add('hidden');
   $('#squery').value = state.live.serverQuery || '';
   $('#squery').addEventListener('keydown', ev => { if (ev.key === 'Enter') loadWindow({ from: null, query: ev.target.value.trim() }); });
@@ -1154,7 +1401,7 @@ function parseDump(text) {
   }
   return out;
 }
-function loadFile(file) { file.text().then(t => { const doc = parseDump(t); const n = normalize(doc).length; if (!n) { toast('No oplog entries found in ' + file.name); return; } state.meta = { agentId: file.name }; load(doc); toast(`Loaded ${n} entries from ${file.name}`); }); }
+function loadFile(file) { file.text().then(t => { const doc = parseDump(t); const wasExport = EXPORT; EXPORT = false; const n = normalize(doc).length; EXPORT = wasExport; if (!n) { toast('No oplog entries found in ' + file.name); return; } EXPORT = false; hideExportBanner(); state.meta = { agentId: file.name }; load(doc); toast(`Loaded ${n} entries from ${file.name}`); }); }
 
 // ---------------------------------------------------------------------------
 // Wiring.
@@ -1165,7 +1412,10 @@ function init() {
   setupMinimap();
   const theme = localStorage.getItem('golem-oplog-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = theme;
-  if (doc.mode === 'live') initLive(doc); else load(doc);
+  if (doc.mode === 'live') initLive(doc);
+  else if (doc.mode === 'export') initExport(doc);
+  else if (doc.mode === 'liveexport') { EXPORT = true; initLive(doc); }
+  else load(doc);
   let deb;
   $('#search').addEventListener('input', ev => { clearTimeout(deb); deb = setTimeout(() => { state.q = ev.target.value.trim().toLowerCase(); renderList(); }, 180); });
   $('#cb-hints').addEventListener('change', ev => { state.hints = ev.target.checked; renderList(); });

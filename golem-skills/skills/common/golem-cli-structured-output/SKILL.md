@@ -87,14 +87,14 @@ golem output-schema
 
 Most structured commands emit exactly one document to stdout.
 
-Some commands emit a finite set of structured documents during one command run. Different `$type`s may appear conditionally, and not every possible document appears every time. For example, `golem deploy` may emit `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`, `deploy.environment-tool-grants`, and/or `deploy.deployment`, followed by a final `deploy` success document.
+Some commands emit a finite set of structured documents during one command run. Different `$type`s may appear conditionally, and not every possible document appears every time. For example, `golem deploy` may emit `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`, `deploy.environment-tool-grants`, and/or `deploy.deployment`, followed by a final `deploy` success document. Another example: `golem agent oplog --obfuscate` emits one `agent.oplog-export-header` first, one `agent.oplog-export-entry` per oplog entry in index order, and one `agent.oplog-export-coverage` last; a sequence without the coverage document is from a failed export. The schemas mark these types `multi-document`.
 
 Some commands emit a stream of documents:
 
 | Command | `$type` | Shape |
 |---------|---------|-------|
 | `agent stream` | `agent.stream` | One document per stream event |
-| `agent oplog` | `agent.oplog` | One document per oplog entry |
+| `agent oplog` | `agent.oplog` | One document per oplog entry, without `--obfuscate` |
 
 For compact `--format json`, each streamed document is emitted as one JSON line. Parse stdout line by line. For `pretty-json`, YAML, and TOON, parse stdout as a sequence or framed stream, not as one JSON object or array.
 

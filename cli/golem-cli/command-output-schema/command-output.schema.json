@@ -91,6 +91,15 @@
       "$ref": "#/definitions/agent.oplog"
     },
     {
+      "$ref": "#/definitions/agent.oplog-export-header"
+    },
+    {
+      "$ref": "#/definitions/agent.oplog-export-entry"
+    },
+    {
+      "$ref": "#/definitions/agent.oplog-export-coverage"
+    },
+    {
       "$ref": "#/definitions/agent.plugin-toggle"
     },
     {
@@ -2134,7 +2143,7 @@
     },
     "agent.oplog": {
       "type": "object",
-      "description": "One document emitted per oplog entry by `golem agent oplog` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "description": "One document emitted per oplog entry by `golem agent oplog` without `--obfuscate` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
       "x-golem-output-mode": "stream",
       "x-golem-command": "agent oplog",
       "required": [
@@ -2163,6 +2172,818 @@
               "$ref": "#/definitions/OmittedOplogEntryContent"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-export-header": {
+      "type": "object",
+      "description": "The header of an obfuscated oplog export by `golem agent oplog --obfuscate` in structured formats: the keep flags, whether a query filtered the entries, and the root agent reference. One run writes one `agent.oplog-export-header` document first, one `agent.oplog-export-entry` document per entry in index order, and one `agent.oplog-export-coverage` document last. A sequence of documents without the coverage document is a failed export. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "obfuscate",
+        "keepScalars",
+        "keepShape",
+        "keepErrorText",
+        "filtered",
+        "root",
+        "cliVersion",
+        "generatedAt"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-export-header"
+        },
+        "obfuscate": {
+          "type": "boolean"
+        },
+        "keepScalars": {
+          "type": "boolean"
+        },
+        "keepShape": {
+          "type": "boolean"
+        },
+        "keepErrorText": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "type": "boolean"
+        },
+        "root": {
+          "$ref": "#/definitions/ReportAgentRef"
+        },
+        "cliVersion": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-export-entry": {
+      "type": "object",
+      "description": "One oplog entry of an obfuscated oplog export by `golem agent oplog --obfuscate`: either a rendered `body` or an `omitted` marker. `attribution` is present only for an entry attributed to an entity. One run writes one `agent.oplog-export-header` document first, one `agent.oplog-export-entry` document per entry in index order, and one `agent.oplog-export-coverage` document last. A sequence of documents without the coverage document is a failed export. Parse stdout as a sequence of documents, not as one array or object.",
+      "oneOf": [
+        {
+          "required": [
+            "body"
+          ]
+        },
+        {
+          "required": [
+            "omitted"
+          ]
+        }
+      ],
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "index",
+        "timestamp",
+        "kind"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-export-entry"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "attribution": {
+          "$ref": "#/definitions/ReportNode"
+        },
+        "body": {
+          "$ref": "#/definitions/ReportNode"
+        },
+        "omitted": {
+          "$ref": "#/definitions/ReportOmission"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-export-coverage": {
+      "type": "object",
+      "description": "The coverage of an obfuscated oplog export by `golem agent oplog --obfuscate`: the entries and values that the report does not show in full. One run writes one `agent.oplog-export-header` document first, one `agent.oplog-export-entry` document per entry in index order, and one `agent.oplog-export-coverage` document last. A sequence of documents without the coverage document is a failed export. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "incomplete",
+        "hydrationFailures",
+        "startUnknown",
+        "schemaLessRpcValues",
+        "notes"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-export-coverage"
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "hydrationFailures": {
+          "$ref": "#/definitions/OplogExportOmittedEntryRefList"
+        },
+        "startUnknown": {
+          "$ref": "#/definitions/OplogExportStartUnknownRefList"
+        },
+        "schemaLessRpcValues": {
+          "$ref": "#/definitions/OplogExportSchemaLessRpcValueRefList"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportToken": {
+      "type": "string",
+      "description": "A keyed token, `<domain>:<32 lower-case hex chars>`. Tokens are equal only inside one export.",
+      "pattern": "^[a-z]+(:[a-z]+)*:[0-9a-f]{32}$"
+    },
+    "ReportAgentRef": {
+      "type": "object",
+      "description": "A reference to an agent: one token over the agent ID text.",
+      "required": [
+        "token"
+      ],
+      "properties": {
+        "token": {
+          "$ref": "#/definitions/ReportToken"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportKnownRole": {
+      "type": "string",
+      "enum": [
+        "multimodal",
+        "unstructuredText",
+        "unstructuredBinary"
+      ]
+    },
+    "ReportNode": {
+      "description": "One node of a rendered value or of the rendered entry structure, tagged by `kind`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "fields"
+          ],
+          "properties": {
+            "kind": {
+              "const": "record"
+            },
+            "typeName": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/definitions/ReportKnownRole"
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ReportField"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "elements"
+          ],
+          "properties": {
+            "kind": {
+              "const": "tuple"
+            },
+            "elements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ReportNode"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "caseKind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "case"
+            },
+            "caseKind": {
+              "type": "string",
+              "enum": [
+                "variant",
+                "enum",
+                "flags",
+                "union",
+                "option",
+                "result"
+              ]
+            },
+            "typeName": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/definitions/ReportKnownRole"
+            },
+            "case": {
+              "type": "string"
+            },
+            "caseIndex": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "$ref": "#/definitions/ReportNode"
+            },
+            "tagToken": {
+              "$ref": "#/definitions/ReportToken"
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "list"
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            },
+            "elements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ReportNode"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "map"
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ReportMapEntry"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "bytes"
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "scalarKind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "scalar"
+            },
+            "scalarKind": {
+              "type": "string",
+              "enum": [
+                "int",
+                "float",
+                "bool",
+                "datetime",
+                "duration"
+              ]
+            },
+            "value": {
+              "type": [
+                "number",
+                "string",
+                "boolean"
+              ]
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "quantity"
+            },
+            "mantissa": {
+              "type": "integer"
+            },
+            "scale": {
+              "type": "integer"
+            },
+            "unit": {
+              "type": "string"
+            },
+            "unitToken": {
+              "$ref": "#/definitions/ReportToken"
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "str"
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "token"
+          ],
+          "properties": {
+            "kind": {
+              "const": "agent"
+            },
+            "token": {
+              "$ref": "#/definitions/ReportToken"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "redacted"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "secret",
+                "quotaToken",
+                "permissionCard",
+                "stream"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "description"
+          ],
+          "properties": {
+            "kind": {
+              "const": "typeDescription"
+            },
+            "description": {
+              "$ref": "#/definitions/ReportTypeDescription"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "number"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "timestamp"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "flag"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ReportField": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/definitions/ReportNode"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportMapEntry": {
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/definitions/ReportNode"
+        },
+        "value": {
+          "$ref": "#/definitions/ReportNode"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportTypeDescription": {
+      "type": "object",
+      "description": "A schema held as data, without its metadata texts, restrictions and discriminator literals.",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ref",
+            "bool",
+            "s8",
+            "s16",
+            "s32",
+            "s64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "f32",
+            "f64",
+            "char",
+            "string",
+            "record",
+            "variant",
+            "enum",
+            "flags",
+            "tuple",
+            "list",
+            "fixedList",
+            "map",
+            "option",
+            "result",
+            "text",
+            "binary",
+            "path",
+            "url",
+            "uuid",
+            "datetime",
+            "duration",
+            "quantity",
+            "union",
+            "secret",
+            "quotaToken",
+            "permissionCard",
+            "future",
+            "stream"
+          ]
+        },
+        "typeName": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/ReportKnownRole"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReportNamedTypeDescription"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReportTypeDescription"
+          }
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "baseUnit": {
+          "type": "string"
+        },
+        "allowedSuffixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "definitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReportNamedTypeDescription"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportNamedTypeDescription": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "body": {
+          "$ref": "#/definitions/ReportTypeDescription"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportOmission": {
+      "type": "object",
+      "required": [
+        "reason",
+        "size"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/ReportOmittedReason"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReportOmittedReason": {
+      "type": "string",
+      "enum": [
+        "tooLarge",
+        "hydrationFailed"
+      ]
+    },
+    "OplogExportOmittedEntryRef": {
+      "type": "object",
+      "required": [
+        "index",
+        "kind",
+        "size",
+        "reason"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "$ref": "#/definitions/ReportOmittedReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportStartUnknownRef": {
+      "type": "object",
+      "required": [
+        "index",
+        "startIndex"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "startIndex": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportSchemaLessRpcValueRef": {
+      "type": "object",
+      "required": [
+        "index",
+        "path"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportOmittedEntryRefList": {
+      "type": "object",
+      "description": "The first 100 items of a coverage list; `discovered` counts every item.",
+      "required": [
+        "shown",
+        "discovered"
+      ],
+      "properties": {
+        "shown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OplogExportOmittedEntryRef"
+          }
+        },
+        "discovered": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportStartUnknownRefList": {
+      "type": "object",
+      "description": "The first 100 items of a coverage list; `discovered` counts every item.",
+      "required": [
+        "shown",
+        "discovered"
+      ],
+      "properties": {
+        "shown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OplogExportStartUnknownRef"
+          }
+        },
+        "discovered": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OplogExportSchemaLessRpcValueRefList": {
+      "type": "object",
+      "description": "The first 100 items of a coverage list; `discovered` counts every item.",
+      "required": [
+        "shown",
+        "discovered"
+      ],
+      "properties": {
+        "shown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OplogExportSchemaLessRpcValueRef"
+          }
+        },
+        "discovered": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -9808,6 +10629,18 @@
     {
       "type": "agent.oplog",
       "rustType": "AgentOplogEntryView"
+    },
+    {
+      "type": "agent.oplog-export-header",
+      "rustType": "AgentOplogExportHeaderView"
+    },
+    {
+      "type": "agent.oplog-export-entry",
+      "rustType": "AgentOplogExportEntryView"
+    },
+    {
+      "type": "agent.oplog-export-coverage",
+      "rustType": "AgentOplogExportCoverageView"
     },
     {
       "type": "agent.plugin-toggle",

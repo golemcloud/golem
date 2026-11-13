@@ -17,6 +17,7 @@ pub mod extraction;
 pub mod files;
 pub mod invocation_session;
 pub mod oplog;
+pub mod oplog_export_view;
 pub mod oplog_html;
 pub mod stream;
 

@@ -44,6 +44,7 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod model;
+pub mod oplog_export;
 pub mod process;
 pub mod sdk_overrides;
 pub mod toon;

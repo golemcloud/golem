@@ -6315,7 +6315,7 @@ async fn deploy_counter_agent_with_invocations(ctx: &mut TestContext, app_name: 
 }
 
 /// The JSON document embedded in a generated oplog viewer page.
-fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
+pub(super) fn embedded_oplog_viewer_document(html: &str) -> serde_json::Value {
     let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
     let start = html
         .find(open_tag)
@@ -6422,12 +6422,18 @@ async fn test_agent_oplog_served_viewer() {
     assert!(document["entries"].as_array().unwrap().is_empty());
     assert!(document["pageSize"].as_u64().unwrap() > 0);
 
-    let first_page: serde_json::Value = get("api/oplog?count=2")
+    let first_page_text = get("api/oplog?count=2")
         .await
         .unwrap()
-        .json()
+        .text()
         .await
         .unwrap();
+    assert!(
+        first_page_text.starts_with(r#"{"entries":[{"index":1,"attribution":"#)
+            && first_page_text.contains(r#""entry":{"type":"Create""#),
+        "the page must keep the declared field order: {first_page_text}"
+    );
+    let first_page: serde_json::Value = serde_json::from_str(&first_page_text).unwrap();
     let first_entries = first_page["entries"].as_array().unwrap();
     assert_eq!(first_entries.len(), 2);
     assert_eq!(first_entries[0]["index"], 1);

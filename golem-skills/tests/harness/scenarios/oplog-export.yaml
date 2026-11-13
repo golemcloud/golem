@@ -1,0 +1,156 @@
+name: "oplog-export"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke"
+    invoke:
+      agent: 'CounterAgent("ox-secret-4821")'
+      method: "increment"
+    expect:
+      stdout_contains: "1"
+
+  # The marker must be in the raw oplog, otherwise every stdout_not_contains below passes trivially.
+  - id: "control-plain-dump"
+    shell:
+      command: "golem"
+      args: ["--format", "json", "agent", "oplog", "CounterAgent(\"ox-secret-4821\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "ox-secret-4821"
+
+  - id: "export-for-bug-report"
+    prompt: >
+      I want to attach the operation log of the CounterAgent "ox-secret-4821" to a bug report
+      for the Golem maintainers. Use the CLI to save it as JSON to a file called
+      oplog-report.json in the test-app directory. The agent name and all values the agent
+      handled are customer data and must not appear in the file.
+    expectedSkills:
+      - "golem-debug-agent-history"
+
+  - id: "check-report"
+    check_file:
+      path: "oplog-report.json"
+    expect:
+      stdout_contains: "agent.oplog-export-coverage"
+      stdout_not_contains: "ox-secret-4821"
+
+  # Usage: node -e <script> <file> <expected header flags as JSON>
+  - id: "validate-report"
+    shell:
+      command: "node"
+      args:
+        - "-e"
+        - &validate-report |-
+          const fs = require("node:fs");
+          const file = process.argv[1];
+          const expected = JSON.parse(process.argv[2]);
+          function fail(msg) { console.log("report-failed: " + msg); process.exit(1); }
+          function documents(text) {
+            const out = []; let depth = 0; let start = -1; let inStr = false; let esc = false;
+            for (let i = 0; i < text.length; i++) {
+              const ch = text[i];
+              if (depth === 0 && ch !== "{" && ch.trim() !== "") fail("text outside a JSON document at offset " + i);
+              if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+              if (ch === '"') inStr = true;
+              else if (ch === "{") { if (depth++ === 0) start = i; }
+              else if (ch === "}" && depth > 0 && --depth === 0) {
+                try { out.push(JSON.parse(text.slice(start, i + 1))); } catch (e) { fail("unparsable JSON document at offset " + start); }
+              }
+            }
+            if (depth !== 0) fail("an unterminated JSON document at offset " + start);
+            return out;
+          }
+          let text;
+          try { text = fs.readFileSync(file, "utf8"); } catch (e) { fail("cannot read " + file); }
+          if (text.includes("ox-secret-4821")) fail("the file contains the marker");
+          let header; let entryCount;
+          if (file.endsWith(".html")) {
+            const m = text.match(/<script id="oplog-data" type="application\/json">([\s\S]*?)<\/script>/);
+            if (!m) fail("no embedded oplog-data document");
+            let doc;
+            try { doc = JSON.parse(m[1]); } catch (e) { fail("the embedded document is not JSON"); }
+            if (doc.mode !== "export") fail("mode is " + JSON.stringify(doc.mode) + ", expected \"export\"");
+            if (!doc.coverage || typeof doc.coverage !== "object") fail("no coverage in the embedded document");
+            if (!Array.isArray(doc.entries)) fail("no entries array in the embedded document");
+            header = doc.header; entryCount = doc.entries.length;
+          } else {
+            const docs = documents(text);
+            if (docs.length === 0) fail("no JSON documents");
+            if (docs[0]["$type"] !== "agent.oplog-export-header") fail("the first document is " + JSON.stringify(docs[0]["$type"]) + ", expected agent.oplog-export-header");
+            if (docs[docs.length - 1]["$type"] !== "agent.oplog-export-coverage") fail("the last document is " + JSON.stringify(docs[docs.length - 1]["$type"]) + ", expected agent.oplog-export-coverage");
+            const middle = docs.slice(1, -1);
+            const other = middle.find((d) => d["$type"] !== "agent.oplog-export-entry");
+            if (other) fail("a document between header and coverage is " + JSON.stringify(other["$type"]));
+            header = docs[0]; entryCount = middle.length;
+          }
+          if (!header || typeof header !== "object") fail("no header");
+          for (const key of Object.keys(expected)) {
+            if (header[key] !== expected[key]) fail("header." + key + " is " + JSON.stringify(header[key]) + ", expected " + JSON.stringify(expected[key]));
+          }
+          if (entryCount < 1) fail("the report has no entries");
+          console.log("report-ok");
+        - "oplog-report.json"
+        - &strict-flags '{"obfuscate":true,"keepScalars":false,"keepShape":false,"keepErrorText":false}'
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "report-ok"
+
+  - id: "export-html"
+    prompt: >
+      The maintainers prefer to browse the report. Write the same report for the CounterAgent
+      "ox-secret-4821" as a single file that they can open in a browser, called
+      oplog-report.html in the test-app directory. It must not contain customer data either.
+    continueSession: true
+    expectedSkills:
+      - "golem-debug-agent-history"
+
+  - id: "check-html"
+    check_file:
+      path: "oplog-report.html"
+    expect:
+      stdout_not_contains: "ox-secret-4821"
+
+  - id: "validate-html"
+    shell:
+      command: "node"
+      args: ["-e", *validate-report, "oplog-report.html", *strict-flags]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "report-ok"
+
+  - id: "export-with-numbers"
+    prompt: >
+      The maintainers also need to see the counter numbers, but still no text values. Write a
+      new JSON report for the CounterAgent "ox-secret-4821" to a file called
+      oplog-report-numbers.json in the test-app directory.
+    continueSession: true
+    expectedSkills:
+      - "golem-debug-agent-history"
+
+  - id: "check-numbers"
+    check_file:
+      path: "oplog-report-numbers.json"
+    expect:
+      stdout_contains: "agent.oplog-export-coverage"
+      stdout_not_contains: "ox-secret-4821"
+
+  - id: "validate-numbers"
+    shell:
+      command: "node"
+      args:
+        - "-e"
+        - *validate-report
+        - "oplog-report-numbers.json"
+        - '{"obfuscate":true,"keepScalars":true,"keepShape":false,"keepErrorText":false}'
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "report-ok"
