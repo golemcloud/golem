@@ -133,7 +133,8 @@ tag_suite!(secrets, deploy_runtime);
 tag_suite!(self_identity, deploy_runtime);
 tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
-tag_suite!(mcp_serve, deploy);
+// `mcp_serve` deploys the prebuilt agent-counters fixture, which only the `agents` shard restores.
+tag_suite!(mcp_serve, agents);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
