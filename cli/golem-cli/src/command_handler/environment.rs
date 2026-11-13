@@ -342,31 +342,32 @@ impl EnvironmentCommandHandler {
     }
 
     /// Resolves a reference that a command argument names, such as the environment of a qualified
-    /// agent ID, and refuses it unless it is the pinned environment. A reference whose names
-    /// differ is refused without a request; one whose names match is resolved, because the same
-    /// names can belong to another account.
+    /// agent ID, and refuses it unless it is the pinned environment under its current names. A
+    /// reference whose names differ is refused; one whose names match is resolved and compared by
+    /// ID, because the same names can belong to another account.
     async fn resolve_environment_reference_in_pinned(
         &self,
         mode: EnvironmentResolveMode,
         environment_reference: &EnvironmentReference,
         pinned: &ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let current = self.current_pinned_environment(pinned).await?;
         let outside = || OutsideEnvironment {
             requested: environment_reference.to_string(),
             environment: format!(
                 "{}/{}",
-                pinned.application_name.0, pinned.environment_name.0
+                current.application_name.0, current.environment_name.0
             ),
         };
         let (application_name, environment_name) = match environment_reference {
             EnvironmentReference::Environment { environment_name } => {
-                if *environment_name != pinned.environment_name {
+                if *environment_name != current.environment_name {
                     bail!(outside());
                 }
                 if !mode.allowed(environment_reference) {
                     self.environment_is_required_error(mode)?;
                 }
-                return self.current_pinned_environment(pinned).await;
+                return Ok(current);
             }
             EnvironmentReference::ApplicationEnvironment {
                 application_name,
@@ -378,43 +379,38 @@ impl EnvironmentCommandHandler {
                 ..
             } => (application_name, environment_name),
         };
-        if *application_name != pinned.application_name
-            || *environment_name != pinned.environment_name
+        if *application_name != current.application_name
+            || *environment_name != current.environment_name
         {
             bail!(outside());
         }
         let resolved = self
             .resolve_environment_reference(mode, environment_reference)
             .await?;
-        if resolved.environment_id != pinned.environment_id {
+        if resolved.environment_id != current.environment_id {
             bail!(outside());
         }
-        Ok(resolved)
+        Ok(current)
     }
 
-    /// The pinned environment as the server has it now, with its current deployment. Only its
-    /// identity is pinned: an environment that was deleted and created again under the same name
-    /// is another environment.
+    /// The pinned environment as the server has it now: with its current names and its current
+    /// deployment. The pin is the environment's ID, so a renamed environment is still the same
+    /// one, and a deleted one fails with the server's not-found error.
     async fn current_pinned_environment(
         &self,
         pinned: &ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         let server_environment = self
-            .get_server_environment_or_err(&pinned.application_id, &pinned.environment_name)
-            .await?;
-        if server_environment.id != pinned.environment_id {
-            bail!(OutsideEnvironment {
-                requested: format!(
-                    "{}/{} ({})",
-                    pinned.application_name.0, pinned.environment_name.0, server_environment.id
-                ),
-                environment: format!(
-                    "{}/{} ({})",
-                    pinned.application_name.0, pinned.environment_name.0, pinned.environment_id
-                ),
-            });
-        }
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .get_environment(&pinned.environment_id.0)
+            .await
+            .map_service_error()?;
         self.ensure_diff_model_version_compatible(ResolvedEnvironmentIdentity {
+            application_name: server_environment.application_name.clone(),
+            environment_name: server_environment.name.clone(),
             server_environment,
             ..pinned.clone()
         })
