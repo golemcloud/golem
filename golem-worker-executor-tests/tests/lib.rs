@@ -75,6 +75,7 @@ pub mod revert;
 pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
+pub mod scan_budget;
 pub mod scheduled_durable;
 pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
@@ -136,6 +137,7 @@ tag_suite!(owner_tool_isolation, group2);
 tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
+tag_suite!(scan_budget, group2);
 tag_suite!(retry_policies, group2);
 tag_suite!(scope_cards, group2);
 
