@@ -697,6 +697,45 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
 }
 
 #[test]
+fn cli_output_schema_commands_resolve_in_clap_tree() {
+    use crate::command::GolemCliCommand;
+    use clap::CommandFactory;
+
+    let schema = load_command_output_schema();
+    let definitions = schema_definitions(&schema);
+    let root = GolemCliCommand::command();
+    let mut unknown = BTreeSet::new();
+    for output_type in schema_output_entries(&schema).keys() {
+        let definition = &definitions[output_type];
+        let commands = definition
+            .get("x-golem-command")
+            .into_iter()
+            .chain(
+                definition
+                    .get("x-golem-commands")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter_map(Value::as_str);
+        for command in commands {
+            let resolves = command
+                .split(' ')
+                .try_fold(&root, |parent, name| parent.find_subcommand(name))
+                .is_some();
+            if !resolves {
+                unknown.insert(format!("{output_type}: `{command}`"));
+            }
+        }
+    }
+    assert!(
+        unknown.is_empty(),
+        "output types name commands that are not in the CLI:\n  {}",
+        unknown.into_iter().collect::<Vec<_>>().join("\n  ")
+    );
+}
+
+#[test]
 fn cli_output_schema_focus_prunes_unrelated_definitions() {
     let schema = focused_command_output_schema(&["agent.oplog".to_string()])
         .expect("focused schema should render");

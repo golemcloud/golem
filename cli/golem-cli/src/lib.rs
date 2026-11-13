@@ -37,6 +37,7 @@ pub mod command;
 pub mod command_examples;
 pub mod command_glossary;
 pub mod command_handler;
+pub mod command_table;
 pub mod config;
 pub mod context;
 pub mod error;

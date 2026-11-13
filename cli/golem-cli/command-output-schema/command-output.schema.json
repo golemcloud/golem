@@ -2195,9 +2195,13 @@
     },
     "agent.plugin-toggle": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent plugin-toggle`.",
+      "description": "Single structured output document emitted by `golem agent activate-plugin` and `golem agent deactivate-plugin`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent plugin-toggle",
+      "x-golem-command": "agent activate-plugin",
+      "x-golem-commands": [
+        "agent activate-plugin",
+        "agent deactivate-plugin"
+      ],
       "required": [
         "$type",
         "activated",
@@ -2226,10 +2230,10 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
+      "description": "Single structured output document emitted by `golem redeploy-agents` and `golem component redeploy-agents`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent redeploy",
-      "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
+      "x-golem-command": "redeploy-agents",
+      "x-golem-commands": ["redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
