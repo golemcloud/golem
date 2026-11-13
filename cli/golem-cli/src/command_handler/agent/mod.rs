@@ -2787,11 +2787,11 @@ impl AgentCommandHandler {
             &agent_id_match.agent_id,
         );
 
-        anyhow!(
-            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            service_error.render(),
-            command,
-        )
+        // The service error stays the source, so that its code and details reach structured
+        // error reports; `{:#}` prints the hint and then the service error.
+        error.context(format!(
+            "The previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {command}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.\n\nThe error of the server"
+        ))
     }
 
     async fn interrupt_agent(

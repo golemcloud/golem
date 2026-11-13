@@ -646,3 +646,53 @@ async fn mcp_serve_reads_the_profile_token_again_on_each_call() {
     structured(&call(&client, "agent_list", list).await);
     client.cancel().await.unwrap();
 }
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_reports_a_failed_invocation_with_the_platform_error() {
+    let ctx = counters_context(&["local"]).await;
+    let agent = r#"FailingCounter("mcp-failed")"#;
+    let client = mcp_client(&ctx, &["-E", "local"]).await;
+
+    let failed = call(
+        &client,
+        "agent_invoke",
+        json!({"agent_id": agent, "function_name": "add", "arguments": ["11"]}),
+    )
+    .await;
+    assert_eq!(error_code(&failed), "internal-agent-execution-failed");
+
+    let refused = call(
+        &client,
+        "agent_invoke",
+        json!({"agent_id": agent, "function_name": "get"}),
+    )
+    .await;
+    assert_eq!(
+        error_code(&refused),
+        "internal-previous-invocation-failed",
+        "{refused:?}"
+    );
+    let message = error_message(&refused);
+    assert!(
+        message.contains("The previous invocation failed"),
+        "{message}"
+    );
+    assert!(message.contains("agent revert"), "{message}");
+    let agent_error = &error(&refused)["payload"]["agent_error"];
+    assert!(
+        agent_error["stderr"]
+            .as_str()
+            .is_some_and(|stderr| stderr.contains("value is too large")),
+        "{agent_error}"
+    );
+    client.cancel().await.unwrap();
+
+    // The CLI prints the hint and the server's error.
+    let outputs = ctx
+        .cli(["-E", "local", cmd::AGENT, cmd::INVOKE, agent, "get"])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("The previous invocation failed"));
+    assert!(outputs.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+}
