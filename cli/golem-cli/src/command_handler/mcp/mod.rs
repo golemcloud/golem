@@ -867,6 +867,7 @@ mod tests {
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
+    use crate::command_table::CommandRow;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
     use crate::error::{LoginRequired, PromptAnswer};
     use crate::model::format::Format;
@@ -1089,6 +1090,28 @@ mod tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn the_stdin_marker_value_is_refused_for_the_marked_argument_of_any_row() {
+        let mut tool = tool("agent_list");
+        tool.row = Box::leak(Box::new(CommandRow {
+            stdin_marker_args: &["filter"],
+            ..*tool.row
+        }));
+        let refused = tool_call_argv(&tool, json!({"filter": ["-"]}).as_object().unwrap())
+            .expect_err("`-` for the marked `filter`");
+        assert!(refused.contains("binds stdin"), "{refused}");
+        assert!(
+            tool_call_argv(
+                &tool,
+                json!({"component_name": "-", "filter": ["status == Idle"]})
+                    .as_object()
+                    .unwrap()
+            )
+            .is_ok(),
+            "`-` for the unmarked `component_name`"
+        );
     }
 
     #[test]
