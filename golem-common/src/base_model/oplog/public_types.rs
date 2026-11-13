@@ -375,6 +375,35 @@ impl Display for OplogCursor {
     }
 }
 
+/// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
+impl std::str::FromStr for OplogCursor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let [index, revision, query_hash] = value.split('-').collect::<Vec<_>>()[..] else {
+            return Err("Invalid oplog cursor".to_string());
+        };
+        let next_oplog_index = index
+            .parse()
+            .map_err(|_| "Invalid index in the oplog cursor".to_string())?;
+        let current_component_revision = revision
+            .parse()
+            .map_err(|_| "Invalid component revision in the oplog cursor".to_string())?;
+        let is_hash = query_hash.len() == 16
+            && query_hash
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if !query_hash.is_empty() && !is_hash {
+            return Err("Invalid query hash in the oplog cursor".to_string());
+        }
+        Ok(OplogCursor {
+            next_oplog_index,
+            current_component_revision,
+            query_hash: query_hash.to_string(),
+        })
+    }
+}
+
 declare_structs! {
     pub struct PublicOplogEntryWithIndex {
         pub oplog_index: OplogIndex,
