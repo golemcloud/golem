@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy --no-self-update && rustup default 1.99.1
       - name: Check and test aggregator
         run: |
           cargo clippy --locked --manifest-path .github/tools/flaky-tests/Cargo.toml --all-targets -- -D warnings
