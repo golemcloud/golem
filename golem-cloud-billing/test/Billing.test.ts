@@ -28,6 +28,7 @@ import {
 const MINUTE = 60 * 1000
 const DAY = 24 * 60 * MINUTE
 const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
+const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
 const fixedPriceId = "price_fixed"
 const meteredPriceId = "price_compute"
 
@@ -517,7 +518,7 @@ describe("Polar billing", () => {
       expect(response.status).toBe(200)
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
       expect(await page(jar)).toContain(
-        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDate.format(graceEnd)}.`
+        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
       )
 
       await sweep(new Date(graceEnd.getTime() - MINUTE))

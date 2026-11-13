@@ -183,6 +183,8 @@ export interface SignedInPageOptions {
 
 const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
 
+const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
+
 const checkoutForm = html`<form method="post" action="/billing/checkout">
             <button type="submit" class="btn btn-primary">Upgrade to Paid</button>
           </form>`
@@ -200,7 +202,7 @@ const renewal = (subscription: Subscription | undefined) => {
 }
 
 const pastDueNotice = (end: Date) =>
-  html`<p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDate.format(end)}. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
+  html`<p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(end)} UTC. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
 
 const planHero = (options: SignedInPageOptions) => {
   if (options.checkoutPending) {

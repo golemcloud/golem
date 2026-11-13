@@ -119,11 +119,11 @@ plan.
   retries. When the last order of a subscription that has ended fails, Polar does not retry it
   and does not mark the subscription: only the age of the order shows the failure. Polar charges
   an order when it creates it, so a renewal stays on the paid plan while Polar charges it.
-- **Past-due grace.** For `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS` (7 by default) after
+- **Past-due grace.** For `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` (7 days by default) after
   `past_due_at`, a `past_due` subscription keeps the account on the paid plan, as after a paid
   renewal: the monthly amounts and paid overage work as before. Polar retries the payment in this
   time, four times over 21 days, and at once when the customer changes the payment method. The
-  page shows the failed payment and the day by which to pay. A subscription that Polar revokes is
+  page shows the failed payment and the time by which to pay. A subscription that Polar revokes is
   `canceled`, and that ends the past-due grace. The Polar setting "Grace period for benefit
   revocation" does not change the plan, because the app does not use Polar benefits.
 - **Sweep.** Every minute, each replica of the web app sets the plan of the accounts whose plan
@@ -256,7 +256,7 @@ code 1.
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view` and `set-plan` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH` | | The overage prices that the paid plan shows next to the paid-overage switch, in USD, as decimal numbers such as `0.045`. Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
-| `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS` | `7` | Days that an account keeps the paid plan after a payment of its subscription fails (see [Subscriptions](#subscriptions)). `0` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. |
+| `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` and `customer_sessions:write`; `push-usage` needs `events:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |

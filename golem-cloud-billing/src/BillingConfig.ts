@@ -1,4 +1,4 @@
-import { Config, ConfigProvider, Context, Effect, Layer, Redacted } from "effect"
+import { Config, ConfigProvider, Context, Duration, Effect, Layer, Redacted } from "effect"
 
 /**
  * TLS mode of the PostgreSQL connection.
@@ -95,8 +95,6 @@ const decimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/
 const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
   Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })))
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
 /**
  * The connection settings use the environment variables of the registry service
  * (`GOLEM__DB__CONFIG__*`), so one secret configures both services against the same database.
@@ -133,6 +131,16 @@ export const postgresConfig: Config.Config<PostgresConfig> = Config.all({
   })
 )
 
+/** The past-due grace in milliseconds, from a duration such as `7 days` or `30 minutes`. */
+export const pastDueGraceMs: Config.Config<number> = Config.Duration("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE").pipe(
+  Config.withDefault(Duration.days(7)),
+  Config.mapEffect((grace) =>
+    Duration.isFinite(grace)
+      ? Effect.succeed(Duration.toMillis(grace))
+      : invalid("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE must be finite, such as 7 days")
+  )
+)
+
 export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   httpPort: Config.Port("GOLEM_CLOUD_BILLING_HTTP_PORT").pipe(Config.withDefault(8080)),
   baseUrl: Config.URL("BETTER_AUTH_URL"),
@@ -155,14 +163,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     perDurableGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH"),
     perEphemeralGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH")
   }),
-  pastDueGraceMs: Config.Int("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS").pipe(
-    Config.withDefault(7),
-    Config.mapEffect((days) =>
-      days < 0
-        ? invalid(`GOLEM_CLOUD_BILLING_PAST_DUE_GRACE_DAYS must be 0 or more, got ${days}`)
-        : Effect.succeed(days * DAY_MS)
-    )
-  ),
+  pastDueGraceMs,
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
     accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),
