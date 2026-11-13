@@ -627,6 +627,7 @@ mod tests {
                     index: OplogIndex::from_u64(4),
                     component_revision: ComponentRevision::new(2).unwrap(),
                     filesystem_snapshot: None,
+                    bootstrap: None,
                 },
             })),
         });
@@ -834,6 +835,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         let wallet = self.owner_execution.wallet().await?;
         let boundary = Box::pin(wallet.lock_boundary());
@@ -843,6 +845,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             new_component_size,
             new_active_plugins,
             snapshot_assisted_details,
+            bootstrap,
             wallet,
             boundary,
         )
@@ -855,6 +858,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
         wallet: Arc<owner_wallet::OwnerWallet>,
         boundary: futures::future::BoxFuture<
             'static,
@@ -869,6 +873,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(linear_memory.current_bytes()),
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
@@ -1246,6 +1251,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_oplog_index,
                 &last_known_status.deleted_regions,
             )
+            .and_then(|()| {
+                cut_point::validate_restore_point_ranges(
+                    entries.iter().filter_map(|(index, entry)| {
+                        cut_point::bootstrap_range_named_by(entry).map(|range| (*index, range))
+                    }),
+                    last_oplog_index,
+                    &last_known_status.deleted_regions,
+                )
+            })
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
                     "Cannot revert worker to oplog index {last_oplog_index}: {error}"

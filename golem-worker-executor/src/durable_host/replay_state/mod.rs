@@ -596,6 +596,9 @@ struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
+    /// `Some` for a cursor over the bootstrap block of a core initializer: it records no replay
+    /// events, and its live switch publishes only its own phase.
+    bootstrap: Option<BootstrapTail>,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
@@ -704,6 +707,16 @@ struct ReplayCursor {
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
     #[cfg(test)]
     retained_claim_miss: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+}
+
+/// What a bootstrap cursor does when its initializer makes a durable call after the recorded
+/// block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BootstrapTail {
+    /// The call diverges: the block must hold every durable call of the initializer.
+    Strict,
+    /// The call continues live and appends after the block.
+    Live,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

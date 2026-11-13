@@ -326,6 +326,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             })
                         })
                         .transpose()?,
+                    bootstrap: successful_update.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -517,6 +518,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
                     filesystem_snapshot: snapshot.filesystem_snapshot,
+                    bootstrap: snapshot.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::SnapshotConfirmed(value) => Ok(
@@ -994,6 +996,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                         snapshot_index: details.snapshot_index.into(),
                                     }
                                 }),
+                            bootstrap: successful_update.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -1235,6 +1238,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
                             filesystem_snapshot: snapshot.filesystem_snapshot,
+                            bootstrap: snapshot.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -2026,6 +2030,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                             snapshot_index: details.snapshot_index,
                         }
                     }),
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
@@ -2181,6 +2186,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .filesystem_snapshot
                         .map(|name| name.parse())
                         .transpose()?,
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {

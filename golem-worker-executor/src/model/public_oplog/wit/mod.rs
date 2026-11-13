@@ -109,6 +109,20 @@ fn durable_invocation_id_from_wit(
     )
 }
 
+fn oplog_region_to_wit(region: golem_common::model::regions::OplogRegion) -> oplog::OplogRegion {
+    oplog::OplogRegion {
+        start: region.start.into(),
+        end: region.end.into(),
+    }
+}
+
+fn oplog_region_from_wit(region: oplog::OplogRegion) -> golem_common::model::regions::OplogRegion {
+    golem_common::model::regions::OplogRegion {
+        start: golem_common::model::OplogIndex::from_u64(region.start),
+        end: golem_common::model::OplogIndex::from_u64(region.end),
+    }
+}
+
 fn durable_stream_summary_to_wit(
     value: golem_common::model::oplog::DurableStreamEventSummary,
 ) -> oplog::DurableStreamEventSummary {

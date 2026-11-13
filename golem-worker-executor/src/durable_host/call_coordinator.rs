@@ -48,19 +48,23 @@ impl<'a> DurableCallAdmission<'a> {
         self
     }
 
+    /// `reconstructed_authority` tells that the core initializer of a pending snapshot-assisted
+    /// update runs on its bootstrap cursor: a live value read of the initializer belongs to the
+    /// bootstrap block of the target and does not wait for the update to finalize.
     fn wallet_admission(
         self,
         runtime: &OwnerRuntime,
         snapshotting: bool,
         durable_call_is_live: bool,
         automatic_update_unsettled: bool,
+        reconstructed_authority: bool,
     ) -> WalletAdmission {
         if self.is_wallet_independent_value_read()
             && *runtime == OwnerRuntime::Agent
             && !snapshotting
             && durable_call_is_live
         {
-            if automatic_update_unsettled {
+            if automatic_update_unsettled && !reconstructed_authority {
                 WalletAdmission::FinalizeUpdate
             } else {
                 WalletAdmission::Independent
@@ -129,6 +133,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
             self.ctx.state.snapshotting_mode,
             self.ctx.state.durable_call_is_live(),
             self.ctx.state.automatic_update_unsettled,
+            self.ctx.bootstrap_uses_reconstructed_authority(),
         ) {
             // A fresh clock/random value or a card's registry liveness needs no authority.
             // Waiting for an accessor's wallet reconciliation here can deadlock: this call owns
@@ -208,6 +213,12 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         &self,
         admission: DurableCallAdmission<'_>,
     ) -> Result<(), WorkerExecutorError> {
+        self.ctx.state.check_bootstrap_admission(
+            admission.function_type,
+            &golem_common::model::oplog::host_functions::HostFunctionName::from(
+                admission.host_function,
+            ),
+        )?;
         if durability::is_write_side_effect(admission.function_type)
             && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
                 method,
@@ -524,12 +535,17 @@ mod tests {
     fn wallet_independent_reads_still_fence_updates_and_replay() {
         let clock = DurableCallAdmission::new(&DurableFunctionType::ReadLocal, "wall_clock::now");
         assert_eq!(
-            clock.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, false, false),
             WalletAdmission::Independent
         );
         assert_eq!(
-            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true),
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true, false),
             WalletAdmission::FinalizeUpdate
+        );
+        // The core initializer of a pending snapshot-assisted update on its bootstrap cursor.
+        assert_eq!(
+            clock.wallet_admission(&OwnerRuntime::Agent, false, true, true, true),
+            WalletAdmission::Independent
         );
         let entity = OwnerRuntime::Entity(AgentEntity::ToolMiddleware(
             ToolMiddlewareName::try_from("middleware").unwrap(),
@@ -539,9 +555,9 @@ mod tests {
             (OwnerRuntime::Agent, true, true),
             (entity, false, true),
         ] {
-            for unsettled in [false, true] {
+            for (unsettled, reconstructed) in [(false, false), (true, false), (true, true)] {
                 assert_eq!(
-                    clock.wallet_admission(&runtime, snapshotting, live, unsettled),
+                    clock.wallet_admission(&runtime, snapshotting, live, unsettled, reconstructed),
                     WalletAdmission::Synchronize
                 );
             }
@@ -550,8 +566,20 @@ mod tests {
             &DurableFunctionType::ReadLocal,
             "cli::environment::get_environment",
         );
+        for reconstructed in [false, true] {
+            assert_eq!(
+                environment.wallet_admission(
+                    &OwnerRuntime::Agent,
+                    false,
+                    true,
+                    true,
+                    reconstructed
+                ),
+                WalletAdmission::Synchronize
+            );
+        }
         assert_eq!(
-            environment.wallet_admission(&OwnerRuntime::Agent, false, true, false),
+            environment.wallet_admission(&OwnerRuntime::Agent, false, true, false, false),
             WalletAdmission::Synchronize
         );
     }

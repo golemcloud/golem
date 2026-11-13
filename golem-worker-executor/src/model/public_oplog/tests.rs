@@ -48,6 +48,7 @@ use golem_common::model::oplog::{
     HostResponseP3SocketsUdpSend, HostResponseSecretRevealed, HostStreamKind, LogLevel,
     OplogPayload,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
     ToolSource,
@@ -624,6 +625,10 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                 new_total_linear_memory_size: Some(0),
                 new_active_plugins: [grant_id].into_iter().collect(),
                 snapshot_assisted_details: None,
+                bootstrap: Some(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(7),
+                }),
             },
             oplog_service.clone(),
             components.clone(),
@@ -642,6 +647,13 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         assert_eq!(
             updated.new_active_plugins.len(),
             usize::from(owner_kind == OwnerKind::EphemeralExternalTool)
+        );
+        assert_eq!(
+            updated.bootstrap,
+            Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            })
         );
 
         let activated = PublicOplogEntry::from_oplog_entry(
@@ -2400,6 +2412,10 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: None,
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         })
         .await
         .unwrap();
@@ -2488,6 +2504,13 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
                 mime_type: "application/octet-stream".to_string(),
             }
         )
+    );
+    assert_eq!(
+        snapshot.bootstrap,
+        Some(OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        })
     );
 
     assert!(
@@ -2618,6 +2641,7 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             }
         } else {
             log_entry(0)

@@ -124,7 +124,7 @@ async fn go_custom_snapshot_round_trips_unexported_state(
 /// by default: after a restart the state comes back from the snapshot (the
 /// restore hook ran, not the constructor), with the items in order.
 #[test]
-#[ignore = "automatic snapshot recovery does not reproduce the Go runtime's internal clock reads"]
+#[ignore = "after a snapshot load, the Go runtime makes monotonic clock reads in the replayed tail that the original run did not make"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_default_json_snapshot_recovers_exported_state(

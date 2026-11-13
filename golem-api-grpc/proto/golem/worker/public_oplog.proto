@@ -424,6 +424,11 @@ message ErrorParameters {
   OplogErrorKind kind = 6;
 }
 
+message OplogRegion {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
 message JumpParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start = 2;
@@ -626,6 +631,7 @@ message SuccessfulUpdateParameters {
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
   optional SnapshotAssistedUpdateDetails snapshot_assisted_details = 11;
+  optional OplogRegion bootstrap = 12;
 }
 
 message SnapshotAssistedUpdateDetails {
@@ -726,6 +732,7 @@ message SnapshotDataParameters {
     MultipartSnapshotData multipart = 4;
   }
   optional string filesystem_snapshot = 5;
+  optional OplogRegion bootstrap = 6;
 }
 
 message SnapshotConfirmedParameters {

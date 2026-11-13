@@ -15,6 +15,7 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{AgentMode, OwnerKind, Principal};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::agent::UntypedAgentConfigEntry;
@@ -599,6 +600,8 @@ pub enum UpdateDescription {
         snapshot_revision: ComponentRevision,
         /// The filesystem snapshot of the selected record. `None` when the record has no name.
         filesystem_snapshot: Option<FilesystemSnapshotName>,
+        /// The bootstrap range that the selected record names.
+        snapshot_bootstrap: Option<OplogRegion>,
     },
 
     /// Custom update by loading a given snapshot on the new version

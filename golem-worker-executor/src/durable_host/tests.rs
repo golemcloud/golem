@@ -55,6 +55,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     };
@@ -178,6 +179,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         },
     )));

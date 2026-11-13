@@ -3,6 +3,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
 
+/// State that the core initializer derives from host inputs. Language runtimes do this for real
+/// (Go seeds its scheduler's PRNG from `random_get` during `_initialize`); this state stands in
+/// for that. It is a pure function of the random seed and of the environment that the initializer
+/// reads while the component is instantiated, so every recovery of the same revision must
+/// reproduce it.
+static INITIALIZER_STATE: std::sync::OnceLock<InitializerState> = std::sync::OnceLock::new();
+
+struct InitializerState {
+    /// A hash of the random seed.
+    seed_hash: u64,
+    /// The number of environment variables, read through the durable `get-environment` call.
+    environment_size: u32,
+}
+
 // The `_initialize` of the reactor runs the constructors during core instantiation. The
 // constructor runs once, also when the first export runs the constructors again.
 golem_rust::ctor::__support::ctor_parse!(
@@ -10,8 +24,44 @@ golem_rust::ctor::__support::ctor_parse!(
     fn initialize_snapshot_clock() {
         // The reactor initializer runs during core instantiation, before snapshot loading.
         std::hint::black_box(std::time::Instant::now());
+        // `RandomState::new` draws its keys from the platform random source.
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::hash::RandomState::new().build_hasher();
+        hasher.write_u32(0x5eed);
+        let environment = std::env::vars().collect::<Vec<_>>();
+        // A language runtime may also make a durable call that is not a read while it initializes.
+        if environment
+            .iter()
+            .any(|(name, _)| name == INITIALIZER_WRITE_VARIABLE)
+        {
+            std::hint::black_box(golem_rust::generate_idempotency_key());
+        }
+        let _ = INITIALIZER_STATE.set(InitializerState {
+            seed_hash: hasher.finish(),
+            environment_size: environment.len() as u32,
+        });
     }
 );
+
+/// When an agent's environment holds this variable, the core initializer also generates an
+/// idempotency key, a durable call that is not a read.
+const INITIALIZER_WRITE_VARIABLE: &str = "INITIALIZER_GENERATES_IDEMPOTENCY_KEY";
+
+fn initializer_state() -> &'static InitializerState {
+    INITIALIZER_STATE
+        .get()
+        .expect("the component initializer did not run")
+}
+
+/// The state that the core initializer derived from its random seed.
+fn initializer_seed_hash() -> u64 {
+    initializer_state().seed_hash
+}
+
+/// The number of environment variables that the core initializer read.
+fn initializer_environment_size() -> u32 {
+    initializer_state().environment_size
+}
 
 #[agent_definition(snapshotting = "enabled")]
 trait SnapshotCounter {
@@ -21,6 +71,10 @@ trait SnapshotCounter {
     /// Differs between agent-counters and agent-counters-v2, so a replay across
     /// a build change is detectable.
     fn component_version(&self) -> u32;
+    /// The state the core initializer derived from its random seed.
+    fn initializer_seed_hash(&self) -> u64;
+    /// The number of environment variables that the core initializer read.
+    fn initializer_environment_size(&self) -> u32;
 }
 
 struct SnapshotCounterImpl {
@@ -45,6 +99,14 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn component_version(&self) -> u32 {
         1
+    }
+
+    fn initializer_seed_hash(&self) -> u64 {
+        initializer_seed_hash()
+    }
+
+    fn initializer_environment_size(&self) -> u32 {
+        initializer_environment_size()
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -196,6 +258,8 @@ trait JsonSnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    /// The state the core initializer derived from its random seed.
+    fn initializer_seed_hash(&self) -> u64;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -218,5 +282,9 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
 
     fn get(&self) -> u32 {
         self.count
+    }
+
+    fn initializer_seed_hash(&self) -> u64 {
+        initializer_seed_hash()
     }
 }

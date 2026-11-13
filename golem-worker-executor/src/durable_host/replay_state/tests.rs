@@ -1247,12 +1247,16 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
     rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(6);
     assert!(rs.disposal_admission_refusal(&operation).await.is_err());
     rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(7);
-    rs.set_replay_target(OplogIndex::from_u64(6)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(6), None)
+        .await
+        .unwrap();
     assert_eq!(
         rs.disposal_admission_refusal(&operation).await.unwrap(),
         None
     );
-    rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(7), None)
+        .await
+        .unwrap();
     rs.cursor.state.lock().await.skipped_regions =
         DeletedRegions::from_regions([OplogRegion::from_range(7..=7)]);
     let reads = oplog.reads.lock().unwrap().clone();
@@ -1565,7 +1569,7 @@ async fn growing_replay_target_revokes_published_live_state() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target)
+        .set_replay_target(new_target, None)
         .await
         .expect("failed to grow replay target");
 
@@ -1600,7 +1604,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target)
+        .set_replay_target(new_target, None)
         .await
         .expect("failed to grow replay target while settling");
     drop(reconstruction);
@@ -1667,7 +1671,7 @@ async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
         .await
         .unwrap();
     replay
-        .set_replay_target(grown_start)
+        .set_replay_target(grown_start, None)
         .await
         .expect("failed to grow replay target over a recorded Start");
     drop(reconstruction);
@@ -1840,7 +1844,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
 
     let new_target = oplog.add(end_for(2, 1)).await.unwrap();
     replay
-        .set_replay_target(new_target)
+        .set_replay_target(new_target, None)
         .await
         .expect("failed to grow replay target with the missing terminal");
     assert_eq!(
@@ -1910,7 +1914,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target)
+        .set_replay_target(new_target, None)
         .await
         .expect("failed to grow replay target while settling");
     let second_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
@@ -2382,6 +2386,7 @@ async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
             active_cards: Vec::new(),
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         invocation_started(pin.clone()),
         start_now(),
@@ -4710,11 +4715,11 @@ async fn attachment_index_excludes_custom_owned_effects_but_preserves_ordinary_r
 
             // Rebuilding an extended target must preserve the same ownership classification.
             replay
-                .set_replay_target(OplogIndex::from_u64(3))
+                .set_replay_target(OplogIndex::from_u64(3), None)
                 .await
                 .unwrap();
             replay
-                .set_replay_target(OplogIndex::from_u64(10))
+                .set_replay_target(OplogIndex::from_u64(10), None)
                 .await
                 .unwrap();
             assert!(
@@ -4912,7 +4917,7 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         None
     );
     replay
-        .set_replay_target(OplogIndex::from_u64(3))
+        .set_replay_target(OplogIndex::from_u64(3), None)
         .await
         .unwrap();
     assert_eq!(
@@ -5016,11 +5021,11 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
         Some((source, Some((OplogIndex::from_u64(5), 5))))
     );
     replay
-        .set_replay_target(OplogIndex::from_u64(3))
+        .set_replay_target(OplogIndex::from_u64(3), None)
         .await
         .unwrap();
     replay
-        .set_replay_target(OplogIndex::from_u64(5))
+        .set_replay_target(OplogIndex::from_u64(5), None)
         .await
         .unwrap();
     let accepted =
@@ -5077,7 +5082,7 @@ async fn attachment_terminal_index_preserves_source_across_target_changes() {
     .unwrap();
     for target in [5, 4, 5] {
         replay
-            .set_replay_target(OplogIndex::from_u64(target))
+            .set_replay_target(OplogIndex::from_u64(target), None)
             .await
             .unwrap();
         assert_eq!(
@@ -6583,16 +6588,22 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     let marker = OplogIndex::from_u64(7);
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
-    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4), None)
+        .await
+        .unwrap();
     assert_eq!(
         rs.invocation_finish_before(marker),
         None,
         "a finish after the replay target is not visible"
     );
-    rs.set_replay_target(finish).await.unwrap();
+    rs.set_replay_target(finish, None).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
-    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
-    rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4), None)
+        .await
+        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(8), None)
+        .await
+        .unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
     rs.get_oplog_entry_agent_invocation_started()
@@ -7092,7 +7103,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                     for entry in suffix {
                         oplog.add(entry).await.unwrap();
                     }
-                    rs.set_replay_target(OplogIndex::from_u64(6))
+                    rs.set_replay_target(OplogIndex::from_u64(6), None)
                         .await
                         .expect("target growth must ignore deleted completion markers");
                 }
@@ -7237,7 +7248,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     .expect("failed to build replay state");
     let marker_idx = oplog.add(discarded_for(2)).await.unwrap();
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
-    rs.set_replay_target(marker_idx)
+    rs.set_replay_target(marker_idx, None)
         .await
         .expect("growing the target over the recorded marker must be idempotent");
 
@@ -8610,7 +8621,9 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     }
     assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
-    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4), None)
+        .await
+        .unwrap();
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
@@ -8622,7 +8635,9 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     assert!(rs.has_unclaimed_retained_starts());
     assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
-    rs.set_replay_target(OplogIndex::from_u64(2)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(2), None)
+        .await
+        .unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
     assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 }
@@ -10177,7 +10192,7 @@ async fn transaction_interleaved_markers_resolve_by_owner_without_blocking_scope
     rs.await_resolution(root).await.unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
     // Cutting the replay target hides B's confirmation without hiding A's confirmation.
-    rs.set_replay_target(OplogIndex::from_u64(10))
+    rs.set_replay_target(OplogIndex::from_u64(10), None)
         .await
         .unwrap();
     assert!(
@@ -10185,7 +10200,7 @@ async fn transaction_interleaved_markers_resolve_by_owner_without_blocking_scope
             .is_committed_remote_transaction(OplogIndex::from_u64(4)))
             .is_none()
     );
-    rs.set_replay_target(OplogIndex::from_u64(13))
+    rs.set_replay_target(OplogIndex::from_u64(13), None)
         .await
         .unwrap();
     assert!(
@@ -11657,7 +11672,9 @@ async fn entity_wallet_prefix_retains_preclaim_hints_and_prunes_future_starts() 
             2
         );
         if prune {
-            rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
+            rs.set_replay_target(OplogIndex::from_u64(3), None)
+                .await
+                .unwrap();
         } else {
             let mut handle = claim_rejected_tool_reconstruction(&rs, OplogIndex::INITIAL).await;
             let mut reconstruction = handle.take_historical_reconstruction().unwrap();
@@ -11733,7 +11750,9 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
     assert!(rs.at_replay_tail());
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
-    rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(3), None)
+        .await
+        .unwrap();
     drop(contention);
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
@@ -11765,7 +11784,7 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     assert_eq!(published.cards[&historical.card_id()].as_ref(), &historical);
     assert_eq!(published.generation, 2);
     assert_eq!(*oplog.reads.lock().unwrap(), reads);
-    assert!(rs.set_replay_target(index).await.is_err());
+    assert!(rs.set_replay_target(index, None).await.is_err());
     assert!(wallet.validate_current().is_err());
     assert!(wallet.lock_boundary().await.is_err());
     assert!(Arc::ptr_eq(&published, &wallet.snapshot()));
@@ -14396,12 +14415,14 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             1,
             None,
             Default::default(),
+            None,
             None,
         ),
         start_now(),
@@ -14541,6 +14562,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             active_cards: vec![selected.clone()],
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         start_now(),
         OplogEntry::CardDerived {
@@ -15020,4 +15042,286 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
         drain.await;
         drop(contention);
     }
+}
+
+async fn bootstrap_cursor_over(
+    oplog: &Arc<InMemoryOplog>,
+    skip_through: u64,
+    target: u64,
+    tail: BootstrapTail,
+) -> ReplayState {
+    ReplayState::new_for_bootstrap(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(skip_through),
+        OplogIndex::from_u64(target),
+        tail,
+    )
+    .await
+    .expect("failed to build bootstrap cursor")
+}
+
+async fn oplog_of(entries: Vec<OplogEntry>) -> Arc<InMemoryOplog> {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    oplog
+}
+
+/// The history `[RecoverySucceeded, resolution 2..=3, now 4..=5, resolution 6..=7]`, whose
+/// bootstrap block is the `now` call at `4..=5`.
+fn history_with_bootstrap_block() -> Vec<OplogEntry> {
+    vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_resolution(),
+        end_for(2, 5),
+        start_now(),
+        end_for(4, 42),
+        start_resolution(),
+        end_for(6, 7),
+    ]
+}
+
+async fn claim_and_resolve(rs: &ReplayState, name: HostFunctionName) -> (u64, u64) {
+    let handle = rs
+        .claim_concurrent_start(&name, &DurableFunctionType::ReadLocal)
+        .await
+        .unwrap();
+    let start = u64::from(handle.start_idx());
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => (start, u64::from(end_idx)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn strict_bootstrap_cursor_replays_its_block_after_history_that_the_main_cursor_replays_later()
+ {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    bootstrap.ensure_bootstrap_consumed().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(bootstrap.at_replay_tail());
+    assert!(!bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "a bootstrap cursor records no replay events, not even ReplayFinished"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(main.has_replay_remaining());
+    assert_eq!(
+        claim_and_resolve(&main, HostFunctionName::MonotonicClockResolution).await,
+        (2, 3)
+    );
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_a_durable_call_after_its_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let memory = replay_linear_memory();
+    claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap
+        .finish_bootstrap_replay()
+        .await;
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert!(matches!(
+        switched,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(!bootstrap.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 2);
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_an_unconsumed_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let unconsumed = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let empty = bootstrap_cursor_over(&oplog, 1, 1, BootstrapTail::Strict).await;
+
+    assert!(matches!(
+        unconsumed.ensure_bootstrap_consumed().await,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(empty.at_replay_tail());
+    assert!(
+        !empty.is_live_published(),
+        "an exhausted bootstrap cursor does not publish live at construction"
+    );
+    empty.ensure_bootstrap_consumed().await.unwrap();
+}
+
+#[test]
+async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Live).await;
+    let memory = replay_linear_memory();
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap
+        .finish_bootstrap_replay()
+        .await
+        .unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert_eq!(switched, Some(OplogIndex::from_u64(5)));
+    assert!(bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        memory.reconciliation_grant_bytes(1),
+        2,
+        "the live switch of a bootstrap cursor leaves the linear memory in replay"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(!main.is_live_published());
+}
+
+#[test]
+async fn a_skip_region_adjacent_to_a_skipped_region_is_passed_by_a_cursor_at_the_old_target() {
+    let oplog = oplog_of(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        end_for(3, 1),
+    ])
+    .await;
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::from_regions([OplogRegion::from_range(3..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    for entry in [
+        start_now(),
+        end_for(5, 2),
+        start_resolution(),
+        end_for(7, 3),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+
+    rs.set_replay_target(
+        OplogIndex::from_u64(8),
+        Some(OplogRegion::from_range(5..=6)),
+    )
+    .await
+    .unwrap();
+    let position = rs.last_replayed_index();
+    let claimed = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
+
+    assert_eq!(position, OplogIndex::from_u64(6));
+    assert_eq!(claimed, (7, 8));
+    assert!(rs.at_replay_tail());
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn a_skip_region_adjacent_to_a_skipped_region_is_passed_by_a_cursor_below_the_old_target() {
+    let oplog = oplog_of(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_resolution(),
+        end_for(2, 1),
+        start_now(),
+        end_for(4, 2),
+    ])
+    .await;
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=5)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+    for entry in [
+        start_now(),
+        end_for(6, 3),
+        start_resolution(),
+        end_for(8, 4),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+
+    rs.set_replay_target(
+        OplogIndex::from_u64(9),
+        Some(OplogRegion::from_range(6..=7)),
+    )
+    .await
+    .unwrap();
+    let position = rs.last_replayed_index();
+    let first = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
+    let second = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
+
+    assert_eq!(position, OplogIndex::from_u64(1));
+    assert_eq!(first, (2, 3));
+    assert_eq!(second, (8, 9));
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the cursor skips the merged region 4..=7 instead of retaining the Start at 6"
+    );
 }

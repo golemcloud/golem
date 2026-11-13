@@ -509,6 +509,12 @@ impl TextOutput for PublicOplogEntry {
                         format_id(&details.snapshot_index),
                     ));
                 }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
+                }
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
@@ -719,6 +725,12 @@ impl TextOutput for PublicOplogEntry {
                 ));
                 if let Some(name) = &params.filesystem_snapshot {
                     logln(format!("{pad}filesystem:        {}", format_id(name)));
+                }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
                 }
                 log_snapshot_data(pad, &params.data);
             }

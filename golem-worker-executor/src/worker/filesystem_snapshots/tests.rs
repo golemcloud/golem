@@ -44,6 +44,7 @@ fn selected(name: Option<&FilesystemSnapshotName>) -> UsableAutomaticSnapshot {
         index: OplogIndex::from_u64(10),
         component_revision: golem_common::model::component::ComponentRevision::INITIAL,
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -298,6 +299,7 @@ fn record(index: u64, name: Option<&FilesystemSnapshotName>) -> UsableAutomaticS
         index: OplogIndex::from_u64(index),
         component_revision: ComponentRevision::new(2).unwrap(),
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -333,15 +335,18 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
         kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: None,
         },
+        bootstrap: None,
     };
-    let plan = |source, snapshot, skip_through, role| StartPlan {
+    let plan = |source, snapshot, skip_through, role, bootstrap| StartPlan {
         source,
         replay: ReplayBaseline {
             snapshot,
             skip_through,
             role,
+            bootstrap,
         },
     };
+    let range = |from, to| Some(OplogRegion::from_range(from..=to));
     let periodic = SnapshotSource::Automatic;
     let assisted = SnapshotSource::SnapshotAssistedAutomatic;
     let manual = SnapshotSource::ManualUpdate;
@@ -354,7 +359,10 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
     );
     let cases: Vec<Case<'_>> = vec![
         (
-            SelectedBaseline::Periodic(record(10, Some(&name))),
+            SelectedBaseline::Periodic(UsableAutomaticSnapshot {
+                bootstrap: range(4, 6),
+                ..record(10, Some(&name))
+            }),
             None,
             true,
             Ok(plan(
@@ -362,6 +370,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), periodic)),
                 Some(index(10)),
                 BaselineRole::Periodic(index(10)),
+                BootstrapSource::Recorded(range(4, 6)),
             )),
         ),
         (
@@ -379,6 +388,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), periodic)),
                 Some(index(10)),
                 BaselineRole::Periodic(index(10)),
+                BootstrapSource::Recorded(None),
             )),
         ),
         (
@@ -393,6 +403,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(Some(&name))),
+                BootstrapSource::Attempt { anchor: index(12) },
             )),
         ),
         (
@@ -416,12 +427,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(None)),
+                BootstrapSource::Attempt { anchor: index(12) },
             )),
         ),
         (
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: Some(name.clone()),
+                bootstrap: range(2, 5),
             },
             None,
             true,
@@ -430,12 +443,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 None,
                 BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(range(2, 5)),
             )),
         ),
         (
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: Some(name.clone()),
+                bootstrap: range(2, 5),
             },
             None,
             false,
@@ -445,6 +460,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
             SelectedBaseline::AssistedPromoted {
                 index: index(10),
                 name: None,
+                bootstrap: None,
             },
             None,
             false,
@@ -453,6 +469,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 None,
                 BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(None),
             )),
         ),
         (
@@ -467,6 +484,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(5), assisted)),
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
@@ -475,6 +493,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 previous: Some(AuthoritativeSnapshot {
                     index: index(5),
                     kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    bootstrap: None,
                 }),
             },
             Some(&update),
@@ -484,6 +503,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(5), manual)),
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
@@ -507,10 +527,14 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 None,
                 Some(index(7)),
                 BaselineRole::ManualPending(manual_head()),
+                BootstrapSource::Attempt { anchor: index(7) },
             )),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             Some(&update),
             true,
             Ok(plan(
@@ -518,16 +542,23 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(7), manual)),
                 None,
                 BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(3, 4)),
             )),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             Some(&update),
             false,
             Err(()),
         ),
         (
-            SelectedBaseline::ManualPromoted { index: index(7) },
+            SelectedBaseline::ManualPromoted {
+                index: index(7),
+                bootstrap: range(3, 4),
+            },
             None,
             true,
             Ok(plan(
@@ -535,6 +566,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(7), manual)),
                 None,
                 BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(3, 4)),
             )),
         ),
         (
@@ -546,6 +578,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 None,
                 None,
                 BaselineRole::InitialFiles,
+                BootstrapSource::Positional,
             )),
         ),
     ];
@@ -558,6 +591,269 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 "{selected:?} with {manual_name:?}, enabled: {enabled}"
             );
         });
+}
+
+/// A start that rejects the last periodic record falls back to the previous usable record, and
+/// its initializer replays the bootstrap range of that record, not the range of the rejected one.
+#[test]
+async fn a_fallback_to_the_previous_periodic_record_replays_the_bootstrap_range_of_that_record() {
+    use crate::worker::snapshot_selection::{SnapshotExclusions, StartSelection};
+    use golem_common::model::{AgentStatusRecord, AutomaticSnapshot, SnapshotFiles};
+    let index = OplogIndex::from_u64;
+    let status = AgentStatusRecord {
+        component_revision: ComponentRevision::new(2).unwrap(),
+        last_automatic_snapshot: Some(AutomaticSnapshot {
+            index: index(20),
+            timestamp: Timestamp::from(2_000),
+            component_revision: ComponentRevision::new(2).unwrap(),
+            files: SnapshotFiles::named(None),
+            bootstrap: Some(OplogRegion::from_range(2..=7)),
+        }),
+        previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
+            bootstrap: Some(OplogRegion::from_range(2..=3)),
+            ..record(10, None)
+        }),
+        ..Default::default()
+    };
+    let bootstrap = |exclusions: &SnapshotExclusions| {
+        plan_start(
+            &StartSelection::of(&status, exclusions, true).baseline,
+            None,
+            true,
+        )
+        .map(|plan| {
+            (
+                plan.replay.snapshot.map(|(index, _)| index),
+                plan.replay.bootstrap,
+            )
+        })
+        .ok()
+    };
+
+    assert_eq!(
+        [
+            bootstrap(&SnapshotExclusions::default()),
+            bootstrap(&SnapshotExclusions::default().rejecting(index(20), &status)),
+        ],
+        [
+            Some((
+                Some(index(20)),
+                BootstrapSource::Recorded(Some(OplogRegion::from_range(2..=7)))
+            )),
+            Some((
+                Some(index(10)),
+                BootstrapSource::Recorded(Some(OplogRegion::from_range(2..=3)))
+            )),
+        ]
+    );
+}
+
+/// A periodic or promoted record replays the core initializer strictly over the range it names;
+/// a pending snapshot-based or snapshot-assisted update replays what its earlier attempts recorded
+/// after its anchor (the `PendingUpdate` entry, or the strategy entry) and continues live, and its
+/// main cursor skips that history.
+#[test]
+async fn a_start_replays_the_core_initializer_over_the_durable_calls_of_its_baseline() {
+    use golem_common::model::{AssistedSelection, PendingUpdateKind};
+    let index = OplogIndex::from_u64;
+    let manual_head = Arc::new(head(
+        PendingUpdateKind::SnapshotBased {
+            filesystem_snapshot: None,
+        },
+        7,
+    ));
+    let assisted_head = Arc::new(head(
+        PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+            source_revision_start_index: index(2),
+            snapshot: record(6, None),
+        })),
+        9,
+    ));
+    let replay = |role, bootstrap| ReplayBaseline {
+        snapshot: None,
+        skip_through: None,
+        role,
+        bootstrap,
+    };
+    let range = |from, to| Some(OplogRegion::from_range(from..=to));
+    let strict = |skip_through, target| InitializerReplay::Bootstrap {
+        skip_through: index(skip_through),
+        target: index(target),
+        tail: BootstrapTail::Strict,
+    };
+    let horizon = index(11);
+    // (baseline, expected initializer replay, expected attempt region)
+    let cases = [
+        (
+            replay(
+                BaselineRole::Periodic(index(20)),
+                BootstrapSource::Recorded(range(3, 5)),
+            ),
+            strict(2, 5),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::Periodic(index(20)),
+                BootstrapSource::Recorded(None),
+            ),
+            strict(1, 1),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(range(8, 10)),
+            ),
+            strict(7, 10),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPromoted,
+                BootstrapSource::Recorded(None),
+            ),
+            strict(1, 1),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::ManualPending(manual_head.clone()),
+                BootstrapSource::Attempt { anchor: index(7) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(7),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            range(8, 11),
+        ),
+        (
+            replay(
+                BaselineRole::ManualPending(manual_head.clone()),
+                BootstrapSource::Attempt { anchor: index(11) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(11),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPending(assisted_head.clone()),
+                BootstrapSource::Attempt { anchor: index(9) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(9),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            range(10, 11),
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPending(assisted_head.clone()),
+                BootstrapSource::Attempt { anchor: index(11) },
+            ),
+            InitializerReplay::Bootstrap {
+                skip_through: index(11),
+                target: horizon,
+                tail: BootstrapTail::Live,
+            },
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(range(3, 5)),
+            ),
+            strict(2, 5),
+            None,
+        ),
+        (
+            replay(
+                BaselineRole::AssistedPromoted,
+                BootstrapSource::Recorded(None),
+            ),
+            strict(1, 1),
+            None,
+        ),
+        (
+            ReplayBaseline::initial_files(),
+            InitializerReplay::Positional,
+            None,
+        ),
+    ];
+
+    for (baseline, initializer, attempt) in cases {
+        assert_eq!(
+            (
+                baseline.initializer_replay(horizon),
+                baseline.attempt_region(horizon)
+            ),
+            (initializer, attempt),
+            "{:?}",
+            baseline.role
+        );
+    }
+}
+
+/// The live bootstrap cursor of a pending snapshot-based update skips the failed attempt of the
+/// snapshot-assisted update that was before it in the queue, so the target initializer of the
+/// pending update does not replay the durable calls of the other target. A strict cursor over a
+/// recorded range skips only the deleted regions, because the status skips the range itself.
+#[test]
+async fn a_live_bootstrap_cursor_skips_the_history_of_the_updates_before_the_pending_one() {
+    use golem_common::model::PendingUpdateKind;
+    let index = OplogIndex::from_u64;
+    let regions = |ranges: &[(u64, u64)]| {
+        DeletedRegionsBuilder::from_regions(
+            ranges
+                .iter()
+                .map(|(from, to)| OplogRegion::from_index_range(index(*from)..=index(*to)))
+                .collect::<Vec<_>>(),
+        )
+        .build()
+    };
+    let collected = |regions: DeletedRegions| {
+        regions
+            .regions()
+            .map(|region| (region.start.as_u64(), region.end.as_u64()))
+            .collect::<Vec<_>>()
+    };
+    // A revert deleted 3..=4. The failed attempt of the snapshot-assisted update after the
+    // `PendingUpdate` entry at 7 recorded 9..=12, and its `FailedUpdate` is at 13.
+    let deleted = regions(&[(3, 4)]);
+    let skipped = regions(&[(3, 4), (9, 12)]);
+    let manual_head = Arc::new(head(
+        PendingUpdateKind::SnapshotBased {
+            filesystem_snapshot: None,
+        },
+        7,
+    ));
+    let pending = ReplayBaseline {
+        snapshot: None,
+        skip_through: Some(index(7)),
+        role: BaselineRole::ManualPending(manual_head),
+        bootstrap: BootstrapSource::Attempt { anchor: index(7) },
+    };
+    let promoted = ReplayBaseline {
+        snapshot: Some((index(7), SnapshotSource::ManualUpdate)),
+        skip_through: None,
+        role: BaselineRole::ManualPromoted,
+        bootstrap: BootstrapSource::Recorded(Some(OplogRegion::from_range(9..=12))),
+    };
+
+    assert_eq!(
+        collected(pending.bootstrap_skipped_regions(&skipped, &deleted)),
+        vec![(2, 7), (9, 12)]
+    );
+    assert_eq!(
+        collected(promoted.bootstrap_skipped_regions(&skipped, &deleted)),
+        vec![(3, 4)]
+    );
 }
 
 #[test]
@@ -580,6 +876,7 @@ async fn the_skipped_regions_of_a_start_skip_the_history_before_a_pending_record
         snapshot: None,
         skip_through,
         role: BaselineRole::InitialFiles,
+        bootstrap: BootstrapSource::Positional,
     };
     let pending = replay(Some(index(6))).skipped_regions(&status_regions);
     let promoted = replay(None).skipped_regions(&status_regions);
@@ -1245,6 +1542,7 @@ async fn a_baseline_restored_the_name_of_its_record_as_a_periodic_or_an_authorit
             snapshot,
             skip_through: None,
             role,
+            bootstrap: BootstrapSource::Positional,
         },
     };
     let manual_head = Arc::new(head(
@@ -1700,6 +1998,7 @@ async fn update_retention_keeps_the_record_of_a_successful_assisted_update_and_c
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: Some(assisted.clone()),
             },
+            bootstrap: None,
         }),
         ..Default::default()
     };
@@ -1720,6 +2019,7 @@ fn snapshot_record(name: Option<&FilesystemSnapshotName>) -> OplogEntry {
         active_cards: Vec::new(),
         wallet_generation: 0,
         filesystem_snapshot: name.cloned(),
+        bootstrap: None,
     }
 }
 
@@ -1747,6 +2047,7 @@ fn assisted_strategy_record(snapshot: u64, name: Option<&FilesystemSnapshotName>
             snapshot_index: OplogIndex::from_u64(snapshot),
             snapshot_revision: ComponentRevision::INITIAL,
             filesystem_snapshot: name.cloned(),
+            snapshot_bootstrap: None,
         },
         Some(OplogIndex::from_u64(snapshot + 1)),
     )
@@ -1767,6 +2068,7 @@ fn assisted_success() -> OplogEntry {
         10,
         None,
         std::collections::HashSet::new(),
+        None,
         None,
     )
 }

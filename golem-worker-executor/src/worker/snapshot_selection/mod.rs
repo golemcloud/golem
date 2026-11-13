@@ -35,6 +35,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, SnapshotFault, UpdateDescription,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot, AuthoritativeSnapshotKind,
     AutomaticSnapshot, PendingUpdateKind, PendingUpdateRef, SnapshotFiles, UsableAutomaticSnapshot,
@@ -264,6 +265,7 @@ fn strategy(
             snapshot_index: snapshot.index,
             snapshot_revision: snapshot.component_revision,
             filesystem_snapshot: snapshot.filesystem_snapshot,
+            snapshot_bootstrap: snapshot.bootstrap,
         },
         None => UpdateDescription::Automatic {
             target_revision: head.target_revision,
@@ -333,10 +335,11 @@ pub(crate) enum SelectedBaseline {
     },
     /// The authoritative baseline of a successful snapshot-assisted update: the `Snapshot` entry
     /// at `index` and its filesystem snapshot. Its replay revision is the source revision of the
-    /// update.
+    /// update. `bootstrap` is the bootstrap range that the successful update names.
     AssistedPromoted {
         index: OplogIndex,
         name: Option<FilesystemSnapshotName>,
+        bootstrap: Option<OplogRegion>,
     },
     /// The snapshot-based manual update at the head of the queue, whose record is its
     /// `PendingUpdate` entry. `previous` is the authoritative baseline before it.
@@ -345,8 +348,12 @@ pub(crate) enum SelectedBaseline {
         previous: Option<AuthoritativeSnapshot>,
     },
     /// The authoritative baseline of a successful snapshot-based manual update: its
-    /// `PendingUpdate` entry at `index`.
-    ManualPromoted { index: OplogIndex },
+    /// `PendingUpdate` entry at `index`. `bootstrap` is the bootstrap range that the successful
+    /// update names.
+    ManualPromoted {
+        index: OplogIndex,
+        bootstrap: Option<OplogRegion>,
+    },
     /// No record: the initial files of the replay revision.
     InitialFiles,
 }
@@ -543,16 +550,22 @@ fn authoritative_baseline(status: &AgentStatusRecord) -> SelectedBaseline {
         Some(AuthoritativeSnapshot {
             index,
             kind: AuthoritativeSnapshotKind::ManualUpdate,
-        }) => SelectedBaseline::ManualPromoted { index: *index },
+            bootstrap,
+        }) => SelectedBaseline::ManualPromoted {
+            index: *index,
+            bootstrap: bootstrap.clone(),
+        },
         Some(AuthoritativeSnapshot {
             index,
             kind:
                 AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot,
                 },
+            bootstrap,
         }) => SelectedBaseline::AssistedPromoted {
             index: *index,
             name: filesystem_snapshot.clone(),
+            bootstrap: bootstrap.clone(),
         },
         None => SelectedBaseline::InitialFiles,
     }
