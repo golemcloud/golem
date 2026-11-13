@@ -296,13 +296,10 @@ const run = <
   })
 
 /**
- * Records a custom operation's result. Sequential and properly nested execution only.
- * The body may await host calls when no unrelated guest work runs during the wait. Do not overlap
- * it with other fibers, concurrent effects, or JavaScript promises, including ordinary host calls:
- * sibling effects can acquire the wrong scope and cause incorrect replay or invocation failure.
- * Misuse is not reliably detected. Await nested operations; do not detach work. Stop and join
- * outstanding work before the body exits, including on failure or interruption. Structured
- * finalization alone does not make concurrent custom scopes supported.
+ * Records a custom operation's result. Operations can run in concurrent fibers and can nest; the
+ * calls of the body are recorded under this operation. Replay returns the recorded result without
+ * running the body. The operation finishes only after its child operations close. Work that
+ * continues after it closes runs in the nearest open enclosing operation.
  * @since 1.6.0
  * @category combinators
  */
@@ -327,8 +324,8 @@ export const wrap = <
 > => sdkErrorsToDefects(run(opts, request, body, opts.error)) as never
 
 /**
- * Infallible form of {@link wrap}, with the same sequential-only and no-detached-work limits.
- * An infallible body can still be interrupted; all children must terminate before its scope closes.
+ * Infallible form of {@link wrap}, with the same limits.
+ * An infallible body can still be interrupted; the operation closes after its children close.
  * @since 1.6.0
  * @category combinators
  */
