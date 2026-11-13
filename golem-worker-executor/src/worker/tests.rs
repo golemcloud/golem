@@ -601,6 +601,22 @@ fn merging_unloaded_states_preserves_startup_failure() {
 }
 
 #[test]
+fn inactivity_outranks_unloaded_states_in_both_orders() {
+    let inactive = || FinalWorkerState::Inactive(WorkerExecutorError::runtime("inactive"));
+    for unloaded in [None, Some(WorkerExecutorError::runtime("startup failed"))] {
+        let unloaded = || FinalWorkerState::Unloaded {
+            startup_failure: unloaded.clone(),
+        };
+        for (current, requested) in [(inactive(), unloaded()), (unloaded(), inactive())] {
+            assert!(matches!(
+                merge_final_worker_state(current, requested),
+                FinalWorkerState::Inactive(error) if error.to_string().contains("inactive")
+            ));
+        }
+    }
+}
+
+#[test]
 fn concurrent_startup_callers_share_one_attempt() {
     let tracker = Arc::new(StartupAttemptTracker::default());
     let barrier = Arc::new(std::sync::Barrier::new(16));
@@ -636,6 +652,23 @@ fn oom_retry_preserves_startup_attempt() {
     assert_eq!(tracker.pending(), Some(initial));
     assert!(tracker.complete(initial, &Ok(())));
     assert_eq!(tracker.current().unwrap(), None);
+}
+
+#[test]
+fn stale_startup_completion_keeps_failure_until_next_attempt() {
+    let tracker = StartupAttemptTracker::default();
+    let failed = tracker.begin(None);
+    let error = WorkerExecutorError::runtime("startup failed");
+
+    assert!(tracker.complete(failed, &Err(error.clone())));
+    assert_eq!(tracker.pending(), None);
+    assert_eq!(tracker.current().unwrap_err(), error);
+    assert!(!tracker.complete(failed, &Ok(())));
+    assert_eq!(tracker.current().unwrap_err(), error);
+
+    let next = tracker.begin(None);
+    assert_ne!(next, failed);
+    assert_eq!(tracker.current().unwrap(), Some(next));
 }
 
 #[test]
@@ -890,9 +923,7 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
 
 #[test]
 fn reconstructed_ephemeral_agent_is_terminal() {
-    let instance = WorkerInstance::Unloaded {
-        startup_failure: Some(inactive_ephemeral_agent_error()),
-    };
+    let instance = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
 
     assert!(matches!(
         instance.startup_failure(),
@@ -1372,6 +1403,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let status = AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
+            not_before: None,
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending.clone()),
             manual_update_target_revision: None,
@@ -1651,4 +1683,224 @@ fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
     let claimed = state.take().unwrap();
     assert_eq!(claimed.unload_request.reason, UnloadReason::Deleting);
     assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
+}
+
+#[test]
+fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() {
+    let key = IdempotencyKey::new("create-key".to_string());
+    let principal = Principal::anonymous();
+    let context = InvocationContextStack::fresh();
+    let derived_phantom = Some(ephemeral_invocation_phantom_id(&key));
+    let chosen_phantom = Some(Uuid::new_v4());
+    let recorded = |intent: CreateIntent, phantom_id: Option<Uuid>| {
+        let request = intent.request(phantom_id, principal.clone(), &context);
+        (request.kind, request.idempotency_key)
+    };
+    let invocation = CreateIntent::Invocation {
+        idempotency_key: Some(key.clone()),
+    };
+    let create = |exclusive| CreateIntent::Create {
+        exclusive,
+        idempotency_key: Some(key.clone()),
+    };
+
+    assert_eq!(
+        recorded(invocation.clone(), None),
+        (CreateRequestKind::GetOrCreate, None)
+    );
+    assert_eq!(
+        recorded(invocation.clone(), derived_phantom),
+        (CreateRequestKind::Phantom, Some(key.clone()))
+    );
+    // A phantom ID that the invocation's key did not produce, such as a durable phantom chosen by
+    // its creator, is not identified by that key.
+    assert_eq!(
+        recorded(invocation, chosen_phantom),
+        (CreateRequestKind::Phantom, None)
+    );
+    assert_eq!(
+        recorded(create(true), None),
+        (CreateRequestKind::Exclusive, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(false), None),
+        (CreateRequestKind::GetOrCreate, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(false), chosen_phantom),
+        (CreateRequestKind::Phantom, Some(key.clone()))
+    );
+    assert_eq!(
+        recorded(create(true), chosen_phantom),
+        (CreateRequestKind::Phantom, Some(key))
+    );
+    assert_eq!(
+        recorded(CreateIntent::UNKEYED_INVOCATION, derived_phantom),
+        (CreateRequestKind::Phantom, None)
+    );
+}
+
+fn pending(key: &IdempotencyKey, not_before: Option<Timestamp>) -> PendingInvocationRef {
+    PendingInvocationRef {
+        timestamp: Timestamp::from(1_000),
+        not_before,
+        oplog_index: OplogIndex::from_u64(2),
+        idempotency_key: Some(key.clone()),
+        manual_update_target_revision: None,
+    }
+}
+
+fn pending_status(begun: bool, entries: Vec<PendingInvocationRef>) -> AgentStatusRecord {
+    AgentStatusRecord {
+        ephemeral_execution_begun: begun,
+        pending_invocations: entries,
+        ..AgentStatusRecord::default()
+    }
+}
+
+#[test]
+fn ephemeral_start_waits_for_scheduled_work_and_ignores_the_constructor_reservation() {
+    use invocation_loop::{EphemeralStart, ephemeral_start_decision};
+
+    let init = IdempotencyKey::new("init-agent".to_string());
+    let method = IdempotencyKey::fresh();
+    let immediate = IdempotencyKey::fresh();
+    let now = Timestamp::from(10_000);
+    let later = Some(Timestamp::from(20_000));
+    let earlier = Some(Timestamp::from(5_000));
+    let decide =
+        |begun, entries| ephemeral_start_decision(&pending_status(begun, entries), &init, now);
+
+    // The constructor reservation is always due, but it must not make scheduled work due.
+    assert_eq!(
+        decide(false, vec![pending(&init, None), pending(&method, later)]),
+        EphemeralStart::NotDue
+    );
+    assert_eq!(
+        decide(false, vec![pending(&init, None), pending(&method, earlier)]),
+        EphemeralStart::Begin
+    );
+    assert_eq!(
+        decide(
+            false,
+            vec![pending(&method, later), pending(&immediate, None)]
+        ),
+        EphemeralStart::Begin
+    );
+    // A creation for an immediate invocation starts as before.
+    assert_eq!(
+        decide(false, vec![pending(&init, None)]),
+        EphemeralStart::Begin
+    );
+    // Cancellation withdrew everything a never-started agent had.
+    assert_eq!(decide(false, vec![]), EphemeralStart::Withdrawn);
+    // A begun agent keeps today's behavior, whatever is pending.
+    assert_eq!(
+        decide(true, vec![pending(&method, later)]),
+        EphemeralStart::Begin
+    );
+    assert_eq!(decide(true, vec![]), EphemeralStart::Begin);
+
+    // An inspection never starts an agent whose start would come before its accepted work.
+    let inspect = |begun, entries| {
+        invocation_loop::ephemeral_inspection_may_start(&pending_status(begun, entries), &init, now)
+    };
+    assert!(!inspect(false, vec![pending(&init, None)]));
+    assert!(!inspect(
+        false,
+        vec![pending(&init, None), pending(&method, later)]
+    ));
+    assert!(inspect(
+        false,
+        vec![pending(&init, None), pending(&method, earlier)]
+    ));
+    assert!(inspect(true, vec![]));
+}
+
+#[test]
+fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold() {
+    use acquisition::never_started_ephemeral_admission;
+
+    let init = IdempotencyKey::new("init-agent".to_string());
+    let method = IdempotencyKey::fresh();
+    let other = IdempotencyKey::fresh();
+    let later = Some(Timestamp::from(20_000));
+    let admit = |status: AgentStatusRecord| never_started_ephemeral_admission(&status, Some(&init));
+
+    assert_eq!(
+        admit(pending_status(
+            false,
+            vec![pending(&init, None), pending(&method, later)]
+        )),
+        Some(Some(method.clone()))
+    );
+    assert_eq!(
+        admit(pending_status(false, vec![pending(&init, None)])),
+        Some(None)
+    );
+    // An immediate invocation accepted before a loss stays fail-stop.
+    assert_eq!(
+        admit(pending_status(
+            false,
+            vec![pending(&init, None), pending(&method, None)]
+        )),
+        None
+    );
+    assert_eq!(
+        admit(pending_status(
+            false,
+            vec![
+                pending(&init, None),
+                pending(&method, later),
+                pending(&other, later)
+            ]
+        )),
+        None
+    );
+    // Cancellation withdrew the constructor: nothing may run the method uninitialized.
+    assert_eq!(
+        admit(AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(4),
+            ..pending_status(false, vec![pending(&method, later)])
+        }),
+        None
+    );
+    // A withdrawn constructor reservation leaves entries after Create; a crash that left only
+    // Create is repaired by appending the reservation, so it may still be admitted.
+    assert_eq!(
+        admit(AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(4),
+            ..pending_status(false, vec![])
+        }),
+        None
+    );
+    assert_eq!(
+        admit(AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(1),
+            ..pending_status(false, vec![])
+        }),
+        Some(None)
+    );
+    // An owner without a constructor needs no reservation.
+    assert_eq!(
+        never_started_ephemeral_admission(
+            &pending_status(false, vec![pending(&method, later)]),
+            None
+        ),
+        Some(Some(method.clone()))
+    );
+    assert_eq!(
+        admit(pending_status(
+            true,
+            vec![pending(&init, None), pending(&method, later)]
+        )),
+        None
+    );
+    assert_eq!(
+        admit(AgentStatusRecord {
+            status: AgentStatus::Failed,
+            ..pending_status(false, vec![pending(&init, None), pending(&method, later)])
+        }),
+        None
+    );
 }

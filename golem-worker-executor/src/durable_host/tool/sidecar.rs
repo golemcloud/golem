@@ -495,7 +495,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         if guest_body_accepts_admission_rejection(&result) {
             return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
         }
-        rollback_live_attachment_admission_rejection(&operation).await;
+        rollback_live_attachment_admission_rejection(&operation).await?;
     }
     finish?;
     if matches!(&result, Ok(Ok(_))) || locally_cancelled {

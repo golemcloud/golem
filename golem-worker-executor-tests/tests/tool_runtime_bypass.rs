@@ -534,6 +534,7 @@ async fn returned_middleware_cannot_reuse_underlying_handle_across_invocations(
         .complete_promise(
             &golem_common::model::PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint),
             },
             Vec::new(),

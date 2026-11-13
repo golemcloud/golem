@@ -23,7 +23,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
     AgentCreationRequest, AgentMetadataDto, AgentTarget, RevertWorkerTarget,
 };
@@ -35,7 +35,7 @@ use golem_common::model::component::{
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, PromiseId, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
@@ -187,7 +187,7 @@ impl WorkerApi {
     /// Complete a promise
     ///
     /// Completes a promise with a given custom array of bytes.
-    /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+    /// The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
     /// The data field is sent back to the worker, and it has no predefined meaning.
     #[oai(
         path = "/:component_id/workers/:agent_name/complete",
@@ -224,11 +224,20 @@ impl WorkerApi {
         params: CompleteParameters,
         auth: AuthCtx,
     ) -> Result<Json<bool>> {
-        let CompleteParameters { oplog_idx, data } = params;
+        let CompleteParameters {
+            oplog_idx,
+            fingerprint,
+            data,
+        } = params;
+        let promise_id = PromiseId {
+            agent_id,
+            fingerprint,
+            oplog_idx: OplogIndex::from_u64(oplog_idx),
+        };
 
         let response = self
             .worker_service
-            .complete_promise(&agent_id, oplog_idx, data, auth)
+            .complete_promise(promise_id, data, auth)
             .await?;
 
         Ok(Json(response))
@@ -494,11 +503,25 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
+        let filter = match params.filter {
+            Some(filter) => {
+                // `serde_json` refuses JSON nested deeper than 128, which bounds the recursion
+                // of `validated` before the depth check.
+                Some(filter.validated().map_err(|e| {
+                    ApiEndpointError::bad_request(
+                        api::error_code::INVALID_AGENT_FILTER,
+                        golem_common::safe(e),
+                    )
+                })?)
+            }
+            None => None,
+        };
+
         let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
-                params.filter.clone(),
+                filter,
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
@@ -1044,6 +1067,7 @@ impl WorkerApi {
                 &agent_id,
                 &request.target_agent_id,
                 request.oplog_index_cutoff,
+                None,
                 auth,
             )
             .await?;
@@ -1226,9 +1250,9 @@ fn normalize_agent_name_with_latest_component(
 ) -> Result<AgentId> {
     if latest_component.metadata.is_agent()
         && let Ok((parsed_agent_id, agent_type)) =
-            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+            ParsedAgentKey::parse_and_resolve_type(agent_id, &latest_component.metadata)
     {
-        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
+        let normalized_agent_id = ParsedAgentKey::new_auto_phantom(
             parsed_agent_id.agent_type,
             parsed_agent_id.parameters,
             parsed_agent_id.phantom_id,

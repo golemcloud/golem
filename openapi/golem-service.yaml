@@ -453,7 +453,7 @@ paths:
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker, and it has no predefined meaning.
       operationId: complete_promise
       parameters:
@@ -16326,6 +16326,10 @@ components:
         oplogIdx:
           type: integer
           format: uint64
+        fingerprint:
+          description: Fingerprint of the agent incarnation that created the promise.
+          type: string
+          format: uuid
         data:
           type: array
           items:
@@ -16333,6 +16337,7 @@ components:
             format: uint8
       required:
       - oplogIdx
+      - fingerprint
       - data
     Constraint:
       type: object
@@ -22993,6 +22998,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
       required:
       - timestamp
       - invocation
@@ -24742,6 +24750,7 @@ components:
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
           McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+          IncompatibleConstructorChange: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
@@ -24749,6 +24758,7 @@ components:
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
       - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+      - $ref: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -24773,6 +24783,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_IncompatibleConstructorChange:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: IncompatibleConstructorChange
+            type: string
+            enum:
+            - IncompatibleConstructorChange
+        required:
+        - type
+      - $ref: '#/components/schemas/IncompatibleConstructorChange'
     DeployValidationWarning_McpImportDiscovery:
       allOf:
       - type: object
@@ -25378,12 +25400,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
       required:
@@ -26210,6 +26226,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
@@ -26313,6 +26331,27 @@ components:
       - staticBindings
       - filesystemBindings
       - fileResponseHeaders
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
+    IncompatibleConstructorChange:
+      title: IncompatibleConstructorChange
+      type: object
+      properties:
+        agentType:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - agentType
+      - path
+      - reason
     InitialAgentFile:
       title: InitialAgentFile
       type: object

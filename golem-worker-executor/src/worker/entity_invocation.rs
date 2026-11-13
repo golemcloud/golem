@@ -1417,7 +1417,10 @@ mod tests {
 
         let (owner, operation) = cleanup_operation();
         assert!(operation.begin_cancel());
-        operation.resolve_cancel(true).await;
+        operation
+            .resolve_cancel(crate::durable_host::tool::operation::TerminalResolution::Committed)
+            .await
+            .unwrap();
         retained_cleanup_failure::<crate::workerctx::default::Context>(
             Some(operation.clone()),
             anyhow::anyhow!("cleanup after cancellation"),

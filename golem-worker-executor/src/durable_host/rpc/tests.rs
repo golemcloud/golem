@@ -26,7 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -327,6 +327,32 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 
 #[async_trait]
 impl Rpc for FingerprintMismatchRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _target: AgentTarget,
@@ -387,6 +413,32 @@ impl Rpc for FingerprintMismatchRpc {
 
 #[async_trait]
 impl Rpc for ActivationFailureRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _target: AgentTarget,
@@ -447,6 +499,32 @@ impl Rpc for ActivationFailureRpc {
 
 #[async_trait]
 impl Rpc for RecordingEnvRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        Err(ServiceRpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         _target: AgentTarget,
@@ -933,7 +1011,7 @@ fn rejected_rpc_creation_drains_every_config_handle() {
 fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId(Uuid::from_u128(1));
-    let logical_agent_id = ParsedAgentId::try_new(
+    let logical_agent_id = ParsedAgentKey::try_new(
         golem_common::model::agent::AgentTypeName("ephemeral-target".to_string()),
         data_value!("constructor"),
         None,

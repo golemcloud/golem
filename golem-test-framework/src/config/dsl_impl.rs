@@ -33,7 +33,7 @@ use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetada
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
@@ -493,7 +493,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
@@ -519,7 +519,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: TypedSchemaValue,
@@ -570,7 +570,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
@@ -795,6 +795,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &promise_id.agent_id.agent_id,
                 &CompleteParameters {
                     oplog_idx: promise_id.oplog_idx.as_u64(),
+                    fingerprint: promise_id.fingerprint.0,
                     data,
                 },
             )

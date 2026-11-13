@@ -29,7 +29,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -40,7 +40,9 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
-use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, PromiseId, ScanCursor,
+};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
@@ -456,8 +458,7 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn complete_promise(
         &self,
-        _: &AgentId,
-        _: u64,
+        _: &PromiseId,
         _: Vec<u8>,
         _: EnvironmentId,
         _: AuthCtx,
@@ -633,6 +634,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AccountId,
         _: AccountEmail,
+        _: Principal,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -665,6 +667,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &IdempotencyKey,
         _: EnvironmentId,
         _: AuthCtx,
+        _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         unimplemented!()
     }

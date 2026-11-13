@@ -190,7 +190,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // than cloning the whole schema graph.
         let remote_agent_type: Arc<AgentTypeSchema> = Arc::new(registered_agent_type.agent_type);
 
-        let agent_id = match golem_common::model::agent::ParsedAgentId::try_new(
+        let agent_id = match golem_common::model::agent::ParsedAgentKey::try_new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
@@ -328,7 +328,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 span,
                 remote_agent_type,
                 remote_method_streams,
-                component_revision,
                 remote_owner,
                 creation_index,
             )
@@ -358,7 +357,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         span,
                         remote_agent_type,
                         remote_method_streams,
-                        component_revision,
                         remote_owner,
                         pinned_ephemeral_identity,
                         creation_index,
@@ -376,7 +374,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         span,
                         remote_agent_type,
                         remote_method_streams,
-                        component_revision,
                         remote_owner,
                         pinned_ephemeral_identity,
                         creation_index,
@@ -396,7 +393,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             span,
             remote_agent_type,
             remote_method_streams,
-            component_revision,
             remote_owner,
             pinned_ephemeral_identity,
             creation_index,

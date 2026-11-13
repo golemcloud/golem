@@ -210,6 +210,38 @@ struct StreamingRemoteRpc {
 
 #[async_trait]
 impl Rpc for StreamingRemoteRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
         agent: AgentTarget,
@@ -630,9 +662,12 @@ impl WorkerProxy for LocalResumeProxy {
         source: &AgentId,
         target: &AgentId,
         cut: &OplogIndex,
+        principal: Principal,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner.fork_worker(source, target, cut, auth).await
+        self.inner
+            .fork_worker(source, target, cut, principal, auth)
+            .await
     }
 
     async fn revert(
@@ -661,6 +696,19 @@ impl WorkerProxy for LocalResumeProxy {
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner.cancel_invocation(agent, key, auth).await
+    }
+
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::agent::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
     }
 
     async fn lookup_invocation_status(
@@ -1978,6 +2026,30 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     assert!(cursor.is_none());
     assert_eq!(after.len(), 2, "recovery must not create a second child");
     assert!(after.iter().any(|agent| agent.agent_id == child));
+    let child_requests = executor
+        .stored_oplog(&child)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    assert_eq!(
+        child_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::Fork
+    );
+    assert_eq!(child_requests[0].idempotency_key, None);
+    assert_eq!(
+        child_requests[0].principal,
+        Principal::Agent(golem_common::model::agent::AgentPrincipal {
+            agent_id: source_id.clone(),
+        }),
+        "the child records the forking agent, not the request that created the source"
+    );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())
         .await?

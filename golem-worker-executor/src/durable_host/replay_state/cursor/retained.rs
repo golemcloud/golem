@@ -1,4 +1,6 @@
+use super::super::ResolutionOutcome;
 use super::*;
+use tokio::sync::oneshot;
 
 /// Whether replay parks the outer call without reconstructing its host-internal observations:
 /// cancellation without a partial result, or an opted-in incomplete call abandoned by a
@@ -89,8 +91,8 @@ impl RetainedClaims<'_> {
         let mut members = HashSet::from([root]);
         let adopted: Vec<OplogIndex> = self
             .st
-            .retained_starts
-            .iter()
+            .starts
+            .retained_iter()
             .filter_map(|(idx, retained)| {
                 let OplogEntry::Start {
                     observational_owner,
@@ -113,8 +115,8 @@ impl RetainedClaims<'_> {
         for idx in adopted {
             let retained = self
                 .st
-                .retained_starts
-                .remove(&idx)
+                .starts
+                .remove_retained(&idx)
                 .expect("adopted retained Starts are taken from the retained map");
             // Adoption consumes the record on the root's behalf, so it publishes the position and
             // the replay events the cursor withheld while the Start was retained, like an
@@ -162,7 +164,7 @@ impl CursorTx<'_> {
             .and_then(|parent| self.st.entity_start_routes.get(&parent))
             .cloned()
             .unwrap_or_default();
-        self.st.retained_starts.insert(
+        self.st.starts.insert_retained(
             idx,
             RetainedStart {
                 entry,
@@ -199,10 +201,10 @@ impl CursorTx<'_> {
         let Some(start_index) = terminal_start_index(entry) else {
             return Ok(false);
         };
-        let Some(retained) = self.st.retained_starts.get_mut(&start_index) else {
+        let Some(terminal) = self.st.starts.get_retained_terminal_mut(&start_index) else {
             return Ok(false);
         };
-        if let Some((prior_idx, prior)) = &retained.terminal {
+        if let Some((prior_idx, prior)) = &*terminal {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 "at most one End/Cancelled per durable call Start",
                 format!(
@@ -212,7 +214,7 @@ impl CursorTx<'_> {
                 ),
             ));
         }
-        retained.terminal = Some((terminal_idx, entry.clone()));
+        *terminal = Some((terminal_idx, entry.clone()));
         Ok(true)
     }
 
@@ -222,7 +224,7 @@ impl CursorTx<'_> {
         &mut self,
         abandoned: &mut AbandonedStarts,
     ) -> Result<(), WorkerExecutorError> {
-        let retained = std::mem::take(&mut self.st.retained_starts);
+        let retained = self.st.starts.take_retained();
         self.publish_retained_count();
         for (idx, retained) in retained {
             let OplogEntry::Start {
@@ -266,18 +268,9 @@ impl CursorTx<'_> {
 
 impl RetainedClaims<'_> {
     fn publish_retained_count(&mut self) {
-        self.st.retained_entity_counts.clear();
-        for retained in self.st.retained_starts.values() {
-            for entity in &retained.enclosing_entities {
-                *self.st.retained_entity_counts.entry(*entity).or_default() += 1;
-            }
-        }
-        self.cursor.unclaimed_retained_starts.publish(
-            self.st
-                .retained_starts
-                .values()
-                .map(|retained| &retained.entry),
-        );
+        self.cursor
+            .unclaimed_retained_starts
+            .publish(self.st.starts.retained_summary());
     }
 
     pub(super) fn publish_claimed_position(
@@ -333,7 +326,7 @@ impl RetainedClaims<'_> {
             return Ok(None);
         };
         if claim.is_reconstruction_claim() {
-            let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+            let reconstruction = self.st.starts.register_reconstruction(
                 handle.start_idx(),
                 self.cursor.wallet.as_ref().map(Arc::downgrade),
             );
@@ -360,8 +353,8 @@ impl RetainedClaims<'_> {
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
         let candidates: Vec<OplogIndex> = self
             .st
-            .retained_starts
-            .keys()
+            .starts
+            .retained_keys()
             .copied()
             .filter(|idx| !self.st.skipped_regions.is_in_deleted_region(*idx))
             .collect();
@@ -369,8 +362,8 @@ impl RetainedClaims<'_> {
             let accepted = {
                 let retained = self
                     .st
-                    .retained_starts
-                    .get(&idx)
+                    .starts
+                    .get_retained(&idx)
                     .expect("retained Start candidates are taken from the retained map");
                 matches_identity(&retained.entry)
             };
@@ -379,8 +372,8 @@ impl RetainedClaims<'_> {
             }
             let retained = self
                 .st
-                .retained_starts
-                .remove(&idx)
+                .starts
+                .remove_retained(&idx)
                 .expect("retained Start candidates are taken from the retained map");
             self.publish_retained_count();
             self.publish_claimed_position(
@@ -396,17 +389,9 @@ impl RetainedClaims<'_> {
             self.publish_deferred_events(retained.deferred_events);
             let handle = match retained.terminal {
                 Some((terminal_idx, terminal)) => {
-                    let receiver = self
-                        .st
-                        .concurrent_resolver
-                        .register(idx, start_parent(&retained.entry));
                     let resolution = self.terminal_resolution(idx, terminal_idx, &terminal);
-                    let resolved = self.st.concurrent_resolver.resolve_if_pending(
-                        idx,
-                        terminal_idx,
-                        resolution,
-                    );
-                    debug_assert!(resolved, "a freshly registered retained claim must resolve");
+                    let (sender, receiver) = oneshot::channel();
+                    let _ = sender.send(ResolutionOutcome::Resolved(resolution));
                     *self.resolved_retained_claim = Some(idx);
                     *self.notify_progress = true;
                     ReplayCallHandle::new(idx, receiver)
@@ -440,17 +425,13 @@ impl CursorTx<'_> {
             }
         }
         self.st.entity_route_members = members;
-        self.st.retained_starts.retain(|idx, _| {
+        self.st.starts.retain_retained(|idx, retained| {
             if deleted(*idx) {
                 if let Some(wallet) = &self.cursor.wallet {
                     wallet.finish_replayed_entity(*idx);
                 }
-                false
-            } else {
-                true
+                return false;
             }
-        });
-        for retained in self.st.retained_starts.values_mut() {
             retained
                 .enclosing_entities
                 .retain(|entity| !deleted(*entity));
@@ -464,7 +445,8 @@ impl CursorTx<'_> {
             retained
                 .deferred_events
                 .retain(|(event_idx, _)| !deleted(*event_idx));
-        }
+            true
+        });
         self.publish_retained_count();
     }
 
@@ -606,13 +588,10 @@ impl RetainedClaims<'_> {
             None
         };
 
-        let receiver = self
-            .st
-            .concurrent_resolver
-            .register(start_idx, parent_start_index);
+        let receiver = self.st.starts.register(start_idx, parent_start_index)?;
         if let Some((terminal_idx, resolution)) = prefetched {
             self.st
-                .concurrent_resolver
+                .starts
                 .resolve_prefetched(start_idx, terminal_idx, resolution);
         }
         *self.notify_progress = true;
@@ -622,7 +601,7 @@ impl RetainedClaims<'_> {
 
 impl ReplayState {
     /// Whether the cursor has committed past durable-call `Start`s nobody has claimed yet (see
-    /// [`CursorState::retained_starts`]). Does not take the cursor lock: read by durable-call
+    /// [`CursorState::starts`]). Does not take the cursor lock: read by durable-call
     /// admission from Store-holding host calls, which must not queue on it.
     pub(crate) fn has_unclaimed_retained_starts(&self) -> bool {
         self.cursor.unclaimed_retained_starts.any()
@@ -666,7 +645,7 @@ impl ReplayState {
                 .is_empty()
             {
                 tracing::debug!(
-                    retained = st.retained_starts.len(),
+                    retained = st.starts.retained_len(),
                     "Keeping unclaimed retained Starts across a live invocation end while an entity body is still reconstructing"
                 );
                 return Ok(());
@@ -676,8 +655,8 @@ impl ReplayState {
             // entry in between, so an unattached terminal is looked up in the recorded prefix
             // before the `Start` is declared unclosed.
             let mut unclosed: HashSet<OplogIndex> = st
-                .retained_starts
-                .iter()
+                .starts
+                .retained_iter()
                 .filter(|(_, retained)| retained.terminal.is_none())
                 .map(|(idx, _)| *idx)
                 .collect();
@@ -712,7 +691,7 @@ impl ReplayState {
                 let unclosed: Vec<_> = unclosed
                     .into_iter()
                     .map(|idx| {
-                        let OplogEntry::Start { function_name, .. } = &st.retained_starts[&idx].entry
+                        let OplogEntry::Start { function_name, .. } = &st.starts.get_retained(&idx).unwrap().entry
                         else {
                             unreachable!("only Start entries are retained");
                         };
@@ -727,8 +706,7 @@ impl ReplayState {
                     ),
                 ));
             }
-            let released = std::mem::take(&mut st.retained_starts);
-            st.retained_entity_counts.clear();
+            let released = st.starts.take_retained();
             state.cursor.unclaimed_retained_starts.clear();
             if released.is_empty() {
                 return Ok(());

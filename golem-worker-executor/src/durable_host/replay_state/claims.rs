@@ -315,14 +315,14 @@ impl ReplayState {
             }
             let mut st = state.cursor.state.lock().await;
             if st.skipped_regions.is_in_deleted_region(start_index)
-                || !st.concurrent_resolver.has_claim(start_index)
+                || !st.starts.has_claim(start_index)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "claimed incomplete admission Start",
                     format!("Start {start_index} is deleted or has no pending resolver"),
                 ));
             }
-            st.concurrent_resolver.unregister_incomplete(start_index);
+            st.starts.unregister_incomplete(start_index);
             drop(st);
             state.cursor.progress.notify_waiters();
             Ok(true)
@@ -497,7 +497,7 @@ impl ReplayState {
                                         "no matching Start; a Start with the same invocation id exists but does not match",
                                     ));
                                 }
-                                if tx.cursor.is_live() {
+                                if tx.cursor.at_replay_tail() {
                                     return Ok((None, None, Some(Missing::ReplayEnded)));
                                 }
                                 if store_live {
@@ -627,7 +627,7 @@ impl ReplayState {
     ///
     /// Every durable scope `Start` consumed during replay leaves a registered awaiter, so its
     /// `End` is always a resolver-routed *awaited terminal* and never an orphan that a parked
-    /// awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals the
+    /// awaiter behind it could sleep on until `exhaust_replay_prefix`. The only un-drained terminals the
     /// cursor may leave at its head are then the dedicated-positional-consumer pairs
     /// (`GolemApiFork`).
     #[cfg(test)]

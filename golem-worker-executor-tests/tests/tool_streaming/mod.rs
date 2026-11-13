@@ -3057,10 +3057,7 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
             };
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: admitted.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, admitted.oplog_idx).await?,
                     vec![],
                 )
                 .await?;
@@ -3697,10 +3694,9 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
     .expect("pending MCP request was observed");
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -4557,10 +4553,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     .await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: direct_worker.clone(),
-                oplog_idx: caller.oplog_idx,
-            },
+            &executor
+                .promise_id(&direct_worker, caller.oplog_idx)
+                .await?,
             Vec::new(),
         )
         .await?;
@@ -4734,10 +4729,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     .await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: decorated_worker.clone(),
-                oplog_idx: caller_promise.oplog_idx,
-            },
+            &executor
+                .promise_id(&decorated_worker, caller_promise.oplog_idx)
+                .await?,
             Vec::new(),
         )
         .await?;
@@ -5370,19 +5364,17 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
     for (worker_id, caller_promise, provider_promise) in promises {
         executor
             .complete_promise(
-                &PromiseId {
-                    agent_id: worker_id.clone(),
-                    oplog_idx: caller_promise.oplog_idx,
-                },
+                &executor
+                    .promise_id(&worker_id, caller_promise.oplog_idx)
+                    .await?,
                 Vec::new(),
             )
             .await?;
         executor
             .complete_promise(
-                &PromiseId {
-                    agent_id: worker_id,
-                    oplog_idx: provider_promise.oplog_idx,
-                },
+                &executor
+                    .promise_id(&worker_id, provider_promise.oplog_idx)
+                    .await?,
                 Vec::new(),
             )
             .await?;
@@ -5708,12 +5700,7 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         .await?
         .into_return_value()
         .expect("promise gate");
-    let SchemaValue::Record { fields } = &gate else {
-        panic!("promise record")
-    };
-    let SchemaValue::U64(index) = fields[1] else {
-        panic!("promise oplog index")
-    };
+    let gate_promise_id = PromiseId::from_value(&gate).expect("promise gate id");
     let loads = executor.instance_load_count(&worker);
     let effects = executor.native_test_effect_count();
     let owned = OwnedAgentId::new(context.default_environment_id, &worker);
@@ -5747,15 +5734,7 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         } => {}
     }
     assert_eq!(executor.native_test_effect_count(), effects + 1);
-    executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker.clone(),
-                oplog_idx: OplogIndex::from_u64(index),
-            },
-            vec![],
-        )
-        .await?;
+    executor.complete_promise(&gate_promise_id, vec![]).await?;
     tokio::select! {
         result = &mut invocation => panic!("timer finished before unloading: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
@@ -8181,10 +8160,7 @@ async fn direct_stdin_reversed_replay_admission(
             wait_for_promise_checkpoint_to_await(&executor, &worker, &first).await?;
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: first.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, first.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -8194,10 +8170,7 @@ async fn direct_stdin_reversed_replay_admission(
                 wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
                 executor
                     .complete_promise(
-                        &PromiseId {
-                            agent_id: worker.clone(),
-                            oplog_idx: second.oplog_idx,
-                        },
+                        &executor.promise_id(&worker, second.oplog_idx).await?,
                         Vec::new(),
                     )
                     .await?;
@@ -8209,10 +8182,7 @@ async fn direct_stdin_reversed_replay_admission(
             wait_for_promise_checkpoint_to_await(&executor, &worker, &started).await?;
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: started.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, started.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -8314,10 +8284,7 @@ async fn direct_stdin_reversed_replay_admission(
         first_wait.release();
         executor
             .complete_promise(
-                &PromiseId {
-                    agent_id: worker.clone(),
-                    oplog_idx: checkpoint.oplog_idx,
-                },
+                &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                 Vec::new(),
             )
             .await?;
@@ -8511,10 +8478,9 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             tokio::time::timeout(Duration::from_secs(30), entered).await??;
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: before.expect("caller checkpoint").oplog_idx,
-                    },
+                    &executor
+                        .promise_id(&worker, before.expect("caller checkpoint").oplog_idx)
+                        .await?,
                     Vec::new(),
                 )
                 .await?;
@@ -8619,10 +8585,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             .await??;
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: checkpoint.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -8694,10 +8657,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         for checkpoint in held {
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: checkpoint.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -9042,10 +9002,7 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
             executor.simulated_crash(&worker).await?;
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: checkpoint.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -9728,10 +9685,7 @@ async fn retained_tool_output_reconstruction(
                     }
                     executor
                         .complete_promise(
-                            &PromiseId {
-                                agent_id: worker.clone(),
-                                oplog_idx: checkpoint.oplog_idx,
-                            },
+                            &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                             Vec::new(),
                         )
                         .await?;
@@ -10164,10 +10118,9 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         let cleanup = executor.probe_entity_settlement_access(&cancelled_worker, entity_start);
         executor
             .complete_promise(
-                &PromiseId {
-                    agent_id: cancelled_worker.clone(),
-                    oplog_idx: checkpoint.oplog_idx,
-                },
+                &executor
+                    .promise_id(&cancelled_worker, checkpoint.oplog_idx)
+                    .await?,
                 Vec::new(),
             )
             .await?;
@@ -11995,10 +11948,9 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             Vec::new(),
         )
         .await?;
@@ -20202,12 +20154,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         .await?
         .into_return_value()
         .expect("cancellation promise");
-    let SchemaValue::Record { fields } = &gate else {
-        anyhow::bail!("expected promise record");
-    };
-    let SchemaValue::U64(index) = fields[1] else {
-        anyhow::bail!("expected promise index");
-    };
+    let gate_promise_id = PromiseId::from_value(&gate)?;
     {
         let cancellation = harness.executor.invoke_and_await_agent(
             &harness.caller_component,
@@ -20227,13 +20174,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         }
         harness
             .executor
-            .complete_promise(
-                &PromiseId {
-                    agent_id: harness.worker_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(index),
-                },
-                vec![],
-            )
+            .complete_promise(&gate_promise_id, vec![])
             .await?;
         let cancelled: bool = tokio::time::timeout(Duration::from_secs(30), &mut cancellation)
             .await
@@ -22864,10 +22805,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
                     .complete_promise(
-                        &PromiseId {
-                            agent_id: worker.clone(),
-                            oplog_idx: before.oplog_idx,
-                        },
+                        &executor.promise_id(&worker, before.oplog_idx).await?,
                         Vec::new(),
                     )
                     .await?;
@@ -22938,10 +22876,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             }
             executor
                 .complete_promise(
-                    &PromiseId {
-                        agent_id: worker.clone(),
-                        oplog_idx: before.oplog_idx,
-                    },
+                    &executor.promise_id(&worker, before.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
@@ -23037,10 +22972,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 }
                 regeneration.release();
             }
-            Ok::<_, anyhow::Error>(Some(PromiseId {
-                agent_id: worker.clone(),
-                oplog_idx: after.oplog_idx,
-            }))
+            Ok::<_, anyhow::Error>(Some(executor.promise_id(&worker, after.oplog_idx).await?))
         };
         let after = tokio::select! {
             result = invocation.as_mut() => panic!("invocation settled before unread checkpoint: {result:?}"),

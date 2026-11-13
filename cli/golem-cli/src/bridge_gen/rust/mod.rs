@@ -5019,23 +5019,6 @@ mod tests {
     }
 
     #[test]
-    fn external_runtime_prelude_preserves_rest_runtime_paths() {
-        let mut generator =
-            RustBridgeGenerator::new(minimal_agent_type("AlphaAgent"), Utf8Path::new("."), true)
-                .unwrap();
-
-        let rendered = generator.generate_lib_rs_tokens().unwrap().to_string();
-
-        assert!(rendered.contains("pub use golem_client :: bridge :: ClientError"));
-        assert!(rendered.contains("pub mod __golem_bridge_runtime"));
-        assert!(rendered.contains("pub use golem_client :: bridge :: GolemServer"));
-        assert!(rendered.contains("pub use golem_common :: schema :: *"));
-        assert!(rendered.contains("pub use golem_common :: agentic :: *"));
-        assert!(rendered.contains("golem_client :: api :: AgentClient :: create_agent"));
-        assert!(rendered.contains("reqwest_middleware :: ClientWithMiddleware"));
-    }
-
-    #[test]
     fn external_generation_preserves_rest_cargo_dependencies_and_api_shape() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =

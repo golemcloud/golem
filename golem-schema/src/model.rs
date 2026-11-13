@@ -260,13 +260,16 @@ pub type OplogIndex = u64;
 )]
 pub struct PromiseId {
     pub agent_id: AgentId,
+    /// Fingerprint of the agent incarnation that created the promise.
+    pub fingerprint: Uuid,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
-    pub fn new(agent_id: AgentId, oplog_idx: OplogIndex) -> Self {
+    pub fn new(agent_id: AgentId, fingerprint: Uuid, oplog_idx: OplogIndex) -> Self {
         Self {
             agent_id,
+            fingerprint,
             oplog_idx,
         }
     }

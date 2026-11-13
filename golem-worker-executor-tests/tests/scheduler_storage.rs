@@ -44,16 +44,18 @@ fn scheduled_action_fingerprints_roundtrip() {
         agent_id: "Counter(\"scheduled\")".to_string(),
     };
     let fingerprint = AgentFingerprint(Uuid::from_u128(4));
+    let promise_id = PromiseId {
+        agent_id: agent_id.clone(),
+        fingerprint,
+        oplog_idx: OplogIndex::from_u64(42),
+    };
     let actions = [
         (
             "scheduled_action_complete_promise.bin",
             ScheduledAction::CompletePromise {
                 account_id,
                 environment_id,
-                promise_id: PromiseId {
-                    agent_id: agent_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(42),
-                },
+                promise_id: promise_id.clone(),
                 target_worker_fingerprint: fingerprint,
             },
         ),
@@ -67,6 +69,12 @@ fn scheduled_action_fingerprints_roundtrip() {
         ),
     ];
     let mut mint = goldenfile::Mint::new("tests/goldenfiles");
+    let encoded = serialize(&promise_id).unwrap();
+    assert_eq!(deserialize::<PromiseId>(&encoded).unwrap(), promise_id);
+    mint.new_goldenfile("promise_id.bin")
+        .unwrap()
+        .write_all(&encoded)
+        .unwrap();
     for (name, action) in actions {
         let encoded = serialize(&action).unwrap();
         assert_eq!(deserialize::<ScheduledAction>(&encoded).unwrap(), action);
@@ -75,6 +83,41 @@ fn scheduled_action_fingerprints_roundtrip() {
             .write_all(&encoded)
             .unwrap();
     }
+}
+
+#[test]
+fn scheduled_invocation_wake_roundtrips_without_payload() {
+    use golem_common::model::{AgentFingerprint, IdempotencyKey};
+    use golem_common::serialization::deserialize;
+
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Counter(\"scheduled\")".to_string(),
+        },
+    );
+    let fingerprint = AgentFingerprint::new();
+    let key = IdempotencyKey::new("scheduled-invocation".to_string());
+    let action = ScheduledAction::WakeInvocation {
+        owned_agent_id: owned_agent_id.clone(),
+        idempotency_key: key.clone(),
+        target_worker_fingerprint: fingerprint,
+    };
+    let decoded = deserialize::<ScheduledAction>(&serialize(&action).unwrap()).unwrap();
+    assert_eq!(decoded, action);
+    assert_eq!(decoded.owned_agent_id(), owned_agent_id);
+    let id = ScheduleId::for_invocation(fingerprint, &key);
+    assert_eq!(id.id, Uuid::new_v5(&fingerprint.0, key.value.as_bytes()));
+    assert_eq!(id, ScheduleId::for_invocation(fingerprint, &key));
+    assert_ne!(
+        id,
+        ScheduleId::for_invocation(AgentFingerprint::new(), &key)
+    );
+    assert_ne!(
+        id,
+        ScheduleId::for_invocation(fingerprint, &IdempotencyKey::fresh())
+    );
 }
 
 #[test]
@@ -115,14 +158,11 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         agent_id: "scheduled".to_string(),
     };
     let environment_id = EnvironmentId::new();
-    let action = ScheduledAction::CompletePromise {
-        account_id: AccountId::new(),
+    let idempotency_key = golem_common::model::IdempotencyKey::fresh();
+    let action = ScheduledAction::WakeInvocation {
         target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
-        environment_id,
-        promise_id: PromiseId {
-            agent_id: agent_id.clone(),
-            oplog_idx: OplogIndex::from_u64(42),
-        },
+        owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+        idempotency_key,
     };
     let conflicting_action = ScheduledAction::Resume {
         agent_created_by: AccountId::new(),
@@ -154,6 +194,10 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id, schedule_id);
+    assert_eq!(
+        claimed[0].due_at.timestamp_millis(),
+        due_at.timestamp_millis()
+    );
     assert_eq!(claimed[0].action, action);
     assert!(
         storage

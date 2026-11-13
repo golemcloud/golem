@@ -302,10 +302,7 @@ async fn tool_return_stops_guest_tails_and_reconstructs_incomplete_imports(
         };
         executor
             .complete_promise(
-                &PromiseId {
-                    agent_id: worker.clone(),
-                    oplog_idx: checkpoint.oplog_idx,
-                },
+                &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                 Vec::new(),
             )
             .await?;

@@ -46,11 +46,10 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
@@ -83,13 +82,12 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentId,
+    logical_agent_id: ParsedAgentKey,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -101,7 +99,6 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation: WasmRpcTargetActivation::DeferredEphemeral { env, config },
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -110,7 +107,7 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<OwnedAgentId> {
     let Some(logical_agent_id) = ephemeral_logical_agent_id else {
@@ -136,14 +133,14 @@ pub(super) fn invocation_target_agent_id(
 pub(super) struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
 }
 
 impl RpcCallTarget {
     pub(super) fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
-        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     ) -> Self {
         Self {
             key_position,
@@ -176,7 +173,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -206,7 +202,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             ),
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -224,7 +219,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
-    remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
     pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
@@ -247,7 +241,6 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
             target_activation,
             remote_agent_type,
             remote_method_streams,
-            remote_component_revision,
             remote_owner,
             creation_index,
         }),
@@ -282,7 +275,8 @@ fn set_rpc_target_replay_pending<Ctx: WorkerCtx>(
 /// fingerprint matches the one persisted at construction time. Failures are returned as
 /// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
 /// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
-/// a fingerprint change is always permanent.
+/// a fingerprint change is always permanent. `idempotency_key` identifies the create the
+/// activation may perform; only the recorded activation call passes one.
 pub(super) async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
@@ -294,6 +288,7 @@ pub(super) async fn activate_rpc_target(
     config: Vec<AgentConfigEntryDto>,
     auth_ctx: &AuthCtx,
     expected_fingerprint: Option<AgentFingerprint>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<Box<dyn RpcDemand>, Error> {
     let demand = rpc
         .create_demand(
@@ -306,7 +301,7 @@ pub(super) async fn activate_rpc_target(
             stack,
             config,
             auth_ctx,
-            None,
+            idempotency_key,
             InvocationFreshnessDisposition::MayExist,
         )
         .await
@@ -379,6 +374,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             config.clone(),
             auth_ctx,
             expected_fingerprint,
+            None,
         );
         tokio::pin!(activation);
         match futures::future::select(activation, interrupt_signal).await {
@@ -795,6 +791,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (env.clone(), config.clone(), payload.span_id.clone())
         };
         let stack = self.clone_as_inherited_stack(&span_id);
+        // A repaired activation keeps its Start, so it sends the key of the original attempt.
+        let idempotency_key = key_position.derive(handle.start_index());
         let demand = {
             let rpc = self.rpc();
             let created_by = self.created_by();
@@ -811,6 +809,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config.clone(),
                 handle.agent_auth_ctx(),
                 None,
+                Some(idempotency_key),
             );
             tokio::pin!(activation);
             match futures::future::select(activation, interrupt_signal).await {

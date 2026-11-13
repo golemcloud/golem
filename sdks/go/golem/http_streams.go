@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -29,24 +30,17 @@ import (
 // method takes or returns [AgentStream]s. Attach it with [DurableStreams].
 //
 // The zero value changes nothing: every slot keeps its canonical name and
-// content type, and every protocol operation stays allowed.
+// content type. The registry supplies the load defaults.
 type StreamRoute struct {
 	// Slots renames slots or sets their content type. A slot not listed keeps
 	// its defaults.
 	Slots []StreamSlot
 
-	// NoExternalWrites stops HTTP clients appending to the input streams.
-	NoExternalWrites bool
-	// NoStreamDelete stops HTTP clients deleting a stream.
-	NoStreamDelete bool
-	// NoInvocationDelete stops HTTP clients deleting an invocation.
-	NoInvocationDelete bool
-
 	// MaxReadersPerStream caps concurrent long-poll and SSE readers of one
-	// stream, from 1 to 16. Zero means no cap.
+	// stream. Zero selects the installation default.
 	MaxReadersPerStream uint32
 	// MaxAppendsPerSecond caps append requests per stream and second. Zero means
-	// no cap; it cannot be set together with NoExternalWrites.
+	// the installation default.
 	MaxAppendsPerSecond uint32
 }
 
@@ -76,8 +70,20 @@ func DurableStreams(route StreamRoute) EndpointOpt {
 	return func(e *Endpoint) { e.streams = &route; e.streamsCount++ }
 }
 
-// maxReadersPerStream is the host's cap on concurrent readers of one stream.
-const maxReadersPerStream = 16
+// RouteMode declares the HTTP transport. Omission leaves the default to the registry.
+type RouteMode string
+
+const (
+	RouteDurableStreams RouteMode = "durableStreams"
+	RoutePlain          RouteMode = "plain"
+	RouteSSE            RouteMode = "sse"
+	RouteWebSocket      RouteMode = "webSocket"
+)
+
+// WithRouteMode declares a mode for one HTTP endpoint.
+func WithRouteMode(mode RouteMode) EndpointOpt {
+	return func(e *Endpoint) { e.mode = mode }
+}
 
 // reservedSlotNames are path segments the Durable Streams protocol owns.
 var reservedSlotNames = []string{"invocations", "streams", "forks"}
@@ -173,7 +179,7 @@ func compileStreamRoute(ep Endpoint, slots streamSlots, bound map[string]int) (w
 
 	seen := map[string]bool{}
 	public := map[string]bool{}
-	out := make([]common.DurableStreamSlotOptions, 0, len(route.Slots))
+	out := make([]coreHTTP.DurableStreamSlotOptions, 0, len(route.Slots))
 	for i, slot := range route.Slots {
 		selectors := 0
 		for _, set := range []bool{slot.Input != "", slot.Output != "", slot.Result} {
@@ -186,7 +192,7 @@ func compileStreamRoute(ep Endpoint, slots streamSlots, bound map[string]int) (w
 			continue
 		}
 
-		var source common.DurableStreamSlotSource
+		var source coreHTTP.DurableStreamSlotSource
 		var key string
 		var bytes, json bool
 		switch {
@@ -196,20 +202,20 @@ func compileStreamRoute(ep Endpoint, slots streamSlots, bound map[string]int) (w
 				fail("Input %q is not an AgentStream input field", slot.Input)
 				continue
 			}
-			source, key, bytes = common.MakeDurableStreamSlotSourceInput(slot.Input), "input:"+slot.Input, isBytes
+			source, key, bytes = coreHTTP.MakeDurableStreamSlotSourceInput(slot.Input), "input:"+slot.Input, isBytes
 		case slot.Output != "":
 			isBytes, ok := slots.outputs[slot.Output]
 			if !ok {
 				fail("Output %q is not an AgentStream field of the returned struct", slot.Output)
 				continue
 			}
-			source, key, bytes = common.MakeDurableStreamSlotSourceOutput(slot.Output), "output:"+slot.Output, isBytes
+			source, key, bytes = coreHTTP.MakeDurableStreamSlotSourceOutput(slot.Output), "output:"+slot.Output, isBytes
 		default:
 			if !slots.result {
 				fail("Result selects nothing: the method returns stream fields, or nothing")
 				continue
 			}
-			source, key, bytes, json = common.MakeDurableStreamSlotSourceOutput("$result"), "output:$result", slots.resultBytes, slots.resultJSON
+			source, key, bytes, json = coreHTTP.MakeDurableStreamSlotSourceOutput("$result"), "output:$result", slots.resultBytes, slots.resultJSON
 		}
 		if seen[key] {
 			fail("slot %s is listed twice", key)
@@ -234,44 +240,25 @@ func compileStreamRoute(ep Endpoint, slots streamSlots, bound map[string]int) (w
 			}
 			contentType = witTypes.Some(slot.ContentType)
 		}
-		out = append(out, common.DurableStreamSlotOptions{Source: source, Name: name, ContentType: contentType})
+		out = append(out, coreHTTP.DurableStreamSlotOptions{Source: source, Name: name, ContentType: contentType})
 	}
 
-	if route.NoExternalWrites && len(slots.inputs) == 0 {
-		fail("NoExternalWrites needs an AgentStream input to apply to")
-	}
-	if route.MaxReadersPerStream > maxReadersPerStream {
-		fail("MaxReadersPerStream must be between 1 and %d", maxReadersPerStream)
-	}
-	if route.MaxAppendsPerSecond > 0 && route.NoExternalWrites {
-		fail("MaxAppendsPerSecond cannot be set together with NoExternalWrites")
-	}
-
-	denied := func(no bool) witTypes.Option[bool] {
-		if no {
-			return witTypes.Some(false)
-		}
-		return witTypes.None[bool]()
-	}
 	limit := func(v uint32) witTypes.Option[uint32] {
 		if v == 0 {
 			return witTypes.None[uint32]()
 		}
 		return witTypes.Some(v)
 	}
-	load := witTypes.None[common.DurableStreamRouteLoadOptions]()
+	load := witTypes.None[coreHTTP.DurableStreamRouteLoadOptions]()
 	if route.MaxReadersPerStream > 0 || route.MaxAppendsPerSecond > 0 {
-		load = witTypes.Some(common.DurableStreamRouteLoadOptions{
+		load = witTypes.Some(coreHTTP.DurableStreamRouteLoadOptions{
 			MaxConcurrentReadersPerStream:       limit(route.MaxReadersPerStream),
 			MaxAppendRequestsPerSecondPerStream: limit(route.MaxAppendsPerSecond),
 		})
 	}
 	return witTypes.Some(common.DurableStreamRouteOptions{
-		Slots:                 out,
-		AllowExternalWrites:   denied(route.NoExternalWrites),
-		AllowStreamDelete:     denied(route.NoStreamDelete),
-		AllowInvocationDelete: denied(route.NoInvocationDelete),
-		Load:                  load,
+		Slots: out,
+		Load:  load,
 	}), errs
 }
 

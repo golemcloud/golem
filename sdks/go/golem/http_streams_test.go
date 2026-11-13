@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 )
 
 type streamedEvents struct {
@@ -56,7 +57,6 @@ func TestDurableStreamsCompilesTheRoute(t *testing.T) {
 			{Input: "uploads", Name: "uploads-in", ContentType: "application/vnd.example.bin"},
 			{Result: true, Name: "events"},
 		},
-		NoStreamDelete:      true,
 		MaxReadersPerStream: 8,
 		MaxAppendsPerSecond: 25,
 	})
@@ -66,19 +66,12 @@ func TestDurableStreamsCompilesTheRoute(t *testing.T) {
 	if len(opts.Slots) != 2 {
 		t.Fatalf("slots = %+v", opts.Slots)
 	}
-	if s := opts.Slots[0]; s.Source.Tag() != common.DurableStreamSlotSourceInput || s.Source.Input() != "uploads" ||
+	if s := opts.Slots[0]; s.Source.Tag() != coreHTTP.DurableStreamSlotSourceInput || s.Source.Input() != "uploads" ||
 		s.Name.Some() != "uploads-in" || s.ContentType.Some() != "application/vnd.example.bin" {
 		t.Fatalf("input slot = %+v", s)
 	}
-	if s := opts.Slots[1]; s.Source.Tag() != common.DurableStreamSlotSourceOutput || s.Source.Output() != "$result" {
+	if s := opts.Slots[1]; s.Source.Tag() != coreHTTP.DurableStreamSlotSourceOutput || s.Source.Output() != "$result" {
 		t.Fatalf("result slot = %+v", s)
-	}
-	// Only what was changed is sent; the host applies its own defaults.
-	if opts.AllowExternalWrites.IsSome() || opts.AllowInvocationDelete.IsSome() {
-		t.Fatalf("defaults must travel as none: %+v", opts)
-	}
-	if opts.AllowStreamDelete.Some() != false {
-		t.Fatalf("NoStreamDelete must send false")
 	}
 	load := opts.Load.Some()
 	if load.MaxConcurrentReadersPerStream.Some() != 8 || load.MaxAppendRequestsPerSecondPerStream.Some() != 25 {
@@ -89,7 +82,7 @@ func TestDurableStreamsCompilesTheRoute(t *testing.T) {
 func TestAnEndpointWithoutDurableStreamsSendsNone(t *testing.T) {
 	e := agent("Media", &Mount{Path: "/media"}, nil, streamMethod(nil, POST("/events")))
 	_, eps, errs := buildHTTP(e)
-	if len(errs) > 0 || eps["events"][0].DurableStreams.IsSome() {
+	if len(errs) > 0 || eps["events"][0].DurableStreams.IsSome() || eps["events"][0].Mode.IsSome() {
 		t.Fatalf("errs = %v, streams = %+v", errs, eps["events"][0].DurableStreams)
 	}
 }
@@ -132,8 +125,6 @@ func TestDurableStreamsRejectsMisuse(t *testing.T) {
 		{"json on bytes", byteStream, StreamRoute{Slots: []StreamSlot{{Input: "uploads", ContentType: "application/x+json"}}}, "does not fit a byte stream"},
 		{"parameters", byteStream, StreamRoute{Slots: []StreamSlot{{Input: "uploads", ContentType: "application/x; a=b"}}}, "parameters or wildcards"},
 		{"type on a string stream", stringStream, StreamRoute{Slots: []StreamSlot{{Result: true, ContentType: "application/x"}}}, "applies only to a byte stream"},
-		{"too many readers", byteStream, StreamRoute{MaxReadersPerStream: 17}, "between 1 and 16"},
-		{"appends without writes", byteStream, StreamRoute{NoExternalWrites: true, MaxAppendsPerSecond: 5}, "cannot be set together"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -163,11 +154,11 @@ func TestAStreamInputCannotBeBoundFromTheRequestLine(t *testing.T) {
 	}
 }
 
-func TestNoExternalWritesNeedsAnInputStream(t *testing.T) {
-	m := method("out", fields("label"), POST("/out", DurableStreams(StreamRoute{NoExternalWrites: true})))
+func TestDeclaredRouteModeIsMetadata(t *testing.T) {
+	m := method("out", nil, GET("/out", WithRouteMode(RouteSSE)))
 	m.outType = reflect.TypeFor[AgentStream[string]]()
-	_, _, errs := buildHTTP(agent("A", &Mount{Path: "/a"}, nil, m))
-	if !anyErrContains(errs, "NoExternalWrites needs") {
-		t.Fatalf("got %v", errs)
+	_, eps, errs := buildHTTP(agent("A", &Mount{Path: "/a"}, nil, m))
+	if len(errs) != 0 || eps["out"][0].Mode.IsNone() || eps["out"][0].Mode.Some() != coreHTTP.HttpRouteModeSse {
+		t.Fatalf("got %v, mode %+v", errs, eps["out"][0].Mode)
 	}
 }

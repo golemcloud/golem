@@ -469,6 +469,12 @@ async fn get_recovers_non_agent_external_tool_owner() {
             local_agent_config: Vec::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     };
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -1893,6 +1899,18 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             )
             .await
             .unwrap();
+        storage
+            .with_entity("test", "seed_promise", "entry")
+            .set_raw(
+                crate::services::promise::promise_namespace_of(
+                    &owned_agent_id.agent_id,
+                    fingerprint,
+                ),
+                "promise",
+                b"value",
+            )
+            .await
+            .unwrap();
     }
     service
         .write_cached_agent_mode(
@@ -1959,6 +1977,22 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             .unwrap()
             .is_none()
     );
+    for (fingerprint, expected) in [
+        (first, Vec::<String>::new()),
+        (second, vec!["promise".into()]),
+    ] {
+        assert_eq!(
+            storage
+                .with("test", "read_promises")
+                .keys(crate::services::promise::promise_namespace_of(
+                    &owned_agent_id.agent_id,
+                    fingerprint,
+                ))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
     assert_eq!(
         service
             .get_rejected_periodic_snapshots(&owned_agent_id, first)
@@ -2011,6 +2045,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(
@@ -2018,6 +2053,17 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
         ),
     });
 
+    assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+
+    status.pending_invocations[0].not_before = Some(Timestamp::from(
+        Timestamp::now_utc().to_millis() + 3_600_000,
+    ));
+    assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+    status.pending_invocations[0].not_before = Some(Timestamp::from(0));
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
         &status
     ));
@@ -2598,6 +2644,12 @@ fn test_create_entry(
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: fingerprint.0,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 
@@ -2906,10 +2958,22 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         hide_identity_after_delete_attempt: true,
         ..FakeOplogService::default()
     });
-    let service = test_worker_service(
-        Arc::new(InMemoryKeyValueStorage::new()),
-        oplog_service.clone(),
-    );
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let service = test_worker_service(storage.clone(), oplog_service.clone());
+    let promises =
+        crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint);
+    storage
+        .with_entity("test", "seed_promise", "entry")
+        .set_raw(promises.clone(), "promise", b"value")
+        .await
+        .unwrap();
+    let promise_keys = || async {
+        storage
+            .with("test", "read_promises")
+            .keys(promises.clone())
+            .await
+            .unwrap()
+    };
     let lifecycle_locks = crate::services::oplog::OpenOplogs::new("delete-test");
     let mut lifecycle = lifecycle_locks
         .lock_lifecycle(&owned_agent_id.agent_id)
@@ -2927,6 +2991,8 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         .await
         .unwrap_err();
     assert!(error.to_string().contains("injected oplog delete failure"));
+    // The agent keeps its oplog, so it keeps its promises too: nothing could rebuild them.
+    assert_eq!(promise_keys().await, vec!["promise".to_string()]);
 
     service
         .remove(
@@ -2940,6 +3006,7 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         .await
         .unwrap();
     assert_eq!(oplog_service.delete_attempts.load(Ordering::Relaxed), 2);
+    assert!(promise_keys().await.is_empty());
 }
 
 #[test]

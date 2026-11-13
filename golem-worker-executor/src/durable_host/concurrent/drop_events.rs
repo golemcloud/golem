@@ -13,19 +13,17 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::replay_to_live::store_is_live;
 use crate::durable_host::tail_work::TailActivity;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::entity::{InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::OwnerRuntime;
 
 /// Store-independent inputs captured before a synchronous HTTP resource/terminal drop.
 #[derive(Clone, Debug)]
 pub(crate) struct HttpSpanCleanupRecorder {
     oplog: Arc<dyn Oplog>,
     replay: ReplayState,
-    entity_execution_mode: Option<InvocationExecutionMode>,
-    local_live_tail: Arc<std::sync::atomic::AtomicBool>,
+    store_replay_state: StoreReplayState,
     persisted: bool,
     parent: Option<OplogIndex>,
     send_start_index: OplogIndex,
@@ -41,8 +39,7 @@ impl HttpSpanCleanupRecorder {
         Self {
             oplog: ctx.state.oplog.clone(),
             replay: ctx.state.replay_state.clone(),
-            entity_execution_mode: ctx.state.entity_execution_mode,
-            local_live_tail: ctx.state.local_live_tail(),
+            store_replay_state: ctx.state.store_replay_state.clone(),
             persisted: persisted && !ctx.state.snapshotting_mode,
             parent: ctx.entity_parent_start_index(),
             send_start_index,
@@ -60,12 +57,9 @@ impl HttpSpanCleanupRecorder {
 
     pub(crate) fn record(self, finished: golem_common::model::oplog::SpanFinished) {
         // Sample this Store at abandonment, then retain that decision across delayed drains.
-        let live = store_is_live(
-            self.entity_execution_mode,
-            self.local_live_tail
-                .load(std::sync::atomic::Ordering::Acquire),
-            self.replay.is_live_published(),
-        );
+        let live = self
+            .store_replay_state
+            .is_live(self.replay.is_live_published());
         let recorder = self.clone();
         let closed = finished.clone();
         let progress = async move {
@@ -920,17 +914,17 @@ pub(super) mod tests {
         cleanup_recorder_for_store(
             oplog,
             replay,
-            Some(InvocationExecutionMode::Live),
-            Arc::new(std::sync::atomic::AtomicBool::new(live)),
+            StoreReplayState::incomplete_entity_for_test(Arc::new(
+                std::sync::atomic::AtomicBool::new(live),
+            )),
             persisted,
         )
     }
 
-    pub(crate) fn cleanup_recorder_for_store(
+    pub(in crate::durable_host) fn cleanup_recorder_for_store(
         oplog: Arc<dyn Oplog>,
         replay: ReplayState,
-        entity_execution_mode: Option<InvocationExecutionMode>,
-        local_live_tail: Arc<std::sync::atomic::AtomicBool>,
+        store_replay_state: StoreReplayState,
         persisted: bool,
     ) -> (
         HttpSpanCleanupRecorder,
@@ -941,8 +935,7 @@ pub(super) mod tests {
             HttpSpanCleanupRecorder {
                 oplog,
                 replay,
-                entity_execution_mode,
-                local_live_tail,
+                store_replay_state,
                 persisted,
                 parent: None,
                 send_start_index: OplogIndex::from_u64(17),
@@ -1014,8 +1007,11 @@ pub(super) mod tests {
         for live_at_drop in [true, false] {
             let oplog = Arc::new(InMemoryOplog::new());
             oplog.add(noop()).await.unwrap();
-            let (recorder, mut events) = cleanup_recorder(oplog.clone(), live_at_drop, true).await;
-            let local_live_tail = recorder.local_live_tail.clone();
+            let (mut recorder, mut events) =
+                cleanup_recorder(oplog.clone(), live_at_drop, true).await;
+            let local_live_tail = Arc::new(std::sync::atomic::AtomicBool::new(live_at_drop));
+            recorder.store_replay_state =
+                StoreReplayState::incomplete_entity_for_test(local_live_tail.clone());
             recorder.record(finished());
             local_live_tail.store(!live_at_drop, std::sync::atomic::Ordering::Release);
             let DropEvent::FinishP3HttpSpan { cleanup } = events.try_recv().unwrap() else {

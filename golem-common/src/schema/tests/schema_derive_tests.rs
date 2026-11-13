@@ -267,8 +267,27 @@ fn model_target_types_round_trip() {
     round_trip(OplogIndex::from_u64(42));
     round_trip(PromiseId {
         agent_id: agent_id.clone(),
+        fingerprint: AgentFingerprint::from(uuid::Uuid::from_u64_pair(9, 10)),
         oplog_idx: OplogIndex::from_u64(7),
     });
+    // A promise ID that a guest returns has the shape of the WIT `promise-id` record, where the
+    // fingerprint is a plain `uuid`.
+    let guest_promise_id = golem_schema::PromiseId::new(
+        golem_schema::AgentId::new(
+            golem_schema::ComponentId::new(component_id.0),
+            agent_id.agent_id.clone(),
+        ),
+        uuid::Uuid::from_u64_pair(9, 10),
+        7,
+    );
+    assert_eq!(
+        PromiseId::from_value(&guest_promise_id.to_value()).expect("decode guest promise id"),
+        PromiseId {
+            agent_id: agent_id.clone(),
+            fingerprint: AgentFingerprint::from(uuid::Uuid::from_u64_pair(9, 10)),
+            oplog_idx: OplogIndex::from_u64(7),
+        }
+    );
     round_trip(TransactionId::new("tx-1"));
     round_trip(AgentStatus::Running);
     round_trip(AgentStatus::Failed);

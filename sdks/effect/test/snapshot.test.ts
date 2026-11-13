@@ -348,6 +348,7 @@ describe("snapshotting", () => {
             componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
             agentId: "waiting-agent",
           },
+          fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
           oplogIdx: 9007199254740993n,
         },
         controls: ["9007199254740993", 9007199254740993n, 0n, -123n],
@@ -389,6 +390,9 @@ describe("snapshotting", () => {
         $golemSnapshot: ["bigint", "9007199254740993"],
       })
       expect(persisted.state.promise.agentId.componentId.uuid.highBits).toEqual({
+        $golemSnapshot: ["bigint", "18446744073709551615"],
+      })
+      expect(persisted.state.promise.fingerprint.lowBits).toEqual({
         $golemSnapshot: ["bigint", "18446744073709551615"],
       })
       expect(persisted.state.transformed).toBe("7")

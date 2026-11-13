@@ -45,8 +45,25 @@ invocation, retry-budget charge or new idempotency key.
 
 ## Ephemeral agents
 
-Ephemeral agents are fail-stop. `reconstructed_ephemeral` exists for observation and invocation
-result lookup; the instance must never be started again (`INACTIVE_EPHEMERAL_AGENT_ERROR`).
+Ephemeral agents are fail-stop. Before an ephemeral instance runs guest code,
+`Worker::begin_ephemeral_execution` commits a `Restart` entry under the instance mutex; the status
+fold sets `ephemeral_execution_begun` permanently. Once it is set, `reconstructed_ephemeral` exists
+only for observation and invocation result lookup, and the instance must never be started again
+(`INACTIVE_EPHEMERAL_AGENT_ERROR`). The lifecycle holds this as the `Inactive` phase, which a failed
+ephemeral start also enters; a durable agent's failed start stays a retryable
+`Unloaded { startup_failure }`. The one exception is an agent that never began and still holds
+its constructor reservation (`never_started_ephemeral_admission`): it may accept one method when it
+has none yet, as when a schedule repair finds the target its first attempt created, and it may run
+one accepted scheduled method cold. A scheduled ephemeral target is created at schedule time with
+its `PendingAgentInvocation` committed. Before the deadline its start is `NotDue`; after token
+cancellation withdrew its work it is `Withdrawn`. Neither runs guest code, and both fail queued
+inspection requests instead of keeping them for a later start. An inspection (filesystem or wallet)
+is refused, not started, on an unloaded ephemeral agent that has not begun and has no due method
+(`ephemeral_inspection_may_start`): it must not use up a target whose schedule is still being
+repaired. An outside caller that knows the target's ID can still start it in that window (create
+with wait, resume, update); the scheduling caller then traps with
+`INACTIVE_EPHEMERAL_AGENT_ERROR`. A start that arrives while a `NotRunnable` start stops is
+restarted after the stop if the work became due.
 
 ## Entity scheduling
 

@@ -28,8 +28,9 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_common::model::security_scheme::{SecuritySchemeLogin, SecuritySchemeRevision};
-use golem_common::model::{AgentId, OplogIndex, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
 use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
+pub use golem_schema::http::HttpRouteMode as AgentRouteMode;
 use hmac::{Hmac, Mac};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sha2::Sha256;
@@ -608,12 +609,6 @@ pub enum PhantomSelection {
     Query { name: String, optional: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
-pub enum AgentRouteMode {
-    Rest,
-    DurableStreams,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct DurableStreamRoutePolicy {
@@ -811,27 +806,22 @@ impl OriginPattern {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 /// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback.
 /// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
-/// for the correct component_id.
+/// for the correct component_id. The checksum covers the agent's fingerprint, so a webhook of a deleted agent
+/// does not complete a promise of the agent re-created with the same name.
 pub struct AgentWebhookId {
     pub agent_name: String,
+    pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
     pub checksum: [u8; 32],
 }
 
 impl AgentWebhookId {
     pub fn from_promise_id(promise_id: &PromiseId, hmac_key: &[u8]) -> Self {
-        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
-
-        mac.update(b"agent-webhook-id:v1");
-        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
-            .expect("PromiseId serialization must not fail");
-        mac.update(&promise_id_bytes);
-
-        let checksum = mac.finalize().into_bytes().into();
         Self {
             agent_name: promise_id.agent_id.agent_id.clone(),
+            fingerprint: promise_id.fingerprint,
             oplog_idx: promise_id.oplog_idx,
-            checksum,
+            checksum: Self::checksum(promise_id, hmac_key),
         }
     }
 
@@ -841,26 +831,32 @@ impl AgentWebhookId {
                 component_id,
                 agent_id: self.agent_name,
             },
+            fingerprint: self.fingerprint,
             oplog_idx: self.oplog_idx,
         }
     }
 
     pub fn verify_checksum(&self, component_id: ComponentId, hmac_key: &[u8]) -> bool {
-        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
+        let promise_id = self.clone().into_promise_id(component_id);
+        Self::mac(&promise_id, hmac_key)
+            .verify_slice(&self.checksum)
+            .is_ok()
+    }
 
+    fn checksum(promise_id: &PromiseId, hmac_key: &[u8]) -> [u8; 32] {
+        Self::mac(promise_id, hmac_key)
+            .finalize()
+            .into_bytes()
+            .into()
+    }
+
+    fn mac(promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
         mac.update(b"agent-webhook-id:v1");
-        let promise_id = PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: self.agent_name.clone(),
-            },
-            oplog_idx: self.oplog_idx,
-        };
-        let promise_id_bytes = desert_rust::serialize_to_byte_vec(&promise_id)
+        let promise_id_bytes = desert_rust::serialize_to_byte_vec(promise_id)
             .expect("PromiseId serialization must not fail");
         mac.update(&promise_id_bytes);
-
-        mac.verify_slice(&self.checksum).is_ok()
+        mac
     }
 
     pub fn to_base64_url(&self) -> String {
@@ -891,6 +887,29 @@ mod tests {
         assert!(exact.matches("https://example.com"));
         assert!(!exact.matches("https://other.com"));
         assert!(!exact.matches("http://example.com")); // scheme matters
+    }
+
+    #[test]
+    fn webhook_id_checksum_covers_the_fingerprint() {
+        let hmac_key = b"webhook-test-key";
+        let component_id = ComponentId(uuid::Uuid::from_u128(1));
+        let promise_id = PromiseId {
+            agent_id: AgentId {
+                component_id,
+                agent_id: "approval(\"order-1\")".to_string(),
+            },
+            fingerprint: AgentFingerprint(uuid::Uuid::from_u128(2)),
+            oplog_idx: OplogIndex::from_u64(7),
+        };
+        let webhook_id = AgentWebhookId::from_promise_id(&promise_id, hmac_key);
+
+        let decoded = AgentWebhookId::from_base64_url(&webhook_id.to_base64_url()).unwrap();
+        assert!(decoded.verify_checksum(component_id, hmac_key));
+        assert_eq!(decoded.into_promise_id(component_id), promise_id);
+
+        let mut of_new_incarnation = webhook_id.clone();
+        of_new_incarnation.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+        assert!(!of_new_incarnation.verify_checksum(component_id, hmac_key));
     }
 
     #[test]
