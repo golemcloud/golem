@@ -54,7 +54,7 @@ use golem_common::model::oplog::{
 use golem_common::schema::{IntoTypedSchemaValue, TypedSchemaValue};
 use golem_schema::FromSchema;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use wasmtime::component::{Accessor, HasData};
@@ -209,7 +209,7 @@ fn entity_span_started(
         parent_span_id: Some(parent_span_id),
         links: Vec::new(),
         started_at: golem_common::model::Timestamp::now_utc(),
-        attributes: AttributeMap(HashMap::from([
+        attributes: AttributeMap(BTreeMap::from([
             (
                 "name".to_string(),
                 AttributeValue::String("entity-invocation".to_string()),
@@ -1216,7 +1216,7 @@ where
         parent_span_id: Some(parent_span_id),
         links: Vec::new(),
         started_at: golem_common::model::Timestamp::now_utc(),
-        attributes: AttributeMap(HashMap::from([
+        attributes: AttributeMap(BTreeMap::from([
             (
                 "name".to_string(),
                 AttributeValue::String("entity-invocation".to_string()),

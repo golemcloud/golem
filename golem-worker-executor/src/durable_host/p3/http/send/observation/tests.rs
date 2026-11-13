@@ -19,6 +19,7 @@ use crate::services::oplog::Oplog;
 use golem_common::model::Timestamp;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload};
+use std::collections::BTreeMap;
 use test_r::test;
 
 fn opening() -> OplogEntry {
@@ -37,7 +38,7 @@ fn opening() -> OplogEntry {
             parent_span_id: None,
             links: Vec::new(),
             started_at: "2025-03-12T13:14:00Z".parse().unwrap(),
-            attributes: AttributeMap(HashMap::new()),
+            attributes: AttributeMap(BTreeMap::new()),
             kind: SpanKind::Client,
         })),
         denial: None,

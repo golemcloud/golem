@@ -772,8 +772,11 @@ fn assert_prefix(prefix: &OplogSnapshot, entries: &OplogSnapshot) -> anyhow::Res
             "public attribution changed at {}",
             expected.oplog_index
         );
-        assert_public_facts_equal(&expected.entry, &actual.entry)
-            .with_context(|| format!("public facts changed at {}", expected.oplog_index))?;
+        ensure!(
+            expected.entry == actual.entry,
+            "public entry changed at {}",
+            expected.oplog_index
+        );
     }
     Ok(())
 }
@@ -802,81 +805,14 @@ fn recorded_attributes(attributes: &AttributeMap) -> Vec<PublicAttribute> {
         .collect()
 }
 
-fn assert_attributes(
-    recorded: &[PublicAttribute],
-    public: &[PublicAttribute],
-) -> anyhow::Result<()> {
-    ensure!(
-        recorded.len() == public.len(),
-        "attribute cardinality changed"
-    );
-    let mut recorded_keys = BTreeSet::new();
-    for attribute in recorded {
-        ensure!(
-            recorded_keys.insert(&attribute.key),
-            "duplicate recorded attribute key"
-        );
-    }
-    let mut public_keys = BTreeSet::new();
-    for attribute in public {
-        ensure!(
-            public_keys.insert(&attribute.key),
-            "duplicate public attribute key"
-        );
-        let expected = recorded
-            .iter()
-            .find(|expected| expected.key == attribute.key)
-            .context("unrecorded public attribute key")?;
-        ensure!(
-            expected.value == attribute.value,
-            "typed attribute value changed for {}",
-            attribute.key
-        );
-    }
-    Ok(())
-}
-
 fn assert_context_projection(
     recorded: &[SpanData],
     public: &[Vec<PublicSpanData>],
 ) -> anyhow::Result<()> {
-    // Use the actual producer for the stored span stack and linked-context layout. Only
-    // its map-backed attribute lists have unordered semantics; stack/node order does not.
-    let expected = encode_span_data(recorded);
     ensure!(
-        expected.len() == public.len(),
-        "span context stack count changed"
+        encode_span_data(recorded) == public,
+        "invocation context changed"
     );
-    for (expected, actual) in expected.iter().zip(public) {
-        ensure!(
-            expected.len() == actual.len(),
-            "span context node count changed"
-        );
-        for (expected, actual) in expected.iter().zip(actual) {
-            match (expected, actual) {
-                (PublicSpanData::LocalSpan(expected), PublicSpanData::LocalSpan(actual)) => {
-                    ensure!(
-                        (
-                            &expected.span_id,
-                            expected.start,
-                            &expected.parent_id,
-                            expected.linked_context,
-                            expected.inherited,
-                        ) == (
-                            &actual.span_id,
-                            actual.start,
-                            &actual.parent_id,
-                            actual.linked_context,
-                            actual.inherited,
-                        ),
-                        "recorded span facts changed"
-                    );
-                    assert_attributes(&expected.attributes, &actual.attributes)?;
-                }
-                _ => ensure!(expected == actual, "recorded external span changed"),
-            }
-        }
-    }
     Ok(())
 }
 
@@ -924,10 +860,11 @@ fn assert_span_projection(
             ) == (&actual.trace_id, &actual.span_id, &actual.trace_states)
         );
     }
-    assert_attributes(
-        &recorded_attributes(&recorded.attributes),
-        &public.attributes,
-    )
+    ensure!(
+        recorded_attributes(&recorded.attributes) == public.attributes,
+        "span opening attributes changed"
+    );
+    Ok(())
 }
 
 fn validate_public_projection(snapshot: &OplogSnapshot) -> anyhow::Result<()> {
@@ -956,10 +893,10 @@ fn validate_public_projection(snapshot: &OplogSnapshot) -> anyhow::Result<()> {
             ) => match (span_attributes, &call.span_attributes) {
                 (Some(recorded), Some(public)) => {
                     ensure!(recorded.span_id == public.span_id);
-                    assert_attributes(
-                        &recorded_attributes(&recorded.attributes),
-                        &public.attributes,
-                    )?;
+                    ensure!(
+                        recorded_attributes(&recorded.attributes) == public.attributes,
+                        "span attribute update changed"
+                    );
                 }
                 (None, None) => {}
                 _ => anyhow::bail!("span attribute update presence changed"),
@@ -1001,141 +938,6 @@ fn validate_public_projection(snapshot: &OplogSnapshot) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn assert_invocation_facts_equal(
-    expected: &PublicAgentInvocation,
-    actual: &PublicAgentInvocation,
-) -> anyhow::Result<()> {
-    // Contexts are fully checked against the recorded span producer for each snapshot.
-    match (expected, actual) {
-        (
-            PublicAgentInvocation::AgentInitialization(expected),
-            PublicAgentInvocation::AgentInitialization(actual),
-        ) => {
-            ensure!(
-                (
-                    &expected.idempotency_key,
-                    &expected.constructor_parameters,
-                    &expected.trace_id,
-                    &expected.trace_states,
-                ) == (
-                    &actual.idempotency_key,
-                    &actual.constructor_parameters,
-                    &actual.trace_id,
-                    &actual.trace_states,
-                )
-            );
-        }
-        (
-            PublicAgentInvocation::AgentMethodInvocation(expected),
-            PublicAgentInvocation::AgentMethodInvocation(actual),
-        ) => {
-            ensure!(
-                (
-                    &expected.idempotency_key,
-                    &expected.method_name,
-                    &expected.function_input,
-                    &expected.trace_id,
-                    &expected.trace_states,
-                ) == (
-                    &actual.idempotency_key,
-                    &actual.method_name,
-                    &actual.function_input,
-                    &actual.trace_id,
-                    &actual.trace_states,
-                )
-            );
-        }
-        (
-            PublicAgentInvocation::ExternalTool(expected),
-            PublicAgentInvocation::ExternalTool(actual),
-        ) => {
-            ensure!(
-                (
-                    &expected.idempotency_key,
-                    &expected.tool_name,
-                    &expected.command_path,
-                    &expected.input,
-                    &expected.trace_id,
-                    &expected.trace_states,
-                ) == (
-                    &actual.idempotency_key,
-                    &actual.tool_name,
-                    &actual.command_path,
-                    &actual.input,
-                    &actual.trace_id,
-                    &actual.trace_states,
-                )
-            );
-        }
-        _ => ensure!(expected == actual),
-    }
-    Ok(())
-}
-
-fn assert_public_facts_equal(
-    expected: &PublicOplogEntry,
-    actual: &PublicOplogEntry,
-) -> anyhow::Result<()> {
-    match (expected, actual) {
-        (PublicOplogEntry::Start(expected), PublicOplogEntry::Start(actual)) => {
-            ensure!(
-                (
-                    expected.timestamp,
-                    expected.parent_start_index,
-                    &expected.function_name,
-                    &expected.invocation_id,
-                    expected.observational_owner,
-                    &expected.request,
-                    &expected.durable_function_type,
-                ) == (
-                    actual.timestamp,
-                    actual.parent_start_index,
-                    &actual.function_name,
-                    &actual.invocation_id,
-                    actual.observational_owner,
-                    &actual.request,
-                    &actual.durable_function_type,
-                )
-            );
-        }
-        (PublicOplogEntry::End(expected), PublicOplogEntry::End(actual)) => {
-            ensure!(
-                (
-                    expected.timestamp,
-                    expected.start_index,
-                    &expected.response,
-                    expected.forced_commit,
-                    &expected.span_finished,
-                ) == (
-                    actual.timestamp,
-                    actual.start_index,
-                    &actual.response,
-                    actual.forced_commit,
-                    &actual.span_finished,
-                )
-            );
-        }
-        (
-            PublicOplogEntry::AgentInvocationStarted(expected),
-            PublicOplogEntry::AgentInvocationStarted(actual),
-        ) => {
-            ensure!(
-                expected.timestamp == actual.timestamp && expected.wallet_pin == actual.wallet_pin
-            );
-            assert_invocation_facts_equal(&expected.invocation, &actual.invocation)?;
-        }
-        (
-            PublicOplogEntry::PendingAgentInvocation(expected),
-            PublicOplogEntry::PendingAgentInvocation(actual),
-        ) => {
-            ensure!(expected.timestamp == actual.timestamp);
-            assert_invocation_facts_equal(&expected.invocation, &actual.invocation)?;
-        }
-        _ => ensure!(expected == actual),
-    }
-    Ok(())
-}
-
 // These records exercise the comparison oracle only. They are never submitted as
 // an entity admission or replay history to an executor.
 fn oracle_fixture() -> OplogSnapshot {
@@ -1145,13 +947,13 @@ fn oracle_fixture() -> OplogSnapshot {
         AgentInvocationStartedParams, CompletionDeliveredParams, EndParams, StartParams,
     };
     use golem_common::model::oplog::{AgentInitializationParameters, DurableFunctionType};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     let timestamp = Timestamp::from(1234_u64);
     let span_id = SpanId::from_string("1").unwrap();
     let parent_id = SpanId::from_string("2").unwrap();
     let trace_id = TraceId::from_string("11111111111111111111111111111111").unwrap();
-    let attributes = HashMap::from([
+    let attributes = BTreeMap::from([
         ("agent_id".into(), AttributeValue::String("owner".into())),
         (
             "agent_parameters".into(),
@@ -1210,7 +1012,7 @@ fn oracle_fixture() -> OplogSnapshot {
     };
     let update = SpanAttributes {
         span_id: SpanId::from_string("3").unwrap(),
-        attributes: AttributeMap(HashMap::from([
+        attributes: AttributeMap(BTreeMap::from([
             ("bytes".into(), AttributeValue::String("4".into())),
             ("result".into(), AttributeValue::String("known".into())),
         ])),
@@ -1349,22 +1151,23 @@ macro_rules! oracle_negative_case {
     };
 }
 
-#[test]
-fn oracle_accepts_only_span_map_iteration_changes() {
-    let expected = oracle_fixture();
-    assert_prefix(&expected, &expected).unwrap();
-    let mut actual = expected.clone();
-    oracle_public_attributes(&mut actual).rotate_left(1);
-    let PublicOplogEntry::Start(call) = &mut actual.public[1].entry else {
+oracle_negative_case!(oracle_rejects_reordered_invocation_attributes, |snapshot| {
+    oracle_public_attributes(snapshot).rotate_left(1);
+});
+
+oracle_negative_case!(oracle_rejects_reordered_opening_attributes, |snapshot| {
+    let PublicOplogEntry::Start(call) = &mut snapshot.public[1].entry else {
         unreachable!()
     };
     call.span_started.as_mut().unwrap().attributes.reverse();
-    let PublicOplogEntry::End(call) = &mut actual.public[2].entry else {
+});
+
+oracle_negative_case!(oracle_rejects_reordered_update_attributes, |snapshot| {
+    let PublicOplogEntry::End(call) = &mut snapshot.public[2].entry else {
         unreachable!()
     };
     call.span_attributes.as_mut().unwrap().attributes.reverse();
-    assert_snapshots_equal(&expected, &actual).unwrap();
-}
+});
 
 oracle_negative_case!(oracle_rejects_recorded_attribute_value_change, |snapshot| {
     let OplogEntry::AgentInvocationStarted {

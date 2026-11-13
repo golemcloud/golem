@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::oplog;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use golem_common::base_model::oplog::{
     QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
@@ -105,7 +105,7 @@ fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
     let started_at = Timestamp::from(1_700_000_000_123);
     let finished_at = Timestamp::from(1_700_000_001_456);
     let cancelled_at = Timestamp::from(1_700_000_002_789);
-    let attributes = AttributeMap(HashMap::from([(
+    let attributes = AttributeMap(BTreeMap::from([(
         "phase".to_string(),
         AttributeValue::String("projection".to_string()),
     )]));

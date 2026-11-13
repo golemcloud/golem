@@ -1119,7 +1119,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
                 parent_span_id: None,
                 links: Vec::new(),
                 started_at: Timestamp::now_utc(),
-                attributes: AttributeMap(HashMap::new()),
+                attributes: AttributeMap(BTreeMap::new()),
                 kind: SpanKind::Internal,
             })),
             denial: None,
