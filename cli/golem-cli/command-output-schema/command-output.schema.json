@@ -2195,9 +2195,13 @@
     },
     "agent.plugin-toggle": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent plugin-toggle`.",
+      "description": "Single structured output document emitted by `golem agent activate-plugin` and `golem agent deactivate-plugin`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent plugin-toggle",
+      "x-golem-command": "agent activate-plugin",
+      "x-golem-commands": [
+        "agent activate-plugin",
+        "agent deactivate-plugin"
+      ],
       "required": [
         "$type",
         "activated",
