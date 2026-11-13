@@ -34,7 +34,7 @@ use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
-use golem_common::model::{InvocationId, InvocationRequestKey};
+use golem_common::model::{InvocationRequestKey, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
 use golem_schema::schema::wit::PermissionCardHandleRep;
@@ -143,7 +143,7 @@ async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery(
     let streams = StreamSession::open(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         vec![binding],
     )
     .await
@@ -331,7 +331,7 @@ impl Rpc for FingerprintMismatchRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -418,7 +418,7 @@ impl Rpc for ActivationFailureRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -505,7 +505,7 @@ impl Rpc for RecordingEnvRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -598,9 +598,9 @@ fn agent_id(name: &str) -> AgentId {
 fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> CancellationTokenEntry {
     CancellationTokenEntry {
         schedule_id: vec![],
-        metadata: invocation_metadata(&InvocationId::new(
+        metadata: invocation_metadata(&OwnedInvocationId::new(
             recipient.agent_id(),
-            Uuid::from_u128(42),
+            Uuid::from_u128(42).into(),
         )),
         owner,
         recipient,

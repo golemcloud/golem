@@ -997,7 +997,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
                 agent_id: worker.clone(),
-                invocation_key: IdempotencyKey::fresh(),
+                invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
         )
@@ -1114,7 +1114,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     assert!(!issuer[0].1.authority_wallet.contains(&card));
     assert!(!issuer[1].1.authority_wallet.contains(&card));
     assert!(issuer[2].1.authority_wallet.contains(&card));
-    let primary = |key: &IdempotencyKey| {
+    let primary = |key: &golem_common::model::InvocationId| {
         recorded
             .iter()
             .enumerate()
@@ -1400,7 +1400,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                     CardManagedByRuntimeDerived {
                         environment_id: context.default_environment_id,
                         agent_id: worker.clone(),
-                        invocation_key: IdempotencyKey::fresh(),
+                        invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                         oplog_index: OplogIndex::INITIAL,
                     },
                 )

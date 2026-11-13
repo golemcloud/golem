@@ -50,7 +50,7 @@ use golem_common::base_model::durable_stream::{
     StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::{OplogEntry, PayloadId, RawOplogPayload};
@@ -83,7 +83,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
             root_kind: StreamRootKind::MethodResult,
             recursive_value_path: vec![],
         },
-        source_invocation: StreamRegistrationInvocation::Local(invocation.idempotency_key.clone()),
+        source_invocation: StreamRegistrationInvocation::Local(invocation.idempotency_key),
         entity_parent_start_index: None,
         component_revision: ComponentRevision::INITIAL,
         element_schema_fingerprint: SchemaFingerprintV1([19; 32]),
@@ -188,7 +188,7 @@ fn local_registration_record_is_owner_relative_and_remote_attribution_is_stable(
         callee_environment_id: EnvironmentId(Uuid::from_u128(903)),
         callee: second.agent_id.clone(),
         callee_fingerprint: AgentFingerprint(Uuid::from_u128(904)),
-        idempotency_key: IdempotencyKey::new("remote-session".into()),
+        idempotency_key: uuid::Uuid::from_u128(101).into(),
     };
     let remote_record = registration_record(
         index,
@@ -424,7 +424,7 @@ impl Oplog for TestOplog {
                 && let Some(mut status) = statuses.get(idempotency_key).cloned()
             {
                 status.apply_pending_invocation(*index, idempotency_key);
-                statuses.insert(idempotency_key.clone(), status);
+                statuses.insert(*idempotency_key, status);
             }
             if let OplogEntry::StreamSession { record, .. } = entry {
                 let record = match record {
@@ -1196,7 +1196,7 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
     let session = crate::durable_host::durable_session::StreamSession::new(
         live.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         [],
     );
     let lock = live.session_lock(&identity.invocation);
@@ -1422,7 +1422,7 @@ pub(crate) fn identity() -> TestIdentity {
             callee_environment_id: environment_id,
             callee: agent_id,
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+            idempotency_key: uuid::Uuid::from_u128(102).into(),
         },
     }
 }
@@ -1435,9 +1435,7 @@ pub(crate) fn registration(
     ProducerRegistrationRequest {
         entity_parent_start_index: None,
         coordinate,
-        source_invocation: StreamRegistrationInvocation::Local(
-            identity.invocation.idempotency_key.clone(),
-        ),
+        source_invocation: StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         component_revision: ComponentRevision::INITIAL,
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
         source_kind,
@@ -1471,7 +1469,7 @@ pub(crate) fn attachment_key(
         callee_environment_id: consumer_environment_id,
         callee: consumer.clone(),
         callee_fingerprint: expected_consumer_fingerprint,
-        idempotency_key: IdempotencyKey::new("consumer-invocation".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(103).into(),
     };
     StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
@@ -1526,7 +1524,7 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
     let key = (identity.invocation.clone(), reader_id);
     let mut index = ProducerStreamIndex::default();
     let empty_packed = consumer_item_record(
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         reader_id,
         StreamOffset::new(OplogIndex::INITIAL, 0),
         0,
@@ -1571,7 +1569,7 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
         },
     );
     let ordinal_overflow = consumer_item_record(
-        StreamRegistrationInvocation::Local(key.0.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(key.0.idempotency_key),
         reader_id,
         StreamOffset::new(OplogIndex::INITIAL, 0),
         u64::MAX,
@@ -1697,7 +1695,7 @@ async fn consumer_observation_commits_only_past_the_published_horizon() {
         let published = published.clone();
         move || *published.lock().unwrap()
     }));
-    let session_key = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+    let session_key = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key);
     let reader = LocalStreamReaderId {
         introducing_oplog_index: OplogIndex::from_u64(5),
         binding_slot: 0,
@@ -1778,7 +1776,7 @@ async fn consumer_reobservation_retains_progress_and_nested_reader_identity() {
         handle,
         role: SessionStreamRole::Input,
     });
-    let reference = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+    let reference = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key);
     live.append_session_record(
         None,
         StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
@@ -1914,9 +1912,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
             None,
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    key.session_key.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 0,
                     source: StreamRecordReference::Foreign(handle),
@@ -3168,8 +3164,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
     let registration_length = oplog.current_oplog_index().await;
 
     let mut altered_source = handle.clone();
-    altered_source.source_invocation.idempotency_key =
-        IdempotencyKey::new("altered-source".to_string());
+    altered_source.source_invocation.idempotency_key = uuid::Uuid::from_u128(104).into();
     let mut altered_revision = handle.clone();
     altered_revision.component_revision = ComponentRevision::new(2).unwrap();
     let mut altered_schema = handle;
@@ -3224,7 +3219,7 @@ async fn deletion_is_fail_closed_for_prepared_and_quiet_active_references() {
     live.commit_deletion_barrier(1_000, true).await.unwrap();
 
     let second_session = StreamInvocationId {
-        idempotency_key: IdempotencyKey::new("second".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(105).into(),
         ..identity.invocation.clone()
     };
     assert_eq!(
@@ -3643,7 +3638,7 @@ async fn reobserved_input_allows_source_loss_overlay() {
         invocation: key.consumer_invocation.clone(),
     };
     let consumer = producer(Arc::new(TestOplog::default()), &consumer_identity, None).await;
-    let reference = StreamRegistrationInvocation::Local(key.session_key.idempotency_key.clone());
+    let reference = StreamRegistrationInvocation::Local(key.session_key.idempotency_key);
     consumer
         .append_session_record(
             None,
@@ -3740,9 +3735,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
             None,
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    key.session_key.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 0,
                     source: StreamRecordReference::Foreign(handle),
@@ -3761,7 +3754,7 @@ async fn source_unavailable_and_consumer_journal_append_are_serialized() {
         format_version:
             golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
-        session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key.clone()),
+        session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
         reader_id,
         source_offset: offsets[0],
         consumer_read_ordinal: 0,
@@ -4009,7 +4002,7 @@ async fn reconciliation_adopts_rolls_back_and_fences_recreated_consumers() {
     );
 
     let second_session = StreamInvocationId {
-        idempotency_key: IdempotencyKey::new("abandoned".to_string()),
+        idempotency_key: uuid::Uuid::from_u128(106).into(),
         ..identity.invocation.clone()
     };
     let second = live
@@ -4194,7 +4187,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: StreamRegistrationInvocation::Local(
-                    identity.invocation.idempotency_key.clone(),
+                    identity.invocation.idempotency_key,
                 ),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 0,
@@ -4214,7 +4207,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
     oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            IdempotencyKey::new("pending-before-consumer-journal".to_string()),
+            uuid::Uuid::from_u128(107).into(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
             Vec::new(),
@@ -6141,7 +6134,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
     });
     let pending = OplogEntry::pending_agent_invocation(
         None,
-        IdempotencyKey::new("durable-session".to_string()),
+        uuid::Uuid::from_u128(108).into(),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
         Vec::new(),
@@ -6161,9 +6154,9 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     committed,
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        public_session_id: session_key.idempotency_key.value.clone(),
+                        public_session_id: session_key.idempotency_key.to_string(),
                         route_scope: None,
-                        session_key: session_key.idempotency_key.clone(),
+                        session_key: session_key.idempotency_key,
                         expiry_policy: StreamSessionExpiryPolicy::None,
                         expiry_deadline_millis: None,
                         attempt: StartAttemptDescriptor {
@@ -6293,7 +6286,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let streams = StreamSession::new(
         live.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         std::iter::empty(),
     );
     let attachment = streams.attachment_key(&handle, 1).unwrap();
@@ -6310,9 +6303,9 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
-        public_session_id: identity.invocation.idempotency_key.value.clone(),
+        public_session_id: identity.invocation.idempotency_key.to_string(),
         route_scope: None,
-        session_key: identity.invocation.idempotency_key.clone(),
+        session_key: identity.invocation.idempotency_key,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
@@ -6340,7 +6333,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let pending = OplogEntry::pending_agent_invocation(
         None,
-        identity.invocation.idempotency_key.clone(),
+        identity.invocation.idempotency_key,
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
         vec!["winner-trace".into()],
@@ -6404,7 +6397,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let recovered = StreamSession::new(
         restarted.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         std::iter::empty(),
     );
     recovered
@@ -6566,7 +6559,7 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
     };
     assert_eq!(
         result.session_key,
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone())
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key)
     );
     assert_eq!(result.result, vec![4, 5]);
     assert_eq!(
@@ -7501,7 +7494,7 @@ async fn same_owner_forwarded_nested_stream_preserves_foreign_handle_and_retry_i
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: StreamRegistrationInvocation::Local(
-                    identity.invocation.idempotency_key.clone(),
+                    identity.invocation.idempotency_key,
                 ),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 17,
@@ -7610,7 +7603,7 @@ async fn stream_limit_is_scoped_to_one_session_not_the_producer_agent_lifetime()
 
     for session in 0..=MAX_DURABLE_STREAMS_PER_SESSION {
         let mut invocation = identity.invocation.clone();
-        invocation.idempotency_key = IdempotencyKey::new(format!("session-{session}"));
+        invocation.idempotency_key = uuid::Uuid::from_u128(1000 + session as u128).into();
         let request = ProducerRegistrationRequest {
             coordinate: StreamRegistrationCoordinate::Root {
                 invocation_id: invocation.clone(),
@@ -7657,9 +7650,7 @@ async fn foreign_mappings_are_deduplicated_and_count_toward_the_session_limit() 
     let record = |mapping| {
         StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(
-                identity.invocation.idempotency_key.clone(),
-            ),
+            session_key: StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
             mapping,
         })
     };
@@ -7756,9 +7747,7 @@ async fn forwarded_inline_input_defers_completion_until_terminal_after_recovery(
             None,
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    owner.invocation.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(owner.invocation.idempotency_key),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 8,
                     source: StreamRecordReference::Foreign(handle.clone()),
@@ -7804,9 +7793,7 @@ async fn session_control_batch_validates_before_appending_any_record() {
     let producer = producer(oplog.clone(), &identity, None).await;
     let cancel = StreamSessionRecord::CancelRequested(StreamSessionCancelRequestedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
-        session_key: StreamRegistrationInvocation::Local(
-            identity.invocation.idempotency_key.clone(),
-        ),
+        session_key: StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
     });
     let tombstone = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -8857,7 +8844,7 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: StreamRegistrationInvocation::Local(
-                    identity.invocation.idempotency_key.clone(),
+                    identity.invocation.idempotency_key,
                 ),
                 result: Err(error.clone()),
             })
@@ -9514,7 +9501,7 @@ async fn nested_registration_must_match_its_enclosing_stream_coordinate() {
         .unwrap();
 
     let mut other_session = identity.invocation.clone();
-    other_session.idempotency_key = IdempotencyKey::new("other-session".to_string());
+    other_session.idempotency_key = uuid::Uuid::from_u128(109).into();
     let other = producer
         .register(
             None,

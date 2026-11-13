@@ -216,7 +216,7 @@ impl Rpc for StreamingRemoteRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -781,7 +781,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn cancel_invocation(
         &self,
         agent: &AgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner.cancel_invocation(agent, key, auth).await
@@ -790,7 +790,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -803,7 +803,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn lookup_invocation_status(
         &self,
         agent: &AgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         env: Option<EnvironmentId>,
         auth: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError> {
@@ -817,7 +817,7 @@ impl WorkerProxy for LocalResumeProxy {
         agent: &AgentId,
         env: EnvironmentId,
         revision: ComponentRevision,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         account: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -929,11 +929,12 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     };
     assert_eq!(created.session, session);
     assert_ne!(
-        created
-            .invocation_key
-            .as_ref()
-            .expect("creation returns the internal invocation key")
-            .value,
+        golem_common::model::InvocationId::from(
+            created
+                .invocation_key
+                .expect("creation returns the internal invocation key")
+        )
+        .to_string(),
         session,
         "durable public session IDs must not become invocation idempotency keys"
     );
@@ -987,7 +988,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         (StreamSlotReadAdmission::Head, None),
         (
             StreamSlotReadAdmission::Continuation,
-            created.invocation_key.clone(),
+            created.invocation_key,
         ),
     ] {
         let mut other_route = read_metadata(admission as i32, invocation_key);
@@ -1030,7 +1031,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .clone()
         .read_stream_slot(read_metadata(
             StreamSlotReadAdmission::Continuation as i32,
-            touched.invocation_key.clone(),
+            touched.invocation_key,
         ))
         .await?
         .into_inner()
@@ -1716,7 +1717,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     let Some(create_stream_session_response::Result::Success(first)) = first.result else {
         anyhow::bail!("{first:?}");
     };
-    let first_key: IdempotencyKey = first.invocation_key.clone().unwrap().into();
+    let first_key: golem_common::model::InvocationId = first.invocation_key.unwrap().into();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let expired = executor
@@ -1845,8 +1846,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     if matches!(
                         StreamSessionRecord::from_value(session.record.value()).unwrap(),
                         StreamSessionRecord::Expired(ref record)
-                            if Some(record.session_key.clone())
-                                == created_before_restart.invocation_key.clone().map(Into::into)
+                            if Some(record.session_key)
+                                == created_before_restart.invocation_key.map(Into::into)
                     ))
                 });
             if expired {
@@ -1929,7 +1930,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
         anyhow::bail!("{created:?}");
     };
     let initial_deadline = created.expiry_deadline_millis.unwrap();
-    let session_key: IdempotencyKey = created.invocation_key.clone().unwrap().into();
+    let session_key: golem_common::model::InvocationId = created.invocation_key.unwrap().into();
     let read = |admission, invocation_key| ReadStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
@@ -1950,7 +1951,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
         read(StreamSlotReadAdmission::Head as i32, None),
         read(
             StreamSlotReadAdmission::Continuation as i32,
-            created.invocation_key.clone(),
+            created.invocation_key,
         ),
     ] {
         let response = executor

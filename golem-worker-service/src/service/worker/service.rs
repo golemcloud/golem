@@ -57,10 +57,9 @@ use golem_common::model::agent::{
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentInvocationIdPattern, AgentInvocationIdentifier, AgentMethodName, AgentPluginName,
-    AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, FilesystemPathPattern,
-    FilesystemResourcePattern, FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget,
-    StoredCard,
+    AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
+    CardId, ClassPermissionTarget, FilesystemPathPattern, FilesystemResourcePattern,
+    FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget, StoredCard,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -459,6 +458,12 @@ fn decode_public_schema_value(
     }
 }
 
+fn parse_final_invocation_id(key: &str) -> WorkerResult<golem_common::model::InvocationId> {
+    key.parse().map_err(|_| {
+        WorkerExecutorError::invalid_request("Invalid invocation ID: expected a UUID").into()
+    })
+}
+
 fn normalize_agent_invocation_identity(
     component: &Component,
     agent_id: &AgentId,
@@ -470,6 +475,7 @@ fn normalize_agent_invocation_identity(
     let key_was_supplied = idempotency_key.is_some();
     let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
     if observation_only {
+        parse_final_invocation_id(&idempotency_key.value)?;
         return Ok((
             agent_id.clone(),
             idempotency_key,
@@ -1661,13 +1667,8 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        let invocation_id = uuid::Uuid::parse_str(&idempotency_key.value)
-            .map(AgentInvocationIdPattern::Uuid)
-            .unwrap_or_else(|_| {
-                AgentInvocationIdPattern::Identifier(AgentInvocationIdentifier(
-                    idempotency_key.value.clone(),
-                ))
-            });
+        let accepted_id = parse_final_invocation_id(&idempotency_key.value)?;
+        let invocation_id = AgentInvocationIdPattern::Uuid(accepted_id.0);
         authorize_agent_permission(
             &auth_ctx,
             &component,
@@ -1680,7 +1681,7 @@ impl WorkerService {
             .worker_client
             .cancel_invocation(
                 agent_id,
-                idempotency_key,
+                &accepted_id,
                 component.environment_id,
                 auth_ctx,
                 None,
@@ -1694,7 +1695,7 @@ impl WorkerService {
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
         receipt: ScheduleId,
         owner: &AgentId,
         auth: AuthCtx,
@@ -1727,7 +1728,7 @@ impl WorkerService {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         _account_id: AccountId,
         config: std::collections::HashMap<String, String>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -1955,6 +1956,7 @@ impl WorkerService {
                 "lookup requires a final invocation key".to_string(),
             ));
         }
+        parse_final_invocation_id(&start.idempotency_key.as_ref().unwrap().value)?;
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -2569,7 +2571,11 @@ impl WorkerService {
             })
             .into();
         let trusted_resume = ResumeAttach {
-            idempotency_key: Some(IdempotencyKey::new(resume.session.idempotency_key).into()),
+            idempotency_key: Some(
+                parse_final_invocation_id(&resume.session.idempotency_key)
+                    .map_err(PublicAgentSessionStartError::Worker)?
+                    .into(),
+            ),
             agent_id: Some(agent_id.clone().into()),
             environment_id: Some(environment_id.into()),
             attachment_id: Some(resume.session.attachment_id.into()),
@@ -2840,7 +2846,11 @@ impl WorkerService {
             })
             .into();
         let trusted_resume = ResumeAttach {
-            idempotency_key: Some(IdempotencyKey::new(resume.session.idempotency_key).into()),
+            idempotency_key: Some(
+                parse_final_invocation_id(&resume.session.idempotency_key)
+                    .map_err(PublicAgentSessionStartError::Worker)?
+                    .into(),
+            ),
             agent_id: Some(agent_id.clone().into()),
             environment_id: Some(component.environment_id.into()),
             attachment_id: Some(resume.session.attachment_id.into()),
@@ -3277,10 +3287,12 @@ impl WorkerService {
             request.idempotency_key.as_ref(),
         );
         let idempotency_key = if lookup {
-            request
+            let key = request
                 .idempotency_key
                 .clone()
-                .expect("lookup key validated")
+                .expect("lookup key validated");
+            parse_final_invocation_id(&key.value)?;
+            key
         } else {
             request_key.owner_key(&format!(
                 "tool:{}/{}",
@@ -3799,7 +3811,6 @@ impl WorkerService {
         let response_agent_id = output.agent_id.clone().unwrap_or_else(|| agent_id.clone());
         let response_idempotency_key = output
             .idempotency_key
-            .clone()
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
 
         match output.result {
@@ -3902,11 +3913,10 @@ mod tests {
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{
-        AgentInvocationIdPattern, AgentInvocationIdentifier, AgentMethodName, AgentPluginName,
-        AgentResourcePattern, AgentVerb, Card, CardId, ClassPermissionTarget, EffectiveSurface,
-        FilesystemPathPattern, FilesystemResourcePattern, FilesystemVerb, GrantSurface,
-        OplogResourcePattern, OplogVerb, PermissionPattern, PermissionTarget, PolymorphicCard,
-        StoredCard,
+        AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern,
+        AgentVerb, Card, CardId, ClassPermissionTarget, EffectiveSurface, FilesystemPathPattern,
+        FilesystemResourcePattern, FilesystemVerb, GrantSurface, OplogResourcePattern, OplogVerb,
+        PermissionPattern, PermissionTarget, PolymorphicCard, StoredCard,
     };
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, InstalledPlugin,
@@ -4987,7 +4997,7 @@ mod tests {
         async fn cancel_invocation(
             &self,
             _: &AgentId,
-            _: &IdempotencyKey,
+            _: &golem_common::model::InvocationId,
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
@@ -5046,7 +5056,9 @@ mod tests {
                 .push(environment_id);
             let mut output = self.invocation_output.lock().unwrap().clone();
             output.agent_id = Some(agent_id.clone());
-            output.idempotency_key.get_or_insert(idempotency_key);
+            output
+                .idempotency_key
+                .get_or_insert(idempotency_key.value.parse().unwrap());
             Ok(output)
         }
 
@@ -5080,10 +5092,16 @@ mod tests {
             agent_id: &AgentId,
             start: InvocationStart,
         ) -> WorkerResult<AgentInvocationOutput> {
-            let key = if start.mode()
+            let key: golem_common::model::InvocationId = if start.mode()
                 == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
             {
-                start.idempotency_key.clone().unwrap().into()
+                start
+                    .idempotency_key
+                    .as_ref()
+                    .unwrap()
+                    .value
+                    .parse()
+                    .unwrap()
             } else {
                 let prepared =
                     InvocationRequestKey::try_from(start.request_key.clone().unwrap()).unwrap();
@@ -5092,12 +5110,9 @@ mod tests {
                     .as_ref()
                     .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
                     .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
-                IdempotencyKey::new(
-                    prepared
-                        .finalize(agent_id.clone(), self.fingerprint, &operation)
-                        .uuid()
-                        .to_string(),
-                )
+                prepared
+                    .finalize(agent_id.clone(), self.fingerprint, &operation)
+                    .id()
             };
             self.invocation_session_starts
                 .lock()
@@ -5134,7 +5149,7 @@ mod tests {
             _: &AgentId,
             _: EnvironmentId,
             _: ComponentRevision,
-            _: IdempotencyKey,
+            _: golem_common::model::InvocationId,
             _: AccountId,
             _: HashMap<String, String>,
             _: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -5421,7 +5436,7 @@ mod tests {
             )
             .unwrap();
             ResumeAttach {
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                idempotency_key: Some(golem_common::model::InvocationId::new().into()),
                 agent_id: Some(agent_id.into()),
                 environment_id: Some(self.environment_id.into()),
                 attachment_id: Some(Uuid::new_v4().into()),
@@ -5752,6 +5767,25 @@ mod tests {
     }
 
     #[test]
+    async fn cancel_invocation_rejects_raw_request_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let result = harness
+            .worker_service
+            .cancel_invocation(
+                &agent_id,
+                &IdempotencyKey::from("raw-request-key"),
+                AuthCtx::System,
+            )
+            .await;
+        assert!(result.unwrap_err().to_string().contains("expected a UUID"));
+        assert!(harness.worker_client.effects.lock().unwrap().is_empty());
+    }
+
+    #[test]
     async fn service_operations_use_exact_agent_oplog_and_filesystem_resources() {
         let harness = RestHarness::new(AgentMode::Durable);
         // `delete` settles existence with a read before dispatching anything,
@@ -5764,7 +5798,7 @@ mod tests {
             agent_id: "weather-agent()".to_string(),
         };
         let path = CanonicalFilePath::from_abs_str("/data/report.txt").unwrap();
-        let invocation_id = "invocation-1";
+        let invocation_id = "00000000-0000-0000-0000-000000000001";
         let permissions = vec![
             agent_target(&agent_id, AgentVerb::Delete, AgentResourcePattern::Empty),
             agent_target(&agent_id, AgentVerb::Interrupt, AgentResourcePattern::Empty),
@@ -5782,8 +5816,8 @@ mod tests {
             agent_target(
                 &agent_id,
                 AgentVerb::CancelInvocation,
-                AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Identifier(
-                    AgentInvocationIdentifier(invocation_id.to_string()),
+                AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
+                    uuid::Uuid::parse_str(invocation_id).unwrap(),
                 )),
             ),
         ];
@@ -6144,7 +6178,7 @@ mod tests {
                 &target_agent_id,
                 harness.environment_id,
                 harness.component_revision,
-                IdempotencyKey::fresh(),
+                golem_common::model::InvocationId::new(),
                 AccountId::new(),
                 HashMap::new(),
                 golem_api_grpc::proto::golem::worker::AgentMetadata::default(),
@@ -6167,7 +6201,7 @@ mod tests {
                     &target_agent_id,
                     harness.environment_id,
                     harness.component_revision,
-                    IdempotencyKey::fresh(),
+                    golem_common::model::InvocationId::new(),
                     AccountId::new(),
                     HashMap::new(),
                     golem_api_grpc::proto::golem::worker::AgentMetadata::default(),
@@ -6250,7 +6284,7 @@ mod tests {
         assert!(phantom_id(&response.agent_id).is_some());
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 1);
-        assert_eq!(response.idempotency_key, invocations[0].1);
+        assert_eq!(response.idempotency_key.to_string(), invocations[0].1.value);
         assert_eq!(invocations[0].2, InvocationFreshnessDisposition::KnownFresh);
         assert_eq!(
             phantom_id(&invocations[0].0),
@@ -7316,9 +7350,9 @@ mod tests {
         assert_ne!(invocations[0].1, invocations[1].1);
         assert_ne!(invocations[0].0, invocations[1].0);
         assert_eq!(first.agent_id, invocations[0].0);
-        assert_eq!(first.idempotency_key, invocations[0].1);
+        assert_eq!(first.idempotency_key.to_string(), invocations[0].1.value);
         assert_eq!(second.agent_id, invocations[1].0);
-        assert_eq!(second.idempotency_key, invocations[1].1);
+        assert_eq!(second.idempotency_key.to_string(), invocations[1].1.value);
         assert!(
             invocations
                 .iter()
@@ -7385,7 +7419,7 @@ mod tests {
         let invocations = harness.worker_client.invocations();
         assert_eq!(invocations.len(), 1);
         assert_eq!(response.agent_id, invocations[0].0);
-        assert_eq!(response.idempotency_key, seed);
+        assert_eq!(response.idempotency_key.to_string(), seed.value);
         assert_eq!(invocations[0].1, seed);
         assert_eq!(
             phantom_id(&invocations[0].0),
@@ -7476,6 +7510,18 @@ mod tests {
         );
 
         start.agent_id = Some(admitted_agent_id.clone().into());
+        let final_key = IdempotencyKey::from_uuid(
+            InvocationRequestKey::try_from(start.request_key.clone().unwrap())
+                .unwrap()
+                .finalize(
+                    admitted_agent_id.clone(),
+                    harness.worker_client.fingerprint,
+                    "run",
+                )
+                .id()
+                .0,
+        );
+        start.idempotency_key = Some(final_key.clone().into());
         start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
         start.freshness_disposition =
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32;
@@ -7496,7 +7542,7 @@ mod tests {
         );
         assert_eq!(
             lookup_start.idempotency_key.clone().map(Into::into),
-            Some(idempotency_key)
+            Some(final_key)
         );
         assert_eq!(
             lookup_start.freshness_disposition(),
@@ -8102,6 +8148,7 @@ mod tests {
         request.component_id = None;
         request.mode = NativeToolInvocationMode::Lookup;
         request.input = None;
+        request.idempotency_key = Some(IdempotencyKey::fresh());
 
         harness
             .worker_service
@@ -8136,7 +8183,7 @@ mod tests {
                 "prepared-owner-seed",
             )),
         };
-        let final_key = IdempotencyKey::from("final-invocation-key");
+        let final_key = IdempotencyKey::fresh();
         request.agent_id = Some(final_owner.clone());
         request.component_id = None;
         request.mode = NativeToolInvocationMode::Lookup;

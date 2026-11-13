@@ -448,7 +448,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
         callee_environment_id: metadata.environment_id,
         callee: metadata.agent_id.clone(),
         callee_fingerprint: metadata.fingerprint,
-        idempotency_key: IdempotencyKey::new("stream-session".into()),
+        idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
     };
     let handle = DurableStreamHandle {
         format_version: 1,
@@ -482,7 +482,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
                         recursive_value_path: vec![],
                     },
                     source_invocation: StreamRegistrationInvocation::Local(
-                        handle.source_invocation.idempotency_key.clone(),
+                        handle.source_invocation.idempotency_key,
                     ),
                     component_revision: handle.component_revision,
                     element_schema_fingerprint: handle.element_schema_fingerprint,
@@ -1157,7 +1157,7 @@ async fn prepare_session(
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
     let pending_index = oplog.current_oplog_index().await.next().next();
-    let idempotency_key = IdempotencyKey::new("stream-session".into());
+    let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
@@ -1173,7 +1173,7 @@ async fn prepare_session(
         callee_environment_id: metadata.environment_id,
         callee: metadata.agent_id.clone(),
         callee_fingerprint: metadata.fingerprint,
-        idempotency_key: idempotency_key.clone(),
+        idempotency_key,
     };
     let attachment_id = AttachmentId::primary(
         metadata.environment_id,
@@ -1184,9 +1184,9 @@ async fn prepare_session(
     for record in [
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            public_session_id: idempotency_key.value.clone(),
+            public_session_id: idempotency_key.to_string(),
             route_scope: None,
-            session_key: idempotency_key.clone(),
+            session_key: idempotency_key,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
@@ -1214,7 +1214,7 @@ async fn prepare_session(
         }),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: idempotency_key.clone(),
+            session_key: idempotency_key,
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -1236,7 +1236,7 @@ async fn prepare_session(
                 worker
                     .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                         None,
-                        idempotency_key.clone(),
+                        idempotency_key,
                         payload.clone(),
                         trace_id.clone(),
                         trace_states.clone(),
@@ -1252,7 +1252,7 @@ async fn prepare_session(
         worker
             .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
@@ -1271,7 +1271,7 @@ async fn prepare_session(
         worker
             .add_and_commit_oplog(OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
-                invocation_id: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
                     output: data_value!(1u32).value().clone(),
                 })),
@@ -1296,7 +1296,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
 ) -> anyhow::Result<()> {
     let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
     let metadata = worker.get_initial_worker_metadata();
-    let idempotency_key = IdempotencyKey::new("direct-completion".into());
+    let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
@@ -1309,7 +1309,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
     worker
         .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
             None,
-            idempotency_key.clone(),
+            idempotency_key,
             payload.clone(),
             context.trace_id.clone(),
             context.trace_states.clone(),
@@ -1320,7 +1320,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
     worker
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            invocation_id: idempotency_key.clone(),
+            invocation_id: idempotency_key,
             payload,
             trace_id: context.trace_id,
             trace_states: context.trace_states,
@@ -1339,7 +1339,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
     let finished_index = worker
         .add_to_oplog(OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
-            invocation_id: idempotency_key.clone(),
+            invocation_id: idempotency_key,
             result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
                 output: data_value!(1u32).value().clone(),
             })),
@@ -1392,7 +1392,6 @@ async fn completion_receipt_precedes_fifo_status_fold(
     });
     let result = tokio::spawn({
         let worker = worker.clone();
-        let idempotency_key = idempotency_key.clone();
         async move { worker.lookup_invocation_result(&idempotency_key).await }
     });
     let metadata_read = tokio::spawn({
@@ -1447,7 +1446,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     use golem_worker_executor::services::oplog::CommitLevel;
 
     let (executor, worker, faults) = setup(last_unique_id, deps, component).await?;
-    let key = IdempotencyKey::new("completion-during-stop".into());
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let context = InvocationContextStack::fresh();
     // Make the actor-owned invocation prefix fall inside the later Jump, forcing checkpoint
     // fallback while leaving the invocation's completion itself in retained history.
@@ -1457,7 +1456,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     worker
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "increment".into(),
                 input: data_value!().value().clone(),
@@ -1495,7 +1494,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     let finished = worker
         .add_to_oplog(OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: key,
             result: OplogPayload::Inline(Box::new(result.clone())),
             method_name: Some("increment".into()),
             consumed_fuel: 0,
@@ -1605,7 +1604,7 @@ async fn jump_projection_finishes_without_its_producer(
         let discarded = worker
             .add_and_commit_oplog(OplogEntry::grow_memory(11))
             .await?;
-        let key = IdempotencyKey::new(format!("invalidate-prefix-{cancel_full_waiter}"));
+        let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
         let context = InvocationContextStack::fresh();
         let started = worker
             .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
@@ -1871,7 +1870,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
             let b_records = session_records(&b).await?;
             let a_activated = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == a_attachment)).count();
             let b_activated = b_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == b_attachment)).count();
-            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == StreamRegistrationInvocation::Local(completed_session.idempotency_key.clone()))).count();
+            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == StreamRegistrationInvocation::Local(completed_session.idempotency_key))).count();
             if a_activated != 0 && b_activated != 0 && finished != 0 {
                 assert_eq!(a_activated, 1);
                 assert_eq!(b_activated, 1);

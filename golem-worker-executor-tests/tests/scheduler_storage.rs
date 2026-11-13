@@ -79,7 +79,7 @@ fn scheduled_action_fingerprints_roundtrip() {
 
 #[test]
 fn scheduled_invocation_wake_roundtrips_without_payload() {
-    use golem_common::model::{AgentFingerprint, IdempotencyKey};
+    use golem_common::model::{AgentFingerprint, InvocationId};
     use golem_common::serialization::deserialize;
 
     let owned_agent_id = OwnedAgentId::new(
@@ -90,17 +90,20 @@ fn scheduled_invocation_wake_roundtrips_without_payload() {
         },
     );
     let fingerprint = AgentFingerprint::new();
-    let key = IdempotencyKey::new("scheduled-invocation".to_string());
+    let key = InvocationId(Uuid::new_v4());
     let action = ScheduledAction::WakeInvocation {
         owned_agent_id: owned_agent_id.clone(),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
         target_worker_fingerprint: fingerprint,
     };
     let decoded = deserialize::<ScheduledAction>(&serialize(&action).unwrap()).unwrap();
     assert_eq!(decoded, action);
     assert_eq!(decoded.owned_agent_id(), owned_agent_id);
     let id = ScheduleId::for_invocation(fingerprint, &key);
-    assert_eq!(id.id, Uuid::new_v5(&fingerprint.0, key.value.as_bytes()));
+    assert_eq!(
+        id.id,
+        Uuid::new_v5(&fingerprint.0, key.to_string().as_bytes())
+    );
     assert_eq!(id, ScheduleId::for_invocation(fingerprint, &key));
     assert_ne!(
         id,
@@ -108,7 +111,7 @@ fn scheduled_invocation_wake_roundtrips_without_payload() {
     );
     assert_ne!(
         id,
-        ScheduleId::for_invocation(fingerprint, &IdempotencyKey::fresh())
+        ScheduleId::for_invocation(fingerprint, &InvocationId(Uuid::new_v4()))
     );
 }
 
@@ -150,7 +153,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         agent_id: "scheduled".to_string(),
     };
     let environment_id = EnvironmentId::new();
-    let idempotency_key = golem_common::model::IdempotencyKey::fresh();
+    let idempotency_key = golem_common::model::InvocationId(Uuid::new_v4());
     let action = ScheduledAction::WakeInvocation {
         target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
         owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),

@@ -482,7 +482,7 @@ impl ToolCommandHandler {
                 &mut stderr_writer,
                 cancelled,
                 std::future::pending::<()>(),
-                |key| accepted = Some(IdempotencyKey::new(key.to_string())),
+                |key| accepted = Some(*key),
             )
             .await
             .map_err(|error| match &error {

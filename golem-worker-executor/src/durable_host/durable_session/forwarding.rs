@@ -151,14 +151,7 @@ pub fn durable_stream_mapping_to_proto(
                 callee_fingerprint: Some(
                     mapping.handle.source_invocation.callee_fingerprint.0.into(),
                 ),
-                idempotency_key: Some(
-                    mapping
-                        .handle
-                        .source_invocation
-                        .idempotency_key
-                        .clone()
-                        .into(),
-                ),
+                idempotency_key: Some(mapping.handle.source_invocation.idempotency_key.into()),
             }),
             component_revision: Some(mapping.handle.component_revision.get()),
             element_schema_fingerprint: mapping.handle.element_schema_fingerprint.0.to_vec(),

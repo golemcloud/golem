@@ -3693,7 +3693,8 @@ async fn outgoing_http_contains_idempotency_key(
     let stored_key = executor
         .external_invocation_key(&worker_id, &key, "run")
         .await?;
-    let expected_key = IdempotencyKey::derived(&stored_key, sends.ended[0]);
+    let expected_key =
+        IdempotencyKey::derived(&IdempotencyKey::new(stored_key.to_string()), sends.ended[0]);
     let expected_response = format!(
         "200 ExampleResponse {{ percentage: 0.0, message: Some(\"{}\") }}",
         expected_key.value

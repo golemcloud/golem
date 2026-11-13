@@ -8,9 +8,27 @@ pub struct InvocationId {
 } derive(Debug, Eq, Hash)
 
 ///|
+pub extend InvocationId with Debug::{to_repr}
+
+///|
+pub extend InvocationId with Eq::{equal, not_equal}
+
+///|
+pub extend InvocationId with Hash::{hash, hash_combine}
+
+///|
+pub extend InvocationId with Show::{output}
+
+///|
 pub suberror InvocationIdParseError {
   InvocationIdParseError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend InvocationIdParseError with Debug::{to_repr}
+
+///|
+pub extend InvocationIdParseError with Eq::{equal, not_equal}
 
 ///|
 pub fn InvocationId::new(
@@ -42,7 +60,7 @@ pub impl Show for InvocationId with fn output(self, logger) {
 
 ///|
 /// The length of the `.<uuid>` suffix of the text form.
-let invocation_id_suffix_length : Int = 37
+let invocation_id_suffix_length : Int32 = 37
 
 ///|
 /// Parses the text form `<agent-id>.<uuid>`. The last 37 characters are the

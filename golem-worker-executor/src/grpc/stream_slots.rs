@@ -119,11 +119,14 @@ impl TryFrom<proto::ReadStreamSlotRequest> for worker::ReadStreamSlotRequest {
                 }
                 Ok(proto::StreamSlotReadAdmission::Continuation) => {
                     worker::StreamSlotReadAdmission::Continuation(
-                        request.invocation_key.map(Into::into).ok_or_else(|| {
-                            WorkerExecutorError::invalid_request(
-                                "stream read continuation requires an invocation key",
-                            )
-                        })?,
+                        request
+                            .invocation_key
+                            .ok_or_else(|| {
+                                WorkerExecutorError::invalid_request(
+                                    "stream read continuation requires an invocation key",
+                                )
+                            })?
+                            .into(),
                     )
                 }
                 _ => {
@@ -347,8 +350,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 creation_intent,
             )
             .await?;
-        let key = admission.invocation_key().clone();
-        request.idempotency_key = Some(key.clone().into());
+        let key = *admission.invocation_key();
+        request.idempotency_key =
+            Some(golem_common::model::IdempotencyKey::from_uuid(key.0).into());
         let revision = worker.stream_session_revision(&key).await?;
         let component = worker
             .component_service()
@@ -383,7 +387,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
+            idempotency_key: key,
             method_name,
             input,
             invocation_context: from_proto_invocation_context(&request.context)
@@ -437,7 +441,7 @@ mod tests {
             fork_offset: first.0.to_vec(),
             sub_offset: 2,
             oplog_index: 23,
-            invocation_key: Some(golem_common::model::IdempotencyKey::new("fork".into()).into()),
+            invocation_key: Some(uuid::Uuid::from_u128(906).into()),
         };
         let result = proto::ReadStreamSlotSuccess::from(worker::ReadStreamSlotResult {
             items: vec![
@@ -462,7 +466,7 @@ mod tests {
             tombstoned: false,
             writable: true,
             fork: Some(fork.clone()),
-            invocation_key: golem_common::model::IdempotencyKey::new("invocation".into()),
+            invocation_key: uuid::Uuid::from_u128(905).into(),
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
             expiry_deadline_millis: Some(40_000),
         });

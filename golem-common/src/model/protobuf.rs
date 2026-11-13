@@ -19,9 +19,9 @@ use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
     AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
-    AgentStatusFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
-    LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable, RoutingTableEntry, ScanCursor,
-    ShardEpoch, ShardId, StringFilterComparator, Timestamp,
+    AgentStatusFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationId,
+    InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
+    RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator, Timestamp,
 };
 use applying::Apply;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -334,6 +334,18 @@ impl From<golem::worker::IdempotencyKey> for IdempotencyKey {
 impl From<IdempotencyKey> for golem::worker::IdempotencyKey {
     fn from(value: IdempotencyKey) -> Self {
         Self { value: value.value }
+    }
+}
+
+impl From<golem_schema::proto::golem::common::Uuid> for InvocationId {
+    fn from(value: golem_schema::proto::golem::common::Uuid) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<InvocationId> for golem_schema::proto::golem::common::Uuid {
+    fn from(value: InvocationId) -> Self {
+        value.0.into()
     }
 }
 

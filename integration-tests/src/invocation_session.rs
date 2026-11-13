@@ -338,7 +338,7 @@ impl InvocationSession {
             .context("cannot resume before acceptance")?;
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: accepted.idempotency_key.clone(),
+                idempotency_key: accepted.idempotency_key,
                 agent_id: accepted.agent_id.clone(),
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,

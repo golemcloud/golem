@@ -665,7 +665,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn cancel_invocation(
         &self,
         _: &AgentId,
-        _: &IdempotencyKey,
+        _: &golem_common::model::InvocationId,
         _: EnvironmentId,
         _: AuthCtx,
         _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
@@ -816,7 +816,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: EnvironmentId,
         _: ComponentRevision,
-        _: IdempotencyKey,
+        _: golem_common::model::InvocationId,
         _: AccountId,
         _: HashMap<String, String>,
         _: golem_api_grpc::proto::golem::worker::AgentMetadata,

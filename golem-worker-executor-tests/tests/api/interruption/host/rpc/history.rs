@@ -15,7 +15,7 @@ pub(super) struct Call {
 
 pub(super) fn invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     method: &str,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
@@ -53,7 +53,7 @@ pub(super) fn invocation(
 
 pub(super) fn caller(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     target: &AgentId,
     asynchronous: bool,
     completed: bool,
@@ -98,7 +98,7 @@ pub(super) fn caller(
         bail!("RPC must carry an internal request key: {request:?}");
     };
     ensure!(
-        *target_key == IdempotencyKey::derived(key, start),
+        *target_key == IdempotencyKey::derived(&IdempotencyKey::new(key.to_string()), start),
         "unexpected derived key: {request:?}, {start}"
     );
     let target_key = target_key.clone();
@@ -153,7 +153,7 @@ pub(super) fn terminal(
 
 pub(super) fn target(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     completed: bool,
 ) -> anyhow::Result<Option<OplogIndex>> {
     let waits: Vec<_> = entries

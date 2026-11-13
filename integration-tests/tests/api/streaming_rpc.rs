@@ -1057,11 +1057,11 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         PrivateResumeOperation::Resume,
         PrivateResumeOperation::Takeover,
     ] {
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(
                 PrivateResumeAttach {
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     attachment_id: Some(
@@ -2130,7 +2130,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     .await?;
     assert_eq!(checkpoint.item_count(), 4);
     let accepted = checkpoint.acceptance.as_ref().unwrap();
-    let key = accepted.idempotency_key.as_ref().unwrap().value.clone();
+    let key = golem_common::model::InvocationId::from(*accepted.idempotency_key.as_ref().unwrap());
     let epoch = accepted.epoch;
     // A finished producer is also a deterministic detach barrier; do not race Resume against
     // the server observing a socket close, and do not use Takeover to hide that distinction.
@@ -2144,7 +2144,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
                     matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
                         if matches!(StreamSessionRecord::from_value(session.record.value()),
                             Ok(StreamSessionRecord::Finished(finished))
-                                if finished.session_key.idempotency_key().value == key
+                                if *finished.session_key.idempotency_key() == key
                                     && finished.result.is_ok()))
                 })
             {
@@ -2194,7 +2194,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.invocation_id.value == key)
+                if method.invocation_id == key)
     )).count(), 1);
     assert_eq!(
         oplog

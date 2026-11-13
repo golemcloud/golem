@@ -27,8 +27,8 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
-    IdempotencyKey, NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState,
-    RetryProperties, RetryVerdict, ThreadRng, Timestamp,
+    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
+    RetryVerdict, ThreadRng, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::{BTreeMap, HashMap};
@@ -880,7 +880,7 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The agent invocation whose work the task retries; its error entries name it. A task can
     /// outlive this invocation, and the status of the agent ignores an error entry that names an
     /// invocation which no longer runs.
-    pub invocation_id: Option<IdempotencyKey>,
+    pub invocation_id: Option<golem_common::model::InvocationId>,
     /// Environment state service for lazy policy fetching
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
@@ -947,7 +947,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
             OplogErrorKind::Invocation,
-            self.invocation_id.clone(),
+            self.invocation_id,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state.clone(),

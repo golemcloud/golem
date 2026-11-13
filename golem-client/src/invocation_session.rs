@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, Stream, StreamExt};
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
@@ -2267,7 +2268,7 @@ pub async fn drive_native_tool_session_with_stop<R, W, E, C, S>(
     stderr: &mut E,
     cancelled: C,
     stop_input: S,
-    mut on_accepted: impl FnMut(&str),
+    mut on_accepted: impl FnMut(&InvocationId),
 ) -> Result<PublicInvocationResult, SessionTransportError>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -4662,7 +4663,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
                                 channel: 11,
@@ -4936,7 +4937,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![native_output_mapping(12, role, "native-output")],
                         session_token: "native-session".to_string(),
                         version: 1,
@@ -5069,7 +5070,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
                                 channel: 11,
@@ -5247,7 +5248,7 @@ mod tests {
             .send(Message::Text(
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
-                    idempotency_key: "accepted-tool-invocation-key".to_string(),
+                    idempotency_key: InvocationId(uuid::Uuid::from_u128(3)),
                     mappings: vec![
                         PublicStreamMapping {
                             channel: stdin_channel,
@@ -5408,7 +5409,7 @@ mod tests {
     /// Opens a tool session and drives it with the two signals.
     async fn open_and_drive_native_tool_session<R, W, C, S>(
         address: std::net::SocketAddr,
-        on_accepted: impl FnMut(&str),
+        on_accepted: impl FnMut(&InvocationId),
         initial: PublicClientMessage,
         input: R,
         stdout: &mut W,
@@ -5494,7 +5495,10 @@ mod tests {
             PublicInvocationResult::ToolSuccess { result: None }
         );
         // The server's invocation key, not the one the client sent.
-        assert_eq!(accepted, vec!["accepted-tool-invocation-key".to_string()]);
+        assert_eq!(
+            accepted,
+            vec![InvocationId(uuid::Uuid::from_u128(3)).to_string()]
+        );
         server.await.unwrap();
     }
 
@@ -6030,7 +6034,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
                                 channel: 12,
@@ -6166,7 +6170,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
                                 12,
@@ -6294,7 +6298,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
                                 12,
@@ -6348,7 +6352,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resumed_attempt,
-                        idempotency_key: "tool-invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
                                 22,
@@ -6941,7 +6945,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
@@ -7125,7 +7129,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
                         version: 1,
@@ -7247,7 +7251,7 @@ mod tests {
                             .send(Message::Text(
                                 encode_text(&PublicServerMessage::InvocationAccepted {
                                     attempt_id,
-                                    idempotency_key: "invocation-key".to_string(),
+                                    idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                                     mappings: vec![PublicStreamMapping {
                                         channel,
                                         direction: PublicStreamDirection::Output,
@@ -7360,7 +7364,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
                         version: 1,
@@ -7396,7 +7400,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
                         version: 1,
@@ -7480,7 +7484,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
                             direction: PublicStreamDirection::Output,
@@ -7524,7 +7528,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Output,
@@ -7611,7 +7615,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
                             direction: PublicStreamDirection::Input,
@@ -7658,7 +7662,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
                             direction: PublicStreamDirection::Input,
@@ -7807,7 +7811,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
                         version: 1,
@@ -7882,7 +7886,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
                         version: 1,
@@ -7927,7 +7931,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resume_attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
                         version: 1,
@@ -7998,7 +8002,7 @@ mod tests {
             for message in [
                 PublicServerMessage::InvocationAccepted {
                     attempt_id,
-                    idempotency_key: "invocation-key".to_string(),
+                    idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                     mappings: Vec::new(),
                     session_token: "session-token".to_string(),
                     version: 1,
@@ -8074,7 +8078,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
@@ -8144,7 +8148,7 @@ mod tests {
                 .send(Message::Text(
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
-                        idempotency_key: "invocation-key".to_string(),
+                        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
                             direction: PublicStreamDirection::Input,
@@ -8329,7 +8333,7 @@ mod tests {
     fn accepted(attempt_id: uuid::Uuid, mappings: Vec<PublicStreamMapping>) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id,
-            idempotency_key: "invocation-key".to_string(),
+            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings,
             session_token: "session-token".to_string(),
             version: 1,

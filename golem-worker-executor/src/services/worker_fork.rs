@@ -78,9 +78,9 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentFingerprint, AgentMetadata, InvocationId, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -814,7 +814,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
-        let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
+        let mut pending_invocation_keys: Vec<(InvocationId, OplogIndex)> = Vec::new();
         // The entries that the update queue reads, kept from the copy, so the fold over them
         // after the copy, when the deleted regions are known, reads no entry again.
         let mut update_entries: Vec<(OplogIndex, KeptUpdateEntry)> = Vec::new();
@@ -900,7 +900,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     invocation_id: idempotency_key,
                     ..
                 } if manual_update.is_none() => {
-                    pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
+                    pending_invocation_keys.push((*idempotency_key, oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
                     invocation_id: idempotency_key,
@@ -1485,14 +1485,20 @@ const CANCELLED_BY_FORK: &str = "cancelled by fork";
 
 #[cfg(test)]
 mod tests {
+    use golem_common::model::{IdempotencyKey, InvocationId};
+    use uuid::Uuid;
+    fn test_invocation_id(value: String) -> InvocationId {
+        InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+    }
+
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::agent::Principal;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogPayload, UpdateDescription};
-    use golem_common::model::{AgentInvocationPayload, IdempotencyKey};
     use golem_common::schema::SchemaValue;
     use std::collections::HashSet;
     use test_r::test;
@@ -1510,7 +1516,7 @@ mod tests {
         let target = agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            invocation_id: IdempotencyKey::new("fork-wallet-pin".to_string()),
+            invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
@@ -1693,7 +1699,7 @@ mod tests {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            invocation_id: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -1863,7 +1869,7 @@ mod tests {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            invocation_id: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -1935,7 +1941,7 @@ mod tests {
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            invocation_id: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::ManualUpdate {

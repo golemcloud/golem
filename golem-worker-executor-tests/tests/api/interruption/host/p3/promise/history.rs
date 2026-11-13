@@ -19,7 +19,7 @@ pub(super) struct PromiseRecord {
 
 pub(super) fn invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
     let mut current = false;
@@ -103,7 +103,7 @@ fn completed(
 
 pub(super) fn promise_record(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     owner: &AgentId,
     ready: bool,
     finished: usize,

@@ -483,7 +483,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         if let Some(value) = status.durable_stream_sessions.get(key) {
             return Ok(Some(value.clone()));
@@ -673,7 +673,7 @@ impl WorkerService for DefaultWorkerService {
                         &status.deleted_regions,
                         &entries,
                         |key, position| {
-                            mappings.insert(key.clone(), position);
+                            mappings.insert(*key, position);
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
@@ -734,7 +734,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         let values = self
             .key_value_storage

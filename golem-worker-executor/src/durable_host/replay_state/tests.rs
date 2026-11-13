@@ -22,7 +22,7 @@ use golem_common::model::oplog::{
     PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
+use golem_common::model::{AgentId, AgentInvocationPayload, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
@@ -253,8 +253,8 @@ fn stored_test_card(card_id: CardId) -> StoredCard {
     })
 }
 
-fn replayed_invocation_id() -> IdempotencyKey {
-    IdempotencyKey::new("wallet-pin-replay".to_string())
+fn replayed_invocation_id() -> golem_common::model::InvocationId {
+    uuid::Uuid::from_u128(1).into()
 }
 
 fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
@@ -262,7 +262,7 @@ fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
 }
 
 fn invocation_started_for(
-    invocation_id: IdempotencyKey,
+    invocation_id: golem_common::model::InvocationId,
     wallet_pin: InvocationWalletPin,
 ) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
@@ -3482,7 +3482,7 @@ fn invocation_finished() -> OplogEntry {
     invocation_finished_for(replayed_invocation_id())
 }
 
-fn invocation_finished_for(invocation_id: IdempotencyKey) -> OplogEntry {
+fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
         invocation_id,
@@ -3511,7 +3511,10 @@ fn test_invocation_wallet_pin() -> InvocationWalletPin {
     }
 }
 
-fn invocation_error_for(invocation_id: IdempotencyKey, retry_from: u64) -> OplogEntry {
+fn invocation_error_for(
+    invocation_id: golem_common::model::InvocationId,
+    retry_from: u64,
+) -> OplogEntry {
     OplogEntry::error(
         None,
         OplogErrorKind::Invocation,
@@ -3530,7 +3533,7 @@ async fn replayed_finished_naming_another_invocation_is_rejected() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
-        invocation_finished_for(IdempotencyKey::new("other-invocation".to_string())),
+        invocation_finished_for(uuid::Uuid::from_u128(2).into()),
     ])
     .await;
 
@@ -3561,7 +3564,7 @@ async fn replayed_finished_naming_the_replayed_invocation_is_accepted() {
 }
 
 async fn replay_invocation_with_error(
-    error_invocation_id: IdempotencyKey,
+    error_invocation_id: golem_common::model::InvocationId,
 ) -> Result<(), WorkerExecutorError> {
     // [RemoveRetryPolicy, AgentInvocationStarted, Start, Error(retry_from: Start), End,
     //  AgentInvocationFinished]
@@ -3592,7 +3595,7 @@ async fn replay_invocation_with_error(
 async fn replayed_invocation_error_naming_a_finished_invocation_is_accepted() {
     // A background task that outlives its invocation records retry errors that name the earlier,
     // already finished invocation. An `Error` is a hint, so it never makes replay diverge.
-    replay_invocation_with_error(IdempotencyKey::new("finished-invocation".to_string()))
+    replay_invocation_with_error(uuid::Uuid::from_u128(3).into())
         .await
         .expect("an error naming a finished invocation must replay");
 }
@@ -4620,8 +4623,7 @@ fn consumer_observation_with_parent(
     } else {
         StreamConsumerObservation::Host
     };
-    let session_key =
-        StreamRegistrationInvocation::Local(IdempotencyKey::new("observations".to_string()));
+    let session_key = StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(501).into());
     let reader_id = LocalStreamReaderId {
         introducing_oplog_index: OplogIndex::from_u64(1),
         binding_slot: reader_slot,
@@ -4670,7 +4672,7 @@ fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> O
                 creation_start: OplogIndex::INITIAL,
                 slot: ToolAttachmentSlot::Stdout,
             },
-            logical_invocation: IdempotencyKey::new("attachment-observation".into()),
+            logical_invocation: uuid::Uuid::from_u128(4).into(),
             observation: if guest {
                 StreamConsumerObservation::Guest {
                     parent_start_index: parent,
@@ -13563,9 +13565,7 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
         let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
         let refusal = if input {
             SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
-                session: StreamRegistrationInvocation::Local(IdempotencyKey::new(
-                    "refused-input".into(),
-                )),
+                session: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(502).into()),
                 binding: Box::new(StreamBindingRecord {
                     transport_stream_id: 1,
                     source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),

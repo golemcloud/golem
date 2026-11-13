@@ -128,9 +128,7 @@ fn entry(value: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
         kind: OplogErrorKind::Invocation,
-        invocation_id: Some(golem_common::model::IdempotencyKey::new(
-            "invocation".to_string(),
-        )),
+        invocation_id: Some(golem_common::model::InvocationId(uuid::Uuid::from_u128(1))),
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         retry_policy_state: None,

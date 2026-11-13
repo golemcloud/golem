@@ -24,10 +24,10 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::InvocationId;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::ParsedAgentKey;
@@ -126,7 +126,7 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
     entity_parent_start_index: Option<OplogIndex>,
-    invocation_id: Option<IdempotencyKey>,
+    invocation_id: Option<golem_common::model::InvocationId>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 }
 
@@ -227,7 +227,7 @@ enum FutureInvokeResultState {
         task: Option<FutureInvokeTaskHandle>,
         streaming: Option<DurableStreamingTaskParams>,
         request: HostRequestGolemRpcInvoke,
-        invocation_id: InvocationId,
+        invocation_id: OwnedInvocationId,
         remote_agent_id: OwnedAgentId,
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,

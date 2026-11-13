@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::{InvocationStart, ResumeAttach};
-use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationId};
 use golem_service_base::model::auth::AuthCtx;
 
 use crate::service::worker::{
@@ -26,7 +26,7 @@ pub(super) trait SessionTransport: Send + Sync {
         resume: ResumeAttach,
         tail: InvocationRequestStream,
     ) -> Result<InvocationResponseStream, WorkerServiceError>;
-    async fn cleanup(&self, agent: AgentId, key: ModelIdempotencyKey) -> CleanupOutcome;
+    async fn cleanup(&self, agent: AgentId, key: InvocationId) -> CleanupOutcome;
 }
 
 pub(super) enum CleanupOutcome {
@@ -54,7 +54,8 @@ impl SessionTransport for WorkerService {
             .await
     }
 
-    async fn cleanup(&self, agent: AgentId, key: ModelIdempotencyKey) -> CleanupOutcome {
+    async fn cleanup(&self, agent: AgentId, key: InvocationId) -> CleanupOutcome {
+        let key = IdempotencyKey::new(key.to_string());
         let cancel = self.cancel_invocation(&agent, &key, AuthCtx::System);
         let interrupt = self.interrupt(&agent, false, AuthCtx::System);
         let (cancel, interrupt) = tokio::join!(cancel, interrupt);

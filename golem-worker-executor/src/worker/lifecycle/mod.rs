@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
@@ -1017,7 +1019,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         schedule_id: ScheduleId,
         owner: &AgentId,
     ) -> Result<bool, WorkerExecutorError> {
@@ -1067,7 +1069,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn cancel_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1099,7 +1101,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         let initialization_key = self.initialization_idempotency_key();
         if self.agent_mode() == AgentMode::Ephemeral
@@ -1370,7 +1372,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .is_some_and(|session| session.prepared.is_some())
                     {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
-                            OplogEntry::cancel_pending_invocation(key.clone()),
+                            OplogEntry::cancel_pending_invocation(*key),
                         ));
                     }
                 }

@@ -49,7 +49,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
+    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, InvocationId,
     InvocationResultMembership, InvocationResultPosition, OwnedAgentId, ReceivedCardTransferIndex,
     ReceivedCardTransferState, ShardEpoch, ShardId, SourceCardTransferIndex,
     SourceCardTransferState, SuccessfulUpdateRecord,
@@ -81,8 +81,8 @@ fn rejections_to_store(
     (kept != current).then(|| kept.into_iter().collect())
 }
 
-fn invocation_result_index_field(key: &IdempotencyKey) -> String {
-    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{}", key.value)
+fn invocation_result_index_field(key: &InvocationId) -> String {
+    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{key}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
@@ -262,7 +262,7 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError>;
 
     async fn lookup_durable_stream_public_binding(
@@ -342,7 +342,7 @@ pub trait WorkerService: Send + Sync {
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         _status: &AgentStatusRecord,
-        _idempotency_key: &IdempotencyKey,
+        _idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         Ok(InvocationResultIndexLookup::Incomplete)
     }

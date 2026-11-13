@@ -14,7 +14,7 @@
 
 use super::account::AccountId;
 use super::component::ComponentId;
-use super::{AgentFingerprint, AgentId, IdempotencyKey};
+use super::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -97,16 +97,22 @@ impl InvocationRequestKey {
         agent_id: AgentId,
         fingerprint: AgentFingerprint,
         operation: &str,
-    ) -> InvocationId {
+    ) -> OwnedInvocationId {
         match self {
-            Self::External { scope, key } => {
-                InvocationId::external(agent_id, fingerprint, operation, Some(*scope), Some(key))
+            Self::External { scope, key } => OwnedInvocationId::external(
+                agent_id,
+                fingerprint,
+                operation,
+                Some(*scope),
+                Some(key),
+            ),
+            Self::Internal(key) => {
+                OwnedInvocationId::internal(agent_id, fingerprint, operation, key)
             }
-            Self::Internal(key) => InvocationId::internal(agent_id, fingerprint, operation, key),
             Self::RouteSession { scope, key } => {
-                InvocationId::route_session(agent_id, fingerprint, operation, scope, key)
+                OwnedInvocationId::route_session(agent_id, fingerprint, operation, scope, key)
             }
-            Self::Unkeyed(uuid) => InvocationId::new(agent_id, *uuid),
+            Self::Unkeyed(uuid) => OwnedInvocationId::new(agent_id, InvocationId(*uuid)),
         }
     }
 
@@ -155,22 +161,26 @@ fn derive_key(domain: &str, fields: &[&[u8]]) -> IdempotencyKey {
     golem_schema_derive::FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct InvocationId {
+pub struct OwnedInvocationId {
     agent_id: AgentId,
-    uuid: Uuid,
+    id: InvocationId,
 }
 
-impl InvocationId {
-    pub fn new(agent_id: AgentId, uuid: Uuid) -> Self {
-        Self { agent_id, uuid }
+impl OwnedInvocationId {
+    pub fn new(agent_id: AgentId, id: InvocationId) -> Self {
+        Self { agent_id, id }
     }
 
     pub fn agent_id(&self) -> &AgentId {
         &self.agent_id
     }
 
+    pub fn id(&self) -> InvocationId {
+        self.id
+    }
+
     pub fn uuid(&self) -> Uuid {
-        self.uuid
+        self.id.0
     }
 
     /// External keys are deterministic only with an authenticated caller scope.
@@ -186,7 +196,7 @@ impl InvocationId {
             (Some(scope), Some(key)) => {
                 Self::derive(agent_id, fingerprint, &scope.to_string(), operation, key)
             }
-            _ => Self::new(agent_id, Uuid::new_v4()),
+            _ => Self::new(agent_id, InvocationId(Uuid::new_v4())),
         }
     }
 
@@ -240,18 +250,20 @@ impl InvocationId {
         );
         Self::new(
             agent_id,
-            Uuid::parse_str(&derived.value).expect("derived idempotency keys are UUIDs"),
+            InvocationId(
+                Uuid::parse_str(&derived.value).expect("derived idempotency keys are UUIDs"),
+            ),
         )
     }
 }
 
-impl Display for InvocationId {
+impl Display for OwnedInvocationId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.agent_id, self.uuid)
+        write!(f, "{}.{}", self.agent_id, self.id)
     }
 }
 
-impl FromStr for InvocationId {
+impl FromStr for OwnedInvocationId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -261,7 +273,7 @@ impl FromStr for InvocationId {
         let owner = value.get(..suffix_start).ok_or_else(invalid)?;
         let suffix = value.get(suffix_start..).ok_or_else(invalid)?;
         let uuid_text = suffix.strip_prefix('.').ok_or_else(invalid)?;
-        let uuid = Uuid::parse_str(uuid_text).map_err(|_| invalid())?;
+        let uuid = uuid_text.parse::<InvocationId>().map_err(|_| invalid())?;
         // AgentId::FromStr accepts a colon, but its Display uses a slash.
         // Split only once: slashes and dots can occur inside the agent name.
         let (component, name) = owner.split_once('/').ok_or_else(invalid)?;
@@ -361,9 +373,9 @@ mod tests {
             },
         ];
         let expected = [
-            InvocationId::external(owner(), fingerprint(), "method", Some(scope), Some(&key)),
-            InvocationId::internal(owner(), fingerprint(), "method", &key),
-            InvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
+            OwnedInvocationId::external(owner(), fingerprint(), "method", Some(scope), Some(&key)),
+            OwnedInvocationId::internal(owner(), fingerprint(), "method", &key),
+            OwnedInvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
         ];
         for (request, expected) in requests.iter().zip(expected) {
             assert_eq!(request.finalize(owner(), fingerprint(), "method"), expected);
@@ -463,17 +475,18 @@ mod tests {
 
     #[test]
     fn invocation_id_text_roundtrip_and_golden_vector() {
-        let id = InvocationId::new(owner(), Uuid::from_u128(3));
+        let id = OwnedInvocationId::new(owner(), InvocationId(Uuid::from_u128(3)));
         let text = "00000000-0000-0000-0000-000000000001/counter(\"a.b/c:雪\").00000000-0000-0000-0000-000000000003";
         assert_eq!(id.to_string(), text);
-        assert_eq!(text.parse::<InvocationId>().unwrap(), id);
+        assert_eq!(text.parse::<OwnedInvocationId>().unwrap(), id);
         assert_eq!(id.agent_id(), &owner());
         assert_eq!(id.uuid(), Uuid::from_u128(3));
+        assert_eq!(id.id(), InvocationId(Uuid::from_u128(3)));
         for name in ["", ".", "/", "\"", "雪", "a.b/c.d/\"雪\"", "é🦀."] {
             let mut agent = owner();
             agent.agent_id = name.to_string();
-            let id = InvocationId::new(agent, Uuid::from_u128(4));
-            assert_eq!(id.to_string().parse::<InvocationId>().unwrap(), id);
+            let id = OwnedInvocationId::new(agent, InvocationId(Uuid::from_u128(4)));
+            assert_eq!(id.to_string().parse::<OwnedInvocationId>().unwrap(), id);
         }
     }
 
@@ -487,20 +500,20 @@ mod tests {
             "雪.00000000-0000-0000-0000-000000000003",
             "00000000-0000-0000-0000-000000000001:name.00000000-0000-0000-0000-000000000003",
         ] {
-            assert!(text.parse::<InvocationId>().is_err(), "{text}");
+            assert!(text.parse::<OwnedInvocationId>().is_err(), "{text}");
         }
-        let valid = InvocationId::new(owner(), Uuid::from_u128(3)).to_string();
+        let valid = OwnedInvocationId::new(owner(), InvocationId(Uuid::from_u128(3))).to_string();
         for invalid in [
             format!("{valid}x"),
             valid[..valid.len() - 1].to_string(),
             valid.replace(".00000000", "!00000000"),
         ] {
-            assert!(invalid.parse::<InvocationId>().is_err());
+            assert!(invalid.parse::<OwnedInvocationId>().is_err());
         }
         // Every possible offset through a multi-byte codepoint at the suffix boundary.
         for count in 0..40 {
             let text = format!("🦀{}", "x".repeat(count));
-            assert!(text.parse::<InvocationId>().is_err());
+            assert!(text.parse::<OwnedInvocationId>().is_err());
         }
     }
 
@@ -510,7 +523,7 @@ mod tests {
         let scope = IdempotencyScope::User(account);
         let key = IdempotencyKey::from("c");
         let derive = |fingerprint, scope, operation, key: &IdempotencyKey| {
-            InvocationId::external(owner(), fingerprint, operation, Some(scope), Some(key))
+            OwnedInvocationId::external(owner(), fingerprint, operation, Some(scope), Some(key))
         };
         let id = derive(fingerprint(), scope, "ab", &key);
         assert_eq!(id, derive(fingerprint(), scope, "ab", &key));
@@ -539,8 +552,8 @@ mod tests {
                 "ab",
                 &key,
             ),
-            InvocationId::internal(owner(), fingerprint(), "ab", &key),
-            InvocationId::route_session(
+            OwnedInvocationId::internal(owner(), fingerprint(), "ab", &key),
+            OwnedInvocationId::route_session(
                 owner(),
                 fingerprint(),
                 "ab",
@@ -562,8 +575,8 @@ mod tests {
             (Some(IdempotencyScope::User(AccountId(Uuid::nil()))), None),
             (None, None),
         ] {
-            let first = InvocationId::external(owner(), fingerprint(), "method", scope, key);
-            let second = InvocationId::external(owner(), fingerprint(), "method", scope, key);
+            let first = OwnedInvocationId::external(owner(), fingerprint(), "method", scope, key);
+            let second = OwnedInvocationId::external(owner(), fingerprint(), "method", scope, key);
             assert_ne!(first, second);
             assert_eq!(first.uuid().get_version_num(), 4);
         }
@@ -572,10 +585,10 @@ mod tests {
     #[test]
     fn invocation_id_internal_and_route_derivation_are_explicit_and_deterministic() {
         let key = IdempotencyKey::from("a.long/key\"雪");
-        let internal = InvocationId::internal(owner(), fingerprint(), "method", &key);
+        let internal = OwnedInvocationId::internal(owner(), fingerprint(), "method", &key);
         assert_eq!(
             internal,
-            InvocationId::internal(owner(), fingerprint(), "method", &key)
+            OwnedInvocationId::internal(owner(), fingerprint(), "method", &key)
         );
         assert_eq!(
             internal.uuid().to_string(),
@@ -583,11 +596,11 @@ mod tests {
         );
         assert_ne!(
             internal,
-            InvocationId::internal(owner(), fingerprint(), "other", &key)
+            OwnedInvocationId::internal(owner(), fingerprint(), "other", &key)
         );
         assert_ne!(
             internal,
-            InvocationId::internal(
+            OwnedInvocationId::internal(
                 owner(),
                 AgentFingerprint(Uuid::from_u128(3)),
                 "method",
@@ -596,17 +609,17 @@ mod tests {
         );
         assert_ne!(
             internal,
-            InvocationId::internal(
+            OwnedInvocationId::internal(
                 owner(),
                 fingerprint(),
                 "method",
                 &IdempotencyKey::from("other")
             )
         );
-        let route = InvocationId::route_session(owner(), fingerprint(), "method", "ab", &key);
+        let route = OwnedInvocationId::route_session(owner(), fingerprint(), "method", "ab", &key);
         assert_eq!(
             route,
-            InvocationId::route_session(owner(), fingerprint(), "method", "ab", &key)
+            OwnedInvocationId::route_session(owner(), fingerprint(), "method", "ab", &key)
         );
         assert_eq!(
             route.uuid().to_string(),
@@ -615,14 +628,14 @@ mod tests {
         assert_ne!(internal, route);
         assert_ne!(
             route,
-            InvocationId::route_session(owner(), fingerprint(), "method", "a", &key)
+            OwnedInvocationId::route_session(owner(), fingerprint(), "method", "a", &key)
         );
         assert_ne!(
-            InvocationId::route_session(owner(), fingerprint(), "c", "ab", &key),
-            InvocationId::route_session(owner(), fingerprint(), "bc", "a", &key),
+            OwnedInvocationId::route_session(owner(), fingerprint(), "c", "ab", &key),
+            OwnedInvocationId::route_session(owner(), fingerprint(), "bc", "a", &key),
         );
         assert_eq!(
-            internal.to_string().parse::<InvocationId>().unwrap(),
+            internal.to_string().parse::<OwnedInvocationId>().unwrap(),
             internal
         );
     }
@@ -645,7 +658,7 @@ mod tests {
             "admin:00000000-0000-0000-0000-00000000000a:as:00000000-0000-0000-0000-00000000000b"
         );
         let derive = |scope| {
-            InvocationId::external(
+            OwnedInvocationId::external(
                 owner(),
                 fingerprint(),
                 "method",
@@ -674,8 +687,8 @@ mod tests {
         let account = AccountId(Uuid::from_u128(10));
         let key = IdempotencyKey::derived_from_bytes(&IdempotencyKey::from("internal"), b"key");
         let mut ids = vec![
-            InvocationId::internal(owner(), fingerprint(), "method", &key),
-            InvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
+            OwnedInvocationId::internal(owner(), fingerprint(), "method", &key),
+            OwnedInvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
         ];
         for scope in [
             IdempotencyScope::User(account),
@@ -685,7 +698,7 @@ mod tests {
                 target: account,
             },
         ] {
-            ids.push(InvocationId::external(
+            ids.push(OwnedInvocationId::external(
                 owner(),
                 fingerprint(),
                 "method",

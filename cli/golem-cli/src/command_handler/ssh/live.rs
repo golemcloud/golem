@@ -22,10 +22,10 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
     ReconnectPolicy, SessionTransportError, drive_native_tool_session_with_stop,
 };
-use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, PublicClientMessage, PublicInvocationResult,
 };
+use golem_common::model::{IdempotencyKey, InvocationId};
 use golem_common::schema::ExternalTypedSchemaValue;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ const OPEN_WAIT: Duration = Duration::from_secs(10);
 /// accepted the command under. Only the accepted key cancels the command or looks it up.
 pub(super) struct CallKey {
     pub(super) request: IdempotencyKey,
-    accepted: tokio::sync::watch::Sender<Option<IdempotencyKey>>,
+    accepted: tokio::sync::watch::Sender<Option<InvocationId>>,
 }
 
 impl CallKey {
@@ -52,14 +52,13 @@ impl CallKey {
         }
     }
 
-    fn accept(&self, key: &str) {
-        self.accepted
-            .send_replace(Some(IdempotencyKey::new(key.to_string())));
+    fn accept(&self, key: &InvocationId) {
+        self.accepted.send_replace(Some(*key));
     }
 
     /// The accepted key, when the server has accepted the command.
-    pub(super) fn accepted(&self) -> Option<IdempotencyKey> {
-        self.accepted.borrow().clone()
+    pub(super) fn accepted(&self) -> Option<InvocationId> {
+        *self.accepted.borrow()
     }
 
     /// Waits until the server has accepted the command. It never answers when the call ends
@@ -142,7 +141,7 @@ async fn open_and_drive(
     stdin: bool,
     stop: impl Future<Output = ()>,
     give_up: impl Future<Output = ()>,
-    on_accepted: impl FnMut(&str),
+    on_accepted: impl FnMut(&InvocationId),
 ) -> Result<PublicInvocationResult, SessionTransportError> {
     tokio::pin!(give_up);
     let session = tokio::select! {

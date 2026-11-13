@@ -363,7 +363,7 @@ async fn emit_stdio_event_access<Ctx: WorkerCtx, U: 'static>(
                     span_id: ctx.state.current_span_id.clone(),
                 },
             );
-        let invocation_id = ctx.current_invocation_id().map(|id| id.uuid());
+        let invocation_id = ctx.current_invocation_id().map(|id| id.id());
         let event = match stream {
             StandardStream::Stdout => InternalWorkerEvent::stdout(contents, invocation_id),
             StandardStream::Stderr => InternalWorkerEvent::stderr(contents, invocation_id),

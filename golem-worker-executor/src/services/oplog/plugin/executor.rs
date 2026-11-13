@@ -361,12 +361,12 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         environment_id: EnvironmentId,
         target_agent_id: &AgentId,
         _caller_account_id: AccountId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.worker_proxy
             .lookup_invocation_status(
                 target_agent_id,
-                idempotency_key.clone(),
+                *idempotency_key,
                 Some(environment_id),
                 &AuthCtx::System,
             )

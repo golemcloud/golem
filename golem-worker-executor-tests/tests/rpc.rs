@@ -2679,7 +2679,7 @@ async fn interrupt_output_producer_after_result(
                         let resume = InvocationRequest {
                             request: Some(invocation_request::Request::ResumeAttach(
                                 ResumeAttach {
-                                    idempotency_key: acceptance.idempotency_key.clone(),
+                                    idempotency_key: acceptance.idempotency_key,
                                     agent_id: Some(agent_id.clone().into()),
                                     environment_id: Some(component.environment_id.into()),
                                     attachment_id: acceptance.attachment_id,
@@ -3751,7 +3751,7 @@ async fn streaming_output_resume_restores_exact_cursors(
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key.clone(),
+            idempotency_key: accepted.idempotency_key,
             agent_id: if restart_executor {
                 start.agent_id.clone()
             } else {
@@ -4604,7 +4604,7 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key.clone(),
+            idempotency_key: accepted.idempotency_key,
             agent_id: start.agent_id.clone(),
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
@@ -4815,7 +4815,7 @@ fn origin_observer_start(
             callee_environment_id: Some(component.environment_id.into()),
             callee: Some(caller.clone().into()),
             callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            idempotency_key: Some(golem_common::model::InvocationId::new().into()),
         }),
         ..Default::default()
     }
@@ -5359,7 +5359,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: accepted.idempotency_key.clone(),
+            idempotency_key: accepted.idempotency_key,
             agent_id: accepted.agent_id.clone(),
             environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
@@ -6473,7 +6473,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: first_accepted.idempotency_key.clone(),
+            idempotency_key: first_accepted.idempotency_key,
             agent_id: start.agent_id.clone(),
             environment_id: start.environment_id,
             attachment_id: first_accepted.attachment_id,
@@ -6748,7 +6748,7 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     };
     let resume_request = InvocationRequest {
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-            idempotency_key: first_accepted.idempotency_key.clone(),
+            idempotency_key: first_accepted.idempotency_key,
             agent_id: start.agent_id.clone(),
             environment_id: start.environment_id,
             attachment_id: first_accepted.attachment_id,
@@ -7165,7 +7165,7 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                                 if method.method_name == "increment_stream_input"
                                     || method.method_name == "increment_stream" =>
                             {
-                                Some(method.invocation_id.clone())
+                                Some(method.invocation_id)
                             }
                             _ => None,
                         }
@@ -7301,7 +7301,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             executor
                 .fork_worker(&source_id, &target.to_string(), cut)
                 .await?;
-            source_invocation_key.clone().into()
+            source_invocation_key.into()
         };
         // This queued invocation can finish only after the fork's open output has drained.
         assert_eq!(
@@ -7629,7 +7629,7 @@ async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
                         if method.method_name == "increment_gated_stream"
                             || method.method_name == "increment_many_stream" =>
                     {
-                        Some(method.invocation_id.clone())
+                        Some(method.invocation_id)
                     }
                     _ => None,
                 },
@@ -7934,7 +7934,7 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             agent_id: start.agent_id,
             environment_id: start.environment_id,
-            idempotency_key: accepted.idempotency_key.clone(),
+            idempotency_key: accepted.idempotency_key,
             expected_callee_fingerprint: start.expected_callee_fingerprint,
             auth_ctx: start.auth_ctx,
             attachment_id: accepted.attachment_id,
@@ -9567,7 +9567,7 @@ async fn typescript_early_output_drop_releases_streaming_cleanup_before_next_inv
                 PublicAgentInvocation::AgentMethodInvocation(method)
                     if method.method_name == "transform" =>
                 {
-                    Some((position, method.invocation_id.clone()))
+                    Some((position, method.invocation_id))
                 }
                 _ => None,
             },

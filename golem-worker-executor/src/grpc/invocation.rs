@@ -39,8 +39,8 @@ pub trait CanStartWorker {
     fn principal(&self) -> Principal {
         Principal::anonymous()
     }
-    fn idempotency_key(&self) -> Option<IdempotencyKey> {
-        None
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
     }
 }
 
@@ -56,10 +56,8 @@ trait ProtobufInvocationDetails {
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
         &[]
     }
-    fn proto_idempotency_key(
-        &self,
-    ) -> Option<&golem_api_grpc::proto::golem::worker::IdempotencyKey> {
-        None
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
     }
 }
 
@@ -122,8 +120,8 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .unwrap_or_else(Principal::anonymous)
     }
 
-    fn idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.proto_idempotency_key().cloned().map(Into::into)
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        self.proto_idempotency_key()
     }
 }
 
@@ -216,10 +214,18 @@ impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::Invocat
         &self.config
     }
 
-    fn proto_idempotency_key(
-        &self,
-    ) -> Option<&golem_api_grpc::proto::golem::worker::IdempotencyKey> {
-        self.idempotency_key.as_ref()
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        let request_key: golem_common::model::InvocationRequestKey = self
+            .request_key
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("request_key is required"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let method_name = self
+            .method_name
+            .as_deref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name is required"))?;
+        Ok(Some(request_key.owner_key(method_name)))
     }
 }
 
@@ -477,9 +483,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.principal(),
             InvocationFreshnessDisposition::MayExist,
-            CreateIntent::Invocation {
-                idempotency_key: request.idempotency_key(),
-            },
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
         .map(Some)
@@ -567,7 +571,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.principal(),
             freshness_disposition,
             CreateIntent::Invocation {
-                idempotency_key: request.idempotency_key(),
+                idempotency_key: request.idempotency_key()?,
             },
         )
         .await

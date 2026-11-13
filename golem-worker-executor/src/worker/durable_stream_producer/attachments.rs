@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut first_error = None;
         for (key, metadata) in sessions {
             let session_reference = if metadata.prepared_position().is_some() {
-                StreamRegistrationInvocation::Local(key.idempotency_key.clone())
+                StreamRegistrationInvocation::Local(key.idempotency_key)
             } else {
                 StreamRegistrationInvocation::Remote(key.clone())
             };
@@ -401,7 +401,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: StreamRegistrationInvocation::Remote(key.session_key.clone()),
-                consumer_invocation: key.consumer_invocation.idempotency_key.clone(),
+                consumer_invocation: key.consumer_invocation.idempotency_key,
                 source: StreamRecordReference::Foreign(mapping.handle.clone()),
                 epoch: key.epoch,
                 role: *role,

@@ -21,6 +21,7 @@ use bytes::Bytes;
 use futures_util::future::Either;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt, future};
+use golem_common::model::InvocationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{AgentEvent, AgentId, LogLevel, Timestamp};
@@ -105,7 +106,7 @@ pub(crate) fn insecure_connector() -> anyhow::Result<Connector> {
 /// written its own output of the invocation, such as streamed result values.
 #[derive(Clone)]
 pub struct InvocationGoal {
-    target: watch::Sender<Option<Uuid>>,
+    target: watch::Sender<Option<InvocationId>>,
     output_written: watch::Sender<bool>,
     reached: Arc<AtomicBool>,
 }
@@ -119,7 +120,7 @@ impl InvocationGoal {
         }
     }
 
-    pub fn set_target(&self, invocation_id: Uuid) {
+    pub fn set_target(&self, invocation_id: InvocationId) {
         self.target.send_replace(Some(invocation_id));
     }
 
@@ -142,10 +143,10 @@ const HELD_EVENT_BYTES: usize = 4 * 1024 * 1024;
 /// loses held events to that bound, a `ClientLagged` notice stands in for them.
 #[derive(Default)]
 struct TargetFilter {
-    target: Option<Uuid>,
-    held: VecDeque<(Uuid, AgentEvent, usize)>,
+    target: Option<InvocationId>,
+    held: VecDeque<(InvocationId, AgentEvent, usize)>,
     held_bytes: usize,
-    dropped: HashMap<Uuid, u64>,
+    dropped: HashMap<InvocationId, u64>,
 }
 
 impl TargetFilter {
@@ -176,7 +177,7 @@ impl TargetFilter {
     }
 
     /// Sets the target and returns its held events.
-    fn set_target(&mut self, target: Uuid) -> Vec<AgentEvent> {
+    fn set_target(&mut self, target: InvocationId) -> Vec<AgentEvent> {
         self.target = Some(target);
         let lagged = self
             .dropped
@@ -217,7 +218,7 @@ fn held_size(event: &AgentEvent) -> usize {
     std::mem::size_of::<AgentEvent>() + text
 }
 
-fn event_invocation_id(event: &AgentEvent) -> Option<Uuid> {
+fn event_invocation_id(event: &AgentEvent) -> Option<InvocationId> {
     match event {
         AgentEvent::StdOut { invocation_id, .. }
         | AgentEvent::StdErr { invocation_id, .. }
@@ -340,7 +341,7 @@ impl AgentConnection {
     }
 
     async fn emit(output: &AgentStreamOutput, agent_name: &str, event: AgentEvent) {
-        let display_id = |invocation_id: Uuid| format!("{agent_name}.{invocation_id}");
+        let display_id = |invocation_id: InvocationId| format!("{agent_name}.{invocation_id}");
         match event {
             AgentEvent::StdOut {
                 timestamp,
@@ -678,9 +679,9 @@ mod tests {
 
     /// An unrelated invocation finishes before the target, and nested calls of the target
     /// never finish.
-    fn events(target: Uuid) -> Vec<AgentEvent> {
-        let child = Uuid::new_v4();
-        let unrelated = Uuid::new_v4();
+    fn events(target: InvocationId) -> Vec<AgentEvent> {
+        let child = InvocationId(Uuid::new_v4());
+        let unrelated = InvocationId(Uuid::new_v4());
         let timestamp = Timestamp::now_utc();
         vec![
             AgentEvent::InvocationStart {
@@ -747,8 +748,8 @@ mod tests {
 
     #[test]
     fn target_filter_shows_only_the_target_after_replayed_history() {
-        let target = Uuid::new_v4();
-        let earlier = Uuid::new_v4();
+        let target = InvocationId(Uuid::new_v4());
+        let earlier = InvocationId(Uuid::new_v4());
         let timestamp = Timestamp::now_utc();
         let stdout = |text: &str, invocation_id| AgentEvent::StdOut {
             timestamp,
@@ -790,8 +791,8 @@ mod tests {
 
     #[test]
     fn target_filter_drops_the_oldest_held_events_past_its_bound() {
-        let target = Uuid::new_v4();
-        let earlier = Uuid::new_v4();
+        let target = InvocationId(Uuid::new_v4());
+        let earlier = InvocationId(Uuid::new_v4());
         let timestamp = Timestamp::now_utc();
         let mebibyte = |byte: u8, invocation_id| AgentEvent::StdOut {
             timestamp,
@@ -829,7 +830,7 @@ mod tests {
     async fn invocation_stream_waits_for_target_finish_after_nested_calls() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
-        let target = Uuid::new_v4();
+        let target = InvocationId(Uuid::new_v4());
         let connection = connection(url).await.unwrap();
         let goal = connection.invocation_goal().unwrap();
         goal.set_target(target);
@@ -850,7 +851,7 @@ mod tests {
     async fn invocation_stream_ends_after_the_target_finish_and_the_callers_output() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
-        let target = Uuid::new_v4();
+        let target = InvocationId(Uuid::new_v4());
         let connection = connection(url).await.unwrap();
         let goal = connection.invocation_goal().unwrap();
         // The socket stays open, so only the goal can end the connection.

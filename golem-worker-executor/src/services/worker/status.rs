@@ -85,7 +85,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         pending_durable_stream_cancellations: status.pending_durable_stream_cancellations.clone(),
         has_durable_stream_history: status.has_durable_stream_history,
         ephemeral_execution_begun: status.ephemeral_execution_begun,
-        current_idempotency_key: status.current_idempotency_key.clone(),
+        current_idempotency_key: status.current_idempotency_key,
         current_invocation_started_at: status.current_invocation_started_at,
         component_revision: status.component_revision,
         component_size: status.component_size,

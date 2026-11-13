@@ -94,7 +94,7 @@ const RECEIVE: &str = "sockets::types::udp-socket::receive";
 
 fn assert_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<()> {
     let mut current = false;

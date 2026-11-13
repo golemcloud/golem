@@ -371,11 +371,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.state.set_current_idempotency_key(key)
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
         self.state.get_current_idempotency_key()
     }
 
@@ -765,12 +765,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .state
                 .oplog
                 .add_pair(
-                    OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
+                    OplogEntry::cancel_pending_invocation(*idempotency_key),
                     Box::new({
                         let error = error.clone();
                         let retry_policy_state = retry_policy_state.clone();
                         let retry_from = *retry_from;
-                        let invocation_id = idempotency_key.clone();
+                        let invocation_id = *idempotency_key;
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
@@ -840,7 +840,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
                 OplogErrorKind::Invocation,
-                current_idempotency_key.clone(),
+                current_idempotency_key,
                 error.clone(),
                 *retry_from,
                 retry_policy_state,

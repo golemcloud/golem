@@ -76,7 +76,7 @@ const CONNECT: &str = "golem:websocket/client::connect";
 
 fn assert_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<()> {
     let mut current = false;
