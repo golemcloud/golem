@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// entry must not report it as accepted.
     pub(in crate::worker) async fn add_and_commit_oplog_internal(
         &self,
-        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        instance_guard: &WorkerLifecycle,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
@@ -463,7 +463,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|refusal| self.refused_by(refusal))?;
 
         if let Some(wakeup) = wakeup
-            && let WorkerInstance::Running(running) = &**instance_guard
+            && let WorkerInstance::Running(running) = instance_guard.state()
         {
             running.sender.send(wakeup).unwrap();
         };

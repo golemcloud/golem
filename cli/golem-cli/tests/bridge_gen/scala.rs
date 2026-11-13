@@ -1035,9 +1035,8 @@ class StreamRuntimeTest extends munit.FunSuite {
     );
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
-fn provisional_invocation_input_acquires_scala_stream_ownership_immediately() {
+fn invocation_input_acquires_scala_stream_ownership_immediately() {
     let pkg = GeneratedPackage::new(agent(
         "AffineInputAgent",
         "scala",
@@ -1844,7 +1843,7 @@ fn generates_named_type_definitions() {
 
 /// Each generated named composite type gets an `encode<Name>` / `decode<Name>`
 /// codec in the `Codecs` object, structurally encoding to and decoding from the
-/// runtime `SchemaValue` (Step 5).
+/// runtime `SchemaValue`.
 #[test]
 fn generates_codecs_for_named_types() {
     let pkg = GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone());
@@ -2278,7 +2277,7 @@ fn reserved_idents_collide_modulo_backticks() {
     );
 }
 
-// --- Scala identifier escaping (Step 2) ------------------------------------
+// --- Scala identifier escaping -----------------------------------------------
 
 #[test]
 fn valid_scala_idents_are_recognized() {

@@ -20,9 +20,6 @@ trait Pipe extends BaseAgent:
   @durableStreamSlot(source = "input", slot = "input", name = "inbox")
   @durableStreamSlot(source = "output", slot = "$result", name = "outbox")
   @durableStreams(
-    allowExternalWrites = true,
-    allowStreamDelete = true,
-    allowInvocationDelete = true,
     maxConcurrentReadersPerStream = 8,
     maxAppendRequestsPerSecondPerStream = 25
   )

@@ -7,7 +7,7 @@
 // not found, without a panic.
 
 use super::*;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::services::component::ComponentService;
@@ -230,8 +230,8 @@ async fn kept_call_during_gated_deletion(
         .await?;
     let caller_name = format!("kept-deleting-caller-{suffix}");
     let child_name = format!("kept-deleting-child-{suffix}");
-    let caller: ParsedAgentId = agent_id!("GolemHostApi", caller_name.as_str());
-    let counter: ParsedAgentId = agent_id!("Counter", child_name.as_str());
+    let caller: ParsedAgentKey = agent_id!("GolemHostApi", caller_name.as_str());
+    let counter: ParsedAgentKey = agent_id!("Counter", child_name.as_str());
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -446,8 +446,8 @@ async fn pinned_call_racing_deletion(
     let caller_name = format!("race-deleting-caller-{suffix}");
     let child_name = format!("race-deleting-child-{suffix}");
     watch_panics_naming(&format!("\"{child_name}\""));
-    let caller: ParsedAgentId = agent_id!("GolemHostApi", caller_name.as_str());
-    let counter: ParsedAgentId = agent_id!("Counter", child_name.as_str());
+    let caller: ParsedAgentKey = agent_id!("GolemHostApi", caller_name.as_str());
+    let counter: ParsedAgentKey = agent_id!("Counter", child_name.as_str());
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;

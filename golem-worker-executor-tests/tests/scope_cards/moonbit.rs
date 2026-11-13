@@ -206,6 +206,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -213,6 +214,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -425,7 +427,7 @@ async fn start_moonbit_permission_executor(
 async fn invoke(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
     method: &str,
     params: golem_common::schema::TypedSchemaValue,
 ) -> anyhow::Result<golem_test_framework::dsl::AgentResult> {

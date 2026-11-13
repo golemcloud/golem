@@ -68,6 +68,12 @@ impl ServiceFixture {
             original_phantom_id: None,
             fingerprint,
             agent_mode: AgentMode::Durable,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: owner.agent_id.clone(),
@@ -87,6 +93,12 @@ impl ServiceFixture {
             local_agent_config: vec![],
             original_phantom_id: None,
             instance_id: fingerprint.0,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }));
         let oplog = service
             .create_fresh(

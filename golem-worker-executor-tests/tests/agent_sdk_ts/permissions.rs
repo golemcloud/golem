@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard, parse_polymorphic_permission,
@@ -333,6 +333,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -340,6 +341,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -485,7 +487,7 @@ fn connect_local_card_transfer_delivery(
 struct Scenario {
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    caller: ParsedAgentId,
+    caller: ParsedAgentKey,
 }
 
 async fn start_scenario(

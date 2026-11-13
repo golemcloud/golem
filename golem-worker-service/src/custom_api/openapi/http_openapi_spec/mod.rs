@@ -98,7 +98,7 @@ impl HttpApiOpenApiSpec {
             .iter()
             .filter(|route| match &route.behavior {
                 RichRouteBehaviour::CallAgent(inner) => {
-                    inner.route_mode == AgentRouteMode::Rest
+                    inner.route_mode == AgentRouteMode::Plain
                         || (matches!(
                             route.route_match.method(),
                             Some(golem_common::model::agent::HttpMethod::Put(_))
@@ -171,6 +171,9 @@ impl HttpApiOpenApiSpec {
 
             let mut operation =
                 build_operation(route, route_schema, graph, &mut component_schemas)?;
+            if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
+                operation["x-golem-route-mode"] = json!(inner.route_mode.as_str());
+            }
             if let RichRouteBehaviour::CallAgent(inner) = &route.behavior
                 && binding_counts[&(&inner.agent_type.0, &inner.method_name)] > 1
             {
@@ -217,9 +220,6 @@ impl HttpApiOpenApiSpec {
                 }
             }
             let path_item = paths.entry(canonical).or_default();
-            if path_item.contains_key("x-golem-route-mode") {
-                operation["x-golem-route-mode"] = json!("rest");
-            }
             insert_operation(path_item, method.as_str(), operation)?;
         }
 
@@ -619,9 +619,9 @@ pub(super) fn insert_operation(
     if path_item.contains_key(key)
         && !(path_item
             .get("x-golem-route-mode")
-            .is_some_and(|mode| mode == "durable-streams")
-            && path_item[key]["x-golem-route-mode"] != "rest"
-            && operation["x-golem-route-mode"] == "rest")
+            .is_some_and(|mode| mode == "durableStreams")
+            && path_item[key]["x-golem-route-mode"] != "plain"
+            && operation["x-golem-route-mode"] == "plain")
     {
         return Err("Duplicate generated operation".into());
     }

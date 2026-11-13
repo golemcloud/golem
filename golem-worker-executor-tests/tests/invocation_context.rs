@@ -18,7 +18,7 @@
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{GolemUserPrincipal, ParsedAgentId, Principal};
+use golem_common::model::agent::{GolemUserPrincipal, ParsedAgentKey, Principal};
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus};
 use golem_common::{agent_id, data_value};
@@ -88,7 +88,7 @@ fn observation(invocation_id: Option<String>, caller: &str) -> Observation {
 async fn report_invocation_ids(
     executor: &impl TestDsl,
     agent_id: &AgentId,
-    parsed: &ParsedAgentId,
+    parsed: &ParsedAgentKey,
 ) -> anyhow::Result<Vec<String>> {
     Ok(executor
         .get_oplog(agent_id, OplogIndex::INITIAL)
@@ -112,7 +112,7 @@ async fn report_invocation_ids(
 async fn await_report_invocation_ids(
     executor: &impl TestDsl,
     agent_id: &AgentId,
-    parsed: &ParsedAgentId,
+    parsed: &ParsedAgentKey,
     count: usize,
 ) -> anyhow::Result<Vec<String>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);

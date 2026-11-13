@@ -108,7 +108,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::{RecipientOwnerContext, RecipientPattern};
 use golem_common::model::card::{

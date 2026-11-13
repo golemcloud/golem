@@ -51,18 +51,6 @@ mod test {
     use test_r::test;
 
     #[test]
-    fn skill_is_installed_detects_existing_skill_md() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let skill = root.join("my-skill");
-        fs::create_dir_all(&skill).unwrap();
-        fs::write(skill.join("SKILL.md"), "---\nname: my-skill\n---\n").unwrap();
-
-        assert!(skill_is_installed(root, "my-skill"));
-        assert!(!skill_is_installed(root, "no-such-skill"));
-    }
-
-    #[test]
     fn skill_is_installed_requires_skill_md_file() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();

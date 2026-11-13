@@ -46,7 +46,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;

@@ -533,6 +533,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         target_activation.config,
                         &auth_ctx,
                         target_activation.target_fingerprint,
+                        None,
                     )
                     .await
                     .map_err(RpcTaskError::Host)?;
@@ -791,6 +792,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                             target_activation.config,
                             &auth_ctx,
                             target_activation.target_fingerprint,
+                            None,
                         )
                         .await?,
                     )

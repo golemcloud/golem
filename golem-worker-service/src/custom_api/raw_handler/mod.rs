@@ -22,7 +22,7 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::AgentId;
-use golem_common::model::agent::{ParsedAgentId, Principal};
+use golem_common::model::agent::{ParsedAgentKey, Principal};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
@@ -154,7 +154,7 @@ impl RawHandler {
             .ok_or(RequestHandlerError::RawBadGateway)?;
         let request_key = golem_common::model::InvocationRequestKey::external(None, None);
         let key = request_key.owner_key(&handler.method_name);
-        let logical = ParsedAgentId::try_new(
+        let logical = ParsedAgentKey::try_new(
             router.agent_type.clone(),
             TypedSchemaValue::new(
                 router.constructor_input.graph.clone(),

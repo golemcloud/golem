@@ -939,20 +939,21 @@ fn non_running_monthly_lifecycles(
     [WorkerInstance; 4],
     futures::channel::oneshot::Sender<Result<(), WorkerExecutorError>>,
 ) {
-    assert!(
-        matches!(running, WorkerInstance::Running(_)),
-        "fixture requires Running"
-    );
+    let WorkerInstance::Running(running) = running else {
+        panic!("fixture requires Running");
+    };
     let (handle, pending) = super::super::DeletionHandle::new();
     (
         [
             WorkerInstance::Deleting(super::super::DeletingWorker {
-                runtime: Box::new(running),
+                runtime: super::super::DeletionRuntime::Retained(
+                    super::super::WorkerRuntime::Running(running),
+                ),
                 handle,
                 completed_stage: super::super::WorkerDeletionStage::Claimed,
             }),
             WorkerInstance::WaitingForPermit(super::super::WaitingWorker {
-                handle: None,
+                handle: tokio::spawn(async {}),
                 start_attempt: attempt,
             }),
             WorkerInstance::Stopping(super::super::StoppingWorker {

@@ -487,7 +487,7 @@ fn exhaustion_error(exhaustion: IntegrationExhaustion) -> &'static str {
     }
 }
 
-fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentId {
+fn probe_agent(exhaustion: IntegrationExhaustion) -> golem_common::model::agent::ParsedAgentKey {
     let name = format!("policy-probe-{exhaustion:?}-{}", uuid::Uuid::new_v4());
     match exhaustion {
         IntegrationExhaustion::DurableStorage => agent_id!("Counter", name),
@@ -623,6 +623,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("initial_file_system")]
     PrecompiledComponent
 );
 
@@ -907,6 +911,502 @@ async fn get_agent_wallet_cards(
     }
 }
 
+/// Wallet, cancel and connect of an agent that does not exist, or that a delete has claimed,
+/// answer as for a missing agent.
+async fn assert_management_finds_no_agent(
+    executor: &TestWorkerExecutor,
+    agent: &AgentId,
+    name: &str,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ConnectWorkerRequest, GetAgentWalletRequest, get_agent_wallet_response,
+    };
+
+    let wallet = executor
+        .client
+        .clone()
+        .get_agent_wallet(GetAgentWalletRequest {
+            agent_id: Some(agent.clone().into()),
+            component_owner_account_id: Some(executor.context.account_id.into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        })
+        .await?
+        .into_inner();
+    let Some(get_agent_wallet_response::Result::Failure(error)) = wallet.result else {
+        panic!("{name}: expected a wallet failure, got {:?}", wallet.result);
+    };
+    assert!(
+        matches!(
+            WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?,
+            WorkerExecutorError::AgentNotFound { .. }
+        ),
+        "{name}"
+    );
+
+    let cancel = executor
+        .cancel_invocation(agent, &IdempotencyKey::fresh())
+        .await
+        .unwrap_err();
+    assert!(
+        cancel.to_string().contains("AgentNotFound"),
+        "{name}: {cancel}"
+    );
+
+    let connect = executor
+        .client
+        .clone()
+        .connect_worker(ConnectWorkerRequest {
+            agent_id: Some(agent.clone().into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            component_owner_account_id: Some(executor.context.account_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(connect.code(), tonic::Code::NotFound, "{name}: {connect:?}");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn wallet_cancel_and_connect_of_a_missing_or_deleted_agent_create_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let missing = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Counter", "management-missing").to_string(),
+    };
+    let deleted_id = agent_id!("Counter", "management-deleted");
+    let deleted = executor
+        .start_agent(&component.id, deleted_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &deleted_id, "increment", data_value!())
+        .await?;
+    let _ = get_agent_wallet_cards(&executor, &deleted).await?;
+    executor.delete_worker(&deleted).await?;
+
+    for (name, agent) in [("missing", &missing), ("deleted", &deleted)] {
+        assert!(
+            executor.get_worker_metadata_opt(agent).await?.is_none(),
+            "{name}"
+        );
+
+        assert_management_finds_no_agent(&executor, agent, name).await?;
+
+        assert!(
+            executor.get_worker_metadata_opt(agent).await?.is_none(),
+            "{name}: a management path created the agent"
+        );
+    }
+    Ok(())
+}
+
+/// A file read, listing, wallet, cancel or connect that meets a delete at any of its stages
+/// answers as for a missing agent and never recreates the agent, also while the deleted
+/// generation is still cached.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
+    use golem_common::model::filesystem::FileReadHead;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    for (name, gated_stage, fail_once) in [
+        (
+            "before-runtime-stopped",
+            Some(WorkerDeletionStage::RuntimeStopped),
+            None,
+        ),
+        (
+            "before-durable-state-removed",
+            Some(WorkerDeletionStage::DurableStateRemoved),
+            None,
+        ),
+        (
+            "before-cache-removed",
+            Some(WorkerDeletionStage::CacheRemoved),
+            None,
+        ),
+        (
+            "cache-removal-failed",
+            None,
+            Some(WorkerDeletionStage::CacheRemoved),
+        ),
+    ] {
+        let agent = executor
+            .start_agent(
+                &component.id,
+                agent_id!("Inspection", name, "/a.txt", b"abc".to_vec(), false),
+            )
+            .await?;
+        assert_eq!(
+            executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
+            b"abc",
+            "{name}"
+        );
+        let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+        let hook = Arc::new(DeletionStageHook::new(
+            owned.clone(),
+            gated_stage,
+            fail_once,
+        ));
+        executor.set_worker_deletion_hook(hook.clone());
+        let deleting = tokio::spawn({
+            let executor = executor.clone();
+            let agent = agent.clone();
+            async move { executor.delete_worker(&agent).await }
+        });
+        let mut deleting = Some(deleting);
+        if gated_stage.is_some() {
+            hook.wait_until_gated().await;
+        } else {
+            let result = deleting.take().unwrap().await?;
+            assert!(result.is_err(), "{name}: injected failure ignored");
+        }
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                read_head(&executor, &agent, "/a.txt")
+            )
+            .await??,
+            FileReadHead::Absent,
+            "{name}"
+        );
+        assert!(
+            file_system_node_is_not_found(&executor, &agent, "/").await?,
+            "{name}"
+        );
+        assert_management_finds_no_agent(&executor, &agent, name).await?;
+
+        if let Some(deleting) = deleting {
+            hook.release();
+            tokio::time::timeout(Duration::from_secs(30), deleting).await???;
+        }
+        assert!(
+            executor.get_worker_metadata_opt(&agent).await?.is_none(),
+            "{name}: a read racing the delete recreated the agent"
+        );
+        assert_eq!(
+            read_head(&executor, &agent, "/a.txt").await?,
+            FileReadHead::Absent,
+            "{name}"
+        );
+        assert!(
+            executor.get_worker_metadata_opt(&agent).await?.is_none(),
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+/// A delete that fails before it removes durable state leaves the agent in place, so a read
+/// keeps the deletion error instead of answering as for a missing agent, until a retried delete
+/// removes the agent.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
+    use golem_common::model::filesystem::FileReadHead;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = executor
+        .start_agent(
+            &component.id,
+            agent_id!(
+                "Inspection",
+                "failed-delete",
+                "/a.txt",
+                b"abc".to_vec(),
+                false
+            ),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+    executor.set_worker_deletion_hook(Arc::new(DeletionStageHook::new(
+        owned,
+        None,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+    )));
+    assert!(executor.delete_worker(&agent).await.is_err());
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_some());
+
+    let (frame, _) = first_read_frame(&executor, &agent, "/a.txt").await?;
+    let Some(get_file_contents_response::Result::Failure(error)) = frame else {
+        panic!("a read of an agent that still exists answered {frame:?}");
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?;
+    assert!(
+        matches!(&error, WorkerExecutorError::InvalidRequest { details }
+            if details.contains("being deleted")),
+        "{error:?}"
+    );
+
+    executor.delete_worker(&agent).await?;
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
+    assert_eq!(
+        read_head(&executor, &agent, "/a.txt").await?,
+        FileReadHead::Absent
+    );
+    Ok(())
+}
+
+/// The same holds for an ephemeral agent whose delete failed while removing its durable state,
+/// after the agent's runtime and status actor had stopped. The inspection gate that refuses to
+/// make a read the agent's first start gives the deletion error instead of reading the stopped
+/// status actor.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_deletion_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
+    use golem_common::model::filesystem::FileReadHead;
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = executor
+        .start_agent(
+            &component.id,
+            agent_id!("EphemeralCounter", "failed-delete"),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+
+    // Armed once the delete reaches the durable state, so the failure lands in the removal of the
+    // derived state, after the runtime stopped and before the oplog is deleted.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let agent = agent.clone();
+        async move { executor.delete_worker(&agent).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_some());
+
+    let (frame, _) = first_read_frame(&executor, &agent, "/a.txt").await?;
+    let Some(get_file_contents_response::Result::Failure(error)) = frame else {
+        panic!("a read of an agent that still exists answered {frame:?}");
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?;
+    assert!(
+        matches!(&error, WorkerExecutorError::InvalidRequest { details }
+            if details.contains("being deleted")),
+        "{error:?}"
+    );
+
+    executor.delete_worker(&agent).await?;
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
+    assert_eq!(
+        read_head(&executor, &agent, "/a.txt").await?,
+        FileReadHead::Absent
+    );
+    Ok(())
+}
+
+/// A read, listing or wallet read that waits behind guest work when a delete claims the agent
+/// answers as for a missing agent, not with the deletion's failure.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetAgentWalletRequest, get_agent_wallet_response,
+    };
+    use golem_common::model::filesystem::FileReadHead;
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed = agent_id!("Inspection", "queued", "/a.txt", b"abc".to_vec(), false);
+    let agent = executor.start_agent(&component.id, parsed.clone()).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &parsed,
+            "replace",
+            data_value!("/a.txt", b"abc".to_vec(), 0u64),
+        )
+        .await?;
+    let before = executor.oplog_max_index(&agent).await?;
+    let blocking = {
+        let executor = executor.clone();
+        let component = component.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &parsed,
+                    "replace",
+                    data_value!("/a.txt", b"def".to_vec(), 60_000u64),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&agent, before.next()).await.unwrap();
+            if oplog.iter().any(|entry| {
+                matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(parameters)
+                if matches!(parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(_)))
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let read = tokio::spawn({
+        let executor = executor.clone();
+        let agent = agent.clone();
+        async move { read_head(&executor, &agent, "/a.txt").await }
+    });
+    let listing = tokio::spawn({
+        let executor = executor.clone();
+        let agent = agent.clone();
+        async move { file_system_node_is_not_found(&executor, &agent, "/").await }
+    });
+    let wallet = tokio::spawn({
+        let executor = executor.clone();
+        let agent = agent.clone();
+        async move {
+            executor
+                .client
+                .clone()
+                .get_agent_wallet(GetAgentWalletRequest {
+                    agent_id: Some(agent.clone().into()),
+                    component_owner_account_id: Some(executor.context.account_id.into()),
+                    environment_id: Some(executor.context.default_environment_id.into()),
+                    auth_ctx: Some(executor.auth_ctx().into()),
+                    principal: None,
+                })
+                .await
+        }
+    });
+    let worker = executor
+        .active_agents()
+        .try_get(&OwnedAgentId::new(context.default_environment_id, &agent))
+        .await
+        .expect("the agent is resident");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.queued_command_count_for_test().await < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(
+        !read.is_finished() && !listing.is_finished() && !wallet.is_finished(),
+        "the reads must wait behind the blocking invocation"
+    );
+
+    executor.delete_worker(&agent).await?;
+
+    assert_eq!(read.await??, FileReadHead::Absent);
+    assert!(listing.await??);
+    let wallet = wallet.await??.into_inner();
+    let Some(get_agent_wallet_response::Result::Failure(error)) = wallet.result else {
+        panic!("expected a wallet failure, got {:?}", wallet.result);
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow!(error))?;
+    assert!(
+        matches!(error, WorkerExecutorError::AgentNotFound { .. }),
+        "{error:?}"
+    );
+    let _ = blocking.await?;
+    assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecordedCardTransfer {
     target_agent_id: AgentId,
@@ -1154,6 +1654,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -1161,6 +1662,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -3427,7 +3929,7 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentKey,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
@@ -3789,7 +4291,7 @@ async fn get_metadata_from_worker(
 
     fn get_agent_id_schema_value(
         component_id: &ComponentId,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
     ) -> SchemaValue {
         SchemaValue::Record {
             fields: vec![
@@ -3803,8 +4305,8 @@ async fn get_metadata_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::model::agent::ParsedAgentId,
-        other_agent_id: &golem_common::model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::model::agent::ParsedAgentKey,
+        other_agent_id: &golem_common::model::agent::ParsedAgentKey,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let agent_id_val1 = get_agent_id_schema_value(&component.id, caller_agent_id);
@@ -4436,6 +4938,62 @@ async fn delete_worker(
     assert!(cursor1.is_none());
     assert!(metadata1.is_ok());
     assert!(metadata2.is_err());
+    Ok(())
+}
+
+/// A delete that arrives while the agent is still initializing waits for the initialization to
+/// publish a runtime, then claims and deletes that runtime once.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn delete_during_initialization_deletes_the_initialized_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "delete-during-initialization");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+    let hook = Arc::new(DeletionStageHook::new(
+        OwnedAgentId::new(context.default_environment_id, &worker_id),
+        None,
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&worker_id)
+        .await;
+
+    let starting_executor = executor.clone();
+    let component_id = component.id;
+    let starting = tokio::spawn(async move {
+        starting_executor
+            .start_agent(&component_id, counter_id)
+            .await
+    });
+    gate.entered().await;
+    let deleting_executor = executor.clone();
+    let deleting_worker_id = worker_id.clone();
+    let deleting =
+        tokio::spawn(async move { deleting_executor.delete_worker(&deleting_worker_id).await });
+    drop(gate);
+
+    // The start may also observe the deletion that follows its initialization.
+    if let Err(error) = starting.await? {
+        assert!(error.to_string().contains("being deleted"), "{error}");
+    }
+    deleting.await??;
+    assert_eq!(hook.claims(), (1, 1));
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
     Ok(())
 }
 
@@ -11014,7 +11572,7 @@ struct ParkedCaller {
     caller: JoinHandle<anyhow::Result<AgentResult>>,
     /// What it takes to reissue the parked call under its own idempotency key.
     component: ComponentDto,
-    parsed_agent_id: golem_common::model::agent::ParsedAgentId,
+    parsed_agent_id: golem_common::model::agent::ParsedAgentKey,
     idempotency_key: IdempotencyKey,
     promise_data: golem_common::schema::TypedSchemaValue,
 }
@@ -11597,7 +12155,7 @@ async fn measured_duplicate_reads(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     (agent_id, worker_id): (
-        &golem_common::model::agent::ParsedAgentId,
+        &golem_common::model::agent::ParsedAgentKey,
         &golem_common::model::AgentId,
     ),
     key: &IdempotencyKey,

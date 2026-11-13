@@ -21,7 +21,7 @@ use crate::Tracing;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
@@ -644,7 +644,7 @@ struct ArchiveFaultAgent {
     fault: Arc<ArchiveFault>,
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     agent_id: AgentId,
 }
 

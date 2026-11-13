@@ -49,7 +49,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
@@ -88,7 +88,7 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentId,
+    logical_agent_id: ParsedAgentKey,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
@@ -113,7 +113,7 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     idempotency_key: &IdempotencyKey,
     method_name: &str,
 ) -> anyhow::Result<OwnedAgentId> {
@@ -142,7 +142,7 @@ pub(super) fn invocation_target_agent_id(
 pub(super) struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
     method_name: String,
 }
 
@@ -150,7 +150,7 @@ impl RpcCallTarget {
     pub(super) fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
-        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
         method_name: &str,
     ) -> Self {
         Self {
@@ -401,9 +401,10 @@ fn set_rpc_target_replay_pending<Ctx: WorkerCtx>(
 /// Activates the remote RPC target. With `expected_fingerprint`, the activation was recorded
 /// before: it returns a [`ReplayedDemand`] of that incarnation and makes no create request. Each
 /// call to the target then carries the fingerprint (see [`Rpc::invoke_and_await`]), so a call
-/// never runs on another incarnation. Without one, it creates a demand; a `create_demand` failure
-/// is returned as a [`ClassifiedHostError`] with the transient/permanent kind from
-/// [`classify_rpc_error`].
+/// never runs on another incarnation. Without one, it creates a demand, and `idempotency_key`
+/// identifies that create; only the recorded activation call and its repair pass one. A
+/// `create_demand` failure is returned as a [`ClassifiedHostError`] with the transient/permanent
+/// kind from [`classify_rpc_error`].
 pub(super) async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
@@ -415,6 +416,7 @@ pub(super) async fn activate_rpc_target(
     config: Vec<AgentConfigEntryDto>,
     auth_ctx: &AuthCtx,
     expected_fingerprint: Option<AgentFingerprint>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<Box<dyn RpcDemand>, Error> {
     if let Some(recorded_fingerprint) = expected_fingerprint {
         return Ok(Box::new(ReplayedDemand::new(recorded_fingerprint)));
@@ -430,7 +432,7 @@ pub(super) async fn activate_rpc_target(
             stack,
             config,
             auth_ctx,
-            None,
+            idempotency_key,
             InvocationFreshnessDisposition::MayExist,
         )
         .await
@@ -492,6 +494,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             config.clone(),
             auth_ctx,
             expected_fingerprint,
+            None,
         );
         tokio::pin!(activation);
         match futures::future::select(activation, interrupt_signal).await {
@@ -908,6 +911,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (env.clone(), config.clone(), payload.span_id.clone())
         };
         let stack = self.clone_as_inherited_stack(&span_id);
+        // A repaired activation keeps its Start, so it sends the key of the original attempt.
+        let idempotency_key = key_position.derive(handle.start_index());
         let demand = {
             let rpc = self.rpc();
             let created_by = self.created_by();
@@ -924,6 +929,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config.clone(),
                 handle.agent_auth_ctx(),
                 None,
+                Some(idempotency_key),
             );
             tokio::pin!(activation);
             match futures::future::select(activation, interrupt_signal).await {
