@@ -386,6 +386,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
+    pub(crate) tool_frontends: Option<Arc<stream_transport::ToolFrontendScope>>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,

@@ -757,12 +757,22 @@ where
     })?;
     let tasks = caller.primary.active_agents().invocation_loops();
     let owned_execution = execution.clone();
+    let input_recordings = {
+        let context = accepted.operation.context();
+        crate::durable_host::durable_session::StreamSession::retain_input_recording(
+            context.input.value(),
+            context.input.graph(),
+            &context.input.graph().root,
+        )
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+    };
     accepted.durability.accept_execution_ownership();
     tasks.spawn_entity(async move {
         let result = execute_accepted_tool_call(
             &caller,
             accepted,
             endpoints,
+            input_recordings,
             Some(&owned_execution),
             completed_supervisor_started,
         )

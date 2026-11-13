@@ -2351,6 +2351,94 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
 
 #[test]
 #[test_r::timeout("30s")]
+async fn result_drains_buffered_nested_streams_without_a_guest_driver() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog,
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    let (root_publisher, root_endpoint) = test_output_stream_pair(1).unwrap();
+    let (child_publisher, child_endpoint) = test_output_stream_pair(1).unwrap();
+    child_publisher
+        .publish_item(SchemaValue::U8(17))
+        .await
+        .unwrap();
+    let child_write = child_publisher.publish_item(SchemaValue::U8(83));
+    tokio::pin!(child_write);
+    assert!(futures::poll!(&mut child_write).is_pending());
+    root_publisher
+        .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+            child_endpoint,
+        )))
+        .await
+        .unwrap();
+    let root_end = root_publisher.publish_end();
+    tokio::pin!(root_end);
+    assert!(futures::poll!(&mut root_end).is_pending());
+
+    // Both publishers are blocked before any result stream has a durable drainer.
+    // Materialization must activate the root and discover its child without a Store.
+    let materialization = tokio::spawn({
+        let streams = streams.clone();
+        async move {
+            let root = SchemaType::stream(Some(SchemaType::stream(Some(SchemaType::u8()))));
+            streams
+                .materialize_result(
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(root_endpoint)),
+                    &SchemaGraph::anonymous(root.clone()),
+                    &root,
+                    ComponentRevision::INITIAL,
+                )
+                .await
+        }
+    });
+    root_end.await.unwrap();
+    child_write.await.unwrap();
+    child_publisher.publish_end().await.unwrap();
+    materialization.await.unwrap().unwrap();
+
+    let result = streams.remote_result_record().await.unwrap().unwrap();
+    let root = producer
+        .materialize_binding(&result.stream_mappings[0])
+        .await
+        .unwrap()
+        .handle;
+    let children = producer.nested_handles(root.stream_id, 0).await.unwrap();
+    assert_eq!(children.len(), 1);
+    let mut child = producer.catch_up(children[0].clone(), None).await.unwrap();
+    for expected in [17, 83] {
+        assert_eq!(
+            child.next().await.unwrap().unwrap().payload,
+            CommittedProducerStreamEventPayload::PackedU8(expected)
+        );
+    }
+    assert_eq!(
+        child.next().await.unwrap().unwrap().payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+    );
+    assert!(producer.stream_head(&root).await.unwrap().closed);
+    assert!(
+        StreamAttachmentControl::inspect_attachments(producer.as_ref())
+            .await
+            .is_empty(),
+        "tool result recording must not wait for a caller attachment"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());

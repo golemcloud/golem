@@ -658,6 +658,17 @@ impl<T> Clone for LiveStreamPublisher<T> {
     }
 }
 
+impl<T: Send + Sync + 'static> LiveStreamPublisher<T> {
+    pub(crate) fn retirement(&self) -> Box<dyn Fn() + Send + Sync> {
+        let sender = self.sender.clone();
+        let changed = self.primary_changed.clone();
+        Box::new(move || {
+            sender.close();
+            changed.notify_waiters();
+        })
+    }
+}
+
 impl<T: Clone> LiveStreamPublisher<T> {
     pub(crate) async fn publish_item(&self, value: T) -> Result<u64, LiveStreamPublishError> {
         let mut state = self.state.lock().await;
@@ -768,6 +779,7 @@ struct PrimaryDropGuard<T> {
     on_drop: Arc<dyn Fn() + Send + Sync>,
     primary_changed: Arc<Notify>,
     armed: bool,
+    keepalive: Option<Box<dyn Send + Sync>>,
 }
 
 impl<T> Drop for PrimaryDropGuard<T> {
@@ -788,6 +800,10 @@ pub(crate) struct ReservedPrimaryLiveStreamSubscriber<T> {
 }
 
 impl<T> ReservedPrimaryLiveStreamSubscriber<T> {
+    pub(crate) fn keep_alive(&mut self, owner: impl Send + Sync + 'static) {
+        self.drop_guard.as_mut().unwrap().keepalive = Some(Box::new(owner));
+    }
+
     pub(crate) fn activate(mut self) -> PrimaryLiveStreamSubscriber<T> {
         self.primary_activated.store(true, Ordering::Release);
         self.primary_changed.notify_waiters();
@@ -874,6 +890,7 @@ pub(crate) fn live_stream_bus<T>(
                 on_drop: Arc::new(on_primary_drop),
                 primary_changed: primary_changed.clone(),
                 armed: true,
+                keepalive: None,
             }),
             primary_activated,
             primary_changed,
@@ -1489,19 +1506,35 @@ mod tests {
 
     #[test]
     async fn primary_loss_closes_the_bus_and_runs_its_scope_guard() {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let (publisher, primary) = live_stream_bus(1, {
-            let cancelled = cancelled.clone();
-            move || cancelled.store(true, Ordering::Release)
-        })
-        .unwrap();
-        drop(primary);
+        for activate in [false, true] {
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (publisher, primary) = live_stream_bus(1, {
+                let cancelled = cancelled.clone();
+                move || cancelled.store(true, Ordering::Release)
+            })
+            .unwrap();
+            let mut reserved = Some(primary);
+            let active = activate.then(|| reserved.take().unwrap().activate());
+            publisher.publish_item(17).await.unwrap();
+            let blocked = publisher.publish_item(29);
+            tokio::pin!(blocked);
+            assert!(futures::poll!(&mut blocked).is_pending());
 
-        assert!(cancelled.load(Ordering::Acquire));
-        assert_eq!(
-            publisher.publish_item(1).await,
-            Err(LiveStreamPublishError::Closed)
-        );
+            drop(active);
+            drop(reserved);
+
+            assert!(cancelled.load(Ordering::Acquire));
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), blocked)
+                    .await
+                    .expect("primary loss must release a blocked publisher"),
+                Err(LiveStreamPublishError::Closed)
+            );
+            assert_eq!(
+                publisher.publish_item(43).await,
+                Err(LiveStreamPublishError::Closed)
+            );
+        }
     }
 
     #[test]

@@ -277,6 +277,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if destination == AccessResultDestination::Guest
+                    && store.with(|mut access| {
+                        get_ctx(access.data_mut()).parks_incomplete_tool_guest_replay()
+                    })
+                {
+                    // Successful tool return can leave admitted imports without an End.
+                    // Reconstruct their Start, but never repair or deliver them to the guest.
+                    self.parked_undelivered_replay = true;
+                    return park_undelivered_forever().await;
+                }
                 if let Some(activity) = drop_activity {
                     if store.with(|mut access| {
                         get_ctx(access.data_mut()).rejects_live_continuation_at_replay_tail()
@@ -530,15 +540,32 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_deferred(&mut AccessorContext::new(store, get_ctx))
+        self.replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
+            .await
+    }
+
+    pub(crate) async fn replay_guest_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
+        self.replay_deferred_to(access, AccessResultDestination::Guest)
             .await
     }
 
     /// Resolves the recorded terminal while retaining the actual caller-delivery boundary.
     /// Callers map errors with the session's trap context, as on the accessor path.
     pub(crate) async fn replay_deferred<Ctx: WorkerCtx>(
+        self,
+        access: &mut impl DurableContext<Ctx>,
+    ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
+        self.replay_deferred_to(access, AccessResultDestination::Host)
+            .await
+    }
+
+    async fn replay_deferred_to<Ctx: WorkerCtx>(
         mut self,
         access: &mut impl DurableContext<Ctx>,
+        destination: AccessResultDestination,
     ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         self.reproduce_refusal_for_claimed_start(access).await?;
@@ -624,6 +651,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if destination == AccessResultDestination::Guest
+                    && access.with_ctx(|ctx| ctx.parks_incomplete_tool_guest_replay())
+                {
+                    self.parked_undelivered_replay = true;
+                    return park_undelivered_forever().await;
+                }
                 self.prepare_incomplete_live_repair_at(access).await?;
                 let transition = publish_incomplete_replay_tail_at(
                     access,

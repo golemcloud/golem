@@ -416,6 +416,7 @@ where
     let (result, delivery) = write_started(
         &mut AccessorContext::new(accessor, accessor.getter()),
         call,
+        true,
         writer,
         controller,
         request,
@@ -475,6 +476,7 @@ pub(crate) async fn write_native<Ctx: WorkerCtx>(
     let (result, mut delivery) = write_started(
         ctx,
         call,
+        false,
         writer.clone(),
         writer.controller(),
         request,
@@ -553,6 +555,7 @@ where
     let (result, mut delivery) = terminal_started(
         ctx,
         call,
+        false,
         writer.clone(),
         writer.controller(),
         request.into(),
@@ -577,6 +580,7 @@ where
 async fn write_started<Pair, Ctx: WorkerCtx>(
     context: &mut impl DurableContext<Ctx>,
     mut call: DurableCallSession<Pair, Cancellable>,
+    guest_import: bool,
     writer: AttachmentWriter,
     controller: AttachmentController,
     request: ToolAttachmentWriteRequest,
@@ -611,7 +615,12 @@ where
                 "regenerated tool output differs from its recorded write at {start}"
             )));
         }
-        match call.replay_deferred(context).await? {
+        let replay = if guest_import {
+            call.replay_guest_deferred(context).await?
+        } else {
+            call.replay_deferred(context).await?
+        };
+        match replay {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
                 anyhow::ensure!(
                     response.outcome.validate(&request),
@@ -931,6 +940,7 @@ where
     let (result, delivery) = terminal_started(
         &mut AccessorContext::new(accessor, accessor.getter()),
         call,
+        true,
         writer,
         controller,
         expected,
@@ -944,6 +954,7 @@ where
 async fn terminal_started<Pair, Ctx: WorkerCtx>(
     context: &mut impl DurableContext<Ctx>,
     mut call: DurableCallSession<Pair, Cancellable>,
+    guest_import: bool,
     writer: AttachmentWriter,
     controller: AttachmentController,
     expected: golem_common::model::oplog::HostRequest,
@@ -980,7 +991,12 @@ where
                 "tool output terminal request differs at {start}"
             )));
         }
-        match call.replay_deferred(context).await? {
+        let replay = if guest_import {
+            call.replay_guest_deferred(context).await?
+        } else {
+            call.replay_deferred(context).await?
+        };
+        match replay {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
                 if let ToolAttachmentTerminalOutcome::Selected(selected) = &response.outcome {
                     anyhow::ensure!(

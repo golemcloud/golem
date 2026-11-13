@@ -242,7 +242,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             source_cancel: None,
             _ctx: std::marker::PhantomData,
         };
-        access.spawn(async move |access| task.run(access).await)?;
+        task.spawn(&mut access)?;
         Ok(stdin)
     }
 
@@ -718,6 +718,54 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             .pop()
             .expect("a scalar tool result await must return one response"))
     }
+}
+
+pub(super) fn abandon_tool_writers<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> anyhow::Result<()> {
+    let mut writers = Vec::new();
+    let mut outputs = Vec::new();
+    let mut stdin = Vec::new();
+    for (rep, entry) in ctx.table().iter_mut() {
+        if entry.is::<ToolOutputWriterEntry>() {
+            writers.push(rep);
+        } else if entry.is::<ToolOutputEntry>() {
+            outputs.push(rep);
+        } else if entry.is::<ToolStdinWriterEntry>() {
+            stdin.push(rep);
+        } else if let Some(stdin) = entry.downcast_mut::<ToolStdinEntry>() {
+            // Untransferred stdin has no reader to release backpressure. Bound
+            // its copied prefix instead of waiting for Store destruction.
+            stdin.controller().configure_completion();
+        }
+    }
+    for rep in writers {
+        let writer = ctx
+            .table()
+            .delete(Resource::<ToolOutputWriterEntry>::new_own(rep))?;
+        durability::dispose_producer(ctx, writer.producer, ByteStreamFailure::Abandoned, false)?;
+    }
+    for rep in outputs {
+        let mut output = ctx
+            .table()
+            .delete(Resource::<ToolOutputEntry>::new_own(rep))?;
+        durability::dispose_producer(
+            ctx,
+            output
+                .producer
+                .take()
+                .expect("output target already consumed"),
+            ByteStreamFailure::Abandoned,
+            true,
+        )?;
+    }
+    for rep in stdin {
+        let writer = ctx
+            .table()
+            .delete(Resource::<ToolStdinWriterEntry>::new_own(rep))?;
+        durability::dispose_producer(ctx, writer.producer, ByteStreamFailure::Abandoned, false)?;
+    }
+    Ok(())
 }
 
 impl<Ctx: WorkerCtx> HostToolStdinWriter for DurableWorkerCtx<Ctx> {

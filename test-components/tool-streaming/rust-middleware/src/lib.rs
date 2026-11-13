@@ -332,18 +332,24 @@ impl
     ) -> Result<AgentStream<presented_typed_output::Item>, ToolInvokeError<Infallible>> {
         let mut source = underlying.produce(tag).await?;
         let (mut writer, output) = AgentStream::new();
-        spawn_local(async move {
-            while let Some(item) = source.next().await.expect("read provider typed output") {
-                writer
-                    .write_one(presented_typed_output::Item {
-                        label: item.label,
-                        ordinal: item.ordinal,
-                    })
-                    .await
-                    .expect("write projected typed output");
-            }
-        });
-        Ok(output)
+        let wrapped = golem_rust::schema::wit::wire::SchemaValueStream::wrap(
+            output.into_raw().await.unwrap(),
+        )
+        .await;
+        while let Some(item) = source.next().await.expect("read provider typed output") {
+            writer
+                .write_one(presented_typed_output::Item {
+                    label: item.label,
+                    ordinal: item.ordinal,
+                })
+                .await
+                .expect("accept projected typed output before return");
+        }
+        drop(writer);
+        Ok(AgentStream::from_schema_stream_with_wire_decoder(
+            golem_rust::schema::SchemaValueStream::from_wrapped(wrapped),
+            |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|error| error.to_string()),
+        ))
     }
 }
 
@@ -861,6 +867,38 @@ streaming_middleware!(
             .await?;
         drop(admitted);
         Ok(format!("early-return({value})"))
+    }
+);
+
+streaming_middleware!(
+    ReturnCutoff,
+    [name = "streaming-return-cutoff"],
+    |underlying, value| {
+        let result = underlying.apply(value).await?;
+        let started = std::rc::Rc::new(std::cell::Cell::new(false));
+        let signal = started.clone();
+        spawn_local(async move {
+            let mut wait = std::pin::pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                60_000_000_000
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(wait.as_mut(), cx).is_pending());
+                signal.set(true);
+                std::task::Poll::Ready(())
+            })
+            .await;
+            wait.await;
+            panic!("middleware guest tail ran after return");
+        });
+        while !started.get() {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        // The test requires the timer's Start and internal clock read to be
+        // recorded before publication, not merely a queued guest import.
+        for _ in 0..2_000 {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        Ok(result)
     }
 );
 

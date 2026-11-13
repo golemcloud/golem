@@ -626,6 +626,7 @@ pub(super) async fn execute_accepted_tool_call<Ctx>(
     accessor: &ToolCaller<Ctx>,
     accepted: AcceptedToolCall,
     endpoints: OwnedToolEndpoints,
+    input_recordings: Vec<tokio_util::task::task_tracker::TaskTrackerToken>,
     execution: Option<&ToolExecution>,
     mut completed_supervisor_started: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<ToolInvokeResponse>
@@ -659,6 +660,7 @@ where
         accessor,
         accepted,
         endpoints,
+        input_recordings,
         execution,
         failed_resources.clone(),
         inner_supervisor_started,
@@ -801,6 +803,7 @@ pub(super) async fn execute_accepted_tool_call_inner<Ctx>(
     accessor: &ToolCaller<Ctx>,
     accepted: AcceptedToolCall,
     endpoints: OwnedToolEndpoints,
+    input_recordings: Vec<tokio_util::task::task_tracker::TaskTrackerToken>,
     execution: Option<&ToolExecution>,
     failed_resources: Arc<Mutex<Option<FailedRetainedEntityResources>>>,
     mut completed_supervisor_started: Option<oneshot::Sender<()>>,
@@ -855,6 +858,17 @@ where
             operation.install_recorded_admission_refusal(refusal, terminal_index);
         }
     }
+    // Accepted live input must record independently of the child's body lane:
+    // the parent may finish while registration still waits for parent preparation.
+    let staged_input = if input_recordings.is_empty() {
+        None
+    } else {
+        let session = streams::session(&accessor.primary, durability.scope()).await?;
+        let context = operation.context();
+        let input = streams::materialize_input(&session, accessor.revision, &context.input).await?;
+        Some((session, input))
+    };
+    drop(input_recordings);
     let replaying_incomplete = durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
     let pre_body_live_admission_cancelled = match durability
@@ -1273,12 +1287,18 @@ where
     };
     let EntityInvocationDescriptor::Tool(descriptor) = &context.descriptor;
     let scope = durability.scope().clone();
-    let result_streams = streams::session(&active_agent.primary(), &scope).await?;
     let caller_revision = accessor.revision;
     let has_input_streams =
         crate::durable_host::schema_value_stream::contains_stream(context.input.value());
-    let input =
-        streams::materialize_input(&result_streams, caller_revision, &context.input).await?;
+    let (result_streams, input) = match staged_input {
+        Some(staged) => staged,
+        None => {
+            let session = streams::session(&active_agent.primary(), &scope).await?;
+            let input =
+                streams::materialize_input(&session, caller_revision, &context.input).await?;
+            (session, input)
+        }
+    };
     let sidecar = ToolSidecarInvocation {
         tool_name: tool_name.to_string(),
         position,

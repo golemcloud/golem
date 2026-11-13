@@ -358,6 +358,127 @@ macro_rules! setup_probe_chain {
     };
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn middleware_return_stops_guest_tail_and_reconstructs_incomplete_timer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-return-cutoff"],
+        context,
+        environment,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        _agent_type,
+        deployment,
+        configure = Arc::new(|config| {
+            config.limits.tail_work_settle_timeout = Duration::from_millis(500);
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+        })
+    );
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "middleware-return-cutoff");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let result: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "middleware_probe_once",
+            data_value!("cutoff"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(result, "leaf(cutoff)");
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let timers: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(timers.len(), 1);
+    let timer = timers[0];
+    let reads: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.parent_start_index == Some(timer)
+                    && start.function_name.ends_with("monotonic-clock::now") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reads.len(),
+        1,
+        "middleware cutoff must follow its internal clock read"
+    );
+    assert!(entries.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == reads[0])
+    ));
+    for entry in &entries {
+        match &entry.entry {
+            PublicOplogEntry::End(end) => assert_ne!(end.start_index, timer),
+            PublicOplogEntry::Cancelled(cancelled) => assert_ne!(cancelled.start_index, timer),
+            _ => {}
+        }
+    }
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment),
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting =
+                    golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let result: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(result, "replayed");
+    for entry in executor.get_oplog(&worker, OplogIndex::INITIAL).await? {
+        match &entry.entry {
+            PublicOplogEntry::End(end) => assert_ne!(end.start_index, timer),
+            PublicOplogEntry::Cancelled(cancelled) => assert_ne!(cancelled.start_index, timer),
+            PublicOplogEntry::Error(error) => panic!("reconstruction failed: {error:?}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn start_probe_effect_server() -> (
     u16,
     tokio::sync::mpsc::UnboundedReceiver<String>,

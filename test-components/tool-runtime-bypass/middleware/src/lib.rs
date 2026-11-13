@@ -153,10 +153,10 @@ async fn universal_one(
         let promise = golem_rust::create_promise();
         let checkpoint = promise.oplog_idx;
         spawn_local(async move {
-            announce_checkpoint(checkpoint).await;
             golem_rust::await_promise(&promise).await;
             let _ = underlying.invoke(command_path, stale_input, None).await;
         });
+        announce_checkpoint(checkpoint).await;
         return Ok(InvocationResult {
             result: Some(
                 ChainEvidence {
