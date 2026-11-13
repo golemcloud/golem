@@ -11896,7 +11896,8 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
 
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
-// deletion is running gets the deletion's refusal rather than a lookup of the deleting generation.
+// deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
+// answer from the deleting generation.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -11972,11 +11973,35 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
         )
         .await?,
     );
+    // A call, not only a lookup, is refused before it is resolved against the deleting generation.
+    let mut call = lookup(fingerprint);
+    call.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    call.request_key = Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+    if let Some(tool) = call.external_tool.as_mut() {
+        tool.input = Some(
+            golem_common::schema::TypedSchemaValue::new(
+                golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::record(vec![]),
+                ),
+                SchemaValue::Record { fields: vec![] },
+            )
+            .try_into()
+            .map_err(anyhow::Error::msg)?,
+        );
+    }
+    let call_during_deletion = answer(
+        tokio::time::timeout(Duration::from_secs(10), executor.invoke_agent_session(call)).await?,
+    );
     hook.release();
     let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
     assert!(
         during_deletion.contains("VALIDATION") && during_deletion.contains("being deleted"),
         "{during_deletion}"
+    );
+    assert!(
+        call_during_deletion.contains("VALIDATION")
+            && call_during_deletion.contains("being deleted"),
+        "{call_during_deletion}"
     );
     drop(executor);
     Ok(())

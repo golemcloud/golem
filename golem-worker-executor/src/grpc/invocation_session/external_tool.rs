@@ -334,11 +334,17 @@ where
                 )
                 .await?;
         }
+        // An existing owner is named by its fingerprint, so the guard pins that incarnation: a
+        // missing, replaced or deleting one is answered before the call reads or prepares it.
+        let expected_fingerprint = request
+            .expected_callee_fingerprint
+            .filter(|_| !tool.fresh_owner)
+            .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into()));
         let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             &owned,
             principal.clone(),
-            None,
+            expected_fingerprint,
         )
         .await?;
         if !tool.fresh_owner {
