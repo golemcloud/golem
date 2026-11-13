@@ -189,30 +189,6 @@ pub enum MonthlyResourcePolicyStatus {
     Unavailable,
 }
 
-const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
-
-fn normalize_concurrent_agents_limit(limit: u64) -> u64 {
-    if limit == 0 {
-        // Backward-compatibility with older registry versions that do not send
-        // this proto field (proto3 scalar default = 0).
-        UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR
-    } else {
-        limit
-    }
-}
-
-/// Normalise the oplog write rate from the proto wire value.
-/// proto3 scalar default is 0 — treat as unlimited (10^18 sentinel).
-fn normalize_oplog_writes_per_second(rate: u64) -> u64 {
-    if rate == 0 {
-        UNLIMITED_OPLOG_WRITES_PER_SECOND
-    } else {
-        rate
-    }
-}
-
-const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
-
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
     fn from(value: ResourceLimits) -> Self {
         let monthly_policy = value.monthly_policy;
@@ -372,14 +348,8 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
             available_blob_storage_bytes: value.available_blob_storage_bytes,
-            max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
-                value.max_concurrent_agents_per_executor,
-            ),
-            // proto3 default (0) means unlimited — normalise to the 10^18
-            // sentinel used throughout the codebase.
-            oplog_writes_per_second: normalize_oplog_writes_per_second(
-                value.oplog_writes_per_second,
-            ),
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
+            oplog_writes_per_second: value.oplog_writes_per_second,
             usage_update_applied: value.usage_update_applied,
         })
     }
@@ -747,36 +717,6 @@ mod tests {
             available_ephemeral_storage_byte_seconds: 6,
             available_ephemeral_storage_byte_nanoseconds_remainder: 7,
         }
-    }
-
-    #[test]
-    fn resource_limits_proto_zero_limit_maps_to_unlimited_sentinel() {
-        let proto = ResourceLimits {
-            monthly_policy: Some(monthly_resource_policy()),
-            max_memory_per_worker: 2,
-            max_table_elements_per_worker: 3,
-            max_disk_space_per_worker: 4,
-            per_invocation_http_call_limit: 0,
-            per_invocation_rpc_call_limit: 0,
-            available_http_calls: 0,
-            available_rpc_calls: 0,
-            available_blob_storage_bytes: 0,
-            max_concurrent_agents_per_executor: 0,
-            oplog_writes_per_second: 0,
-            monthly_policy_status:
-                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
-            usage_update_applied: false,
-            monthly_usage_mode_revision: 0,
-            monthly_policy_revision: 0,
-        };
-
-        let converted: super::ResourceLimits = proto.try_into().unwrap();
-
-        assert_eq!(
-            converted.max_concurrent_agents_per_executor,
-            1_000_000_000_000_000_000
-        );
-        assert_eq!(converted.oplog_writes_per_second, 1_000_000_000_000_000_000);
     }
 
     #[test]
