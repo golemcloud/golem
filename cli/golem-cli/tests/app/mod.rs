@@ -60,6 +60,7 @@ mod self_identity;
 mod server_config;
 #[cfg(unix)]
 mod server_restart;
+mod service_config_failure;
 mod ssh;
 mod tls_endpoint;
 mod tool_metadata_conformance;
