@@ -76,6 +76,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_mode,
             request.cursor.map(Into::into),
             OplogIndex::from_u64(request.from_oplog_index),
+            None,
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -97,6 +98,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             chunk.next_oplog_index,
             chunk.current_component_revision,
             chunk.last_index,
+            None,
         )
         .map(Into::into);
 
@@ -193,6 +195,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_mode,
             request.cursor.map(Into::into),
             OplogIndex::INITIAL,
+            Some(&request.query),
         )
         .await?;
         let chunk = search_public_oplog_page(
@@ -216,6 +219,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             chunk.next_oplog_index,
             chunk.current_component_revision,
             chunk.last_index,
+            Some(&request.query),
         )
         .map(Into::into);
 

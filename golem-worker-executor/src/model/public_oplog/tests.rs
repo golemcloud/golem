@@ -63,6 +63,7 @@ use golem_common::schema::tool::{CommandTree, Tool};
 use golem_common::schema::{
     IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, SecretValuePayload,
 };
+use golem_service_base::error::worker_executor::StaleCursorReason;
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use prost::Message;
@@ -3018,19 +3019,22 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         None,
         indices[2],
+        Some("needle"),
     )
     .await
     .unwrap();
     assert_eq!((start, revision), (indices[2], updated_revision));
 
     // The budget ends the first search after five entries, before the match. The page is empty,
-    // and its cursor points to the first entry it did not read, with the revision.
+    // and its cursor points to the first entry it did not read, with the revision and the hash of
+    // the query.
     let first = search(start, revision).await.unwrap();
     assert!(first.entries.is_empty());
     let cursor = oplog_page_cursor(
         first.next_oplog_index,
         first.current_component_revision,
         first.last_index,
+        Some("needle"),
     )
     .expect("a page that ends before the last entry has a cursor");
     assert_eq!(
@@ -3038,8 +3042,31 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         OplogCursor {
             next_oplog_index: indices[7].as_u64(),
             current_component_revision: updated_revision.into(),
+            query_hash: OplogCursor::query_hash(Some("needle")),
         }
     );
+
+    // A read of another query, or a read without a query, refuses the cursor.
+    for query in [Some("needles"), Some(""), None] {
+        let result = oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(cursor.clone()),
+            OplogIndex::INITIAL,
+            query,
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(WorkerExecutorError::StaleCursor {
+                agent_id: owned_agent_id.agent_id.clone(),
+                next_oplog_index: indices[7],
+                reason: StaleCursorReason::QueryMismatch,
+            }),
+            "a read of {query:?} must refuse the cursor of a search for \"needle\""
+        );
+    }
 
     // The cursor continues where the first search stopped, with the revision it carries.
     let (start, revision) = oplog_page_start(
@@ -3048,6 +3075,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         Some(cursor),
         OplogIndex::INITIAL,
+        Some("needle"),
     )
     .await
     .unwrap();
@@ -3058,6 +3086,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         second.next_oplog_index,
         second.current_component_revision,
         second.last_index,
+        Some("needle"),
     )
     .expect("the budget ends the second search before the last entry");
     assert_eq!(second_cursor.next_oplog_index, indices[12].as_u64());
@@ -3073,7 +3102,8 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         oplog_page_cursor(
             third.next_oplog_index,
             third.current_component_revision,
-            third.last_index
+            third.last_index,
+            Some("needle"),
         ),
         None
     );
@@ -3091,8 +3121,10 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             Some(OplogCursor {
                 next_oplog_index,
                 current_component_revision: updated_revision.into(),
+                query_hash: OplogCursor::query_hash(Some("needle")),
             }),
             OplogIndex::INITIAL,
+            Some("needle"),
         )
         .await;
         match result {
@@ -3107,7 +3139,9 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                     WorkerExecutorError::StaleCursor {
                         agent_id: owned_agent_id.agent_id.clone(),
                         next_oplog_index: OplogIndex::from_u64(next_oplog_index),
-                        last_oplog_index: last_index,
+                        reason: StaleCursorReason::PastEnd {
+                            last_oplog_index: last_index,
+                        },
                     }
                 );
             }

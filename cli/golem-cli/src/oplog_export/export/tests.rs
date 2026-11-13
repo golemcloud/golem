@@ -156,6 +156,7 @@ impl OplogReads for FakeReads {
         let next = (matching.len() > taken.len()).then(|| OplogCursor {
             next_oplog_index: taken.last().unwrap().entry.oplog_index.as_u64() + 1,
             current_component_revision: REVISION,
+            query_hash: OplogCursor::query_hash(query),
         });
         Ok(OplogPage {
             entries: taken
