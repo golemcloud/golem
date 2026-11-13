@@ -108,7 +108,7 @@ golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
 The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
-> **Note**: `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
+> **Note**: Without `--page`, `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
 
 Use `--page` to read one page across all selected components, in the order of their names. A page has at most `--max-count` agents (default 50). The output has a `cursor` when there can be more agents; pass it back unchanged as `--scan-cursor` with `--page`, and stop when a page has no `cursor`. A page can end early at the server's scan budget, so it can have fewer agents, or none, and still have a cursor.
 
