@@ -774,7 +774,10 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
 
     // Drops what was printed between calls, such as a late log line of the previous call.
     let _ = capture.take();
-    let ctx = Arc::new(server_ctx.for_tool_call(confirmed, environment.clone()));
+    let ctx = match server_ctx.for_tool_call(confirmed, environment.clone()) {
+        Ok(ctx) => Arc::new(ctx),
+        Err(error) => return error_result("command-failed", error_message_for_output(&error)),
+    };
     let mut lazy = LazyContext::with_context(global_flags.clone(), hooks, ctx.clone());
     let result = CommandHandler::<Hooks>::handle_subcommand(&mut lazy, command.subcommand).await;
     match result {

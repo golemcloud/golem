@@ -17,6 +17,7 @@
 use super::{TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
 use golem_cli::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
+use golem_cli::config::{AuthenticationConfig, Config, ProfileName};
 use golem_cli::{fs, versions};
 use indoc::formatdoc;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
@@ -614,5 +615,34 @@ async fn mcp_serve_reads_only_its_environment() {
         let result = call(&client, "agent_get", json!({"agent_id": outside})).await;
         assert_eq!(error_code(&result), "outside-environment", "{outside}");
     }
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_reads_the_profile_token_again_on_each_call() {
+    let ctx = counters_context(&["local"]).await;
+    // A qualified environment selects no manifest environment, so the calls use the login token
+    // of the `local` profile.
+    let client = mcp_client(&ctx, &["-E", &format!("{APP}/local")]).await;
+    let list = json!({"component_name": "it:agent-counters"});
+    structured(&call(&client, "agent_list", list.clone()).await);
+
+    let set_token = |auth: AuthenticationConfig| {
+        assert!(
+            Config::update_profile(&ProfileName::local(), ctx.config_dir.path(), |profile| {
+                profile.auth = auth
+            })
+            .unwrap()
+        );
+    };
+    set_token(AuthenticationConfig::static_token(
+        "not-a-valid-token".to_string(),
+    ));
+    let refused = call(&client, "agent_list", list.clone()).await;
+    assert_eq!(error_code(&refused), "auth-unauthorized", "{refused:?}");
+
+    set_token(AuthenticationConfig::static_builtin_local());
+    structured(&call(&client, "agent_list", list).await);
     client.cancel().await.unwrap();
 }

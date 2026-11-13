@@ -392,18 +392,27 @@ impl Context {
     }
 
     /// The context of one tool call of `golem mcp serve`, made from the server's context: the
-    /// same profile, server, manifest selection and settings, without a new read of the profile
-    /// config or the manifest selection. It works only in `environment`, the server's
-    /// environment. It confirms a command only when the call confirms, so neither `--yes` nor
-    /// the manifest's `cli.autoConfirm` confirms a command. The questions about the manifest
-    /// itself keep the answer that the server got at start.
-    pub fn for_tool_call(&self, confirmed: bool, environment: ResolvedEnvironmentIdentity) -> Self {
-        Self {
+    /// same profile, server, manifest selection and settings, without a new selection of the
+    /// profile or the manifest environment. Only the profile's login token is read again from
+    /// the config, so that a login in a terminal applies to the next call. It works only in
+    /// `environment`, the server's environment. It confirms a command only when the call
+    /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
+    /// questions about the manifest itself keep the answer that the server got at start.
+    pub fn for_tool_call(
+        &self,
+        confirmed: bool,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Self> {
+        let mut profile = self.profile.clone();
+        if let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? {
+            profile.profile.auth = stored.profile.auth;
+        }
+        Ok(Self {
             config_dir: self.config_dir.clone(),
             format: self.format,
             help_mode: self.help_mode,
             post_deploy_args: self.post_deploy_args.clone(),
-            profile: self.profile.clone(),
+            profile,
             explicit_profile_name: self.explicit_profile_name.clone(),
             environment_reference: self.environment_reference.clone(),
             global_environment_selector: self.global_environment_selector.clone(),
@@ -435,7 +444,7 @@ impl Context {
                 self.app_source_mode.clone(),
             )),
             caches: Caches::new(),
-        }
+        })
     }
 
     pub fn config_dir(&self) -> &Path {
