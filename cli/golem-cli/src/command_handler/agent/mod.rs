@@ -100,6 +100,7 @@ use golem_common::model::{
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
+use crate::command_handler::interactive::Ask;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
@@ -845,7 +846,9 @@ impl AgentCommandHandler {
         // The REPL writes the accepted invocation ID to stdin once the call returns.
         let invocation_target = connection.invocation_goal().map(|goal| async move {
             use tokio::io::AsyncBufReadExt;
-            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            let stdin =
+                crate::command_handler::interactive::async_stdin("the accepted invocation ID")?;
+            let mut lines = tokio::io::BufReader::new(stdin).lines();
             if let Ok(Some(line)) = lines.next_line().await {
                 goal.set_target(
                     line.trim()
@@ -3210,7 +3213,7 @@ impl AgentCommandHandler {
             output_path.log_color_highlight()
         ))
         .with_default(false)
-        .prompt()?;
+        .ask()?;
 
         Ok(result)
     }

@@ -32,9 +32,10 @@ use crate::command::{GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobal
 use crate::command_name;
 use crate::command_table::{COMMAND_TABLE, CommandClass, CommandRow};
 use crate::context::Context;
+use crate::error::service::{ServiceError, ServiceErrorKind};
 use crate::error::{
-    ConfirmationRequired, ContextInitHintError, HintError, NonSuccessfulExit, OutsideEnvironment,
-    PipedExitCode,
+    ContextInitHintError, HintError, InputRequired, LoginRequired, NonSuccessfulExit,
+    OutsideEnvironment, PipedExitCode, PromptAnswer,
 };
 use crate::log::{
     LogColorize, Output, OutputCapture, discard_held_log, error_message_for_output, log_action,
@@ -46,6 +47,7 @@ use crate::model::cli_output::{
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use anyhow::{anyhow, bail};
 use clap::{Arg, ArgAction, Command, CommandFactory};
+use golem_common::base_model::api::error_code;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -471,13 +473,130 @@ fn argument_values(
     }
 }
 
-/// The error envelope of a tool call that failed: `{"error": {"code", "message"}}` as JSON text,
-/// with `isError`. It is not `structuredContent`, because it does not match the tool's output
-/// schema, and clients check `structuredContent` against that schema also for an error.
+/// The error envelope of a tool call that failed, `{"error": "<code>", "payload": {"message",
+/// ...}}`, as JSON text with `isError`. It is not `structuredContent`, because it does not match
+/// the tool's output schema, and clients check `structuredContent` against that schema also for
+/// an error.
 pub fn error_result(code: &str, message: impl Into<String>) -> CallToolResult {
+    error_envelope(code, message.into(), Map::new())
+}
+
+fn error_envelope(code: &str, message: String, details: Map<String, Value>) -> CallToolResult {
+    let mut payload = Map::new();
+    payload.insert("message".to_string(), Value::String(message));
+    payload.extend(details);
     CallToolResult::error(vec![ContentBlock::text(
-        json!({"error": {"code": code, "message": message.into()}}).to_string(),
+        json!({"error": code, "payload": payload}).to_string(),
     )])
+}
+
+/// How a failed call is reported: the error code, the message when it is not the command's
+/// error message, and the other fields of the payload.
+struct ToolError {
+    code: String,
+    message: Option<String>,
+    details: Map<String, Value>,
+}
+
+impl ToolError {
+    fn new(code: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: None,
+            details: Map::new(),
+        }
+    }
+}
+
+/// The error identifier of a platform error code: `AGENT_NOT_FOUND` is `agent-not-found`.
+fn platform_error_id(code: &str) -> String {
+    code.to_lowercase().replace('_', "-")
+}
+
+fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
+    if let Some(input) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<InputRequired>())
+    {
+        return input_required(input, tool);
+    }
+    if error.chain().any(|cause| cause.is::<LoginRequired>()) {
+        return ToolError::new("login-required");
+    }
+    if error.chain().any(|cause| cause.is::<OutsideEnvironment>()) {
+        return ToolError::new("outside-environment");
+    }
+    if let Some(service) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ServiceError>())
+        && let Some(code) = service.error_code()
+    {
+        let mut tool_error = ToolError::new(platform_error_id(code));
+        tool_error
+            .details
+            .insert("service".to_string(), json!(service.service_name));
+        if let ServiceErrorKind::ErrorResponse(response) = &service.kind {
+            tool_error
+                .details
+                .insert("status".to_string(), json!(response.status_code));
+            if let Some(agent_error) = response.agent_error() {
+                tool_error.details.insert(
+                    "agent_error".to_string(),
+                    json!({"cause": agent_error.cause, "stderr": agent_error.stderr}),
+                );
+            }
+        }
+        return tool_error;
+    }
+    if let Some(HintError::EnvironmentHasNoDeployment) = error.downcast_ref::<HintError>() {
+        return ToolError::new(platform_error_id(error_code::ENVIRONMENT_NOT_DEPLOYED));
+    }
+    ToolError::new("command-failed")
+}
+
+/// A question that the command asked: the question, and the tool argument that answers it on the
+/// next call, when the tool has one.
+fn input_required(input: &InputRequired, tool: &ManagementTool) -> ToolError {
+    let confirmation = input.answer == Some(PromptAnswer::Yes);
+    let answer_with = match input.answer {
+        Some(PromptAnswer::Yes) => tool.row.destructive.then_some(CONFIRM_ARGUMENT),
+        Some(PromptAnswer::Argument(id)) => tool
+            .arguments
+            .iter()
+            .any(|argument| argument.id == id)
+            .then_some(id),
+        None => None,
+    };
+    let how = match answer_with {
+        Some(CONFIRM_ARGUMENT) => format!(
+            "To answer yes, call `{}` again with `{CONFIRM_ARGUMENT}: true`.",
+            tool.name()
+        ),
+        Some(argument) => format!(
+            "To answer, call `{}` again with the argument `{argument}`.",
+            tool.name()
+        ),
+        None => "No argument of this tool answers it; run the command in a terminal with the \
+                 `golem` CLI."
+            .to_string(),
+    };
+    let mut prompt = json!({"kind": input.kind.id(), "question": input.question});
+    if !input.options.is_empty() {
+        prompt["options"] = json!(input.options);
+    }
+    let mut tool_error = ToolError::new(if confirmation {
+        "confirmation-required"
+    } else {
+        "input-required"
+    });
+    tool_error.message = Some(format!("{input}. {how}"));
+    tool_error.details.insert("prompt".to_string(), prompt);
+    if let Some(answer_with) = answer_with {
+        tool_error
+            .details
+            .insert("answer_with".to_string(), json!(answer_with));
+    }
+    tool_error
 }
 
 /// Whether a call of `tool` may run: a destructive tool runs only with `confirm: true`, also when
@@ -542,12 +661,13 @@ impl ServerHandler for ManagementMcpServer {
             Err(message) => return Ok(error_result("invalid-arguments", message).into()),
         };
         if !confirmed(tool, &arguments) {
-            return Ok(error_result(
+            return Ok(error_envelope(
                 "confirmation-required",
                 format!(
                     "`{}` is destructive and runs only with `{CONFIRM_ARGUMENT}: true`",
                     tool.name()
                 ),
+                Map::from_iter([("answer_with".to_string(), json!(CONFIRM_ARGUMENT))]),
             )
             .into());
         }
@@ -663,7 +783,7 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
             let (stdout, _) = capture.take();
             success(tool, &stdout)
         }
-        Err(error) => failure(error, &ctx, global_flags, capture),
+        Err(error) => failure(error, &ctx, global_flags, capture, tool),
     }
 }
 
@@ -702,18 +822,10 @@ fn failure(
     ctx: &Arc<Context>,
     global_flags: &GolemCliGlobalFlags,
     capture: &OutputCapture,
+    tool: &ManagementTool,
 ) -> CallToolResult {
     set_log_output(Output::Stderr);
-    let code = if error
-        .chain()
-        .any(|cause| cause.is::<ConfirmationRequired>())
-    {
-        "confirmation-required"
-    } else if error.chain().any(|cause| cause.is::<OutsideEnvironment>()) {
-        "outside-environment"
-    } else {
-        "command-failed"
-    };
+    let tool_error = classify(&error, tool);
     // A hint error and a context error are explained by the messages that their handlers log, as
     // on the CLI; the log is the message.
     let logged = if let Some(hint) = error.downcast_ref::<HintError>() {
@@ -726,21 +838,28 @@ fn failure(
         error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>()
     };
     let (_, stderr) = capture.take();
-    let message = if logged {
-        message_for_output(String::from_utf8_lossy(&stderr))
+    let message = match tool_error.message {
+        Some(message) => message,
+        None if logged => message_for_output(String::from_utf8_lossy(&stderr))
             .trim()
-            .to_string()
-    } else {
-        error_message_for_output(&error)
+            .to_string(),
+        None => error_message_for_output(&error),
     };
-    error_result(code, message)
+    error_envelope(&tool_error.code, message, tool_error.details)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, management_tools, tool_call_argv};
+    use super::{
+        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, classify, error_envelope, management_tools,
+        tool_call_argv,
+    };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
+    use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
+    use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
+    use crate::error::{LoginRequired, PromptAnswer};
     use crate::model::format::Format;
+    use inquire::{Select, Text};
     use serde_json::{Value, json};
     use test_r::test;
 
@@ -845,6 +964,90 @@ mod tests {
                 "{arguments}"
             );
         }
+    }
+
+    fn envelope(result: &rmcp::model::CallToolResult) -> Value {
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_none());
+        let text = &result.content[0].as_text().unwrap().text;
+        serde_json::from_str(text).unwrap()
+    }
+
+    fn reported(error: anyhow::Error, tool_name: &str) -> Value {
+        let tool = tool(tool_name);
+        let tool_error = classify(&error, &tool);
+        envelope(&error_envelope(
+            &tool_error.code,
+            tool_error.message.unwrap_or_else(|| error.to_string()),
+            tool_error.details,
+        ))
+    }
+
+    #[test]
+    fn a_prompt_under_the_server_is_a_structured_error() {
+        refuse_prompts();
+
+        let asked = Select::new("Select a component:", vec!["shop:cart", "shop:order"]).ask();
+        let report = reported(asked.unwrap_err().into(), "agent_list");
+        assert_eq!(report["error"], "input-required");
+        assert_eq!(
+            report["payload"]["prompt"],
+            json!({
+                "kind": "select",
+                "question": "Select a component:",
+                "options": ["shop:cart", "shop:order"],
+            })
+        );
+        assert!(report["payload"].get("answer_with").is_none());
+        assert!(
+            report["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Select a component:")
+        );
+
+        let asked = Text::new("Component name:")
+            .ask_answered_by(Some(PromptAnswer::Argument("component_name")));
+        let report = reported(asked.unwrap_err().into(), "agent_list");
+        assert_eq!(report["payload"]["prompt"]["kind"], "text");
+        assert_eq!(report["payload"]["answer_with"], "component_name");
+
+        let read = interactive::stdin("the secret value").unwrap_err();
+        let report = reported(read, "agent_list");
+        assert_eq!(report["error"], "input-required");
+        assert_eq!(report["payload"]["prompt"]["kind"], "stdin");
+
+        let confirmed = InteractiveHandler::confirm_manifest_profile_warning(false).unwrap_err();
+        let report = reported(confirmed, "agent_revert");
+        assert_eq!(report["error"], "confirmation-required");
+        assert_eq!(report["payload"]["prompt"]["kind"], "confirm");
+        assert_eq!(report["payload"]["answer_with"], CONFIRM_ARGUMENT);
+    }
+
+    #[test]
+    fn platform_errors_keep_their_identifier() {
+        let not_found = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 404,
+                errors: vec!["Agent not found".to_string()],
+                code: Some("AGENT_NOT_FOUND".to_string()),
+                additional_fields: Default::default(),
+            }),
+        };
+        let report = reported(not_found.into(), "agent_get");
+        assert_eq!(report["error"], "agent-not-found");
+        assert_eq!(report["payload"]["status"], 404);
+        assert_eq!(report["payload"]["service"], "Worker");
+
+        let login = anyhow::Error::new(LoginRequired {
+            login: "profile cloud".to_string(),
+        });
+        assert_eq!(reported(login, "agent_get")["error"], "login-required");
+        assert_eq!(
+            reported(anyhow::anyhow!("anything else"), "agent_get")["error"],
+            "command-failed"
+        );
     }
 
     #[test]

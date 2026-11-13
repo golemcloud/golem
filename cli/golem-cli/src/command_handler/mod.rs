@@ -40,7 +40,7 @@ use crate::command_handler::bridge::BridgeCommandHandler;
 use crate::command_handler::card::CardCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
-use crate::command_handler::interactive::{InteractiveHandler, refuse_unconfirmed_confirmations};
+use crate::command_handler::interactive::{InteractiveHandler, refuse_prompts};
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::log::render_structured_document;
 use crate::command_handler::partial_match::ErrorHandler;
@@ -171,7 +171,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let is_mcp_server = matches!(command.subcommand, GolemCliSubcommand::Mcp { .. });
                 if is_mcp_server {
                     command.global_flags.format = Some(Format::Json);
-                    refuse_unconfirmed_confirmations();
+                    refuse_prompts();
                 }
                 if is_server || is_mcp_server {
                     keep_running_on_closed_output();
