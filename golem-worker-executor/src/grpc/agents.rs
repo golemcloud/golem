@@ -16,7 +16,7 @@ use super::{
     AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AgentMetadata, AuthCtx,
     CancelInvocationRequest, DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest,
     ForkWorkerResponse, HasActiveAgents, HasAll, HasEvents, HasPromiseService, HasWorkerService,
-    HashMap, LookupResult, OplogIndex, OwnedAgentId, RecvError,
+    HashMap, InvocationContextStack, LookupResult, OplogIndex, OwnedAgentId, RecvError,
     ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
     UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
