@@ -400,6 +400,19 @@ impl ConfigSchema {
                 let group = &field.path[..length];
                 let mut present = false;
                 for layer in layers {
+                    for prefix_length in 0..group.len() {
+                        if let Some((value, origin)) = field_fill(
+                            &layer.value,
+                            &group[..prefix_length],
+                            &layer.origin,
+                            catalogs,
+                            None,
+                        )? && selector(&value, "$config", &origin)?.is_some()
+                        {
+                            present = false;
+                            break;
+                        }
+                    }
                     present |=
                         field_fill(&layer.value, group, &layer.origin, catalogs, None)?.is_some();
                 }

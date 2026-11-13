@@ -504,6 +504,36 @@ fn catalog_group_selection_is_atomic_and_groups_remain_required() {
     schema.fields[0].path = vec!["group".into(), "setting".into()];
     let sources = catalog(json!({"empty":{},"live":{"$kind":"shared"}}));
     assert!(schema.resolve(&sources, &[], &origin("code")).is_err());
+    for input in [
+        vec![json!({"$config":"empty"})],
+        vec![json!({"group":{}}), json!({"$config":"empty"})],
+        vec![
+            json!({"group":{"setting":{"$config":"live"}}}),
+            json!({"$config":"empty"}),
+        ],
+    ] {
+        let error = schema
+            .resolve(&sources, &layers(input), &origin("code"))
+            .expect_err("replacing the root with an empty catalog removes the required group");
+        assert!(
+            error
+                .message
+                .contains("missing required config group 'group'")
+        );
+    }
+    for input in [
+        vec![json!({"group":{}}), json!({})],
+        vec![
+            json!({"group":{}}),
+            json!({"$config":"empty"}),
+            json!({"group":{}}),
+        ],
+    ] {
+        let plan = schema
+            .resolve(&sources, &layers(input), &origin("code"))
+            .unwrap();
+        assert_eq!(plan[0].source, ConfigSourcePlan::CapturedAbsence);
+    }
     let plan = schema
         .resolve(
             &sources,
@@ -528,6 +558,22 @@ fn catalog_group_selection_is_atomic_and_groups_remain_required() {
             )
             .is_err()
     );
+    schema.fields[0].value_type = SchemaType::option(SchemaType::u32());
+    schema.fields[0].path = vec!["group".into(), "nested".into(), "setting".into()];
+    for (overlay, valid) in [
+        (json!({}), true),
+        (json!({"group":{"$config":"empty"}}), false),
+    ] {
+        let result = schema.resolve(
+            &sources,
+            &layers(vec![json!({"group":{"nested":{}}}), overlay]),
+            &origin("code"),
+        );
+        assert_eq!(result.is_ok(), valid);
+        if let Ok(plan) = result {
+            assert_eq!(plan[0].source, ConfigSourcePlan::CapturedAbsence);
+        }
+    }
 }
 
 #[test]
@@ -764,4 +810,66 @@ fn catalog_tool_descriptors_replace_wiring_and_code_defaults_are_canonical() {
     );
     schema.fields[0].default = Some(SchemaValue::String("not canonical JSON".into()));
     assert!(schema.validate(&origin("code")).is_err());
+}
+
+#[test]
+fn catalog_tool_middleware_scopes_use_manifest_authoring_grammar() {
+    let id = TypeId::new("Callable");
+    let mut schema = schema(ConfigFieldKind::Static, SchemaType::ref_to(id.clone()));
+    schema.graph.defs.push(SchemaTypeDef {
+        id: id.clone(),
+        name: None,
+        body: SchemaType::string(),
+    });
+    schema.descriptors.insert(id, ConfigDescriptorKind::Tool);
+    let sources = catalog(json!({}));
+    for (readable, revealable) in [
+        (json!("*"), json!([])),
+        (json!([]), json!("*")),
+        (
+            json!([r"credentials.github\=token"]),
+            json!([r#""database url".password"#]),
+        ),
+        (json!(null), json!(null)),
+    ] {
+        let value = json!({
+            "target":"grep",
+            "middleware":[{
+                "name":"audit",
+                "secretKeysReadable":readable,
+                "secretKeysRevealable":revealable
+            }]
+        });
+        let plan = schema
+            .resolve(
+                &sources,
+                &layers(vec![json!({"setting":value})]),
+                &origin("code"),
+            )
+            .unwrap();
+        assert_eq!(plan[0].source, ConfigSourcePlan::Descriptor(value));
+    }
+    for name in ["secretKeysReadable", "secretKeysRevealable"] {
+        for invalid in [
+            json!("anything"),
+            json!(["*"]),
+            json!(["credentials..key"]),
+            json!(["credentials\\"]),
+            json!([r#""credentials"#]),
+            json!([4]),
+            json!({"kind":"all"}),
+        ] {
+            let value = json!({"target":"grep","middleware":[{"name":"audit",name:invalid}]});
+            assert!(
+                schema
+                    .resolve(
+                        &sources,
+                        &layers(vec![json!({"setting":value})]),
+                        &origin("code"),
+                    )
+                    .is_err(),
+                "unexpectedly accepted {value}"
+            );
+        }
+    }
 }

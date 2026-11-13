@@ -16,6 +16,7 @@ use super::{
     ConfigCatalogKind, ConfigCatalogSources, ConfigError, ConfigOrigin, ConfigSchema, catalog_kind,
     children, deref_type, parse_catalog_path, union_branch,
 };
+use crate::model::parse_agent_config_path;
 use crate::model::retry_policy::RetryPolicy;
 use crate::model::tool::ToolName;
 use crate::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
@@ -97,6 +98,33 @@ impl ConfigDescriptorKind {
                                     return Err(source
                                         .child(key)
                                         .error("unknown middleware property"));
+                                }
+                            }
+                            for name in ["secretKeysReadable", "secretKeysRevealable"] {
+                                if let Some(scope) = object.remove(name)
+                                    && !scope.is_null()
+                                {
+                                    let source = source.child(name);
+                                    match scope {
+                                        Value::String(value) if value == "*" => {}
+                                        Value::Array(paths) => {
+                                            for (index, path) in paths.iter().enumerate() {
+                                                let source = source.child(&index.to_string());
+                                                let path = path
+                                                    .as_str()
+                                                    .filter(|path| *path != "*")
+                                                    .ok_or_else(|| source.error("scope paths must be strings other than '*'"))?;
+                                                parse_agent_config_path(path).map_err(|error| {
+                                                    source.error(error.to_string())
+                                                })?;
+                                            }
+                                        }
+                                        _ => {
+                                            return Err(source.error(
+                                                "scope must be '*' or a list of secret paths",
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                             object
