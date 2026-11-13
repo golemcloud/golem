@@ -267,7 +267,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let mut items = Vec::new();
         let mut result_seen = false;
         let mut finishes = 0;
-        let mut output_ends = 0;
+        let mut output_terminals = 0;
         while let Some(response) = responses.message().await? {
             state
                 .validate_response(&response)
@@ -290,9 +290,19 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                         executor.complete_promise(&gate, Vec::new()).await?;
                     }
                 }
-                Some(invocation_response::Response::OutputEnd(_)) => output_ends += 1,
-                Some(invocation_response::Response::OutputError(error)) => {
-                    assert_ne!(mode, "complete", "successful producer failed: {error:?}");
+                Some(invocation_response::Response::StreamEnd(end)) => {
+                    output_terminals += 1;
+                    match StreamTerminal::try_from(end.outcome.expect("output terminal"))
+                        .map_err(anyhow::Error::msg)?
+                    {
+                        StreamTerminal::Finished => assert_eq!(mode, "complete"),
+                        StreamTerminal::Failed(error) => {
+                            assert_ne!(mode, "complete", "successful producer failed: {error:?}");
+                        }
+                        StreamTerminal::ConsumerCancelled { .. } => {
+                            anyhow::bail!("producer output was cancelled by its consumer");
+                        }
+                    }
                 }
                 Some(invocation_response::Response::Finished(finished)) => {
                     finishes += 1;
@@ -311,10 +321,10 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         }
         assert!(state.is_complete());
         assert_eq!(finishes, 1);
+        assert_eq!(output_terminals, 1);
         let oplog = executor.get_oplog(&worker, checkpoint.next()).await?;
         let recorded = recorded_string_items(&oplog)?;
         if mode == "complete" {
-            assert_eq!(output_ends, 1);
             assert_eq!(items, ["before-terminal", "completed"]);
             assert_eq!(recorded, items);
         } else {
