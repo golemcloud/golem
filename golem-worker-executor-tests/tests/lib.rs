@@ -57,6 +57,7 @@ pub mod observability;
 pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
+pub mod oplog_processor;
 pub mod oplog_sweep;
 pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
@@ -71,6 +72,8 @@ pub mod revert;
 pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
+pub mod scheduled_durable;
+pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
@@ -112,6 +115,8 @@ pub fn raw_params(
 }
 
 tag_suite!(api, group1);
+tag_suite!(scheduled_durable, group1);
+tag_suite!(scheduled_ephemeral, group1);
 tag_suite!(retry_lifecycle, group1);
 tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
@@ -150,6 +155,7 @@ tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
+tag_suite!(oplog_processor, group1);
 tag_suite!(oplog_unreadable, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);

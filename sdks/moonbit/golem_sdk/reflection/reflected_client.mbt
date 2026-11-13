@@ -418,7 +418,7 @@ pub fn AgentType::new_phantom_value_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(constructor_value, None, None, overrides)
   } else {
-    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+    let phantom_id = @identity.new_phantom_id()
     let identity = self.agent_id_value(
       constructor_value,
       phantom_id=Some(phantom_id),
@@ -443,7 +443,7 @@ pub fn AgentType::new_phantom_json_with_config(
   if self.mode == Ephemeral {
     self.client_value_with_config(packed_constructor, None, None, overrides)
   } else {
-    let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+    let phantom_id = @identity.new_phantom_id()
     let identity = self.agent_id_value(
       packed_constructor,
       phantom_id=Some(phantom_id),
@@ -549,7 +549,7 @@ pub fn AgentType::new_phantom_value(
   guard self.mode == Durable else {
     raise Identity("phantom identities are unavailable for ephemeral agents")
   }
-  let phantom_id = @schema.Uuid::from_wit(@apiHost.generate_idempotency_key())
+  let phantom_id = @identity.new_phantom_id()
   self.resume_phantom_value(constructor_value, phantom_id)
 }
 

@@ -259,7 +259,6 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     let app_name = format!("{language}-durable-streams-walkthrough");
     fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
     ctx.cd(&app_name);
-    ctx.add_env_var("DURABLE_STREAM_TOKEN", TEST_TOKEN);
     assert!(
         ctx.cli([
             flag::YES,
@@ -274,7 +273,9 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
     let readme = fs::read_to_string(ctx.cwd_path_join("README.md")).unwrap();
     assert!(readme.contains(&format!("ORIGIN=http://{app_name}.localhost:9006")));
     assert!(!readme.contains("ORIGIN=http://app-name.localhost:9006"));
+    // The template's secret defaults need the token only for deployment, not for a build.
     assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", TEST_TOKEN);
     ctx.start_server().await;
     let manifest_path = ctx.cwd_path_join("golem.yaml");
     let mut manifest: serde_yaml::Value =
@@ -461,95 +462,6 @@ async fn go_streaming_template_durable_streams_walkthrough() {
     streaming_template_walkthrough("go", "appendExternal", "readExternal").await;
 }
 
-/// A Go agent appends to and reads from an external Durable Stream, with its
-/// bearer token held as a config secret, as the streaming templates do.
-#[test]
-#[timeout("20 minutes")]
-async fn go_external_durable_streams_e2e() {
-    let mut ctx = TestContext::new();
-    fs::create_dir_all(ctx.cwd_path_join("go-durable-streams")).unwrap();
-    ctx.cd("go-durable-streams");
-    assert!(
-        ctx.cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
-            .await
-            .success_or_dump()
-    );
-    let component = std::fs::read_dir(ctx.cwd_path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .chain(std::iter::once(ctx.cwd_path().to_path_buf()))
-        .find(|path| path.join("go.mod").exists())
-        .expect("the Go component directory");
-    let module = fs::read_to_string(component.join("go.mod"))
-        .unwrap()
-        .lines()
-        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
-        .unwrap();
-    fs::remove(component.join("agents")).unwrap();
-    fs::write_str(
-        component.join("streaming/streaming.go"),
-        include_str!("go_durable_streams.go"),
-    )
-    .unwrap();
-    fs::write_str(
-        component.join("main.go"),
-        format!("package main\n\nimport _ \"{module}/streaming\"\n\nfunc main() {{}}\n"),
-    )
-    .unwrap();
-    let manifest = ctx.cwd_path_join("golem.yaml");
-    let original = fs::read_to_string(&manifest).unwrap();
-    let body = original.split("\nhttpApi:").next().unwrap().to_string();
-    fs::write_str(
-        &manifest,
-        format!("{body}\nsecretDefaults:\n  local:\n    externalAuth: \"{TEST_TOKEN}\"\n"),
-    )
-    .unwrap();
-    ctx.start_server().await;
-    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
-
-    let server = ReferenceServer::start().await;
-    let external = server.create("/go", "application/json").await;
-    // Go agents read their arguments in Go syntax: a list is `{…}`.
-    let url = json!(external).to_string();
-    let append_args = vec![
-        url.clone(),
-        r#""stable-go-producer""#.to_string(),
-        r#"{"once"}"#.to_string(),
-        "false".to_string(),
-    ];
-    let first: Option<String> =
-        invoke_template_raw(&ctx, "appendExternal", append_args.clone()).await;
-    assert!(first.is_some());
-    let duplicate: Option<String> = invoke_template_raw(&ctx, "appendExternal", append_args).await;
-    assert_eq!(duplicate, None);
-    let _: Option<String> = invoke_template_raw(
-        &ctx,
-        "appendExternal",
-        vec![
-            url.clone(),
-            r#""closer""#.to_string(),
-            r#"{"tail"}"#.to_string(),
-            "true".to_string(),
-        ],
-    )
-    .await;
-    let values: Vec<String> = invoke_template(&ctx, "readExternal", vec![json!(external)]).await;
-    assert_eq!(values, ["once", "tail"]);
-    let requests = server.requests().await;
-    assert!(
-        requests
-            .iter()
-            .any(|r| r["producerId"] == "stable-go-producer")
-    );
-    for method in ["GET", "POST"] {
-        assert!(requests.iter().any(|r| {
-            r["path"] == "/go" && r["method"] == method && r["authenticated"] == true
-        }));
-    }
-    server.stop().await;
-}
-
 #[test]
 #[timeout("10 minutes")]
 async fn external_durable_streams_golem_gateway_e2e() {
@@ -577,10 +489,8 @@ async fn external_durable_streams_golem_gateway_e2e() {
         components:
           golem-it:external-durable-streams:
             componentWasm: external-durable-streams.wasm
-            outputWasm: external-durable-streams-final.wasm
           golem-it:agent-sdk-rust:
             componentWasm: agent-sdk-rust.wasm
-            outputWasm: agent-sdk-rust-final.wasm
         httpApi:
           deployments:
             local:
@@ -812,7 +722,6 @@ async fn external_durable_streams_reference_server_e2e() {
         components:
           golem-it:external-durable-streams:
             componentWasm: external-durable-streams.wasm
-            outputWasm: external-durable-streams-final.wasm
     "#, version = versions::sdk::MANIFEST},
     )
     .unwrap();

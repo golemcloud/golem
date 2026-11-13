@@ -26,7 +26,7 @@ use crate::services::file_loader::FileLoader;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::owner_wallet::WalletCards;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::component::{ComponentId, ComponentRevision, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
@@ -84,7 +84,7 @@ impl RevisionUpdateInputs {
     pub(crate) fn of<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
         Self {
             component_service: ctx.state.component_service.clone(),
-            component_id: ctx.owned_agent_id.component_id(),
+            component_id: ctx.owner_component_metadata().id,
         }
     }
 }
@@ -109,7 +109,7 @@ impl RevisionFileInputs {
 /// What the update of an instance reads from its worker context after it has fetched the metadata
 /// of the revision: the parsed agent id and the initial agent config.
 pub(crate) struct AgentInputs {
-    pub(crate) agent_id: Option<ParsedAgentId>,
+    pub(crate) agent_id: Option<ParsedAgentKey>,
     pub(crate) initial_agent_config: Vec<TypedAgentConfigEntry>,
 }
 

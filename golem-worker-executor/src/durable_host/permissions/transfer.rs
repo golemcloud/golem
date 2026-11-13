@@ -17,7 +17,7 @@ use super::{
     AgentCardHolder, AgentId, AgentPermissionMonomorphizationContext, CardHolder, CardId,
     CardManagedBy, CardManagedByRuntimeDerived, CardTransferData, DurableWorkerCtx,
     GolemPermissionsInstallTransfer, HasWorker, HostRequest, HostRequestPermissionCardTransfer,
-    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, ParsedAgentId,
+    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, ParsedAgentKey,
     PendingCardEventRef, PendingSourceCardTransferRetry, PendingSourceTransferProgress,
     PermissionCardDeriveError, QueuedCardEvent, QueuedCardEventTransfer, RecipientOwnerContext,
     RecipientPattern, RuntimeCardCreation, SourceTransferProgress, StoredCard, Timestamp, Uuid,
@@ -69,7 +69,7 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
     target: AgentId,
 ) -> Result<InstallAgentTarget, permissions_types::PermissionError> {
     let owned_target = OwnedAgentId::new(ctx.owned_agent_id().environment_id(), &target);
-    let target_revision = ctx
+    let target_metadata = ctx
         .state
         .worker_service
         .get(&owned_target)
@@ -78,29 +78,45 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
             permissions_types::PermissionError::NotPermitted(format!(
                 "install-card target metadata lookup failed: {error}"
             ))
-        })?
-        .map(|metadata| {
-            metadata
-                .last_known_status
-                .map(|status| status.component_revision)
-                .unwrap_or(
-                    metadata
-                        .initial_worker_metadata
-                        .last_known_status
-                        .component_revision,
-                )
-        });
+        })?;
+    let target_revision = target_metadata.as_ref().map(|metadata| {
+        metadata
+            .last_known_status
+            .as_ref()
+            .map(|status| status.component_revision)
+            .unwrap_or(
+                metadata
+                    .initial_worker_metadata
+                    .last_known_status
+                    .component_revision,
+            )
+    });
     let component = ctx
         .state
         .component_service
-        .get_metadata(target.component_id, target_revision)
+        .get_metadata(
+            target_metadata
+                .as_ref()
+                .map_or(target.component_id, |metadata| {
+                    metadata.initial_worker_metadata.component_id
+                }),
+            target_revision,
+        )
         .await
         .map_err(|error| {
             permissions_types::PermissionError::NotPermitted(format!(
                 "install-card target metadata lookup failed: {error}"
             ))
         })?;
-    let agent_type = ParsedAgentId::parse_agent_type_name(&target.agent_id).map_err(|error| {
+    let agent_type = match &target_metadata {
+        Some(metadata) => metadata
+            .initial_worker_metadata
+            .agent_type_name
+            .clone()
+            .ok_or_else(|| "Owner has no agent type".to_string()),
+        None => ParsedAgentKey::parse_agent_type_name(&target.agent_id),
+    }
+    .map_err(|error| {
         permissions_types::PermissionError::InvalidRecipient(format!(
             "invalid install target agent ID: {error}"
         ))

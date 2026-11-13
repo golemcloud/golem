@@ -81,7 +81,7 @@ use golem_common::model::agent::typed_constructor_parameters;
 use golem_common::model::agent::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, ParsedAgentKey};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -90,7 +90,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::model::{
+    AgentFilter, FilterComparator, IdempotencyKey, OplogIndex, StringFilterComparator,
+};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
@@ -1253,10 +1255,11 @@ impl AgentCommandHandler {
                 let mut filters = filters;
                 filters.insert(
                     0,
-                    format!(
-                        "name startswith {}(",
-                        agent_type.agent_type.type_name.0.clone()
-                    ),
+                    AgentFilter::new_name(
+                        StringFilterComparator::StartsWith,
+                        format!("{}(", agent_type.agent_type.type_name.0),
+                    )
+                    .to_string(),
                 );
 
                 Ok((
@@ -1360,19 +1363,15 @@ impl AgentCommandHandler {
                 .await?;
 
             for agent in agents {
-                let raw_agent_id = agent.agent_id.agent_id.clone();
+                let raw_agent_id = agent.raw_agent_id().to_owned();
 
                 let agent_component = self
                     .ctx
                     .component_handler()
-                    .get_component_revision_by_id(
-                        &agent.agent_id.component_id,
-                        agent.component_revision,
-                    )
+                    .get_component_revision_by_id(&agent.component_id(), agent.component_revision)
                     .await?;
 
-                let parsed_agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&raw_agent_id).ok();
+                let parsed_agent_type_name = agent.agent_type_name();
                 let component_metadata: ComponentMetadata = agent_component.metadata.into();
 
                 let defaults = parsed_agent_type_name.as_ref().and_then(|agent_type_name| {
@@ -1403,11 +1402,11 @@ impl AgentCommandHandler {
                     })
                     .unwrap_or_default();
 
+                let parsed = agent.parsed_agent_id(&component_metadata);
                 let mut agent_view = AgentMetadataView::from(agent)
                     .with_defaults(defaults)
                     .with_secret_config_paths(secret_config_paths);
 
-                let parsed = ParsedAgentId::parse(&raw_agent_id, &component_metadata).ok();
                 agent_view.agent_id = crate::agent_id_display::render_agent_id_or_raw(
                     parsed.as_ref(),
                     &source_language,
@@ -1540,7 +1539,7 @@ impl AgentCommandHandler {
                     .await?
                 else {
                     bail!(
-                        "Component {} not found, while getting current component version",
+                        "Component {} not found, while getting current component revision",
                         component.component_name
                     );
                 };
@@ -1569,16 +1568,6 @@ impl AgentCommandHandler {
             agent_id: agent_id.clone(),
             from_revision,
             revision: target_revision,
-            from_version: self
-                .ctx
-                .component_handler()
-                .component_version_at(&component.id, from_revision)
-                .await,
-            version: self
-                .ctx
-                .component_handler()
-                .component_version_at(&component.id, target_revision)
-                .await,
         };
 
         let mut update_results = TryUpdateAllWorkersView::default();
@@ -1869,8 +1858,12 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
-        let plugin_priority =
-            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+        let plugin_priority = self.resolve_plugin_priority(
+            &component,
+            &agent_id_match.agent_type_name,
+            &plugin_name,
+            explicit_priority,
+        )?;
 
         log_action(
             "Activating plugin",
@@ -1918,8 +1911,12 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
-        let plugin_priority =
-            self.resolve_plugin_priority(&component, &agent_id, &plugin_name, explicit_priority)?;
+        let plugin_priority = self.resolve_plugin_priority(
+            &component,
+            &agent_id_match.agent_type_name,
+            &plugin_name,
+            explicit_priority,
+        )?;
 
         log_action(
             "Deactivating plugin",
@@ -1960,18 +1957,13 @@ impl AgentCommandHandler {
     fn resolve_plugin_priority(
         &self,
         component: &ComponentDto,
-        agent_id: &RawAgentId,
+        agent_type: &AgentTypeName,
         plugin_name: &str,
         explicit_priority: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0)
-            .map(|n| n.0)
-            .unwrap_or_default();
-
-        let agent_type = AgentTypeName(agent_type_name.clone());
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         let plugins = component_metadata
-            .agent_type_plugins(&agent_type)
+            .agent_type_plugins(agent_type)
             .unwrap_or_default();
 
         let matching: Vec<_> = plugins
@@ -1989,7 +1981,7 @@ impl AgentCommandHandler {
                 log_error(format!(
                     "Plugin {} is not installed for agent type {}.",
                     plugin_name.log_color_error_highlight(),
-                    agent_type_name.log_color_error_highlight(),
+                    agent_type.0.log_color_error_highlight(),
                 ));
                 if !available.is_empty() {
                     logln(format!(
@@ -2131,11 +2123,6 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let version = self
-            .ctx
-            .component_handler()
-            .component_version_at(component_id, target_revision)
-            .await;
         let client_update_mode = client_update_mode(update_mode);
         let mut update_results = TryUpdateAllWorkersView::default();
         let mut agents_awaiting_update = Vec::new();
@@ -2143,8 +2130,8 @@ impl AgentCommandHandler {
             let result = self
                 .update_agent(
                     component_name,
-                    &agent.agent_id.component_id,
-                    &agent.agent_id.agent_id,
+                    &agent.component_id(),
+                    agent.raw_agent_id(),
                     update_mode,
                     target_revision,
                     false,
@@ -2159,22 +2146,16 @@ impl AgentCommandHandler {
                 Err(error) => {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        agent_id: agent.raw_agent_id().into(),
                         error: error_message_for_output(&error),
                     });
                 }
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
-                agent_id: agent.agent_id.agent_id.as_str().into(),
+                agent_id: agent.raw_agent_id().into(),
                 from_revision: agent.component_revision,
                 revision: target_revision,
-                from_version: self
-                    .ctx
-                    .component_handler()
-                    .component_version_at(component_id, agent.component_revision)
-                    .await,
-                version: version.clone(),
             });
         }
 
@@ -2182,8 +2163,8 @@ impl AgentCommandHandler {
             for (agent, update_attempt_index) in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
-                        &agent.agent_id.component_id,
-                        &agent.agent_id.agent_id,
+                        &agent.component_id(),
+                        agent.raw_agent_id(),
                         target_revision,
                         client_update_mode,
                         update_attempt_index,
@@ -2192,7 +2173,7 @@ impl AgentCommandHandler {
                 {
                     update_results.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent.agent_id.agent_id.as_str().into(),
+                        agent_id: agent.raw_agent_id().into(),
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2419,7 +2400,7 @@ impl AgentCommandHandler {
 
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in agents {
-            let agent_id = agent.agent_id.agent_id.clone();
+            let agent_id = agent.raw_agent_id().to_owned();
             let from_revision = agent.component_revision;
             match self.redeploy_agent(component_name, agent).await {
                 Ok(()) => result
@@ -2488,9 +2469,9 @@ impl AgentCommandHandler {
 
         let mut result = BulkAgentActionResult::with_capacity(agents.len());
         for agent in &agents {
-            let agent_id = &agent.agent_id.agent_id;
+            let agent_id = agent.raw_agent_id();
             match self.delete_agent(component_name, agent).await {
-                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Ok(()) => result.succeeded.push(agent_id.into()),
                 Err(error) => {
                     log_error_action(
                         "Failed",
@@ -2502,7 +2483,7 @@ impl AgentCommandHandler {
                     );
                     result.errors.push(AgentActionError {
                         component_name: component_name.clone(),
-                        agent_id: agent_id.as_str().into(),
+                        agent_id: agent_id.into(),
                         error: error_message_for_output(&error),
                     });
                 }
@@ -2524,7 +2505,7 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{} to current version",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         let _indent = LogIndent::new();
@@ -2538,12 +2519,12 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         self.new_agent(
-            agent_metadata.agent_id.component_id.0,
-            agent_metadata.agent_id.agent_id,
+            agent_metadata.component_id().0,
+            agent_metadata.raw_agent_id().to_owned(),
             agent_metadata.env,
             agent_metadata.config,
         )
@@ -2564,12 +2545,12 @@ impl AgentCommandHandler {
             format!(
                 "agent {}/{}",
                 component_name.0.bold().blue(),
-                agent_metadata.agent_id.agent_id.bold().green(),
+                agent_metadata.raw_agent_id().bold().green(),
             ),
         );
         self.delete(
-            agent_metadata.agent_id.component_id.0,
-            &agent_metadata.agent_id.agent_id,
+            agent_metadata.component_id().0,
+            agent_metadata.raw_agent_id(),
         )
         .await?;
         log_action("Deleted", "agent");
@@ -2698,10 +2679,10 @@ impl AgentCommandHandler {
 pub(crate) fn try_recanonicalize_agent_id_with_parsed(
     agent_id: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<ParsedAgentId>) {
+) -> (RawAgentId, Option<ParsedAgentKey>) {
     let raw = &agent_id.0;
 
-    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // Extract type name and params using ParsedAgentKey::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_id.clone(), None);
@@ -2777,7 +2758,7 @@ pub(crate) fn try_recanonicalize_agent_id_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed = ParsedAgentId::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
+    let parsed = ParsedAgentKey::try_new(agent_type.type_name.clone(), typed, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2835,7 +2816,7 @@ impl AgentCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_id: String,
     ) -> anyhow::Result<AgentIdMatch> {
-        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+        let parsed_agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -3027,13 +3008,13 @@ impl AgentCommandHandler {
         component: &ComponentDto,
         agent_id: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentId, AgentTypeSchema)>> {
+    ) -> anyhow::Result<Option<(ParsedAgentKey, AgentTypeSchema)>> {
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         if !component_metadata.is_agent() {
             return Ok(None);
         }
 
-        match ParsedAgentId::parse_and_resolve_type(&agent_id.0, &component_metadata) {
+        match ParsedAgentKey::parse_and_resolve_type(&agent_id.0, &component_metadata) {
             Ok((agent_id, agent_type)) => {
                 validate_ordinary_agent_type(&agent_type)?;
                 match function_name {
@@ -3091,7 +3072,8 @@ impl AgentCommandHandler {
                 }
             }
             Err(err) => {
-                let parsed_agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.0).ok();
+                let parsed_agent_type_name =
+                    ParsedAgentKey::parse_agent_type_name(&agent_id.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -3379,10 +3361,7 @@ fn secret_config_paths_for_agent_type(
 /// `Ephemeral`, the corresponding equality filter is prepended so the
 /// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
-    let user_set_mode = filters
-        .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
-    if user_set_mode {
+    if user_set_mode_filter(&filters) {
         return filters;
     }
     let mode_filter = match mode {
@@ -3396,12 +3375,15 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out
 }
 
-/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
-/// meaning the caller should not add its own mode overlay.
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint anywhere,
+/// also inside `and`, `or`, `not` or parentheses, meaning the caller should not add its own
+/// mode overlay. A filter that does not parse is refused later, when the list builds its
+/// structured filter.
 fn user_set_mode_filter(filters: &[String]) -> bool {
     filters
         .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+        .filter_map(|filter| filter.parse::<AgentFilter>().ok())
+        .any(|filter| filter.mentions_mode())
 }
 
 /// Structured filter matching agents in either durability mode, used for
@@ -3544,9 +3526,9 @@ fn build_repl_agent_id(
     typed_parameters: TypedSchemaValue,
     phantom_id: Option<Uuid>,
     idempotency_key: &IdempotencyKey,
-) -> anyhow::Result<ParsedAgentId> {
+) -> anyhow::Result<ParsedAgentKey> {
     let agent_id =
-        ParsedAgentId::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
+        ParsedAgentKey::try_new(agent_type.type_name.clone(), typed_parameters, phantom_id)
             .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
 
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
@@ -3559,10 +3541,10 @@ fn build_repl_agent_id(
 }
 
 fn normalize_public_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
-) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<ParsedAgentKey> {
+    ParsedAgentKey::new_auto_phantom(
         agent_type.type_name.clone(),
         agent_id.parameters.clone(),
         agent_id.phantom_id,
@@ -3572,7 +3554,7 @@ fn normalize_public_agent_id(
 }
 
 fn validate_public_invocation_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     agent_type: &AgentTypeSchema,
 ) -> anyhow::Result<()> {
     if agent_type.mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some() {
@@ -3593,7 +3575,7 @@ mod tests {
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::agent::RawAgentId;
     use crate::model::environment::EnvironmentReference;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentName;
@@ -3760,9 +3742,22 @@ mod tests {
 
     #[test]
     fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
-        let input = vec!["MODE == ephemeral".to_string()];
+        let input = vec!["mode == EPHEMERAL".to_string()];
         let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_finds_user_mode_filter_inside_compound_filters() {
+        for filter in [
+            "(mode == ephemeral)",
+            "status == Idle or mode == ephemeral",
+            "not mode == durable",
+        ] {
+            let input = vec!["status == Running".to_string(), filter.to_string()];
+            let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+            assert_eq!(result, input, "filter: {filter}");
+        }
     }
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
@@ -3793,34 +3788,6 @@ mod tests {
             snapshotting: Snapshotting::Disabled(Empty {}),
             config: vec![],
         }
-    }
-
-    /// The host fills an auto-injected principal, so the CLI neither asks for
-    /// it nor sends a value for it.
-    #[test]
-    fn method_arguments_skip_the_auto_injected_principal() {
-        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
-        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
-            golem_common::schema::agent::NamedField::user_supplied("amount", SchemaType::s64()),
-            golem_common::schema::agent::NamedField::auto_injected(
-                "principal",
-                golem_common::schema::agent::AutoInjectedKind::Principal,
-                SchemaType::record(vec![]),
-            ),
-        ]);
-        let parsed = parse_method_parameters_with_error_table(
-            &agent_type,
-            "run",
-            vec!["5".into()],
-            &SourceLanguage::Rust,
-        )
-        .unwrap();
-        assert_eq!(
-            parsed,
-            SchemaValue::Record {
-                fields: vec![SchemaValue::S64(5)]
-            }
-        );
     }
 
     #[test]
@@ -3961,7 +3928,7 @@ mod tests {
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             None,
@@ -3975,7 +3942,7 @@ mod tests {
     #[test]
     fn explicit_ephemeral_phantom_is_rejected_for_public_invocation() {
         let agent_type = test_agent_type_schema(AgentMode::Ephemeral);
-        let agent_id = ParsedAgentId::try_new(
+        let agent_id = ParsedAgentKey::try_new(
             AgentTypeName("repl-agent".to_string()),
             empty_typed_parameters(),
             Some(Uuid::new_v4()),

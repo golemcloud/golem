@@ -82,7 +82,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -604,7 +604,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &self.owned_agent_id,
                 agent_id,
             ),
-            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 component_baseline_monomorphization_context(
                     self.authority_component_metadata(),
                     &self.owned_agent_id,
@@ -968,7 +968,7 @@ impl InheritedInvocationScope {
 pub(crate) fn agent_effective_surface_from_component_metadata(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
     let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
     let card = agent_initial_card_from_component_metadata(component, agent_id)?;
@@ -984,7 +984,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             let card = StoredCard::Polymorphic(
                 component
                     .metadata
@@ -1004,7 +1004,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
     golem_common::model::card::AgentPermissionMonomorphizationContext {
         account: component.account_email.clone(),
@@ -1042,7 +1042,7 @@ pub(crate) fn owner_monomorphization_context(
         ResolvedOwnerContext::Agent(agent_id) => {
             agent_monomorphization_context(component, owned_agent_id, agent_id)
         }
-        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+        ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
             component_baseline_monomorphization_context(component, owned_agent_id)
         }
     }
@@ -1059,7 +1059,7 @@ pub(in crate::durable_host) fn component_baseline_effective_surface_from_wallet<
 
 pub(crate) fn agent_initial_card_from_component_metadata(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<StoredCard, WorkerExecutorError> {
     let card = component
         .metadata
@@ -1071,7 +1071,7 @@ pub(crate) fn agent_initial_card_from_component_metadata(
 
 fn missing_agent_initial_card_error(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> WorkerExecutorError {
     WorkerExecutorError::invalid_request(format!(
         "Missing initial permission card for agent type {} in component {} revision {}",

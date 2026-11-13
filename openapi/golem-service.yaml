@@ -18029,11 +18029,12 @@ components:
         Authoritative kind of an execution owner.
 
         This is persisted at creation time. In particular, an instance name that
-        happens to look like an external-tool owner never grants that authority.
+        happens to use a reserved owner namespace never grants that authority.
       type: string
       enum:
       - component-agent
       - ephemeral-external-tool
+      - oplog-processor
     PathDirection:
       type: string
       enum:
@@ -22978,6 +22979,9 @@ components:
           format: date-time
         invocation:
           $ref: '#/components/schemas/PublicAgentInvocation'
+        notBefore:
+          type: string
+          format: date-time
       required:
       - timestamp
       - invocation
@@ -24426,10 +24430,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        rootPackageName:
-          type: string
-        rootPackageVersion:
-          type: string
         configSchema:
           default:
             schema:
@@ -24719,6 +24719,7 @@ components:
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
           McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+          IncompatibleConstructorChange: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
@@ -24726,6 +24727,7 @@ components:
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
       - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
+      - $ref: '#/components/schemas/DeployValidationWarning_IncompatibleConstructorChange'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -24750,6 +24752,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_IncompatibleConstructorChange:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: IncompatibleConstructorChange
+            type: string
+            enum:
+            - IncompatibleConstructorChange
+        required:
+        - type
+      - $ref: '#/components/schemas/IncompatibleConstructorChange'
     DeployValidationWarning_McpImportDiscovery:
       allOf:
       - type: object
@@ -25355,12 +25369,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DurableStreamSlotOptions'
-        allowExternalWrites:
-          type: boolean
-        allowStreamDelete:
-          type: boolean
-        allowInvocationDelete:
-          type: boolean
         load:
           $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
       required:
@@ -26187,6 +26195,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        mode:
+          $ref: '#/components/schemas/HttpRouteMode'
         durableStreams:
           $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
@@ -26290,6 +26300,27 @@ components:
       - staticBindings
       - filesystemBindings
       - fileResponseHeaders
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
+    IncompatibleConstructorChange:
+      title: IncompatibleConstructorChange
+      type: object
+      properties:
+        agentType:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - agentType
+      - path
+      - reason
     InitialAgentFile:
       title: InitialAgentFile
       type: object

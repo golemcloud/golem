@@ -13,6 +13,7 @@ use quote::ToTokens;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use syn::{Expr, ImplItem, Item, ItemImpl, Lit, Type};
 use test_r::test;
 use uuid::uuid;
@@ -523,7 +524,7 @@ struct SourceSummary {
 
 #[test]
 fn cli_output_schema_source_kinds_are_consistent() {
-    let summary = collect_source_summary();
+    let summary = &*SOURCE_SUMMARY;
     let mut errors = Vec::new();
 
     if let Ok(path) = std::env::var("GOLEM_CLI_OUTPUT_SUMMARY_MD") {
@@ -623,9 +624,7 @@ fn cli_output_schema_matches_source_registry() {
         "oneOf refs must match output types"
     );
 
-    jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    LazyLock::force(&COMMAND_OUTPUT_SCHEMA_VALIDATOR);
 }
 
 #[test]
@@ -869,8 +868,6 @@ fn component_metadata_displays_tools_middlewares_and_files() {
         metadata: ComponentMetadata::from_parts_with_tools_and_middlewares(
             Default::default(),
             vec![],
-            None,
-            None,
             vec![],
             BTreeMap::new(),
             sample.tools.clone(),
@@ -911,9 +908,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
     assert!(!text.contains("middleware-env-secret"));
     assert!(!text.contains("middleware-plugin-secret"));
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .unwrap();
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     for show_secrets in [false, true] {
         let get = to_structured_output_value_masked(
             ComponentGetView(component.clone()),
@@ -1082,7 +1077,6 @@ fn sample_component_view() -> crate::model::component::ComponentView {
     let mut component = crate::model::component::ComponentView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-        component_version: Some("1.0.0".to_string()),
         component_revision: 1,
         component_size: 0,
         created_at: fixed_datetime(),
@@ -1374,6 +1368,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1390,6 +1385,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1434,10 +1430,7 @@ fn fixed_hash(input: &str) -> golem_common::model::diff::Hash {
 
 #[test]
 fn cli_output_schema_validates_schema_native_secret_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let secret = golem_client::model::AgentSecretDto {
         id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
@@ -1571,9 +1564,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
     })
     .expect("agent.oplog should serialize");
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .expect("command output schema must be valid");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&output),
         "schema rejected agent.oplog secret metadata: {:?}",
@@ -1599,10 +1590,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
 
 #[test]
 fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut runner = proptest::test_runner::TestRunner::deterministic();
 
     let component = arb_component_view()
@@ -1651,10 +1639,7 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 
 #[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1678,10 +1663,7 @@ fn cli_output_schema_rejects_invalid_tool_definition() {
 // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn cli_output_schema_rejects_out_of_range_tool_command_index() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1706,10 +1688,7 @@ fn cli_output_schema_rejects_out_of_range_tool_command_index() {
 
 #[test]
 fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = (arb_component_manifest_trace_result())
         .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
         .expect("component.manifest-trace strategy should produce a value")
@@ -1738,9 +1717,7 @@ fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
 #[test]
 fn cli_output_schema_validates_discriminated_documents() {
     let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let definitions = schema_definitions(&schema);
     for output_type in schema_output_entries(&schema).keys() {
@@ -1780,9 +1757,7 @@ fn cli_output_schema_validates_discriminated_documents() {
 fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
     let schema = load_command_output_schema();
     let definitions = schema_definitions(&schema);
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
         !definition_allows_additional_properties(
@@ -1808,10 +1783,7 @@ fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
 
 #[test]
 fn cli_output_schema_validates_registered_examples() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY {
         for example in (entry.examples)() {
@@ -1840,10 +1812,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
         json!(0.5)
     );
 
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&example),
         "account limits schema should accept fractional memory billable excess: {:?}",
@@ -1857,10 +1826,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
 proptest! {
     #[test]
     fn cli_output_schema_accepts_registered_generated_examples(value in arb_registered_output_document()) {
-        let schema = load_command_output_schema();
-        let validator = jsonschema::options()
-            .build(&schema)
-            .expect("command output schema must be a valid JSON schema");
+        let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
         prop_assert!(
             validator.is_valid(&value),
@@ -1872,6 +1838,12 @@ proptest! {
         );
     }
 }
+
+static COMMAND_OUTPUT_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    jsonschema::options()
+        .build(&load_command_output_schema())
+        .expect("command output schema must be a valid JSON schema")
+});
 
 fn load_command_output_schema() -> Value {
     serde_json::from_str(crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON)
@@ -1935,12 +1907,14 @@ fn registry_output_entries() -> BTreeMap<String, String> {
 }
 
 fn source_output_entries() -> BTreeMap<String, String> {
-    collect_source_summary()
+    SOURCE_SUMMARY
         .outputs
-        .into_iter()
-        .map(|output| (output.type_name(), output.rust_type))
+        .iter()
+        .map(|output| (output.type_name(), output.rust_type.clone()))
         .collect()
 }
+
+static SOURCE_SUMMARY: LazyLock<SourceSummary> = LazyLock::new(collect_source_summary);
 
 fn collect_source_summary() -> SourceSummary {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -2436,7 +2410,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         ..attachment_read.clone()
     };
 
-    vec![
+    let mut entries = vec![
         PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
             timestamp: timestamp(),
             attachment: attachment_read
@@ -2577,6 +2551,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: Some(timestamp()),
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
                 idempotency_key: IdempotencyKey::new("init-key".to_string()),
                 constructor_parameters: typed_string_value("constructor"),
@@ -2768,22 +2743,26 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
                 snapshot: multipart_snapshot(),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
                 idempotency_key: IdempotencyKey::new("process-key".to_string()),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
                 target_revision: ComponentRevision::new(5).unwrap(),
             }),
@@ -2819,7 +2798,24 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
-    ]
+    ];
+    let create = entries
+        .iter()
+        .find_map(|entry| match entry {
+            PublicOplogEntry::Create(parameters) => Some(parameters.clone()),
+            _ => None,
+        })
+        .unwrap();
+    for owner_kind in [
+        golem_common::model::agent::OwnerKind::EphemeralExternalTool,
+        golem_common::model::agent::OwnerKind::OplogProcessor,
+    ] {
+        entries.push(PublicOplogEntry::Create(CreateParams {
+            owner_kind,
+            ..create.clone()
+        }));
+    }
+    entries
 }
 
 fn arb_build_result() -> OutputDocumentStrategy {
@@ -3291,6 +3287,8 @@ fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> 
 }
 
 fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails> {
+    use golem_schema::http::HttpRouteMode;
+
     (
         arb_http_method(),
         proptest::collection::vec(arb_path_segment(), 0..2),
@@ -3322,9 +3320,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
             (
                 arb_small_string(),
                 arb_small_string(),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
                 proptest::option::of(1u32..=16),
                 proptest::option::of(1u32..=1000),
             )
@@ -3332,9 +3327,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     |(
                         input_slot,
                         output_slot,
-                        allow_external_writes,
-                        allow_stream_delete,
-                        allow_invocation_delete,
                         max_concurrent_readers_per_stream,
                         max_append_requests_per_second_per_stream,
                     )| Some(
@@ -3359,9 +3351,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                                 content_type: Some("application/octet-stream".to_string()),
                             },
                         ],
-                            allow_external_writes,
-                            allow_stream_delete,
-                            allow_invocation_delete,
                             load: Some(golem_common::model::agent::DurableStreamRouteLoadOptions {
                                 max_concurrent_readers_per_stream,
                                 max_append_requests_per_second_per_stream,
@@ -3370,6 +3359,12 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     ),
                 ),
         ],
+        proptest::option::of(proptest::sample::select(vec![
+            HttpRouteMode::DurableStreams,
+            HttpRouteMode::Plain,
+            HttpRouteMode::Sse,
+            HttpRouteMode::WebSocket,
+        ])),
     )
         .prop_map(
             |(
@@ -3380,6 +3375,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 auth_details,
                 allowed_patterns,
                 durable_streams,
+                mode,
             )| {
                 golem_common::model::agent::HttpEndpointDetails {
                     http_method,
@@ -3389,6 +3385,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     auth_details,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     durable_streams,
+                    mode,
                 }
             },
         )
@@ -3884,8 +3881,6 @@ type AgentTransitionFields = (
     crate::model::agent::RawAgentId,
     golem_common::model::component::ComponentRevision,
     golem_common::model::component::ComponentRevision,
-    Option<String>,
-    Option<String>,
 );
 
 /// Shared field generator for the two identical revision-transition metas
@@ -3896,58 +3891,44 @@ fn arb_agent_transition_fields() -> BoxedStrategy<AgentTransitionFields> {
         arb_small_string(),
         arb_small_u64(),
         arb_small_u64(),
-        proptest::option::of(arb_small_string()),
-        proptest::option::of(arb_small_string()),
     )
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                (
-                    golem_common::model::component::ComponentName(component_name),
-                    crate::model::agent::RawAgentId(agent_id),
-                    golem_common::model::component::ComponentRevision::new(from_revision)
-                        .expect("generated revision should be valid"),
-                    golem_common::model::component::ComponentRevision::new(revision)
-                        .expect("generated revision should be valid"),
-                    from_version,
-                    version,
-                )
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            (
+                golem_common::model::component::ComponentName(component_name),
+                crate::model::agent::RawAgentId(agent_id),
+                golem_common::model::component::ComponentRevision::new(from_revision)
+                    .expect("generated revision should be valid"),
+                golem_common::model::component::ComponentRevision::new(revision)
+                    .expect("generated revision should be valid"),
+            )
+        })
         .boxed()
 }
 
 fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMeta> {
     arb_agent_transition_fields()
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                crate::model::deploy::AgentUpdateMeta {
-                    component_name,
-                    agent_id,
-                    from_revision,
-                    revision,
-                    from_version,
-                    version,
-                }
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            crate::model::deploy::AgentUpdateMeta {
+                component_name,
+                agent_id,
+                from_revision,
+                revision,
+            }
+        })
         .boxed()
 }
 
 fn arb_agent_redeployment_meta()
 -> BoxedStrategy<crate::model::agent::action_result::AgentRedeploymentMeta> {
     arb_agent_transition_fields()
-        .prop_map(
-            |(component_name, agent_id, from_revision, revision, from_version, version)| {
-                crate::model::agent::action_result::AgentRedeploymentMeta {
-                    component_name,
-                    agent_id,
-                    from_revision,
-                    revision,
-                    from_version,
-                    version,
-                }
-            },
-        )
+        .prop_map(|(component_name, agent_id, from_revision, revision)| {
+            crate::model::agent::action_result::AgentRedeploymentMeta {
+                component_name,
+                agent_id,
+                from_revision,
+                revision,
+            }
+        })
         .boxed()
 }
 
@@ -5262,7 +5243,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             arb_component_layer_id(),
             proptest::option::of(arb_small_string()),
             proptest::option::of(arb_small_string()),
-            proptest::option::of(arb_small_string()),
             arb_vec_merge_mode(),
             proptest::collection::vec(arb_manifest_build_command(), 1..3),
             arb_map_merge_mode(),
@@ -5293,7 +5273,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 second_layer_id,
                 selection,
                 component_wasm,
-                output_wasm,
                 _build_mode,
                 build,
                 _custom_commands_mode,
@@ -5349,9 +5328,6 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
             properties
                 .component_wasm
                 .apply_layer(&second_layer_id, selection, component_wasm);
-            properties
-                .output_wasm
-                .apply_layer(&second_layer_id, selection, output_wasm);
             properties.build.apply_layer(
                 &layer_id,
                 selection,
@@ -5701,7 +5677,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
     (
         arb_small_string(),
         arb_uuid(),
-        proptest::option::of(arb_small_string()),
         arb_small_u64(),
         arb_small_u64(),
         Just(fixed_datetime()),
@@ -5719,7 +5694,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
             |(
                 component_name,
                 component_id,
-                component_version,
                 component_revision,
                 component_size,
                 created_at,
@@ -5748,7 +5722,6 @@ fn arb_component_view() -> BoxedStrategy<crate::model::component::ComponentView>
                 crate::model::component::ComponentView {
                     component_name: golem_common::model::component::ComponentName(component_name),
                     component_id: golem_common::model::component::ComponentId(component_id),
-                    component_version,
                     component_revision,
                     component_size,
                     created_at,
@@ -5965,6 +5938,12 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    agent_types: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                            golem_common::model::agent::AgentTypeName("agent".to_string()),
+                        )),
+                    )]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -6004,6 +5983,25 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    agent_types: BTreeMap::from_iter([
+                        (
+                            "agent".to_string(),
+                            golem_common::model::diff::HashOf::form_value(
+                                golem_common::schema::agent::AgentTypeSchema {
+                                    description: "changed".to_string(),
+                                    ..sample_agent_type_schema(
+                                        golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                    )
+                                },
+                            ),
+                        ),
+                        (
+                            "added".to_string(),
+                            golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                                golem_common::model::agent::AgentTypeName("added".to_string()),
+                            )),
+                        ),
+                    ]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -6851,20 +6849,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_hash(),
         arb_small_u64(),
         proptest::collection::vec(
-            (
-                proptest::option::of(any::<u32>()),
-                proptest::option::of(arb_small_string()),
-                arb_small_string(),
-            )
-                .prop_map(|(import_index, upstream_tool_name, reason)| {
-                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
-                        golem_common::model::deployment::McpImportDiscovery {
-                            import_index,
-                            upstream_tool_name,
-                            reason,
-                        },
-                    )
-                }),
+            prop_oneof![
+                (
+                    proptest::option::of(any::<u32>()),
+                    proptest::option::of(arb_small_string()),
+                    arb_small_string(),
+                )
+                    .prop_map(|(import_index, upstream_tool_name, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                            golem_common::model::deployment::McpImportDiscovery {
+                                import_index,
+                                upstream_tool_name,
+                                reason,
+                            },
+                        )
+                    }),
+                (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                    |(agent_type, path, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::IncompatibleConstructorChange(
+                            golem_common::model::deployment::IncompatibleConstructorChange {
+                                agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                                path,
+                                reason,
+                            },
+                        )
+                    }
+                ),
+            ],
             0..4,
         ),
     )
@@ -7026,7 +7037,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
         proptest::option::of(arb_url_string()),
         any::<bool>(),
         proptest::option::of(any::<bool>()),
-        arb_format_string(),
+        arb_format(),
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
@@ -7038,11 +7049,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
                         .map(|url| url.parse().expect("generated URL should parse")),
                     allow_insecure,
                     authenticated,
-                    config: crate::config::ProfileConfig {
-                        default_format: default_format
-                            .parse()
-                            .expect("generated format should parse"),
-                    },
+                    config: crate::config::ProfileConfig { default_format },
                 }
             },
         )

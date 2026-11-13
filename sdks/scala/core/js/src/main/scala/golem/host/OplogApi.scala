@@ -48,9 +48,23 @@ object OplogApi {
     parameters: Map[String, String]
   )
 
+  enum OwnerKind {
+    case ComponentAgent, EphemeralExternalTool, OplogProcessor
+  }
+
+  object OwnerKind {
+    private[host] def fromJs(raw: String): OwnerKind = raw match {
+      case "component-agent"         => ComponentAgent
+      case "ephemeral-external-tool" => EphemeralExternalTool
+      case "oplog-processor"         => OplogProcessor
+      case other                     => throw new IllegalArgumentException(s"Unknown owner kind: $other")
+    }
+  }
+
   final case class CreateParameters(
     timestamp: ContextApi.DateTime,
     agentId: AgentHostApi.AgentIdLiteral,
+    ownerKind: OwnerKind,
     componentRevision: BigInt,
     env: Map[String, String],
     createdBy: String,
@@ -237,7 +251,8 @@ object OplogApi {
 
   final case class PendingAgentInvocationParameters(
     timestamp: ContextApi.DateTime,
-    invocation: AgentInvocation
+    invocation: AgentInvocation,
+    notBefore: Option[ContextApi.DateTime]
   )
 
   sealed trait UpdateDescription extends Product with Serializable
@@ -647,6 +662,7 @@ object OplogApi {
     CreateParameters(
       timestamp = parseDateTime(raw.timestamp),
       agentId = parseAgentId(raw.agentId),
+      ownerKind = OwnerKind.fromJs(raw.ownerKind),
       componentRevision = BigInt(raw.componentRevision.toString),
       env = raw.env.toSeq.map(t => t._1 -> t._2).toMap,
       createdBy = raw.createdBy.toString,
@@ -953,7 +969,11 @@ object OplogApi {
       case other =>
         throw new IllegalArgumentException(s"Unknown AgentInvocation tag: $other")
     }
-    PendingAgentInvocationParameters(timestamp = parseDateTime(raw.timestamp), invocation = agentInv)
+    PendingAgentInvocationParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      invocation = agentInv,
+      notBefore = raw.notBefore.toOption.map(parseDateTime)
+    )
   }
 
   private def parsePendingUpdateParameters(raw: JsPendingUpdateParameters): PendingUpdateParameters = {

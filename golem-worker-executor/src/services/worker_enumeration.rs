@@ -10,9 +10,7 @@ use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::base_model::worker_filter::{
-    AgentAndFilter, AgentModeFilter, AgentNotFilter, AgentOrFilter, FilterComparator,
-};
+use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -20,22 +18,6 @@ use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{Instrument, info, warn};
-
-/// Returns `true` if `filter` contains any `Mode(...)` reference at any depth.
-fn contains_mode(filter: &AgentFilter) -> bool {
-    match filter {
-        AgentFilter::Mode(_) => true,
-        AgentFilter::And(AgentAndFilter { filters })
-        | AgentFilter::Or(AgentOrFilter { filters }) => filters.iter().any(contains_mode),
-        AgentFilter::Not(AgentNotFilter { filter }) => contains_mode(filter),
-        AgentFilter::Name(_)
-        | AgentFilter::Status(_)
-        | AgentFilter::Revision(_)
-        | AgentFilter::CreatedAt(_)
-        | AgentFilter::Env(_)
-        | AgentFilter::Config(_) => false,
-    }
-}
 
 /// Derives the `modes` argument for `OplogService::scan_for_component` from the
 /// optional user-supplied `AgentFilter`.
@@ -69,7 +51,7 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
 
     // If the filter doesn't reference Mode at all, the default applies even
     // when other constraints (name, status, ...) are present.
-    if !contains_mode(filter) {
+    if !filter.mentions_mode() {
         return Some(AgentMode::Durable);
     }
 
@@ -100,13 +82,13 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
                     // Non-Mode child: must not hide a Mode reference inside,
                     // otherwise narrowing the scan could drop valid matches.
                     other => {
-                        if contains_mode(other) {
+                        if other.mentions_mode() {
                             return None;
                         }
                     }
                 }
             }
-            // `contains_mode(filter)` was true above and every nested-Mode case
+            // `filter.mentions_mode()` was true above and every nested-Mode case
             // has already short-circuited, so a top-level Mode(Equal, ..) must
             // have been captured.
             mode_eq.map(Some).unwrap_or(None)
@@ -157,7 +139,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             else {
                 continue;
             };
-            if agent_id.component_id == *component_id
+            if metadata.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
             {

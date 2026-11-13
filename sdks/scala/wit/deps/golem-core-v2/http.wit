@@ -1,0 +1,29 @@
+interface http {
+  enum http-route-mode {
+    durable-streams,
+    plain,
+    sse,
+    web-socket,
+  }
+
+  record durable-stream-route-options {
+    slots: list<durable-stream-slot-options>,
+    load: option<durable-stream-route-load-options>,
+  }
+
+  record durable-stream-slot-options {
+    source: durable-stream-slot-source,
+    name: option<string>,
+    content-type: option<string>,
+  }
+
+  variant durable-stream-slot-source {
+    input(string),
+    output(string),
+  }
+
+  record durable-stream-route-load-options {
+    max-concurrent-readers-per-stream: option<u32>,
+    max-append-requests-per-second-per-stream: option<u32>,
+  }
+}

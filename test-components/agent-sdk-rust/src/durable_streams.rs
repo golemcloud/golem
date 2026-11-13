@@ -66,9 +66,6 @@ pub trait DurableStreamAgent {
                 name = "events",
                 content_type = "application/vnd.golem.events"
             ),
-            allow_external_writes = true,
-            allow_stream_delete = false,
-            allow_invocation_delete = false,
             max_concurrent_readers_per_stream = 1,
         )
     )]
@@ -79,9 +76,6 @@ pub trait DurableStreamAgent {
         durable_streams(
             input("input", name = "messages"),
             output("$result", name = "responses"),
-            allow_external_writes = true,
-            allow_stream_delete = false,
-            allow_invocation_delete = false,
             max_concurrent_readers_per_stream = 1,
             max_append_requests_per_second_per_stream = 1,
         )
@@ -96,16 +90,6 @@ pub trait DurableStreamAgent {
         )
     )]
     fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
-
-    #[endpoint(
-        put = "/locked-echo",
-        durable_streams(
-            input("input", name = "locked-messages"),
-            output("$result", name = "locked-responses"),
-            allow_external_writes = false,
-        )
-    )]
-    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 
     #[endpoint(put = "/echo-records")]
     fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
@@ -238,10 +222,6 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 
     fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
-        copy_stream(input, |value| value)
-    }
-
-    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
         copy_stream(input, |value| value)
     }
 

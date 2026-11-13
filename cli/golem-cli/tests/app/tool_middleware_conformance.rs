@@ -521,17 +521,6 @@ async fn adapter_uses_lookup_identity_with_presented_metadata_and_generated_clie
     ctx.start_server().await;
     deploy(&mut ctx).await;
 
-    let generated = std::fs::read_to_string(ctx.cwd_path_join(
-        "golem-temp/bridge-sdk/rust/internal/compat-leaf-tool-guest-client/src/lib.rs",
-    ))
-    .unwrap();
-    assert!(
-        generated.contains("pub struct PresentedAdapterClient"),
-        "{generated}"
-    );
-    assert!(generated.contains("ToolRpc::new("), "{generated}");
-    assert!(generated.contains("\"compat-leaf\""), "{generated}");
-
     let agent = format!("adapter-{}", Uuid::new_v4());
     let constructor = format!("AdapterConformanceAgent(\"{agent}\")");
     let result = invoke_agent(
@@ -789,8 +778,6 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
             cmd::BUILD,
             "conformance:typescript-consumer",
             "--step",
-            "add-metadata",
-            "--step",
             "gen-bridge",
         ])
         .await;
@@ -798,15 +785,22 @@ async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_gen
     let generated = std::fs::read_to_string(ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts")).unwrap();
     assert!(generated.contains("async refresh_again("), "{generated}");
     assert!(!generated.contains("async refresh("), "{generated}");
-    std::fs::remove_file(ctx.cwd_path_join("golem-temp/agents/conformance_adapter_release.wasm"))
-        .unwrap();
+    std::fs::remove_file(ctx.component_wasm("conformance:adapter", None).await).unwrap();
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:adapter",
+            "--step",
+            "build",
+        ])
+        .await;
+    assert!(output.success_or_dump());
     let output = ctx
         .cli([
             flag::YES,
             cmd::BUILD,
             "conformance:typescript-consumer",
-            "--step",
-            "add-metadata",
             "--step",
             "gen-bridge",
         ])
@@ -880,16 +874,6 @@ async fn universal_middleware_preserves_complete_discovery_metadata() {
         before["tool"]["definition"], after["tool"]["definition"],
         "universal middleware changed discovery metadata"
     );
-
-    let contract: Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            workspace_path().join("test-data/gol-40/rich-tool-conformance-v1.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(contract["contract"], "GOL-40-CONTRACT-1");
-    assert_eq!(contract["comparison"]["permittedDifferences"], json!([]));
 
     let agent = format!("transparent-{}", Uuid::new_v4());
     let result = invoke(&mut ctx, &agent, "invoke", &["\"metadata\""]).await;

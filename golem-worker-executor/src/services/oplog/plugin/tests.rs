@@ -567,8 +567,6 @@ impl ComponentService for FakeComponentService {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![],
                 provision_configs,
             ),
@@ -866,6 +864,11 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
+        component_id: agent_id.component_id,
+        agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+            "TestPlugin".into(),
+        )),
+        canonical_key: Some(agent_id.agent_id.clone()),
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
@@ -879,6 +882,12 @@ fn test_worker_metadata(
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     };
 
     let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(

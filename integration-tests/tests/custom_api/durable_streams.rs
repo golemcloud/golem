@@ -274,7 +274,7 @@ async fn string_stream_rejects_text_content_type_at_deployment(
 #[test]
 #[tag(gol_102)]
 #[timeout("180s")]
-async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits(
+async fn customized_json_routes_apply_aliases_and_route_local_load_limits(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
@@ -382,79 +382,6 @@ async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits
             }
         ])
     );
-    let denied_stream_delete = agent
-        .client
-        .delete(agent.base_url.join(&input)?)
-        .send()
-        .await?;
-    assert_eq!(
-        denied_stream_delete.status(),
-        StatusCode::METHOD_NOT_ALLOWED
-    );
-    assert_eq!(
-        header(&denied_stream_delete, ALLOW.as_str()),
-        "PUT, HEAD, GET, POST"
-    );
-    assert_eq!(
-        agent
-            .client
-            .head(agent.base_url.join(&input)?)
-            .send()
-            .await?
-            .status(),
-        StatusCode::OK,
-        "denied stream deletion must not tombstone the stream"
-    );
-    let denied_invocation_delete = agent
-        .client
-        .delete(agent.base_url.join(&base)?)
-        .send()
-        .await?;
-    assert_eq!(
-        denied_invocation_delete.status(),
-        StatusCode::METHOD_NOT_ALLOWED
-    );
-    assert_eq!(
-        header(&denied_invocation_delete, ALLOW.as_str()),
-        "PUT, HEAD, GET"
-    );
-    assert_eq!(
-        agent
-            .client
-            .get(agent.base_url.join(&base)?)
-            .send()
-            .await?
-            .status(),
-        StatusCode::OK,
-        "denied invocation deletion must not cancel the session"
-    );
-    let after_delete_manifest = agent
-        .client
-        .get(agent.base_url.join(&base)?)
-        .send()
-        .await?
-        .json::<Value>()
-        .await?;
-    assert!(
-        after_delete_manifest["streams"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|stream| stream["closed"] == false && stream["cancelled"] == false)
-    );
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        append_json(
-            agent,
-            &input,
-            serde_json::json!("after-denied-delete"),
-            false,
-        )
-        .await?
-        .status(),
-        StatusCode::NO_CONTENT
-    );
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
         agent
@@ -475,12 +402,7 @@ async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits
             .await?
             .json::<Value>()
             .await?,
-        serde_json::json!([
-            "héllo 🌍",
-            "secondary-1",
-            "secondary-2",
-            "after-denied-delete"
-        ])
+        serde_json::json!(["héllo 🌍", "secondary-1", "secondary-2"])
     );
 
     let openapi = agent
@@ -498,7 +420,7 @@ async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits
     let input_path =
         &paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}/streams/messages"];
     assert!(input_path["post"].is_object());
-    assert!(input_path["delete"].is_null());
+    assert!(input_path["delete"].is_object());
     assert!(input_path["get"]["responses"]["429"].is_object());
     assert!(input_path["get"]["responses"]["503"].is_object());
     assert_eq!(
@@ -514,7 +436,8 @@ async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits
         "application/json"
     );
     assert!(
-        paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}"]["delete"].is_null()
+        paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}"]["delete"]
+            .is_object()
     );
     Ok(())
 }
@@ -631,122 +554,16 @@ async fn customized_byte_routes_preserve_mime_sse_and_byte_exact_forks(
         assert_eq!(item["x-golem-stream-slot"]["name"], name);
         assert_eq!(item["x-golem-stream-slot"]["content-type"], MIME);
         assert_eq!(item["x-golem-stream-slot"]["representation"], "bytes");
-        assert!(item["delete"].is_null());
+        assert!(item["delete"].is_object());
         assert_eq!(
             item["get"]["responses"]["200"]["content"][MIME]["schema"]["format"],
             "binary"
         );
     }
     assert!(
-        paths["/durable-stream-agents/{id}/custom-bytes/invocations/{session}"]["delete"].is_null()
+        paths["/durable-stream-agents/{id}/custom-bytes/invocations/{session}"]["delete"]
+            .is_object()
     );
-    Ok(())
-}
-
-#[test]
-#[tag(gol_102)]
-#[timeout("120s")]
-async fn disabled_external_writes_allow_only_empty_open_forks(
-    #[dimension(db)] agent: &HttpTestContext,
-) -> anyhow::Result<()> {
-    let session = Uuid::new_v4().to_string();
-    let route = format!("/durable-stream-agents/ds3-{session}/locked-echo");
-    let base = format!("{route}/invocations/{session}");
-    let input = format!("{base}/streams/locked-messages");
-    assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
-    let before = agent
-        .client
-        .head(agent.base_url.join(&input)?)
-        .send()
-        .await?;
-    let before_offset = header(&before, "stream-next-offset");
-    let denied = append_json(agent, &input, serde_json::json!("forbidden"), false).await?;
-    assert_eq!(denied.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(header(&denied, ALLOW.as_str()), "PUT, HEAD, GET, DELETE");
-    let after = agent
-        .client
-        .head(agent.base_url.join(&input)?)
-        .send()
-        .await?;
-    assert_eq!(header(&after, "stream-next-offset"), before_offset);
-
-    let fork_path =
-        |name: &str| format!("{route}/forks/{name}/invocations/{session}/streams/locked-messages");
-    let empty = fork_path("empty");
-    assert_eq!(
-        agent
-            .client
-            .put(agent.base_url.join(&empty)?)
-            .header("stream-forked-from", &input)
-            .send()
-            .await?
-            .status(),
-        StatusCode::CREATED
-    );
-    let empty_head = agent
-        .client
-        .head(agent.base_url.join(&empty)?)
-        .send()
-        .await?;
-    assert_eq!(empty_head.status(), StatusCode::OK);
-    assert!(!empty_head.headers().contains_key("stream-closed"));
-    assert_eq!(
-        agent
-            .client
-            .get(agent.base_url.join(&empty)?)
-            .send()
-            .await?
-            .json::<Value>()
-            .await?,
-        serde_json::json!([])
-    );
-    let with_content = fork_path("with-content");
-    assert_eq!(
-        agent
-            .client
-            .put(agent.base_url.join(&with_content)?)
-            .header("stream-forked-from", &input)
-            .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!("forbidden"))
-            .send()
-            .await?
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    let closed = fork_path("closed");
-    assert_eq!(
-        agent
-            .client
-            .put(agent.base_url.join(&closed)?)
-            .header("stream-forked-from", &input)
-            .header("stream-closed", "true")
-            .send()
-            .await?
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    for rejected in [with_content, closed] {
-        assert_eq!(
-            agent
-                .client
-                .head(agent.base_url.join(&rejected)?)
-                .send()
-                .await?
-                .status(),
-            StatusCode::NOT_FOUND,
-            "a rejected fork must not create state"
-        );
-    }
-    let openapi = agent
-        .client
-        .get(agent.base_url.join("/openapi.json")?)
-        .send()
-        .await?
-        .json::<Value>()
-        .await?;
-    let locked_input = &openapi["paths"]["/durable-stream-agents/{id}/locked-echo/invocations/{session}/streams/locked-messages"];
-    assert!(locked_input["get"].is_object());
-    assert!(locked_input["post"].is_null());
     Ok(())
 }
 

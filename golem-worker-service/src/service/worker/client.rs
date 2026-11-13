@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::worker::invocation_session_result;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationFailure, InvocationFailureKind, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
-    InvocationStart, LogEvent,
+    InvocationStart, LogEvent, ScheduledInvocationCancellation,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -45,9 +45,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
+use golem_common::model::agent::{
+    AgentMetadataDto, AgentTarget, Principal, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -454,7 +457,7 @@ where
 pub trait WorkerClient: Send + Sync {
     async fn prepare(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -469,7 +472,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn create(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -630,6 +633,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
+        principal: Principal,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -656,11 +660,12 @@ pub trait WorkerClient: Send + Sync {
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool>;
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -969,7 +974,7 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 impl WorkerClient for WorkerExecutorWorkerClient {
     async fn prepare(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -981,11 +986,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let fingerprint = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "prepare_worker",
                 move |client| {
                     let freshness_disposition =
@@ -1029,7 +1036,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn create(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -1039,11 +1046,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
         let fingerprint = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "create_worker",
                 move |worker_executor_client| {
                     let agent_id = agent_id_clone.clone();
@@ -1343,24 +1352,30 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         validate_agent_enumeration_count(count)?;
 
-        if can_use_running_metadata_fast_path(&filter, &cursor) {
+        if let Some(running_filter) = running_metadata_fast_path_filter(&filter, &cursor) {
             let result = self
-                .find_running_metadata_internal(component_id, filter, auth_ctx)
+                .find_running_metadata_internal(
+                    component_id,
+                    Some(running_filter),
+                    auth_ctx.clone(),
+                )
                 .await?;
-
-            Ok((None, result.into_iter().take(count as usize).collect()))
-        } else {
-            self.find_metadata_internal(
-                component_id,
-                filter,
-                cursor,
-                count,
-                precise,
-                environment_id,
-                auth_ctx,
-            )
-            .await
+            // The fast path returns no cursor, so it is only complete when every match fits in
+            // one page.
+            if result.len() <= count as usize {
+                return Ok((None, result));
+            }
         }
+        self.find_metadata_internal(
+            component_id,
+            filter,
+            cursor,
+            count,
+            precise,
+            environment_id,
+            auth_ctx,
+        )
+        .await
     }
 
     async fn resume(
@@ -1883,10 +1898,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
+        principal: Principal,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = source_agent_id.clone();
         let target_agent_id = target_agent_id.clone();
+        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
         self.call_worker_executor(
             source_agent_id.clone(),
             "fork_worker",
@@ -1901,7 +1918,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    principal: Some(principal.clone()),
                 }))
             },
             |response| match response.into_inner() {
@@ -2021,6 +2038,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         let agent_id = agent_id.clone();
         let idempotency_key = idempotency_key.clone();
@@ -2036,6 +2054,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
+                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {
@@ -2215,7 +2234,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
@@ -2230,14 +2249,15 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let agent_id = agent_id.clone();
+        let target = agent_id;
+        let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
 
         let result = self
             .call_worker_executor(
-                agent_id.clone(),
+                target.clone(),
                 "invoke_agent_session",
                 move |worker_executor_client| {
                     let freshness_disposition =
@@ -2851,34 +2871,74 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
     }
 }
 
-fn can_use_running_metadata_fast_path(filter: &Option<AgentFilter>, cursor: &ScanCursor) -> bool {
-    cursor.is_finished() && filter.as_ref().is_some_and(is_filter_with_running_status)
+/// The filter for the running-agents fast path, when the request can use it. The enumeration of
+/// running agents has no default durability mode, so the filter gets the default of the full
+/// enumeration: durable agents only, unless the filter mentions a mode.
+fn running_metadata_fast_path_filter(
+    filter: &Option<AgentFilter>,
+    cursor: &ScanCursor,
+) -> Option<AgentFilter> {
+    let filter = filter.as_ref()?;
+    if !cursor.is_finished() || !is_filter_with_running_status(filter) {
+        return None;
+    }
+    Some(if filter.mentions_mode() {
+        filter.clone()
+    } else {
+        filter.and(AgentFilter::new_mode(
+            FilterComparator::Equal,
+            AgentMode::Durable,
+        ))
+    })
 }
 
 #[cfg(test)]
 mod running_metadata_fast_path_tests {
-    use super::can_use_running_metadata_fast_path;
+    use super::running_metadata_fast_path_filter;
     use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::{AgentFilter, AgentStatus, ScanCursor};
     use test_r::test;
 
-    fn running_filter() -> Option<AgentFilter> {
-        Some(AgentFilter::new_status(
-            FilterComparator::Equal,
-            AgentStatus::Running,
-        ))
+    fn running() -> AgentFilter {
+        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
+    }
+
+    fn mode(mode: AgentMode) -> AgentFilter {
+        AgentFilter::new_mode(FilterComparator::Equal, mode)
     }
 
     #[test]
     fn running_filter_uses_fast_path_only_without_a_cursor() {
-        assert!(can_use_running_metadata_fast_path(
-            &running_filter(),
-            &ScanCursor::default()
-        ));
-        assert!(!can_use_running_metadata_fast_path(
-            &running_filter(),
-            &ScanCursor::new("malformed".to_string())
-        ));
+        assert!(
+            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default()).is_some()
+        );
+        assert!(
+            running_metadata_fast_path_filter(
+                &Some(running()),
+                &ScanCursor::new("malformed".to_string())
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn fast_path_lists_durable_agents_unless_the_filter_mentions_a_mode() {
+        assert_eq!(
+            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default()),
+            Some(AgentFilter::new_and(vec![
+                running(),
+                mode(AgentMode::Durable)
+            ]))
+        );
+        let ephemeral = AgentFilter::new_and(vec![
+            running(),
+            AgentFilter::new_or(vec![mode(AgentMode::Ephemeral), mode(AgentMode::Durable)]),
+        ]);
+        assert_eq!(
+            running_metadata_fast_path_filter(&Some(ephemeral.clone()), &ScanCursor::default()),
+            Some(ephemeral)
+        );
     }
 }
 
@@ -3315,7 +3375,7 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::*;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+    use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -3874,7 +3934,7 @@ mod rejection_mapping_tests {
 
         client
             .invoke_agent(
-                &agent_id,
+                &AgentTarget::Current(agent_id),
                 Some("run".to_string()),
                 Some(SchemaValue {
                     value: Some(schema_value::Value::TupleValue(Default::default())),

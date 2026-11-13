@@ -3651,6 +3651,8 @@ async function refusingServer(statuses, handler) {
   http.on('upgrade', (request, socket, head) => {
     const status = statuses[upgrades++];
     if (status !== undefined) {
+      // A client abort can reset the socket while the refusal is being written.
+      socket.once('error', (error) => assert.equal(error.code, 'ECONNRESET'));
       socket.end(`HTTP/1.1 ${status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
       return;
     }

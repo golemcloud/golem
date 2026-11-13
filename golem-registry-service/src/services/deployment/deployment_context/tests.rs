@@ -208,10 +208,84 @@ fn selector_test_agent(path: &str, optional: bool) -> AgentTypeSchema {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        mode: None,
         durable_streams: None,
     }];
     agent.methods = vec![method];
     agent
+}
+
+#[test]
+fn http_compilation_preserves_route_modes_and_rejects_unserved_redeployment() {
+    use golem_common::schema::{NamedField, NamedFieldType, OutputSchema};
+    use golem_schema::http::HttpRouteMode;
+    use golem_service_base::custom_api::RouteBehaviour;
+
+    for shape in 0..4 {
+        let mut agent = selector_test_agent("/events/{instance}", false);
+        let stream = SchemaType::stream(Some(SchemaType::string()));
+        match shape {
+            0 => {
+                agent.methods[0].input_schema =
+                    InputSchema::parameters([NamedField::user_supplied("events", stream)])
+            }
+            1 => agent.methods[0].output_schema = OutputSchema::Single(Box::new(stream)),
+            2 => {
+                agent.methods[0].output_schema =
+                    OutputSchema::Single(Box::new(SchemaType::record(vec![NamedFieldType {
+                        name: "events".into(),
+                        body: stream,
+                        metadata: Default::default(),
+                    }])))
+            }
+            _ => {}
+        }
+        let mut context = http_context(vec![agent]);
+        let mut errors = vec![];
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let calls: Vec<_> = routes
+            .iter()
+            .filter_map(|route| match &route.behaviour {
+                RouteBehaviour::CallAgent(call) => Some(call),
+                _ => None,
+            })
+            .collect();
+        assert!(!calls.is_empty());
+        let expected = if shape == 3 {
+            HttpRouteMode::Plain
+        } else {
+            HttpRouteMode::DurableStreams
+        };
+        assert!(calls.iter().all(|call| call.route_mode == expected));
+
+        let agent = &mut context
+            .registered_agent_types
+            .values_mut()
+            .next()
+            .unwrap()
+            .agent_type;
+        agent.methods[0].http_endpoint[0].mode = Some(if shape == 3 {
+            HttpRouteMode::DurableStreams
+        } else {
+            HttpRouteMode::Plain
+        });
+        context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
+        assert!(!errors.is_empty());
+        if shape != 3 {
+            assert!(format!("{errors:?}").contains("mode not served yet"));
+        }
+    }
 }
 
 #[test]
@@ -225,6 +299,7 @@ fn required_phantom_mount_emits_only_the_selector_path() {
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert!(errors.is_empty(), "{errors:?}");
         let calls: Vec<_> = routes
@@ -282,6 +357,7 @@ fn phantom_mount_validation_preserves_application_binding_ownership() {
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert!(!errors.is_empty());
     }
@@ -326,7 +402,12 @@ fn optional_phantom_mount_rebinds_captures_and_stream_families() {
             vec!["callbacks".into(), "selected".into()],
         ));
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             routes
@@ -392,6 +473,7 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert_eq!(errors.is_empty(), !optional, "{errors:?}");
     }
@@ -408,6 +490,7 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
             &HashMap::new(),
             &mut errors,
             &mut vec![],
+            &Default::default(),
         );
         assert_eq!(errors.is_empty(), !same_method, "{errors:?}");
     }
@@ -416,7 +499,12 @@ fn optional_phantom_mount_rejects_new_overlap_without_changing_existing_preceden
     selected.methods[0].input_schema =
         InputSchema::parameters([NamedField::user_supplied("value", SchemaType::string())]);
     let mut errors = vec![];
-    http_context(vec![selected]).compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    http_context(vec![selected]).compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
 }
 
@@ -443,6 +531,7 @@ fn query_phantom_mount_compiles_requiredness_and_reserves_stream_controls() {
                     &HashMap::new(),
                     &mut errors,
                     &mut vec![],
+                    &Default::default(),
                 );
                 if streams && name != "instance" {
                     assert!(
@@ -516,8 +605,12 @@ fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
     let context = http_context(vec![router]);
 
     let mut route_errors = vec![];
-    let routes =
-        context.compile_http_api_routes(&HashMap::new(), &mut route_errors, &mut Vec::new());
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut route_errors,
+        &mut Vec::new(),
+        &Default::default(),
+    );
     assert!(
         route_errors.is_empty(),
         "tooling-router-provisioning: {route_errors:?}"
@@ -600,7 +693,12 @@ fn http_mount_compilation_loads_metadata_corpus() {
         }
         let context = http_context(vec![agent]);
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         if let Some(expected_error) = case["expect"]["error"].as_str() {
             let expected_message = match expected_error {
                 "router-mode" => "HTTP router agents must be ephemeral",
@@ -711,7 +809,12 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
         .components
         .insert(component.component_name.clone(), component.clone());
     let mut errors = vec![];
-    let mut routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let mut routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     drop(files);
     prepare_router_file_indexes(&context, &mut routes).unwrap();
@@ -783,7 +886,12 @@ fn http_mount_compilation_provider_limit_and_order() {
     for count in [64, 65] {
         let context = http_context(agents[..count].to_vec());
         let mut errors = vec![];
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert_eq!(errors.is_empty(), count == 64, "{errors:?}");
         if count == 64 {
             assert!(
@@ -797,7 +905,12 @@ fn http_mount_compilation_provider_limit_and_order() {
     }
     let context = http_context(vec![router_agent("a", "/a/b"), router_agent("z", "/a-")]);
     let mut errors = vec![];
-    let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(routes[0].path[0].literal_value(), Some("a-"));
     assert!(routes[0].route_id < routes[1].route_id);
@@ -838,7 +951,12 @@ fn http_mount_compilation_rejects_equal_not_nested_or_literal_parameter_overlap(
     ] {
         let context = http_context(agents);
         let mut errors = vec![];
-        context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+        context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut vec![],
+            &Default::default(),
+        );
         assert_eq!(errors.is_empty(), accepted, "{errors:?}");
     }
 }
@@ -862,12 +980,18 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        mode: None,
         durable_streams: None,
     }];
     agent.methods = vec![method];
     let context = http_context(vec![agent]);
     let mut errors = vec![];
-    let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut vec![]);
+    let routes = context.compile_http_api_routes(
+        &HashMap::new(),
+        &mut errors,
+        &mut vec![],
+        &Default::default(),
+    );
     assert!(errors.is_empty(), "{errors:?}");
     assert!(
         routes
@@ -1257,7 +1381,12 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
         let mut warnings = vec![];
         assert!(
             context
-                .compile_http_api_routes(&HashMap::new(), &mut errors, &mut warnings)
+                .compile_http_api_routes(
+                    &HashMap::new(),
+                    &mut errors,
+                    &mut warnings,
+                    &Default::default()
+                )
                 .is_empty()
         );
         assert!(errors.is_empty());
@@ -1277,7 +1406,12 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 created_at: chrono::Utc::now(),
             },
         );
-        let routes = context.compile_http_api_routes(&HashMap::new(), &mut errors, &mut warnings);
+        let routes = context.compile_http_api_routes(
+            &HashMap::new(),
+            &mut errors,
+            &mut warnings,
+            &Default::default(),
+        );
         assert!(errors.is_empty(), "{errors:?}");
         if kind == AgentTypeKind::HttpRouter || live_files {
             assert_eq!(routes.len(), 3);
@@ -1454,8 +1588,6 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
                 ..KnownExports::default()
             },
             Vec::new(),
-            None,
-            None,
             Vec::new(),
             BTreeMap::new(),
             tools,

@@ -138,6 +138,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         CreateParameters(
           ts,
           mockAgentId,
+          OwnerKind.ComponentAgent,
           BigInt(1),
           Map("env" -> "val"),
           "golem",
@@ -212,7 +213,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           walletPin
         )
       ),
-      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),
+      OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
       OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),
@@ -300,6 +301,13 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("OplogIndex type alias") {
       val idx: OplogIndex = BigInt(99)
       assertTrue(idx == BigInt(99))
+    },
+    test("owner kinds preserve the WIT discriminant") {
+      assertTrue(
+        OwnerKind.fromJs("component-agent") == OwnerKind.ComponentAgent,
+        OwnerKind.fromJs("ephemeral-external-tool") == OwnerKind.EphemeralExternalTool,
+        OwnerKind.fromJs("oplog-processor") == OwnerKind.OplogProcessor
+      )
     }
   )
 }

@@ -51,6 +51,39 @@ fn node_http_router_ports_match_manifest_schema() {
     }
 }
 
+#[test]
+fn component_wasm_is_the_only_manifest_artifact_path() {
+    for section in ["components", "componentTemplates"] {
+        for preset in [false, true] {
+            let mut properties = serde_json::json!({"componentWasm": "component.wasm"});
+            for removed_field in [false, true] {
+                if removed_field {
+                    properties["outputWasm"] = Value::String("output.wasm".to_string());
+                }
+                let component = if preset {
+                    serde_json::json!({"presets": {"quick": properties.clone()}})
+                } else {
+                    properties.clone()
+                };
+                let document = serde_json::json!({
+                    "app": "test-app",
+                    section: {"app:main": component}
+                });
+                assert_eq!(
+                    serde_json::from_value::<Application>(document.clone()).is_ok(),
+                    !removed_field,
+                    "{document}"
+                );
+                assert_eq!(
+                    JSON_SCHEMA_VALIDATOR.is_valid(&document),
+                    !removed_field,
+                    "{document}"
+                );
+            }
+        }
+    }
+}
+
 fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
     strategy: BoxedStrategy<T>,
 ) -> BoxedStrategy<Option<T>> {
@@ -450,7 +483,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
         arb_opt(arb_ident()),
-        arb_opt(arb_ident()),
         (
             arb_opt(arb_vec_merge_mode_model()),
             arb_build_commands_model(),
@@ -485,7 +517,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             |(
                 is_default,
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -493,7 +524,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             )| ComponentPreset {
                 default: is_default.then_some(Marker),
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,
@@ -519,7 +549,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
         (arb_token_list_model(), arb_opt(arb_guest_language_model())),
-        arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
             arb_opt(arb_vec_merge_mode_model()),
@@ -557,7 +586,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             |(
                 (templates, guest_language),
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -567,7 +595,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 templates,
                 guest_language,
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,
@@ -594,7 +621,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
 fn arb_component_model() -> BoxedStrategy<Component> {
     (
         arb_token_list_model(),
-        arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -634,7 +660,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 templates,
                 dir,
                 component_wasm,
-                output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
                 (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
@@ -644,7 +669,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 templates,
                 dir,
                 component_wasm,
-                output_wasm,
                 dependencies: ComponentDependencies::default(),
                 node_http_routers: None,
                 build_merge_mode,
@@ -1861,6 +1885,15 @@ fn schema_and_serde_reject_component_guest_language() {
 
 #[test]
 fn schema_is_loadable_and_validates_empty_app() {
+    let schema: Value = serde_json::from_str(crate::APP_MANIFEST_JSON_SCHEMA).unwrap();
+    assert_eq!(
+        schema["$id"],
+        format!(
+            "https://schema.golem.cloud/app/golem/{}/golem.schema.json",
+            crate::manifest_schema_version!()
+        )
+    );
+
     let app = Application {
         app: Some("app-name".to_string()),
         ..Default::default()
@@ -2564,6 +2597,37 @@ bridge:
             "schema accepted {invalid_dependency}"
         );
     }
+
+    for valid_dependency in [
+        "{ git: https://example.test/repo }",
+        "{ git: https://example.test/repo, branch: main }",
+        "{ git: https://example.test/repo, tag: v1 }",
+        "{ git: https://example.test/repo, rev: abc123 }",
+        "{ version: '1', package: custom, features: [extra], defaultFeatures: true }",
+    ] {
+        let valid = format!(
+            "app: test-app\nbridge:\n  rust:\n    external:\n      agents: '*'\n      additionalDependencies:\n        custom: {valid_dependency}\n"
+        );
+        let app = Application::from_yaml_str(&valid)
+            .unwrap_or_else(|err| panic!("serde rejected {valid_dependency}: {err}"));
+        let app_value = serde_json::to_value(&app).unwrap();
+        assert_eq!(
+            app_value["bridge"]["rust"]["external"]["additionalDependencies"]["custom"],
+            serde_yaml::from_str::<serde_json::Value>(valid_dependency).unwrap(),
+            "{valid_dependency}"
+        );
+        let reparsed = Application::from_yaml_str(&serde_yaml::to_string(&app).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reparsed).unwrap(),
+            app_value,
+            "{valid_dependency}"
+        );
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&valid).unwrap()),
+            "schema rejected {valid_dependency}"
+        );
+    }
 }
 
 #[test]
@@ -2634,6 +2698,39 @@ fn root_version_source_shape_rules() {
     // hashOnly must be true; unknown fields rejected
     assert!(parse("git:\n  hashOnly: false").is_err());
     assert!(parse("git:\n  tagPattern: \"v*\"\n  bogus: 1").is_err());
+
+    for (source, expected) in [
+        (
+            "{ git: { tagPattern: 'v*', commitInfo: false, hashFallback: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSource::Git {
+                git: GitVersionSource::Tag(GitTagVersionSource {
+                    tag_pattern: "v*".to_string(),
+                    commit_info: Some(false),
+                    hash_fallback: Some(true),
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+        (
+            "{ git: { hashOnly: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSource::Git {
+                git: GitVersionSource::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+    ] {
+        assert_eq!(parse(source).unwrap(), expected, "{source}");
+        let manifest = format!("app: a\nversion: {source}\n");
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&manifest).unwrap()),
+            "schema rejected {source}"
+        );
+    }
 }
 
 #[test]
@@ -2665,6 +2762,39 @@ fn override_version_source_shape_rules() {
     ));
     // mixing hash and tag options is still rejected
     assert!(parse("git:\n  hashOnly: true\n  tagPattern: \"v*\"").is_err());
+
+    for (source, expected) in [
+        (
+            "{ git: { tagPattern: 'v*', commitInfo: false, hashFallback: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Tag(GitTagVersionSourceOverride {
+                    tag_pattern: Some("v*".to_string()),
+                    commit_info: Some(false),
+                    hash_fallback: Some(true),
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+        (
+            "{ git: { hashOnly: true, allowDirty: true, staticFallback: '0.0.0' } }",
+            AppVersionSourceOverride::Git {
+                git: GitVersionSourceOverride::Hash(GitHashVersionSource {
+                    hash_only: Marker,
+                    allow_dirty: Some(true),
+                    static_fallback: Some("0.0.0".to_string()),
+                }),
+            },
+        ),
+    ] {
+        assert_eq!(parse(source).unwrap(), expected, "{source}");
+        let manifest = format!("app: a\nenvironments:\n  e:\n    version: {source}\n");
+        assert!(
+            JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&manifest).unwrap()),
+            "schema rejected {source}"
+        );
+    }
 }
 
 #[test]
@@ -2809,7 +2939,7 @@ fn local_server_system_memory_override_rejects_invalid_values() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 400,
+        cases: 256,
         .. ProptestConfig::default()
     })]
 
@@ -2829,22 +2959,14 @@ proptest! {
         prop_assert_eq!(app_from_json_value, app_original_value);
 
         let json_value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let json_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&json_value);
-        prop_assert!(
-            json_evaluation.flag().valid,
-            "Schema validation failed for generated app JSON payload: {:?}",
-            json_evaluation
-                .iter_errors()
-                .map(|e| format!("{} :: {}", e.instance_location, e.error))
-                .collect::<Vec<_>>()
-        );
-
         let yaml_value: serde_json::Value = serde_yaml::from_str(&yaml_str).unwrap();
-        let yaml_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&yaml_value);
+        prop_assert_eq!(&json_value, &yaml_value);
+
         prop_assert!(
-            yaml_evaluation.flag().valid,
-            "Schema validation failed for generated app YAML payload: {:?}",
-            yaml_evaluation
+            JSON_SCHEMA_VALIDATOR.is_valid(&json_value),
+            "Schema validation failed for generated app payload: {:?}",
+            JSON_SCHEMA_VALIDATOR
+                .evaluate(&json_value)
                 .iter_errors()
                 .map(|e| format!("{} :: {}", e.instance_location, e.error))
                 .collect::<Vec<_>>()

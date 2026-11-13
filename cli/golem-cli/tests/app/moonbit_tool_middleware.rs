@@ -69,7 +69,7 @@ async fn test_moonbit_tool_middleware_component_roles() {
 }
 
 /// A build with nothing to do must not touch the component wasms, otherwise the
-/// `add-metadata` and `gen-bridge` steps re-run on every build. This exercises both
+/// output copy and `gen-bridge` steps re-run on every build. This exercises both
 /// halves of that: `golem_sdk_tools` leaving unchanged generated sources alone, and
 /// the `wasm-tools` steps declaring `sources`/`targets` so they can be skipped.
 /// Deliberately built without `--force-build`, which bypasses all up-to-date checks.
@@ -119,6 +119,7 @@ fn assert_component_contracts(ctx: &TestContext, profile: &str) {
     let required_imports = [
         "interface:golem:agent/common@2.0.0",
         "interface:golem:api/host@1.5.0",
+        "interface:golem:core/http@2.0.0",
         "interface:golem:core/types@2.0.0",
         "interface:golem:tool/common@0.1.0",
         "interface:golem:tool/host@0.1.0",

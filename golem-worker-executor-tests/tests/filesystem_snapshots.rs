@@ -20,11 +20,12 @@ use crate::durability::assert_snapshot_recovery_loaded;
 use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
+    MultipartPartData, OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
+    PublicSnapshotData,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
@@ -211,7 +212,7 @@ impl Operation {
 /// The agent under test, with its component.
 struct Agent {
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     worker_id: AgentId,
 }
 
@@ -3405,7 +3406,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
 /// snapshot record with a name, and a confirmation of that name. The caller calls it after an
 /// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
 /// and no snapshot record is waiting for its upload when the wait ends.
-async fn newest_snapshot_confirmed(
+pub(crate) async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
@@ -3440,7 +3441,7 @@ async fn newest_snapshot_confirmed(
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentId,
+    agent: &ParsedAgentKey,
 ) -> anyhow::Result<serde_json::Value> {
     let state = executor
         .invoke_and_await_agent(component, agent, "getState", data_value!())
@@ -6027,21 +6028,17 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 let restores = store.restored_names().len();
                 store.fail_next_restores(1);
                 agent.stop(executor, context).await?;
-                executor.resume(&agent.worker_id, false).await?;
-                // The start that fails to restore fails the invocation that waits for it, and
-                // the agent waits to retry; a resume starts it again.
-                let tree = eventually(Duration::from_secs(60), || async {
-                    match agent.describe(executor).await {
-                        Ok(tree) => Ok(Some(tree)),
-                        Err(_) => {
-                            executor.resume(&agent.worker_id, false).await?;
-                            Ok(None)
-                        }
-                    }
-                })
-                .await;
-                let tree = match tree {
-                    Ok(tree) => tree,
+                let key = golem_common::model::IdempotencyKey::fresh();
+                let rename = || executor.invoke_and_await_agent_with_key(
+                    &agent.component, &agent.agent, &key, "apply",
+                    data_value!("rename".to_string(), "before.txt".to_string(), "after.txt".to_string()),
+                );
+                let result = tokio::time::timeout(Duration::from_secs(60), rename())
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(|result| result);
+                let result = match result {
+                    Ok(result) => result,
                     Err(error) => {
                         let updates = agent.update_results(executor).await.ok();
                         return Err(error.context(format!(
@@ -6050,6 +6047,15 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                         )));
                     }
                 };
+                assert_eq!(result.into_typed::<String>()?, "ok");
+                assert_eq!(rename().await?.into_typed::<String>()?, "ok");
+                let oplog = executor.get_oplog(&agent.worker_id, OplogIndex::INITIAL).await?;
+                assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start) if matches!(&start.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(invoked) if invoked.idempotency_key == key)
+                )).count(), 1);
+                agent.apply_all(executor, &[Operation::Rename { from: "after.txt", to: "continued.txt" }]).await?;
+                let tree = agent.describe(executor).await?;
                 let restored = store.restored_names().split_off(restores);
                 let outcomes = agent.update_results(executor).await?;
                 anyhow::Ok((baseline, tree, restored, outcomes))
@@ -6061,7 +6067,7 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
         restarts
             .into_iter()
             .for_each(|(baseline, tree, restored, outcomes)| {
-                assert_eq!(tree, [written("before.txt")]);
+                assert_eq!(tree, [r#"continued.txt file links=1 writable=true content="before.txt""#]);
                 assert_eq!(restored, [baseline.clone(), baseline]);
                 assert_eq!(outcomes.len(), 1, "{outcomes:?}");
                 assert!(outcomes[0].starts_with("updated to"), "{outcomes:?}");

@@ -190,10 +190,16 @@ impl OplogService for IndexTestOplogService {
     async fn read_exact(
         &self,
         _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        if matches!(
+            self.entries.get(&OplogIndex::INITIAL),
+            Some(OplogEntry::Create { parameters, .. }) if parameters.agent_mode != agent_mode
+        ) {
+            return Ok(BTreeMap::new());
+        }
         self.reads.lock().unwrap().push((idx, n));
         if self.pause_next_read.swap(false, Ordering::AcqRel) {
             self.read_started.notify_one();
@@ -433,20 +439,25 @@ fn rejections_to_store_are_in_index_order_keep_only_candidates_and_nothing_when_
 }
 
 #[test]
-async fn get_recovers_uuid_named_non_agent_component_worker() {
+async fn get_recovers_non_agent_external_tool_owner() {
     let component_id = ComponentId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
         component_id,
-        agent_id: Uuid::new_v4().to_string(),
+        agent_id: golem_common::model::agent::OwnerKind::external_tool_instance_name(
+            &IdempotencyKey::new("external-tool-storage-recovery".to_string()),
+        ),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create = OplogEntry::Create {
         timestamp: Timestamp::now_utc(),
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: agent_id.clone(),
-            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
-            agent_mode: AgentMode::Durable,
+            component_id,
+            agent_type_name: None,
+            canonical_key: None,
+            owner_kind: golem_common::model::agent::OwnerKind::EphemeralExternalTool,
+            agent_mode: AgentMode::Ephemeral,
             component_revision: ComponentRevision::INITIAL,
             env: Vec::new(),
             environment_id,
@@ -458,6 +469,12 @@ async fn get_recovers_uuid_named_non_agent_component_worker() {
             local_agent_config: Vec::new(),
             original_phantom_id: None,
             instance_id: Uuid::new_v4(),
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
         }),
     };
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -2000,6 +2017,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(
@@ -2007,6 +2025,17 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
         ),
     });
 
+    assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+
+    status.pending_invocations[0].not_before = Some(Timestamp::from(
+        Timestamp::now_utc().to_millis() + 3_600_000,
+    ));
+    assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
+        &status
+    ));
+    status.pending_invocations[0].not_before = Some(Timestamp::from(0));
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
         &status
     ));
@@ -2576,6 +2605,9 @@ fn test_create_entry(
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
         agent_id: owned_agent_id.agent_id.clone(),
+        component_id: owned_agent_id.agent_id.component_id,
+        agent_type_name: None,
+        canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_mode,
         component_revision: ComponentRevision::INITIAL,
@@ -2589,6 +2621,12 @@ fn test_create_entry(
         local_agent_config: Vec::new(),
         original_phantom_id: None,
         instance_id: fingerprint.0,
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            golem_common::model::agent::Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
     }))
 }
 

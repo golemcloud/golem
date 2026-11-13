@@ -443,12 +443,10 @@ where
                     ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
                         agent_type_name: agent.agent_type.clone(),
                     },
-                    ResolvedOwnerContext::ComponentWorker
-                    | ResolvedOwnerContext::ComponentBaseline => {
-                        ToolBindingOwner::ComponentBaseline {
-                            component_id: component.id,
-                        }
-                    }
+                    ResolvedOwnerContext::ComponentBaseline
+                    | ResolvedOwnerContext::OplogProcessor => ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
                 }
             });
             let activation_snapshot = if let Some(activation) = pinned_activation {
@@ -764,7 +762,7 @@ where
                     .ok_or_else(|| anyhow!("owner generation fenced replayed tool invocation"))?;
                 accessor.with(|mut access| {
                     durability::install_cancellation_effect(access.get(), &operation)
-                });
+                })?;
                 return Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                     durability,
                     operation,
@@ -829,7 +827,7 @@ where
                 .ok_or_else(|| anyhow!("owner generation fenced tool invocation"))?;
             accessor.with(|mut access| {
                 durability::install_cancellation_effect(access.get(), &operation)
-            });
+            })?;
             let _permit = prepared.permit;
             Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                 durability,

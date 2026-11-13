@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
@@ -115,7 +117,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
         let output = self
             .0
             .invoke_agent(
-                &call.agent_id,
+                &AgentTarget::Current(call.agent_id.clone()),
                 Some(call.method.clone()),
                 Some(input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -240,7 +242,7 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
         unreachable!()
     };
     let key = IdempotencyKey::fresh();
-    let logical = ParsedAgentId::try_new(
+    let logical = ParsedAgentKey::try_new(
         router.agent_type.clone(),
         TypedSchemaValue::new(
             router.constructor_input.graph.clone(),

@@ -40,6 +40,15 @@ import (
 // Entry is one oplog entry. Its cases are the constants of this package.
 type Entry = oplogwit.PublicOplogEntry
 
+// OwnerKind is the authoritative execution-owner kind stored at creation.
+type OwnerKind = oplogwit.OwnerKind
+
+const (
+	OwnerKindComponentAgent        = oplogwit.OwnerKindComponentAgent
+	OwnerKindEphemeralExternalTool = oplogwit.OwnerKindEphemeralExternalTool
+	OwnerKindOplogProcessor        = oplogwit.OwnerKindOplogProcessor
+)
+
 // The parameters of the commonly inspected cases.
 type (
 	CreateParameters                  = oplogwit.CreateParameters

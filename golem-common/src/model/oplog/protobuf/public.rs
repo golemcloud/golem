@@ -59,7 +59,9 @@ use crate::model::oplog::public_oplog_entry::{
     SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
     StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
 };
-use crate::model::oplog::raw_types::{CreateParameters, DurableStreamEventSummary};
+use crate::model::oplog::raw_types::{
+    CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
+};
 use crate::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
@@ -265,6 +267,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             })),
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                    not_before: pending_worker_invocation.not_before.map(Into::into),
                     timestamp: pending_worker_invocation
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -942,6 +945,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
                         golem_api_grpc::proto::golem::worker::PendingAgentInvocationParameters {
+                            not_before: pending_worker_invocation.not_before.map(Into::into),
                             timestamp: Some(pending_worker_invocation.timestamp.into()),
                             invocation: Some(pending_worker_invocation.invocation.try_into()?),
                         },
@@ -1829,19 +1833,19 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState> for PublicR
     }
 }
 
-/// Convert a `PublicOplogEntry` to a domain `OplogEntry`.
+/// Convert supplied public observations without establishing Create ownership.
 ///
 /// Some entry types (e.g. `AgentInvocationStarted`) cannot be losslessly
 /// round-tripped because the public representation discards internal detail.
 /// For those cases this conversion returns an error.
-impl TryFrom<PublicOplogEntry> for OplogEntry {
+impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
     type Error = String;
 
     fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
         match value {
-            PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
+            PublicOplogEntry::Create(create) => return Ok(Self::CreateProjection {
                 timestamp: create.timestamp,
-                parameters: Box::new(CreateParameters {
+                parameters: Box::new(CreateProjectionParameters {
                     agent_id: create.agent_id,
                     owner_kind: create.owner_kind,
                     agent_mode: create.agent_mode,
@@ -2307,6 +2311,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     record: OplogPayload::Inline(Box::new(record)),
                 })
             }
-        }
+        }.map(Self::Other)
     }
 }

@@ -443,6 +443,9 @@ impl TextOutput for PublicOplogEntry {
                     &params.timestamp,
                     &params.invocation,
                 );
+                if let Some(not_before) = &params.not_before {
+                    logln(format!("{pad}not before:        {}", format_id(not_before)));
+                }
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));

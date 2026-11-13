@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, stream_terminal,
 };
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::TypedSchemaValue;
 use golem_schema::proto::golem::common::Uuid;
@@ -296,7 +296,7 @@ impl InvocationSession {
     pub async fn start(
         deps: &impl TestDependencies,
         component: &ComponentDto,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         method: &str,
         input: TypedSchemaValue,
         timeout: Duration,

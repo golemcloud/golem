@@ -29,28 +29,24 @@ pub(super) fn host_response_to_public_value(
 
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
-    async fn from_oplog_entry(
+    async fn from_enrichment_entry(
         oplog_index: OplogIndex,
-        value: OplogEntry,
+        value: golem_common::model::oplog::OplogEnrichmentEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        owner_component_id: ComponentId,
+        owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
-        let owner_kind = if OwnerKind::is_reserved_instance_name(&owned_agent_id.agent_id.agent_id)
-        {
-            OwnerKind::EphemeralExternalTool
-        } else {
-            OwnerKind::ComponentAgent
-        };
-        match value {
-            OplogEntry::Create {
+        let value = match value {
+            golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
                 timestamp,
                 parameters,
             } => {
-                let golem_common::model::oplog::CreateParameters {
+                let golem_common::model::oplog::CreateProjectionParameters {
                     agent_id,
                     owner_kind,
                     agent_mode,
@@ -67,10 +63,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     instance_id,
                 } = *parameters;
                 let metadata = components
-                    .get_metadata(
-                        owned_agent_id.agent_id.component_id,
-                        Some(component_revision),
-                    )
+                    .get_metadata(owner_component_id, Some(component_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
@@ -96,7 +89,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(PublicOplogEntry::Create(CreateParams {
+                return Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
                     owner_kind,
@@ -112,7 +105,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
-                }))
+                }));
+            }
+            golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,
+        };
+        match value {
+            OplogEntry::Create { .. } => {
+                Err("Create must be projected before enrichment".to_string())
             }
             OplogEntry::Start {
                 timestamp,
@@ -257,7 +256,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 );
                 let public_invocation = agent_invocation_to_public(
                     components.clone(),
-                    owned_agent_id,
+                    owner_component_id,
+                    agent_type_name,
                     component_revision,
                     invocation,
                 )
@@ -287,7 +287,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),
-                    owned_agent_id,
+                    owner_component_id,
+                    agent_type_name,
                     component_revision,
                     method_name.clone(),
                     invocation_result,
@@ -337,6 +338,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::PendingAgentInvocation {
                 timestamp,
+                not_before,
                 idempotency_key,
                 payload,
                 trace_id,
@@ -359,7 +361,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 );
                 let public_invocation = agent_invocation_to_public(
                     components.clone(),
-                    owned_agent_id,
+                    owner_component_id,
+                    agent_type_name,
                     component_revision,
                     invocation,
                 )
@@ -368,6 +371,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::PendingAgentInvocation(
                     PendingAgentInvocationParams {
                         timestamp,
+                        not_before,
                         invocation: public_invocation,
                     },
                 ))
@@ -419,12 +423,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 snapshot_assisted_details,
             } => {
                 let metadata = components
-                    .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+                    .get_metadata(owner_component_id, Some(target_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let new_plugins = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let new_plugins = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .unwrap_or_default()
                     .iter()
                     .filter(|&p| new_active_plugins.contains(&p.environment_plugin_grant_id))
@@ -522,10 +527,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 plugin_grant_id,
             } => {
                 let metadata = components
-                    .get_metadata(
-                        owned_agent_id.agent_id.component_id,
-                        Some(component_revision),
-                    )
+                    .get_metadata(owner_component_id, Some(component_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
@@ -551,10 +553,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 plugin_grant_id,
             } => {
                 let metadata = components
-                    .get_metadata(
-                        owned_agent_id.agent_id.component_id,
-                        Some(component_revision),
-                    )
+                    .get_metadata(owner_component_id, Some(component_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
@@ -687,10 +686,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 last_batch_start,
             } => {
                 let metadata = components
-                    .get_metadata(
-                        owned_agent_id.agent_id.component_id,
-                        Some(component_revision),
-                    )
+                    .get_metadata(owner_component_id, Some(component_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 

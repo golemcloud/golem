@@ -22,7 +22,7 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{AgentTarget, ParsedAgentKey};
 use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
@@ -75,7 +75,7 @@ pub async fn invoke_tool(
     );
 
     let parsed_agent_id =
-        ParsedAgentId::try_new(mcp_tool.agent_type_name.clone(), parameters, None).map_err(
+        ParsedAgentKey::try_new(mcp_tool.agent_type_name.clone(), parameters, None).map_err(
             |e| {
                 tracing::error!("Failed to parse agent id: {}", e);
                 ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
@@ -109,7 +109,7 @@ pub async fn invoke_tool(
 
     let agent_output = worker_service
         .invoke_agent(
-            &agent_id,
+            &AgentTarget::Current(agent_id.clone()),
             Some(mcp_tool.method.name.clone()),
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,

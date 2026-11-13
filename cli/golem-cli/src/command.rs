@@ -1067,9 +1067,7 @@ pub mod shared_args {
         ///                 cargo, npm, scala-cli, moon are installed and the
         ///                 expected versions are available).
         ///   build         Run the per-language build for each selected
-        ///                 component (produces the component WASM).
-        ///   add-metadata  Attach Golem-specific metadata to the built WASM
-        ///                 components (agent types, secrets, resource limits).
+        ///                 component to produce its componentWasm artifact.
         ///   gen-bridge    Generate language-specific Bridge SDK client code
         ///                 from agent type interfaces, so other components in
         ///                 the application can call this component as a typed
@@ -1709,17 +1707,22 @@ pub mod worker {
             #[arg(long, conflicts_with = "agent_type_name")]
             component_name: Option<ComponentName>,
 
-            /// Filter for agent metadata in form of `property op value`.
+            /// Filter for agent metadata in form of `property op value`, combined with
+            /// `and`, `or`, `not` and parentheses.
             ///
             /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
             /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required
-            /// and the value itself must not contain spaces.
+            /// Spaces around the operator are required. `not` binds tightest, then `and`,
+            /// then `or`; keywords are case-insensitive.
+            /// Quote a value with `"` when it contains whitespace outside parentheses, starts
+            /// with `(` or `"`, or has unbalanced parentheses or quotes; inside quotes use `\"`
+            /// and `\\`. Agent IDs such as `Counter("a b", 2)` need no extra quotes.
             ///
             /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
-            /// `status == Running`, `env.var1 == value`, `name like %worker%`.
+            /// `status == Running`, `env.var1 == value`, `name like worker`,
+            /// `(status == Failed or status == Retrying) and not env.MODE == test`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
             filter: Vec<String>,
@@ -3235,6 +3238,7 @@ mod test {
     };
     use crate::error::ShowClapHelpTarget;
     use crate::model::agent::AgentUpdateMode;
+    use crate::model::format::Format;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
@@ -3282,6 +3286,29 @@ mod test {
         assert_eq!(parsed, std::time::Duration::from_secs(2));
 
         assert!(parse_agent_stream_ping_interval("not-a-duration").is_err());
+    }
+
+    #[test]
+    fn format_flag_accepts_the_names_profile_config_accepts() {
+        for (name, expected) in [
+            ("pretty", Format::PrettyJson),
+            ("pretty-json", Format::PrettyJson),
+            ("pretty-yaml", Format::PrettyYaml),
+            ("toon", Format::Toon),
+        ] {
+            let command = GolemCliCommand::try_parse_from(["golem", "--format", name, "build"])
+                .unwrap_or_else(|error| panic!("--format {name}: {error}"));
+            assert_eq!(
+                command.global_flags.format,
+                Some(expected),
+                "--format {name}"
+            );
+            let config: Format = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(config, expected, "profile default format {name}");
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(["golem", "--format", "pretty-text", "build"]).is_err()
+        );
     }
 
     #[test]

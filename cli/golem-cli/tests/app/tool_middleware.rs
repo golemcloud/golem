@@ -53,7 +53,7 @@ async fn test_ts_tool_middleware_component_roles() {
 
     let optimized = ctx.cli([flag::YES, cmd::BUILD, flag::FORCE_BUILD]).await;
     assert!(optimized.success_or_dump());
-    assert_role_contracts(&ctx);
+    assert_role_contracts(&ctx, "optimized").await;
     for role in ["ordinary", "middleware", "combined"] {
         assert!(
             preinitialized_component(&ctx, role).is_file(),
@@ -67,7 +67,7 @@ async fn test_ts_tool_middleware_component_roles() {
         .cli(["-P", "quick", flag::YES, cmd::BUILD, flag::FORCE_BUILD])
         .await;
     assert!(quick.success_or_dump());
-    assert_role_contracts(&ctx);
+    assert_role_contracts(&ctx, "quick").await;
     for role in ["ordinary", "middleware", "combined"] {
         assert!(
             dynamic_component(&ctx, role).is_file(),
@@ -80,10 +80,11 @@ async fn test_ts_tool_middleware_component_roles() {
     }
 }
 
-fn assert_role_contracts(ctx: &TestContext) {
+async fn assert_role_contracts(ctx: &TestContext, preset: &str) {
     for role in ["ordinary", "middleware", "combined"] {
         assert_component_contract(
-            &final_component(ctx, role),
+            &ctx.component_wasm(&format!("ts-tool-middleware-roles:{role}"), Some(preset))
+                .await,
             &[
                 AGENT_GUEST,
                 LOAD_SNAPSHOT,
@@ -145,12 +146,6 @@ fn assert_component_contract(component: &Path, expected_exports: &[&str], expect
         "unexpected direct {TOOL_HOST} import count in {}",
         component.display()
     );
-}
-
-fn final_component(ctx: &TestContext, role: &str) -> PathBuf {
-    ctx.cwd_path_join(format!(
-        "golem-temp/agents/ts_tool_middleware_roles_{role}.wasm"
-    ))
 }
 
 fn dynamic_component(ctx: &TestContext, role: &str) -> PathBuf {

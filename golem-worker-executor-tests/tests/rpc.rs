@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result, stream_terminal,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentPrincipal, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentPrincipal, ParsedAgentKey, Principal};
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::{
@@ -8733,7 +8733,7 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
 async fn invoke_agent_session(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<Result<SchemaValue, String>> {
@@ -8765,7 +8765,7 @@ async fn wait_for_agent_initialization(
 async fn open_invocation_session(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<(
@@ -8787,7 +8787,7 @@ async fn open_invocation_session(
 async fn open_invocation_session_with_key(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     idempotency_key: &IdempotencyKey,
     method_name: &str,
     params: TypedSchemaValue,

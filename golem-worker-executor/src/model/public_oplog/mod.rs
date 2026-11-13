@@ -40,7 +40,8 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
@@ -139,6 +140,35 @@ pub trait PublicOplogEntryOps: Sized {
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        owner_component_id: ComponentId,
+        owner_kind: OwnerKind,
+        agent_type: Option<&AgentTypeName>,
+        component_revision: ComponentRevision,
+    ) -> Result<Self, String> {
+        Self::from_enrichment_entry(
+            oplog_index,
+            value.into(),
+            oplog_service,
+            components,
+            owned_agent_id,
+            agent_mode,
+            owner_component_id,
+            owner_kind,
+            agent_type,
+            component_revision,
+        )
+        .await
+    }
+
+    async fn from_enrichment_entry(
+        oplog_index: OplogIndex,
+        value: golem_common::model::oplog::OplogEnrichmentEntry,
+        oplog_service: Arc<dyn OplogService>,
+        components: Arc<dyn ComponentService>,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        owner_component_id: ComponentId,
+        owner_kind: OwnerKind,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;

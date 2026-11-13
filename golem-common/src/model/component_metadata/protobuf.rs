@@ -143,8 +143,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
                 .into_iter()
                 .map(|memory| memory.into())
                 .collect(),
-            root_package_name: value.root_package_name,
-            root_package_version: value.root_package_version,
             agent_type_ids: value
                 .agent_type_ids
                 .into_iter()
@@ -265,8 +263,6 @@ impl TryFrom<ComponentMetadataInnerData>
                 .into_iter()
                 .map(|memory| memory.into())
                 .collect(),
-            root_package_name: value.root_package_name,
-            root_package_version: value.root_package_version,
             agent_type_ids: value
                 .agent_type_ids
                 .into_iter()

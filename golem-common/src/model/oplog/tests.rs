@@ -859,6 +859,203 @@ fn create_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+    for owner_kind in [
+        crate::model::agent::OwnerKind::ComponentAgent,
+        crate::model::agent::OwnerKind::EphemeralExternalTool,
+        crate::model::agent::OwnerKind::OplogProcessor,
+    ] {
+        let mut entry = entry.clone();
+        let PublicOplogEntry::Create(parameters) = &mut entry else {
+            unreachable!()
+        };
+        parameters.owner_kind = owner_kind;
+        let serialized = entry.to_json_string();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&serialized).unwrap(),
+            entry
+        );
+        let mut proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(
+            super::OplogEnrichmentEntry::try_from(proto.clone()).unwrap(),
+            super::OplogEnrichmentEntry::try_from(entry).unwrap()
+        );
+        let Some(golem_api_grpc::proto::golem::worker::oplog_entry::Entry::Create(create)) =
+            &mut proto.entry
+        else {
+            unreachable!()
+        };
+        assert_eq!(create.owner_kind, i32::from(owner_kind));
+        create.owner_kind = 3;
+        assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
+    }
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let projected = super::OplogEnrichmentEntry::try_from(proto).unwrap();
+    assert_eq!(
+        projected,
+        super::OplogEnrichmentEntry::try_from(entry.clone()).unwrap()
+    );
+    let super::OplogEnrichmentEntry::CreateProjection {
+        timestamp,
+        parameters,
+    } = projected
+    else {
+        panic!("expected Create projection");
+    };
+    let PublicOplogEntry::Create(supplied) = entry else {
+        unreachable!()
+    };
+    assert_eq!(timestamp, supplied.timestamp);
+    assert_eq!(parameters.agent_id, supplied.agent_id);
+    assert_eq!(parameters.instance_id, supplied.instance_id);
+    assert_eq!(parameters.component_revision, supplied.component_revision);
+    assert_eq!(
+        parameters.local_agent_config[0].path,
+        supplied.local_agent_config[0].path
+    );
+}
+
+#[test]
+fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
+    use super::{CreateParameters, CreateRequest, CreateRequestKind, OplogEnrichmentEntry};
+    use crate::model::agent::{AgentMode, AgentPrincipal, AgentTypeName, OwnerKind};
+    use crate::model::environment::EnvironmentId;
+    use crate::model::invocation_context::{
+        AttributeValue, InvocationContextSpan, InvocationContextStack,
+    };
+
+    let mut creator_context = InvocationContextStack::new(
+        TraceId::generate(),
+        InvocationContextSpan::external_parent(SpanId::generate()),
+        vec!["vendor=creator".to_string()],
+    );
+    creator_context.push(
+        InvocationContextSpan::local()
+            .rounded()
+            .parent(Some(creator_context.spans.first().clone()))
+            .with_attributes(HashMap::from([(
+                "request".to_string(),
+                AttributeValue::String("create".to_string()),
+            )]))
+            .build(),
+    );
+    let creator = Principal::Agent(AgentPrincipal {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Creator(1)".to_string(),
+        },
+    });
+    let mut requests = [
+        CreateRequestKind::GetOrCreate,
+        CreateRequestKind::Exclusive,
+        CreateRequestKind::Phantom,
+        CreateRequestKind::Fork,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, kind)| {
+        CreateRequest::new(
+            kind,
+            (index % 2 == 0).then(|| IdempotencyKey::new(format!("create-{index}"))),
+            creator.clone(),
+            &creator_context,
+        )
+    })
+    .cycle();
+    let recorded = requests.next().unwrap();
+    assert_eq!(recorded.invocation_context().to_oplog_data().len(), 2);
+    assert_eq!(
+        recorded.invocation_context().to_oplog_data(),
+        creator_context.to_oplog_data()
+    );
+    assert_eq!(
+        recorded.invocation_context().trace_id,
+        creator_context.trace_id
+    );
+
+    for agent_type_name in [None, Some(AgentTypeName("StoredType".to_string()))] {
+        for canonical_key in [None, Some("StructuralType(\"parameter\")".to_string())] {
+            let component_id = ComponentId::new();
+            let entry = OplogEntry::Create {
+                timestamp: Timestamp::now_utc().rounded(),
+                parameters: Box::new(CreateParameters {
+                    component_id,
+                    agent_type_name: agent_type_name.clone(),
+                    canonical_key,
+                    agent_id: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "DifferentType(42)".to_string(),
+                    },
+                    owner_kind: OwnerKind::ComponentAgent,
+                    agent_mode: AgentMode::Durable,
+                    component_revision: ComponentRevision::new(7).unwrap(),
+                    env: vec![("key".into(), "value".into())],
+                    environment_id: EnvironmentId::new(),
+                    created_by: AccountId::new(),
+                    parent: None,
+                    component_size: 17,
+                    initial_total_linear_memory_size: 29,
+                    initial_active_plugins: Default::default(),
+                    local_agent_config: vec![],
+                    original_phantom_id: None,
+                    instance_id: Uuid::new_v4(),
+                    create_request: requests.next().unwrap(),
+                }),
+            };
+            let bytes = crate::serialization::serialize(&entry).unwrap();
+            assert_eq!(
+                crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+                entry
+            );
+            let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                entry.clone().try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+            for owner_kind in [
+                OwnerKind::ComponentAgent,
+                OwnerKind::EphemeralExternalTool,
+                OwnerKind::OplogProcessor,
+            ] {
+                let mut entry = entry.clone();
+                let OplogEntry::Create { parameters, .. } = &mut entry else {
+                    unreachable!()
+                };
+                parameters.owner_kind = owner_kind;
+                let bytes = crate::serialization::serialize(&entry).unwrap();
+                assert_eq!(
+                    crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+                    entry
+                );
+                let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                    entry.clone().try_into().unwrap();
+                assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+                let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(
+                    create,
+                )) = &mut proto.entry
+                else {
+                    unreachable!()
+                };
+                assert_eq!(create.owner_kind, i32::from(owner_kind));
+                create.owner_kind = 3;
+                assert!(OplogEntry::try_from(proto).is_err());
+            }
+            let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(create)) =
+                &mut proto.entry
+            else {
+                panic!("expected Create");
+            };
+            create.component_id = None;
+            assert_eq!(
+                OplogEntry::try_from(proto).unwrap_err(),
+                "Missing component_id"
+            );
+            let projection = OplogEnrichmentEntry::from(entry);
+            let bytes = crate::serialization::serialize(&projection).unwrap();
+            assert_eq!(
+                crate::serialization::deserialize::<OplogEnrichmentEntry>(&bytes).unwrap(),
+                projection
+            );
+        }
+    }
 }
 
 #[test]
@@ -1469,6 +1666,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
 fn pending_agent_invocation_with_initialization_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: None,
         invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             constructor_parameters: typed(
@@ -1498,6 +1696,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
+        not_before: Some(Timestamp::from(123_456)),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
@@ -1709,6 +1908,47 @@ fn resumed_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pending_invocation_deadline_raw_and_public_roundtrips() {
+    for not_before in [None, Some(Timestamp::from(123_456))] {
+        let raw = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before,
+            idempotency_key: IdempotencyKey::new("pending".to_string()),
+            payload: OplogPayload::SerializedInline {
+                bytes: crate::serialization::serialize(
+                    &crate::model::AgentInvocationPayload::SaveSnapshot,
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        assert!(raw.is_hint());
+        let bytes = crate::serialization::serialize(&raw).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(raw, decoded);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        let decoded: OplogEntry = proto.try_into().unwrap();
+        assert_eq!(raw, decoded);
+
+        let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: raw.timestamp(),
+            not_before,
+            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        });
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        let decoded: PublicOplogEntry = proto.try_into().unwrap();
+        assert_eq!(public, decoded);
+        let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
+        assert_eq!(public, decoded);
+    }
 }
 
 #[test]
@@ -2137,7 +2377,12 @@ fn span_closed_is_a_hint_and_roundtrips() {
         assert!(public.matches(&Query::Term {
             value: "span-closed".to_string(),
         }));
-        match OplogEntry::try_from(public).unwrap() {
+        let super::OplogEnrichmentEntry::Other(raw) =
+            super::OplogEnrichmentEntry::try_from(public).unwrap()
+        else {
+            panic!("expected non-Create projection");
+        };
+        match raw {
             OplogEntry::SpanClosed {
                 resource_start_index: raw_resource_start_index,
                 span_finished,
@@ -2171,7 +2416,11 @@ fn public_snapshot_with_filesystem_snapshot_roundtrips() {
     let decoded = PublicOplogEntry::try_from(proto).unwrap();
     assert_eq!(decoded, entry);
 
-    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    let super::OplogEnrichmentEntry::Other(raw) =
+        super::OplogEnrichmentEntry::try_from(entry.clone()).unwrap()
+    else {
+        panic!("expected non-Create projection");
+    };
     match raw {
         OplogEntry::Snapshot {
             filesystem_snapshot,
@@ -2224,7 +2473,11 @@ fn public_snapshot_confirmed_roundtrips() {
     let decoded = PublicOplogEntry::try_from(proto).unwrap();
     assert_eq!(decoded, entry);
 
-    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    let super::OplogEnrichmentEntry::Other(raw) =
+        super::OplogEnrichmentEntry::try_from(entry.clone()).unwrap()
+    else {
+        panic!("expected non-Create projection");
+    };
     assert!(raw.is_hint());
     match (raw, entry) {
         (

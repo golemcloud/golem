@@ -342,6 +342,10 @@ fn update_status_with_precomputed_regions(
                     | OplogEntry::StreamSession { .. }
             )
         });
+    let ephemeral_execution_begun = last_known.ephemeral_execution_begun
+        || new_entries
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Restart { .. }));
     let UpdateFields {
         failed_updates,
         successful_updates,
@@ -421,6 +425,7 @@ fn update_status_with_precomputed_regions(
         durable_stream_sessions,
         export_fork_admissions,
         has_durable_stream_history,
+        ephemeral_execution_begun,
         pending_durable_stream_cancellations,
         current_idempotency_key,
         cancelled_idempotency_key,

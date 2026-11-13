@@ -3,9 +3,64 @@ import { vi } from "vitest"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import * as Bridge from "../src/Bridge.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
+import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 
 describe("Bridge", () => {
+  it.effect(
+    "prepares ephemeral connections without making reusable IDs and releases on failure",
+    () =>
+      Effect.gen(function* () {
+        const makeAgentId = vi.fn(() => "unexpected")
+        const drop = vi.fn()
+        const connect = vi.fn(() => Effect.succeed({ drop } as unknown as RpcConnection))
+        const services = Layer.merge(
+          Layer.succeed(AgentHostClient, { makeAgentId } as never),
+          Layer.succeed(RpcClient, { connect }),
+        )
+        const resolve = Bridge.resolveRemoteAgent(
+          "Ephemeral",
+          Bridge.v.record([]),
+          undefined,
+          [],
+          "ephemeral",
+        )
+        expect(connect).not.toHaveBeenCalled()
+        const result = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const remote = yield* resolve
+            expect(remote.agentId).toBe("Ephemeral")
+            expect(drop).not.toHaveBeenCalled()
+            return yield* Effect.fail("caller failed")
+          }),
+        ).pipe(Effect.provide(services), Effect.result)
+        expect(result).toMatchObject({ _tag: "Failure", failure: "caller failed" })
+        expect(makeAgentId).not.toHaveBeenCalled()
+        expect(connect).toHaveBeenCalledTimes(1)
+        expect(drop).toHaveBeenCalledTimes(1)
+
+        const cause = { tag: "denied" as const, val: "denied by host" }
+        const rejected = yield* resolve.pipe(
+          Effect.scoped,
+          Effect.provide(
+            Layer.merge(
+              Layer.succeed(AgentHostClient, { makeAgentId } as never),
+              Layer.succeed(RpcClient, {
+                connect: () => Effect.fail(new RpcHostError(cause, "WasmRpc.create")),
+              }),
+            ),
+          ),
+          Effect.result,
+        )
+        expect(rejected).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "RpcCallError", cause },
+        })
+        if (rejected._tag === "Failure" && rejected.failure._tag === "RpcCallError")
+          expect(rejected.failure.cause).toBe(cause)
+        expect(drop).toHaveBeenCalledTimes(1)
+      }),
+  )
+
   it.live("keeps resolution and invocation lazy and cancels an interrupted await", () => {
     let connects = 0
     let invokes = 0

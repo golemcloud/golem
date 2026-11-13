@@ -38,6 +38,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
     let context = InvocationContextStack::fresh_rounded();
     let mut entries = [
         OplogEntry::pending_agent_invocation(
+            None,
             IdempotencyKey::new("shared".to_string()),
             payload.clone(),
             context.trace_id.clone(),

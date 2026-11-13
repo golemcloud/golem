@@ -833,6 +833,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "pending-agent-invocation",
         js.Dynamic.literal(
           timestamp = ts(),
+          notBefore = ts(1800000000, 123),
           invocation = js.Dynamic.literal(
             tag = "exported-function",
             `val` = js.Dynamic.literal(
@@ -850,6 +851,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val inv    = parsed.asInstanceOf[OplogEntry.PendingAgentInvocation].params.invocation
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingAgentInvocation],
+        parsed
+          .asInstanceOf[OplogEntry.PendingAgentInvocation]
+          .params
+          .notBefore
+          .contains(
+            ContextApi.DateTime(BigInt(1800000000), 123)
+          ),
         inv.isInstanceOf[AgentInvocation.ExportedFunction],
         inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment",
         inv

@@ -3424,7 +3424,6 @@
         "$type",
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -3445,9 +3444,6 @@
         },
         "componentId": {
           "type": "string"
-        },
-        "componentVersion": {
-          "type": ["string", "null"]
         },
         "componentRevision": {
           "type": "integer",
@@ -3541,7 +3537,6 @@
       "required": [
         "guestLanguage",
         "componentWasm",
-        "outputWasm",
         "dependencyAgents",
         "dependencyTools",
         "build",
@@ -3559,7 +3554,6 @@
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
         "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
-        "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "dependencyTools": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
         "buildMergeMode": { "$ref": "#/definitions/VecMergeMode" },
@@ -4605,7 +4599,6 @@
       "required": [
         "componentName",
         "componentId",
-        "componentVersion",
         "componentRevision",
         "componentSize",
         "createdAt",
@@ -4620,7 +4613,6 @@
       "properties": {
         "componentName": { "type": "string" },
         "componentId": { "type": "string" },
-        "componentVersion": { "type": ["string", "null"] },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "componentSize": { "type": "integer", "minimum": 0 },
         "createdAt": { "type": "string" },
@@ -5461,6 +5453,17 @@
             "reason": { "type": "string" }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "agentType", "path", "reason"],
+          "properties": {
+            "type": { "const": "IncompatibleConstructorChange" },
+            "agentType": { "type": "string" },
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -5812,7 +5815,7 @@
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
-        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -5941,7 +5944,7 @@
     "PublicOplogEntryPendingAgentInvocation": {
       "type": "object",
       "required": ["type", "timestamp", "invocation"],
-      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" } },
+      "properties": { "type": { "const": "PendingAgentInvocation" }, "timestamp": { "type": "string" }, "invocation": { "$ref": "#/definitions/PublicAgentInvocation" }, "notBefore": { "type": ["string", "null"] } },
       "additionalProperties": false
     },
     "PublicOplogEntryPendingUpdate": {
@@ -6450,9 +6453,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6463,9 +6464,7 @@
         "componentName": { "type": "string" },
         "agentId": { "type": "string" },
         "fromRevision": { "type": "integer", "minimum": 0 },
-        "revision": { "type": "integer", "minimum": 0 },
-        "fromVersion": { "type": "string" },
-        "version": { "type": "string" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6629,6 +6628,10 @@
       "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "agentTypeChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
+        },
         "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
@@ -6640,6 +6643,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentType" }
+      ]
     },
     "AgentTypeProvisionConfigDiffMapValue": {
       "oneOf": [
@@ -7177,9 +7187,13 @@
         }
       ]
     },
+    "HttpRouteMode": {
+      "type": "string",
+      "enum": ["durableStreams", "plain", "sse", "webSocket"]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "mode", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
@@ -7187,18 +7201,16 @@
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "mode": { "oneOf": [{ "$ref": "#/definitions/HttpRouteMode" }, { "type": "null" }] },
         "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "DurableStreamRouteOptions": {
       "type": "object",
-      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "required": ["slots", "load"],
       "properties": {
         "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
-        "allowExternalWrites": { "type": ["boolean", "null"] },
-        "allowStreamDelete": { "type": ["boolean", "null"] },
-        "allowInvocationDelete": { "type": ["boolean", "null"] },
         "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false

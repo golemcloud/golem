@@ -27,7 +27,7 @@ impl ReplayState {
                                 return Ok(true);
                             }
                             tx.try_get_oplog_entry(|_| false).await?;
-                            if wallet.has_recorded_derivation(card) || tx.cursor.is_live() {
+                            if wallet.has_recorded_derivation(card) || tx.cursor.at_replay_tail() {
                                 return Ok(true);
                             }
                             tx.check_parked_positional_read(cursor::PositionalReader::Ordinary)
@@ -94,7 +94,7 @@ impl ReplayState {
             .run_owned_cursor_op(move |state| async move {
                 let _historical_reconstruction = historical_reconstruction;
                 let mut st = state.cursor.state.lock().await;
-                st.concurrent_resolver.unregister(start_idx);
+                st.starts.unregister(start_idx);
                 Ok(())
             })
             .await;
@@ -131,7 +131,7 @@ impl ReplayState {
         handle: &ReplayCallHandle,
     ) -> Result<bool, WorkerExecutorError> {
         self.drain_awaited_terminals().await?;
-        Ok(handle.resolution_ready() || self.is_live())
+        Ok(handle.resolution_ready() || self.at_replay_tail())
     }
 
     /// Rejects a resolved delivery marker beyond the effective replay target. Debug target
@@ -178,8 +178,9 @@ impl ReplayState {
         &self,
         start_index: OplogIndex,
         marker_index: OplogIndex,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(Some(start_index), marker_index, None)
+        self.await_delivery_boundary(Some(start_index), marker_index, None, activity)
             .await
     }
 
@@ -187,7 +188,7 @@ impl ReplayState {
         &self,
         index: OplogIndex,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, None).await
+        self.await_delivery_boundary(None, index, None, None).await
     }
 
     pub(in crate::durable_host) async fn await_guest_stream_observation(
@@ -195,14 +196,21 @@ impl ReplayState {
         index: OplogIndex,
         order: Option<GuestReadOrder>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
-        self.await_delivery_boundary(None, index, order).await
+        self.await_delivery_boundary(None, index, order, None).await
     }
 
+    /// With `activity`, the passive progress wait parks while an `AgentInvocationFinished` lies
+    /// between the cursor and the boundary: only a later invocation can replay the guest
+    /// progress that reaches it, and that invocation cannot start until this one settles.
+    /// Cursor operations, and waits for a boundary inside the current invocation, stay active.
+    /// The boundary lookup reads the invocation finishes that the recovery metadata scan
+    /// collected, so a wait adds no oplog reads.
     async fn await_delivery_boundary(
         &self,
         start_index: Option<OplogIndex>,
         marker_index: OplogIndex,
         guest_order: Option<GuestReadOrder>,
+        activity: Option<&TailActivity>,
     ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
@@ -242,7 +250,7 @@ impl ReplayState {
                 return Ok(barrier);
             }
 
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     match start_index {
                         Some(start_index) => format!(
@@ -257,8 +265,13 @@ impl ReplayState {
                 ));
             }
 
-            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
-                .await?;
+            let wait = self.wait_while_blocked(BlockedOn::CursorProgress, progress);
+            match activity {
+                Some(activity) if self.invocation_finish_before(marker_index).is_some() => {
+                    activity.park(wait).await?
+                }
+                _ => wait.await?,
+            }
         }
     }
 
@@ -292,7 +305,7 @@ impl ReplayState {
                     .await
             })
             .await?;
-            if self.is_live() {
+            if self.at_replay_tail() {
                 return Ok(());
             }
 
@@ -392,7 +405,7 @@ impl ReplayState {
                     let routed = tokio::select! {
                         biased;
                         failure = state.cursor.owner_tool_operations.wait_for_owner_failure() => {
-                            state.cursor.state.lock().await.concurrent_resolver.unregister(start_idx);
+                            state.cursor.state.lock().await.starts.unregister(start_idx);
                             return Err(super::cursor::historical_reconstruction_owner_failure(failure));
                         }
                         gate = gate.as_mut() => {
@@ -417,7 +430,7 @@ impl ReplayState {
                                 .state
                                 .lock()
                                 .await
-                                .concurrent_resolver
+                                .starts
                                 .unregister(start_idx);
                             Err(WorkerExecutorError::runtime(format!(
                                 "concurrent replay resolver channel closed for Start at {start_idx}"
@@ -446,8 +459,8 @@ impl ReplayState {
                 }
             }
 
-            if self.is_live() {
-                // The lock-free `is_live()` snapshot may have observed a sibling transaction that
+            if self.at_replay_tail() {
+                // The lock-free `at_replay_tail()` snapshot may have observed a sibling transaction that
                 // already published `last_replayed_index == replay_target` while committing *this*
                 // call's terminal but had not yet routed it to the resolver (delivery in
                 // `on_committed_replay_entry` happens after the position is published, see
@@ -472,11 +485,11 @@ impl ReplayState {
                                 // flushed it before its `End`, or a crash happened in between).
                                 // Drop the stale registration and report Incomplete so the caller
                                 // can re-execute the side effect and complete the existing `Start`.
-                                st.concurrent_resolver.unregister_incomplete(start_idx);
+                                st.starts.unregister_incomplete(start_idx);
                                 Ok(ResolutionOutcome::Incomplete)
                             }
                             Err(oneshot::error::TryRecvError::Closed) => {
-                                st.concurrent_resolver.unregister(start_idx);
+                                st.starts.unregister(start_idx);
                                 Err(WorkerExecutorError::runtime(format!(
                                     "concurrent replay resolver channel closed for Start at {start_idx}"
                                 )))

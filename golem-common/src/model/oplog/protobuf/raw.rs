@@ -35,7 +35,8 @@ use crate::model::card::CardId;
 use crate::model::invocation_context::TraceId;
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::raw_types::{
-    CreateParameters, DurableStreamEventSummary, DurableStreamOutcome, DurableStreamTerminalOutcome,
+    CreateParameters, CreateRequest, CreateRequestKind, DurableStreamEventSummary,
+    DurableStreamOutcome, DurableStreamTerminalOutcome,
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
@@ -162,8 +163,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
     }
 }
 
-/// Chained conversion: proto → `PublicOplogEntry` → domain `OplogEntry`.
-impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for OplogEntry {
+/// Public protobuf entries supply observations, not authoritative Create metadata.
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry>
+    for crate::model::oplog::OplogEnrichmentEntry
+{
     type Error = String;
 
     fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
@@ -420,6 +423,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let entry = match value {
             OplogEntry::Create { parameters, .. } => {
                 let CreateParameters {
+                    component_id,
+                    agent_type_name,
+                    canonical_key,
                     agent_id,
                     owner_kind,
                     agent_mode,
@@ -434,8 +440,12 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
+                    create_request,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
+                    component_id: Some(component_id.into()),
+                    agent_type_name: agent_type_name.map(|name| name.0),
+                    canonical_key,
                     agent_id: Some(agent_id.into()),
                     owner_kind: owner_kind.into(),
                     agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
@@ -460,6 +470,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         .collect::<Result<Vec<_>, _>>()?,
                     original_phantom_id: original_phantom_id.map(Into::into),
                     instance_id: Some(instance_id.into()),
+                    create_request: Some(create_request_to_proto(create_request)),
                 })
             }
             OplogEntry::Start {
@@ -572,6 +583,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::Interrupted { .. } => Entry::Interrupted(RawTimestampOnly {}),
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
             OplogEntry::PendingAgentInvocation {
+                not_before,
                 idempotency_key,
                 payload,
                 trace_id,
@@ -579,6 +591,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 invocation_context,
                 ..
             } => Entry::PendingAgentInvocation(RawPendingAgentInvocationParameters {
+                not_before: not_before.map(Into::into),
                 idempotency_key: Some(idempotency_key.into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
@@ -1059,6 +1072,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Create {
                     timestamp,
                     parameters: Box::new(CreateParameters {
+                        component_id: p.component_id.ok_or("Missing component_id")?.try_into()?,
+                        agent_type_name: p.agent_type_name.map(crate::model::agent::AgentTypeName),
+                        canonical_key: p.canonical_key,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -1073,6 +1089,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         local_agent_config,
                         original_phantom_id,
                         instance_id,
+                        create_request: create_request_from_proto(
+                            p.create_request.ok_or("Missing create_request")?,
+                        )?,
                     }),
                 })
             }
@@ -1219,6 +1238,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(OplogEntry::PendingAgentInvocation {
                     timestamp,
+                    not_before: p.not_before.map(Into::into),
                     idempotency_key,
                     payload,
                     trace_id,
@@ -1643,4 +1663,65 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
         }
     }
+}
+
+fn create_request_to_proto(
+    value: CreateRequest,
+) -> golem_api_grpc::proto::golem::worker::RawCreateRequest {
+    use golem_api_grpc::proto::golem::worker::RawCreateRequestKind;
+
+    let CreateRequest {
+        kind,
+        idempotency_key,
+        principal,
+        trace_id,
+        trace_states,
+        invocation_context,
+    } = value;
+    golem_api_grpc::proto::golem::worker::RawCreateRequest {
+        kind: match kind {
+            CreateRequestKind::GetOrCreate => RawCreateRequestKind::GetOrCreate,
+            CreateRequestKind::Exclusive => RawCreateRequestKind::Exclusive,
+            CreateRequestKind::Phantom => RawCreateRequestKind::Phantom,
+            CreateRequestKind::Fork => RawCreateRequestKind::Fork,
+        } as i32,
+        idempotency_key: idempotency_key.map(Into::into),
+        principal: Some(principal.into()),
+        trace_id: trace_id.to_string(),
+        trace_states,
+        invocation_context: invocation_context
+            .into_iter()
+            .map(span_data_to_proto)
+            .collect(),
+    }
+}
+
+fn create_request_from_proto(
+    value: golem_api_grpc::proto::golem::worker::RawCreateRequest,
+) -> Result<CreateRequest, String> {
+    use golem_api_grpc::proto::golem::worker::RawCreateRequestKind;
+
+    let kind = match RawCreateRequestKind::try_from(value.kind)
+        .map_err(|e| format!("Invalid create request kind: {e}"))?
+    {
+        RawCreateRequestKind::GetOrCreate => CreateRequestKind::GetOrCreate,
+        RawCreateRequestKind::Exclusive => CreateRequestKind::Exclusive,
+        RawCreateRequestKind::Phantom => CreateRequestKind::Phantom,
+        RawCreateRequestKind::Fork => CreateRequestKind::Fork,
+    };
+    Ok(CreateRequest {
+        kind,
+        idempotency_key: value.idempotency_key.map(Into::into),
+        principal: value
+            .principal
+            .ok_or("Missing create request principal")?
+            .try_into()?,
+        trace_id: TraceId::from_string(value.trace_id)?,
+        trace_states: value.trace_states,
+        invocation_context: value
+            .invocation_context
+            .into_iter()
+            .map(span_data_from_proto)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
 }

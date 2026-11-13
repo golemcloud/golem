@@ -433,18 +433,12 @@ impl ComponentCommandHandler {
                 .agent_handler()
                 .redeploy_component_agents(&component.component_name, &component.id)
                 .await?;
-            let version = component.metadata.root_package_version.clone();
             for (agent_id, from_revision) in result.succeeded {
-                let from_version = self
-                    .component_version_at(&component.id, from_revision)
-                    .await;
                 agents.push(AgentRedeploymentMeta {
                     component_name: component.component_name.clone(),
                     agent_id,
                     from_revision,
                     revision: component.revision,
-                    from_version,
-                    version: version.clone(),
                 });
             }
             errors.extend(result.errors);
@@ -1936,7 +1930,7 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let wasm_path = component.final_wasm();
+        let wasm_path = component.wasm();
 
         let mapping = agent_types
             .iter()
@@ -2465,6 +2459,11 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            agent_types: properties
+                .agent_types
+                .iter()
+                .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
+                .collect(),
             component_config: diff::ComponentConfig {
                 schema: properties.config_schema.clone(),
                 initial_permissions: {
@@ -2739,19 +2738,6 @@ impl ComponentCommandHandler {
             .await
     }
 
-    /// Best-effort, cached lookup of a component's user-facing release version string at a given
-    /// revision. Returns `None` if the revision can't be fetched or has no version set.
-    pub async fn component_version_at(
-        &self,
-        component_id: &ComponentId,
-        revision: ComponentRevision,
-    ) -> Option<String> {
-        self.get_component_revision_by_id(component_id, revision)
-            .await
-            .ok()
-            .and_then(|component| component.metadata.root_package_version)
-    }
-
     pub async fn get_component_revision_by_id(
         &self,
         component_id: &ComponentId,
@@ -2895,7 +2881,7 @@ fn validate_tool_binding_references<'a>(
                 ToolValidationCode::ReservedMiddleware,
                 path,
                 source.map(std::path::Path::to_path_buf),
-                "Tool middleware bindings are reserved for GOL-39",
+                "Tool name `middleware` is reserved for tool middleware declarations and cannot be bound as a tool",
             ));
             continue;
         }

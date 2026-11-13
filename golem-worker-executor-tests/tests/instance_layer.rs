@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -83,7 +83,7 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use golem_worker_executor::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use golem_worker_executor::workerctx::{
@@ -1164,7 +1164,7 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
 async fn initialize_entity(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
@@ -1184,8 +1184,7 @@ async fn initialize_entity(
         principal,
     };
     let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
-    let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1203,7 +1202,7 @@ async fn initialize_entity(
 async fn invoke_sleep_p3(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     seconds: u64,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
@@ -1222,8 +1221,7 @@ async fn invoke_sleep_p3(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1235,7 +1233,7 @@ async fn invoke_sleep_p3(
 async fn invoke_entity_method(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     method_name: &str,
     input: golem_common::schema::SchemaValue,
@@ -1256,7 +1254,7 @@ async fn invoke_entity_method(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await? {
+    match invoke_observed_and_traced(lowered, store, instance, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(

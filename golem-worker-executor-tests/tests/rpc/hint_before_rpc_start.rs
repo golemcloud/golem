@@ -1,6 +1,9 @@
 use super::*;
-use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, AgentTarget, InvocationFreshnessDisposition,
+};
 use golem_common::model::card::ScopeCard;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
 use pretty_assertions::assert_eq;
@@ -42,9 +45,42 @@ impl DispatchThenHangRpc {
 
 #[async_trait]
 impl Rpc for DispatchThenHangRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                invocation,
+                scheduled_at,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn create_demand(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -57,14 +93,25 @@ impl Rpc for DispatchThenHangRpc {
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                agent,
+                environment_id,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
 
     async fn invoke_and_await(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -81,7 +128,18 @@ impl Rpc for DispatchThenHangRpc {
         let result = self
             .inner
             .invoke_and_await(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
                 card,
             )
             .await;
@@ -93,7 +151,8 @@ impl Rpc for DispatchThenHangRpc {
 
     async fn invoke(
         &self,
-        agent: &OwnedAgentId,
+        agent: AgentTarget,
+        environment_id: EnvironmentId,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         method: String,
@@ -109,7 +168,18 @@ impl Rpc for DispatchThenHangRpc {
         let result = self
             .inner
             .invoke(
-                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                agent,
+                environment_id,
+                key,
+                freshness,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
             )
             .await;
         if hang {

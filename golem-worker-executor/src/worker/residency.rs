@@ -53,13 +53,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if instance_guard.ensure_not_deleting().is_err() {
             return false;
         }
-        let stop_result = match &*instance_guard {
+        let stop_result = match instance_guard.state() {
             WorkerInstance::Running(running) => {
                 if self.is_running_worker_idle(running).await {
                     let stop_result = self
                         .stop_internal_locked(
                             &mut instance_guard,
-                            false,
+                            StopOrigin::External,
                             None,
                             UnloadRequest::ordinary(UnloadReason::Idle),
                             FinalWorkerState::Unloaded {
@@ -76,8 +76,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
-            WorkerInstance::Unloaded { .. } | WorkerInstance::CleanupFailed(_) => None,
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => None,
+            WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Inactive(_)
+            | WorkerInstance::CleanupFailed(_) => None,
+            WorkerInstance::Deleting(_) => None,
             WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => None,
         };
 
@@ -133,7 +135,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
     ) -> StartupComponentChargeRequirement {
         let metadata = self.get_latest_worker_metadata().await;
-        let component_id = self.owned_agent_id.component_id();
+        let component_id = metadata.component_id;
         let current_revision = metadata.last_known_status.component_revision;
         let current_size = metadata.last_known_status.component_size;
 
@@ -226,7 +228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> (ComponentId, ComponentRevision, u64) {
         let metadata = self.get_latest_worker_metadata().await;
         (
-            self.owned_agent_id.component_id(),
+            metadata.component_id,
             metadata.last_known_status.component_revision,
             metadata.last_known_status.component_size,
         )
@@ -237,7 +239,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// These workers can be stopped to free up available worker memory.
     pub async fn is_currently_idle_but_running(&self) -> bool {
-        match &*self.instance.lock().await {
+        match self.instance.lock().await.state() {
             WorkerInstance::Running(running) => self.is_running_worker_idle(running).await,
             WorkerInstance::WaitingForPermit(_) => {
                 debug!(
@@ -246,7 +248,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
-            WorkerInstance::Unloaded { .. } => {
+            WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
                     self.owned_agent_id
@@ -269,7 +271,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false
             }
             // TODO: this probably wants to cooperate with memory free up
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
+            WorkerInstance::Deleting(_) => {
                 debug!(
                     "Worker {} is deleting, cannot be used to free up memory",
                     self.owned_agent_id
@@ -281,7 +283,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) async fn is_running_worker_idle(&self, running: &RunningWorker) -> bool {
         let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-        let has_pending_invocations = !self.pending_invocations().await.is_empty();
+        let has_pending_invocations = self.has_due_invocations().await;
         let has_queued_internal_work = {
             let mut queue = running.queue.write().await;
             queue.retain(|invocation| !invocation.is_abandoned());
@@ -321,7 +323,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// invocations, …) can keep serving. This accessor lets callers
     /// distinguish those two states.
     pub async fn is_loaded(&self) -> bool {
-        matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
+        matches!(
+            self.instance.lock().await.state(),
+            WorkerInstance::Running(_)
+        )
     }
     /// Starts a conditional ordinary `ActiveAgents` retirement unless deletion already owns it.
     /// The returned guard rolls the marker back unless the cache removal commits.
@@ -362,7 +367,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             changed: self.durable_stream_producer.changed(),
             committed: false,
         };
-        matches!(&*self.instance.lock().await, WorkerInstance::Deleting(_)).then_some(retirement)
+        matches!(
+            self.instance.lock().await.state(),
+            WorkerInstance::Deleting(_)
+        )
+        .then_some(retirement)
     }
     pub(in crate::worker) fn cache_retirement_in_progress(&self) -> bool {
         self.cache_retirement_in_progress.load(Ordering::Acquire)
@@ -389,7 +398,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return None;
         }
-        match &*self.instance.lock().await {
+        match self.instance.lock().await.state() {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = {
@@ -413,7 +422,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return None;
                 }
 
-                let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                let has_pending_invocations = self.has_due_invocations().await;
                 if has_pending_invocations {
                     Some(EvictionClass::WarmRunnable)
                 } else {
@@ -454,7 +463,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if instance_guard.ensure_not_deleting().is_err() {
             return EvictionStopOutcome::Ineligible;
         }
-        let should_stop = match &*instance_guard {
+        let should_stop = match instance_guard.state() {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = {
@@ -477,7 +486,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     false
                 } else {
                     let eligibility = self.current_filesystem_pressure_eligibility(running);
-                    let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                    let has_pending_invocations = self.has_due_invocations().await;
                     let current_class = if has_pending_invocations {
                         EvictionClass::WarmRunnable
                     } else {
@@ -494,7 +503,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let stop_result = self
                 .stop_internal_locked(
                     &mut instance_guard,
-                    false,
+                    StopOrigin::External,
                     None,
                     unload_request,
                     FinalWorkerState::Unloaded {
@@ -505,14 +514,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            let outcome = match &*self.instance.lock().await {
+            let outcome = match self.instance.lock().await.state() {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
-                WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
+                WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {
+                    EvictionStopOutcome::Unloaded
+                }
                 _ => EvictionStopOutcome::CleanupFailed,
             };
-            if outcome == EvictionStopOutcome::Unloaded
-                && !self.pending_invocations().await.is_empty()
-            {
+            if outcome == EvictionStopOutcome::Unloaded && self.has_due_invocations().await {
                 // Only the invocation loop runs durable pending invocations, and their callers
                 // already started the worker and only wait. The start waits for memory admission.
                 // It is spawned because eviction can run inside the memory growth of another
@@ -537,7 +546,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn filesystem_pressure_eligibility(
         &self,
     ) -> Option<FilesystemPressureEligibility> {
-        match &*self.instance.lock().await {
+        match self.instance.lock().await.state() {
             WorkerInstance::Running(running) => {
                 Some(self.current_filesystem_pressure_eligibility(running))
             }
@@ -628,7 +637,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let receiver = {
             let instance = self.lock_non_stopping_worker().await;
-            let WorkerInstance::Running(running) = &*instance else {
+            let WorkerInstance::Running(running) = instance.state() else {
                 return Ok(());
             };
             let (sender, receiver) = oneshot::channel();

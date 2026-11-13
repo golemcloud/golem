@@ -145,7 +145,7 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
-  export type OwnerKind = "component-agent" | "ephemeral-external-tool";
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool" | "oplog-processor";
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
@@ -674,6 +674,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type PendingAgentInvocationParameters = {
     timestamp: Datetime;
     invocation: AgentInvocation;
+    notBefore?: Datetime;
   };
   export type SnapshotParameters = {
     timestamp: Datetime;
@@ -961,6 +962,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
+    notBefore?: Datetime;
     idempotencyKey: string;
     payload: OplogPayload;
     traceId: string;

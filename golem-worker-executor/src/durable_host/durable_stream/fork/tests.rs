@@ -984,6 +984,7 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
         })
         .collect();
     let pending = OplogEntry::pending_agent_invocation(
+        None,
         identity.invocation.idempotency_key.clone(),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),

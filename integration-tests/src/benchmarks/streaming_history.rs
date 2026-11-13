@@ -20,7 +20,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use golem_common::data_value;
 use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
@@ -60,7 +60,7 @@ pub struct StreamingHistoryContext {
 pub struct StreamingHistoryIteration {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    caller: ParsedAgentId,
+    caller: ParsedAgentKey,
     measured_agents: Vec<AgentId>,
     environment_id: EnvironmentId,
     length: u32,
@@ -75,7 +75,7 @@ pub struct StreamingColdIteration {
     user: TestUserContext<BenchmarkTestDependencies>,
     application: String,
     environment: String,
-    target: ParsedAgentId,
+    target: ParsedAgentKey,
     measured_agents: Vec<AgentId>,
     environment_id: EnvironmentId,
     length: u32,
@@ -194,7 +194,7 @@ async fn component_and_environment(
 async fn invoke_caller(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    caller: &ParsedAgentId,
+    caller: &ParsedAgentKey,
     method: &str,
     input: golem_common::schema::TypedSchemaValue,
 ) -> anyhow::Result<Vec<SchemaValue>> {
@@ -234,7 +234,7 @@ async fn seed_direct_session(
     user: &TestUserContext<BenchmarkTestDependencies>,
     application: &str,
     environment: &str,
-    target: &ParsedAgentId,
+    target: &ParsedAgentKey,
     domain: u32,
 ) -> anyhow::Result<()> {
     let report = PublicInvocationSession::start(

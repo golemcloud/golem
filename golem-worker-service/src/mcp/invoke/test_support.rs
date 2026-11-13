@@ -27,9 +27,9 @@ use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
@@ -395,7 +395,7 @@ struct RecordingWorkerClient {
 impl WorkerClient for RecordingWorkerClient {
     async fn prepare(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -407,6 +407,7 @@ impl WorkerClient for RecordingWorkerClient {
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let AgentTarget::Current(agent_id) = agent_id;
         let _ = (
             environment_variables,
             config,
@@ -426,7 +427,7 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn create(
         &self,
-        _: &AgentId,
+        _: &AgentTarget,
         _: HashMap<String, String>,
         _: Vec<AgentConfigEntryDto>,
         _: bool,
@@ -632,6 +633,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AccountId,
         _: AccountEmail,
+        _: Principal,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -664,13 +666,14 @@ impl WorkerClient for RecordingWorkerClient {
         _: &IdempotencyKey,
         _: EnvironmentId,
         _: AuthCtx,
+        _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         unimplemented!()
     }
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        agent_id: &AgentTarget,
         _: Option<String>,
         method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
         _: i32,
@@ -685,6 +688,7 @@ impl WorkerClient for RecordingWorkerClient {
         principal: golem_api_grpc::proto::golem::component::Principal,
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
+        let AgentTarget::Current(agent_id) = agent_id;
         self.agent_ids.lock().unwrap().push(agent_id.clone());
         self.method_params.lock().unwrap().push(method_params);
         self.contexts
@@ -919,8 +923,6 @@ impl InvocationHarness {
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
                 vec![],
-                None,
-                None,
                 vec![agent_type.clone()],
                 BTreeMap::new(),
             ),

@@ -155,6 +155,9 @@ use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
+use crate::worker::lifecycle::state::{
+    LifecycleTransition, StartupFailure, StopOrigin, WaitingPhase, WorkerLifecycle,
+};
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
@@ -185,7 +188,7 @@ use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
     ResolvedOwnerContext, Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
@@ -199,8 +202,9 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex,
-    OplogPayload, ReadOnlyViolationError, SnapshotAssistedUpdateDetails, UpdateDescription,
+    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName,
+    OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
+    SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -244,6 +248,68 @@ pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-
 pub(crate) enum WorkerCreationMode {
     ComponentAgent,
     EphemeralExternalTool,
+    OplogProcessor,
+}
+
+/// What a caller asks for when it may create an owner. Only the request that actually writes the
+/// Create entry is recorded; a caller that finds the owner existing records nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CreateIntent {
+    /// The owner is created as a side effect of an invocation. The invocation's idempotency key
+    /// identifies the create only for an owner whose phantom ID is derived from that key.
+    Invocation {
+        idempotency_key: Option<IdempotencyKey>,
+    },
+    /// An explicit create request.
+    Create {
+        exclusive: bool,
+        idempotency_key: Option<IdempotencyKey>,
+    },
+}
+
+impl CreateIntent {
+    pub const UNKEYED_INVOCATION: Self = Self::Invocation {
+        idempotency_key: None,
+    };
+
+    fn request(
+        &self,
+        phantom_id: Option<Uuid>,
+        principal: Principal,
+        invocation_context: &InvocationContextStack,
+    ) -> CreateRequest {
+        let (kind, idempotency_key) = match self {
+            Self::Invocation { idempotency_key } if phantom_id.is_some() => (
+                CreateRequestKind::Phantom,
+                idempotency_key
+                    .clone()
+                    .filter(|key| phantom_id == Some(ephemeral_invocation_phantom_id(key))),
+            ),
+            Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
+            Self::Create {
+                idempotency_key, ..
+            } if phantom_id.is_some() => (CreateRequestKind::Phantom, idempotency_key.clone()),
+            Self::Create {
+                exclusive: true,
+                idempotency_key,
+            } => (CreateRequestKind::Exclusive, idempotency_key.clone()),
+            Self::Create {
+                exclusive: false,
+                idempotency_key,
+            } => (CreateRequestKind::GetOrCreate, idempotency_key.clone()),
+        };
+        CreateRequest::new(kind, idempotency_key, principal, invocation_context)
+    }
+}
+
+impl WorkerCreationMode {
+    fn owner_kind(self) -> OwnerKind {
+        match self {
+            Self::ComponentAgent => OwnerKind::ComponentAgent,
+            Self::EphemeralExternalTool => OwnerKind::EphemeralExternalTool,
+            Self::OplogProcessor => OwnerKind::OplogProcessor,
+        }
+    }
 }
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
@@ -350,16 +416,23 @@ struct StartupAttemptTracker {
     state: StdMutex<StartupAttemptState>,
 }
 
+/// The logical start that callers join. One attempt can span stops, delays and permit
+/// reacquisition, so it is tracked apart from the lifecycle phase.
 #[derive(Default)]
-struct StartupAttemptState {
-    pending: Option<Uuid>,
-    failure: Option<WorkerExecutorError>,
+enum StartupAttemptState {
+    #[default]
+    Idle,
+    Pending(Uuid),
+    Failed(WorkerExecutorError),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DeletionHandle {
     completion: Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>,
 }
+
+/// Publishes the result of one deletion attempt to its `DeletionHandle`.
+type DeletionSender = oneshot::Sender<Result<(), WorkerExecutorError>>;
 
 pub(crate) enum DeleteOutcome {
     Started(DeletionHandle),
@@ -420,9 +493,17 @@ pub trait WorkerDeletionHook: Send + Sync {
 
 #[derive(Debug)]
 struct DeletingWorker {
-    runtime: Box<WorkerInstance>,
+    runtime: DeletionRuntime,
     handle: DeletionHandle,
     completed_stage: WorkerDeletionStage,
+}
+
+/// The runtime that a deletion retains from the resolved worker it claimed. The deletion's stop,
+/// or its successful cleanup retry, leaves `Stopped`.
+#[derive(Debug)]
+enum DeletionRuntime {
+    Retained(WorkerRuntime),
+    Stopped,
 }
 
 /// Represents worker that may be running or suspended.
@@ -441,11 +522,13 @@ pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     deps: All<Ctx>,
     card_interest_index: Arc<CardInterestIndex>,
-    instance: Arc<Mutex<WorkerInstance>>,
+    instance: Arc<Mutex<WorkerLifecycle>>,
     unload_cleanup: StdMutex<Option<invocation_loop::UnloadCleanup>>,
     resolved: OnceCell<ResolvedWorkerData<Ctx>>,
-    initialization_complete: AtomicBool,
-    initialization_request: StdMutex<Option<(InvocationContextStack, Principal)>>,
+    /// Set while a construction attempt that committed Create has not published the worker. A
+    /// retry then reloads that incarnation instead of creating another one, an ephemeral retry is
+    /// not treated as a reconstruction, and the unresolved worker stays cached.
+    unpublished_create: AtomicBool,
 }
 
 /// Metadata-dependent worker fields installed atomically after acquisition resolves.
@@ -455,7 +538,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 #[doc(hidden)]
 pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_context: ResolvedOwnerContext,
-    parsed_agent_id: Option<ParsedAgentId>,
+    parsed_agent_id: Option<ParsedAgentKey>,
 
     oplog: Arc<dyn Oplog>,
     pub(crate) tasks: tasks::WorkerTasks,
@@ -666,13 +749,13 @@ pub struct HydratedInvocation {
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn is_resolved(&self) -> bool {
-        self.initialization_complete.load(Ordering::Acquire)
+        self.resolved.get().is_some()
     }
 
     pub(crate) fn can_discard_unresolved(&self) -> bool {
         self.instance.try_lock().is_ok_and(|instance| {
-            matches!(&*instance, WorkerInstance::Unresolved)
-                && self.initialization_request.lock().unwrap().is_none()
+            matches!(instance.state(), WorkerInstance::Unresolved)
+                && !self.unpublished_create.load(Ordering::Acquire)
         })
     }
 
@@ -708,7 +791,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) fn component_id(&self) -> ComponentId {
-        self.owned_agent_id.component_id()
+        self.initial_worker_metadata.component_id
     }
 
     pub fn owner_execution(&self) -> Arc<OwnerExecution> {
@@ -817,6 +900,24 @@ impl Drop for WorkerStatusMetric {
 enum WorkerInstance {
     Unresolved,
     Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
+    /// admission returns it until the next start, which runs the agent again.
+    Unloaded {
+        startup_failure: Option<WorkerExecutorError>,
+    },
+    /// An ephemeral agent that must never start again (`StartupFailure::Inactive`).
+    Inactive(WorkerExecutorError),
+    CleanupFailed(WorkerExecutorError),
+    WaitingForPermit(WaitingWorker),
+    Running(RunningWorker),
+    Stopping(StoppingWorker),
+    Deleting(DeletingWorker),
+}
+
+/// The phases that hold or report a worker runtime, which a stop can end. Each is also a
+/// `WorkerInstance` phase; a deletion retains one of them.
+#[derive(Debug)]
+enum WorkerRuntime {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
@@ -824,8 +925,7 @@ enum WorkerInstance {
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
-    StoppedForDeletion,
-    Deleting(DeletingWorker),
+    Inactive(WorkerExecutorError),
 }
 
 impl WorkerInstance {
@@ -834,6 +934,7 @@ impl WorkerInstance {
             Self::Unloaded {
                 startup_failure: Some(err),
             }
+            | Self::Inactive(err)
             | Self::CleanupFailed(err) => Some(err),
             _ => None,
         }
@@ -853,7 +954,7 @@ pub struct WorkerTrace {
 
 #[derive(Debug)]
 struct WaitingWorker {
-    handle: Option<JoinHandle<()>>,
+    handle: JoinHandle<()>,
     start_attempt: Uuid,
 }
 
@@ -909,7 +1010,7 @@ enum WorkerInterruptState {
 
 #[derive(Debug)]
 struct RunningWorker {
-    handle: Option<JoinHandle<()>>,
+    handle: JoinHandle<()>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     waiting_for_command: Arc<AtomicBool>,
@@ -1041,11 +1142,12 @@ pub(crate) struct FilesystemPressureEligibility {
     last_effect_completion: u64,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum FinalWorkerState {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    Inactive(WorkerExecutorError),
     CleanupFailed(WorkerExecutorError),
     Deleting,
 }
@@ -1075,6 +1177,7 @@ enum InvocationResult {
     Cached {
         result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
+    Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
     },
@@ -1233,6 +1336,8 @@ pub(crate) struct GetOrCreateWorkerResult {
     initial_component: Arc<golem_service_base::model::component::Component>,
     /// Ephemeral agents are fail-stop: reconstructing one from its lower oplog is allowed for
     /// observation and invocation-result lookup, but the instance must never be started again.
+    /// The one exception is an agent that never began executing (no `Restart`): it may run its
+    /// first execution, see [`acquisition::never_started_ephemeral_admission`].
     reconstructed_ephemeral: bool,
     newly_created: bool,
 }

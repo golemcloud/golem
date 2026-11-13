@@ -928,7 +928,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(descriptor.target_component_revision),
             )
             .await?;
-        let parsed = ParsedAgentId::parse(&self.agent_id().agent_id, &component.metadata)
+        let parsed = self
+            .initial_worker_metadata
+            .parse_agent_id(&component.metadata)
             .map_err(WorkerExecutorError::invalid_request)?;
         let agent = component
             .metadata

@@ -34,6 +34,7 @@ use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
@@ -1863,6 +1864,7 @@ async fn append_prepared_pending(
         .unwrap();
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -3048,6 +3050,32 @@ struct AttachedProducerRpc {
 
 #[async_trait::async_trait]
 impl Rpc for AttachedProducerRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        _target: &OwnedAgentId,
+        _key: golem_common::model::IdempotencyKey,
+        _receipt: golem_common::model::ScheduleId,
+        _owner: &golem_common::model::AgentId,
+        _auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        Err(RpcError::ProtocolError {
+            details: "schedule cancellation is not supported by this test RPC".to_string(),
+        })
+    }
+
+    async fn schedule_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _expected_fingerprint: AgentFingerprint,
+        _invocation: golem_common::model::AgentInvocation,
+        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        Err(RpcError::ProtocolError {
+            details: "scheduling is not supported by this test RPC".to_string(),
+        })
+    }
+
     async fn control_durable_stream_attachment(
         &self,
         request: golem_common::base_model::durable_stream::StreamAttachmentControlRequest,
@@ -3107,7 +3135,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn create_demand(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -3123,7 +3152,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke_and_await(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _method_name: String,
@@ -3191,7 +3221,8 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _method_name: String,
@@ -10341,6 +10372,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -10979,6 +11011,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .unwrap();
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             consumer.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -11523,6 +11556,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
 
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             identity.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -11944,6 +11978,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             session_key.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -12171,6 +12206,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .unwrap();
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             session_key.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -12719,6 +12755,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .unwrap();
     let pending_invocation_oplog_index = consumer_oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             consumer.invocation.idempotency_key.clone(),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),

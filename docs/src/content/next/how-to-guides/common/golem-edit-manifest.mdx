@@ -2,12 +2,22 @@
 
 The `golem.yaml` file in the project root is the **Golem Application Manifest**. It defines the entire application: components, agents, build steps, environments, HTTP/MCP deployments, and more.
 
-**Manifest version**: The `manifestVersion` field at the top of the file identifies the application manifest document version. Do not change it.
+**Manifest version**: Every current manifest document, including included fragments, must use `manifestVersion: "2.0.0"`. The editor schema publication is `2.0.0-dev.1`, available at `https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json`. The manifest format marker, schema publication, and application deployment version are separate values.
+
+## Upgrading Older Manifests
+
+At startup, commands that load an application manifest preview the upgrade plan for versions `1.5.0` and `1.6.0` and ask for confirmation before writing files. Use `--yes` when the upgrade is approved and no interactive prompt is needed. The upgrade sets `manifestVersion` to `"2.0.0"`, updates existing schema URLs to `2.0.0-dev.1`, and adds the current marker to included versionless fragments in the older application. Unknown or future versions are not rewritten.
+
+The upgrade removes `outputWasm` from component and component-template base properties and presets. It keeps `componentWasm` unchanged as the sole actual built artifact path. It does not add a copy stage to preserve the removed staged artifact path.
+
+If manifest configuration strings, including commands, still reference the removed staged artifact path, the CLI rejects the upgrade before any writes. Update those references to use the actual artifact identified by `componentWasm`, then retry. Do not guess profile-dependent paths or add a copy stage. A `1.5.0` manifest with bridge configuration still requires manual adjustment before the upgrade can proceed.
+
+The guard inspects strings in the manifest, not the contents of external scripts invoked by commands. Check those scripts manually and update any staged-path references to use the actual `componentWasm` artifact. The upgrade does not inspect or rewrite external scripts.
 
 ## Top-Level Structure
 
 ```yaml
-manifestVersion: "1.5.0"          # Manifest document version — do not change
+manifestVersion: "2.0.0"          # Required manifest format marker
 app: my-app                       # Application name
 
 includes:                          # (optional) Glob patterns for additional manifest fragments
@@ -67,8 +77,7 @@ components:
     dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
-    outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Final WASM for extraction and upload
     build:                         # Build commands (see Build Commands below)
       - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
@@ -99,8 +108,7 @@ components:
 |-------|------|-------------|
 | `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
-| `componentWasm` | string | Path to the built WASM component |
-| `outputWasm` | string | Path for the final output WASM ready for upload |
+| `componentWasm` | string | Path to the final WASM component used unchanged for metadata extraction and upload, relative to the effective component directory |
 | `build` | array | Build commands (see Build Commands) |
 | `env` | map | Environment variables (string → string) |
 | `envMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
@@ -822,7 +830,6 @@ This table shows where each property can be defined:
 | `clean` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `dir` | — | — | ✅ | — | — | — |
 | `componentWasm` | — | ✅ | ✅ | — | ✅ | — |
-| `outputWasm` | — | ✅ | ✅ | — | ✅ | — |
 
 ### Related Guides
 - Load [`golem-generating-tool-clients`](/next/how-to-guides/common/golem-generating-tool-clients) to select built-in releases or MCP imports, generate typed clients, and configure consumer imports separately from deployment bindings
@@ -832,7 +839,7 @@ This table shows where each property can be defined:
 ## Edit Guardrails
 
 - **Do not invent fields**: most manifest objects use `additionalProperties: false` — only use fields documented above.
-- **Preserve `manifestVersion`**: never change the manifest document version.
+- **Require `manifestVersion: "2.0.0"`**: use this marker for new documents. For versions `1.5.0` and `1.6.0`, use the CLI's confirmed upgrade described above instead of only changing the marker.
 - **Agent names use PascalCase**: matching the class/trait name in code (e.g., `MyAgent`, not `my-agent`).
 - **Component names use `namespace:name`** format (e.g., `my-app:billing`).
 - **Only one `default: true` preset** per preset map.

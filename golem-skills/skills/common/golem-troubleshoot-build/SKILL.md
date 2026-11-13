@@ -14,9 +14,8 @@ For the normal build workflow and `golem build` usage, load `golem-build`. This 
 `golem build` executes a multi-step pipeline. Understanding which step failed is the first step to diagnosing problems:
 
 1. **Check** — proposes dependency and configuration fixes first, then verifies build tools
-2. **Build** — runs language-specific compilation commands
-3. **Add Metadata** — embeds component name and version into the output WASM
-4. **Generate Bridge** — generates bridge SDK code for inter-component communication
+2. **Build** — runs language-specific compilation commands to produce `componentWasm`, the final artifact used unchanged for metadata extraction and upload, without an output-copy stage
+3. **Generate Bridge** — generates bridge SDK code for inter-component communication
 
 Run a single step in isolation with `--step`:
 
@@ -133,7 +132,7 @@ golem component manifest-trace
 This command outputs a detailed trace for each component showing:
 
 - **Applied Layers** — the ordered list of configuration layers that contributed to the final values (e.g., component template, component definition, agent template, agent common, environment presets, custom presets)
-- **Property Values and Origins** — for each property (`config`, `env`, `plugins`, `files`, `build`, `clean`, `componentWasm`, `outputWasm`), the final resolved value plus a trace of which layer introduced or modified it
+- **Property Values and Origins** — for each property (`config`, `env`, `plugins`, `files`, `build`, `clean`, `componentWasm`), the final resolved value plus a trace of which layer introduced or modified it
 - **Merge Operations** — whether values were merged (showing inserted/updated entries) or entirely replaced, and from which layer
 
 ### Example Usage

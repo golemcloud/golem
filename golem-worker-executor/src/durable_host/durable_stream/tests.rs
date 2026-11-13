@@ -4241,6 +4241,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
 
     oplog
         .add(OplogEntry::pending_agent_invocation(
+            None,
             IdempotencyKey::new("pending-before-consumer-journal".to_string()),
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
@@ -6276,6 +6277,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
         role: SessionStreamRole::Output,
     });
     let pending = OplogEntry::pending_agent_invocation(
+        None,
         IdempotencyKey::new("durable-session".to_string()),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
@@ -6472,6 +6474,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
         stream_mappings: vec![StreamBindingRecord::foreign(&mapping)],
     };
     let pending = OplogEntry::pending_agent_invocation(
+        None,
         identity.invocation.idempotency_key.clone(),
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),

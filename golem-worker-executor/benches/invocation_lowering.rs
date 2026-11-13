@@ -29,7 +29,7 @@ use golem_common::base_model::IdempotencyKey;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocation;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::schema::{
@@ -127,14 +127,12 @@ fn component_metadata() -> ComponentMetadata {
     ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
-        None,
-        None,
         vec![representative_agent_type()],
         BTreeMap::new(),
     )
 }
 
-fn parsed_agent_id() -> ParsedAgentId {
+fn parsed_agent_id() -> ParsedAgentKey {
     let parameters = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -147,7 +145,7 @@ fn parsed_agent_id() -> ParsedAgentId {
             fields: vec![SchemaValue::U64(1)],
         },
     );
-    ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+    ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
 }
 
 fn method_input_value() -> SchemaValue {

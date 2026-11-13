@@ -6,6 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/component/agent_files.proto";
 import "golem/component/plugin.proto";
+import "golem/http/http.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/worker_id.proto";
 
@@ -90,33 +91,8 @@ message HttpEndpointDetails {
   repeated QueryVariable query_vars = 4;
   optional AgentHttpAuthDetails auth_details = 5;
   CorsOptions cors_options = 6;
-  optional DurableStreamRouteOptions durable_streams = 7;
-}
-
-message DurableStreamRouteOptions {
-  repeated DurableStreamSlotOptions slots = 1;
-  optional bool allow_external_writes = 2;
-  optional bool allow_stream_delete = 3;
-  optional bool allow_invocation_delete = 4;
-  optional DurableStreamRouteLoadOptions load = 5;
-}
-
-message DurableStreamSlotOptions {
-  DurableStreamSlotSource source = 1;
-  optional string name = 2;
-  optional string content_type = 3;
-}
-
-message DurableStreamSlotSource {
-  oneof value {
-    string input = 1;
-    string output = 2;
-  }
-}
-
-message DurableStreamRouteLoadOptions {
-  optional uint32 max_concurrent_readers_per_stream = 1;
-  optional uint32 max_append_requests_per_second_per_stream = 2;
+  optional golem.http.DurableStreamRouteOptions durable_streams = 7;
+  optional golem.http.HttpRouteMode mode = 8;
 }
 
 enum StandardHttpMethod {

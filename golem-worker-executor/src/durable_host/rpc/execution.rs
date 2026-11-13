@@ -50,6 +50,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::RetryContext;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
@@ -185,7 +186,8 @@ pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
     let demand = ctx
         .rpc()
         .create_demand(
-            remote_agent_id,
+            AgentTarget::Current(remote_agent_id.agent_id()),
+            remote_agent_id.environment_id,
             &prepared.method_name,
             ctx.created_by(),
             ctx.agent_id(),
@@ -263,7 +265,8 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 let interrupt_signal = interrupt_signal.map(Error::from);
                 let either_result = futures::future::select(
                     rpc.invoke_and_await(
-                        &remote_agent_id,
+                        AgentTarget::Current(remote_agent_id.agent_id()),
+                        remote_agent_id.environment_id,
                         Some(idempotency_key.clone()),
                         dispatch_freshness,
                         prepared.method_name.clone(),
@@ -384,7 +387,8 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
             let result = ctx
                 .rpc()
                 .invoke(
-                    &remote_agent_id,
+                    AgentTarget::Current(remote_agent_id.agent_id()),
+                    remote_agent_id.environment_id,
                     Some(idempotency_key.clone()),
                     dispatch_freshness,
                     prepared.method_name.clone(),
@@ -547,6 +551,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     target_activation.config,
                     &auth_ctx,
                     target_activation.target_fingerprint,
+                    None,
                 )
                 .await
                 .map_err(RpcTaskError::Host)?;
@@ -556,7 +561,8 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
             };
 
             let invocation = rpc.invoke_and_await(
-                &remote_agent_id,
+                AgentTarget::Current(remote_agent_id.agent_id()),
+                remote_agent_id.environment_id,
                 Some(idempotency_key),
                 freshness_disposition,
                 method_name,
@@ -798,6 +804,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                             target_activation.config,
                             &auth_ctx,
                             target_activation.target_fingerprint,
+                            None,
                         )
                         .await?,
                     )
@@ -810,7 +817,8 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                     remote.as_ref(),
                     acceptance,
                     rpc.invoke_and_await_streaming(
-                        &remote_agent_id,
+                        AgentTarget::Current(remote_agent_id.agent_id()),
+                        remote_agent_id.environment_id,
                         idempotency_key,
                         method_name,
                         params.input,

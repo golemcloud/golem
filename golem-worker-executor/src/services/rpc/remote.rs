@@ -26,9 +26,143 @@ impl RemoteInvocationRpc {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: IdempotencyKey,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.worker_proxy
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        let AgentInvocation::AgentMethod {
+            idempotency_key,
+            method_name,
+            input,
+            invocation_context,
+            principal,
+            scope_card,
+        } = invocation
+        else {
+            return Err(RpcError::ProtocolError {
+                details: "guest scheduling requires an agent method invocation".to_string(),
+            });
+        };
+        let parent = match &principal {
+            Principal::Agent(agent) => Some(agent.agent_id.clone().into()),
+            _ => None,
+        };
+        let start = InvocationStart {
+            agent_id: Some(owned_agent_id.agent_id().into()),
+            method_name: Some(method_name),
+            input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
+                details: format!(
+                    "scheduled input cannot cross the remote worker boundary: {error}"
+                ),
+            })?),
+            idempotency_key: Some(idempotency_key.clone().into()),
+            context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                parent,
+                env: HashMap::new(),
+                tracing: Some(invocation_context.into()),
+            }),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            principal: Some(principal.into()),
+            environment_id: Some(owned_agent_id.environment_id.into()),
+            config: Vec::new(),
+            component_owner_account_id: None,
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: Some(prost_types::Timestamp {
+                seconds: scheduled_at.timestamp(),
+                nanos: scheduled_at.timestamp_subsec_nanos() as i32,
+            }),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: None,
+            expected_callee_fingerprint: Some(expected_fingerprint.0.into()),
+            durable_input_mappings: Vec::new(),
+            origin_invocation: None,
+            scope_card: scope_card
+                .as_ref()
+                .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
+                .transpose()
+                .map_err(|details| RpcError::ProtocolError { details })?,
+            external_tool: None,
+        };
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(start.clone())),
+        };
+        let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
+        state
+            .lock()
+            .await
+            .validate_trusted_request(&request)
+            .map_err(|details| RpcError::ProtocolError { details })?;
+        let mut inbound = self
+            .worker_proxy
+            .invoke_agent_session(Box::pin(tokio_stream::iter([request])))
+            .await?;
+        if let Some(response) = inbound.next().await {
+            let response = response?;
+            state
+                .lock()
+                .await
+                .validate_response(&response)
+                .map_err(|details| RpcError::ProtocolError { details })?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(accepted)) => {
+                    if accepted.agent_id != start.agent_id
+                        || accepted.idempotency_key != start.idempotency_key
+                        || accepted.method_name != start.method_name
+                        || accepted.component_revision.is_none()
+                    {
+                        return Err(RpcError::ProtocolError {
+                            details: "scheduled invocation acceptance does not match the target invocation".to_string(),
+                        });
+                    }
+                    return Ok(golem_common::model::ScheduleId::for_invocation(
+                        expected_fingerprint,
+                        &idempotency_key,
+                    ));
+                }
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    confirm_terminal_response_is_last(&mut inbound, &state).await?;
+                    return Err(rpc_error_from_rejection(rejected));
+                }
+                Some(invocation_response::Response::Finished(finished)) => {
+                    return Err(rpc_error_from_invocation_finished(finished));
+                }
+                _ => {
+                    return Err(RpcError::ProtocolError {
+                        details: "unexpected response before scheduled invocation acceptance"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Err(RpcError::RemoteInternalError {
+            details: "scheduled invocation response ended before committed acceptance".to_string(),
+        })
+    }
+
+    async fn create_demand(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         method_name: &str,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -39,6 +173,8 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         debug!("Ensuring remote target worker exists");
 
         let principal = caller_agent_principal(self_agent_id);
@@ -67,7 +203,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -80,6 +217,8 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
 
         let output = self
@@ -115,7 +254,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await_streaming(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: IdempotencyKey,
         method_name: String,
         method_parameters: ProtoSchemaValue,
@@ -132,6 +272,8 @@ impl Rpc for RemoteInvocationRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let start = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(owned_agent_id.agent_id().into()),
@@ -373,7 +515,8 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         method_name: String,
@@ -385,6 +528,8 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
 
         self.worker_proxy

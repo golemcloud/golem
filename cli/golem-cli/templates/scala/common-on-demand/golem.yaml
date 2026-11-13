@@ -21,7 +21,6 @@ componentTemplates:
         - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
       quick:
         build:
         - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/agent_guest.wasm"
@@ -36,4 +35,3 @@ componentTemplates:
           module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
