@@ -17,7 +17,7 @@ use super::{
     HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedSemaphorePermit,
     PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id,
-    find_component_revision_at, get_public_oplog_entry, get_public_oplog_page, golem, min,
+    get_public_oplog_entry, get_public_oplog_page, golem, min, oplog_page_cursor, oplog_page_start,
     search_public_oplog_page,
 };
 
@@ -25,14 +25,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     WorkerExecutorImpl<Ctx, Svcs>
 {
     /// Limits of an oplog page that this executor returns to a remote caller. They keep the
-    /// page below the gRPC message size limit; `GetOplogEntry` returns the omitted entries.
-    fn oplog_query_limits(&self, requested_count: u64) -> PublicOplogPageLimits {
+    /// page below the gRPC message size limit; `GetOplogEntry` returns the omitted entries. A
+    /// page of no entries is refused: its cursor would point to where it started, and a caller
+    /// that follows cursors would never end.
+    fn oplog_query_limits(
+        &self,
+        requested_count: u64,
+    ) -> Result<PublicOplogPageLimits, WorkerExecutorError> {
+        if requested_count == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "the count of an oplog page must be at least 1",
+            ));
+        }
         let limits = &self.services.config().limits;
-        PublicOplogPageLimits {
+        Ok(PublicOplogPageLimits {
             count: min(requested_count as usize, limits.max_oplog_query_pages_size),
             max_bytes: limits.max_oplog_query_page_bytes,
             max_entry_bytes: limits.max_inline_oplog_entry_size,
-        }
+        })
     }
 
     pub(super) async fn get_oplog_internal(
@@ -56,65 +66,36 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = identity.agent_mode;
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
-        let chunk = match request.cursor {
-            Some(cursor) => {
-                let current_component_revision =
-                    cursor.current_component_revision.try_into().map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "failed converting component_revision: {e}"
-                        ))
-                    })?;
+        let limits = self.oplog_query_limits(request.count)?;
+        let (start, start_component_revision) = oplog_page_start(
+            self.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            request.cursor.map(Into::into),
+            OplogIndex::from_u64(request.from_oplog_index),
+        )
+        .await?;
+        let chunk = get_public_oplog_page(
+            component_service,
+            self.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            identity.create_parameters().component_id,
+            identity.create_parameters().owner_kind,
+            agent_type_name.as_ref(),
+            start_component_revision,
+            start,
+            limits,
+        )
+        .await
+        .map_err(WorkerExecutorError::unknown)?;
 
-                get_public_oplog_page(
-                    component_service.clone(),
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    identity.create_parameters().component_id,
-                    identity.create_parameters().owner_kind,
-                    agent_type_name.as_ref(),
-                    current_component_revision,
-                    OplogIndex::from_u64(cursor.next_oplog_index),
-                    self.oplog_query_limits(request.count),
-                )
-                .await
-                .map_err(WorkerExecutorError::unknown)?
-            }
-            None => {
-                let start = OplogIndex::from_u64(request.from_oplog_index);
-                let initial_component_revision = find_component_revision_at(
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    start,
-                )
-                .await?;
-
-                get_public_oplog_page(
-                    component_service.clone(),
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    identity.create_parameters().component_id,
-                    identity.create_parameters().owner_kind,
-                    agent_type_name.as_ref(),
-                    initial_component_revision,
-                    start,
-                    self.oplog_query_limits(request.count),
-                )
-                .await
-                .map_err(WorkerExecutorError::unknown)?
-            }
-        };
-
-        let next = if chunk.entries.is_empty() {
-            None
-        } else {
-            Some(golem::worker::OplogCursor {
-                next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_revision: chunk.current_component_revision.into(),
-            })
-        };
+        let next = oplog_page_cursor(
+            chunk.next_oplog_index,
+            chunk.current_component_revision,
+            chunk.last_index,
+        )
+        .map(Into::into);
 
         Ok(GetOplogResponse {
             result: Some(
@@ -202,66 +183,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = identity.agent_mode;
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
-        let chunk = match request.cursor {
-            Some(cursor) => {
-                let current_component_revision =
-                    cursor.current_component_revision.try_into().map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "failed converting component_revision: {e}"
-                        ))
-                    })?;
+        let limits = self.oplog_query_limits(request.count)?;
+        let (start, start_component_revision) = oplog_page_start(
+            self.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            request.cursor.map(Into::into),
+            OplogIndex::INITIAL,
+        )
+        .await?;
+        let chunk = search_public_oplog_page(
+            component_service,
+            self.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            identity.create_parameters().component_id,
+            identity.create_parameters().owner_kind,
+            agent_type_name.as_ref(),
+            start_component_revision,
+            start,
+            limits,
+            &request.query,
+            self.services.config().limits.scan_budget,
+        )
+        .await
+        .map_err(WorkerExecutorError::unknown)?;
 
-                search_public_oplog_page(
-                    component_service.clone(),
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    identity.create_parameters().component_id,
-                    identity.create_parameters().owner_kind,
-                    agent_type_name.as_ref(),
-                    current_component_revision,
-                    OplogIndex::from_u64(cursor.next_oplog_index),
-                    self.oplog_query_limits(request.count),
-                    &request.query,
-                )
-                .await
-                .map_err(WorkerExecutorError::unknown)?
-            }
-            None => {
-                let start = OplogIndex::INITIAL;
-                let initial_component_revision = find_component_revision_at(
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    start,
-                )
-                .await?;
-                search_public_oplog_page(
-                    component_service.clone(),
-                    self.oplog_service(),
-                    &owned_agent_id,
-                    agent_mode,
-                    identity.create_parameters().component_id,
-                    identity.create_parameters().owner_kind,
-                    agent_type_name.as_ref(),
-                    initial_component_revision,
-                    start,
-                    self.oplog_query_limits(request.count),
-                    &request.query,
-                )
-                .await
-                .map_err(WorkerExecutorError::unknown)?
-            }
-        };
-
-        let next = if chunk.entries.is_empty() {
-            None
-        } else {
-            Some(golem::worker::OplogCursor {
-                next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_revision: chunk.current_component_revision.into(),
-            })
-        };
+        let next = oplog_page_cursor(
+            chunk.next_oplog_index,
+            chunk.current_component_revision,
+            chunk.last_index,
+        )
+        .map(Into::into);
 
         Ok(SearchOplogResponse {
             result: Some(

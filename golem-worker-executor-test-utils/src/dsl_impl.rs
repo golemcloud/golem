@@ -797,18 +797,17 @@ impl TestDsl for TestWorkerExecutor {
             if let Some(chunk) = chunk.result {
                 match chunk {
                     get_oplog_response::Result::Success(chunk) => {
-                        if chunk.entries.is_empty() {
-                            break;
-                        } else {
-                            result.extend(
-                                self.full_oplog_entries(
-                                    agent_id,
-                                    latest_version.environment_id,
-                                    chunk.entries,
-                                )
-                                .await?,
-                            );
-                            cursor = chunk.next;
+                        result.extend(
+                            self.full_oplog_entries(
+                                agent_id,
+                                latest_version.environment_id,
+                                chunk.entries,
+                            )
+                            .await?,
+                        );
+                        match chunk.next {
+                            Some(next) => cursor = Some(next),
+                            None => break,
                         }
                     }
                     get_oplog_response::Result::Failure(error) => {
@@ -882,18 +881,17 @@ impl TestDsl for TestWorkerExecutor {
             if let Some(chunk) = chunk.result {
                 match chunk {
                     search_oplog_response::Result::Success(chunk) => {
-                        if chunk.entries.is_empty() {
-                            break;
-                        } else {
-                            result.extend(
-                                self.full_oplog_entries(
-                                    agent_id,
-                                    latest_version.environment_id,
-                                    chunk.entries,
-                                )
-                                .await?,
-                            );
-                            cursor = chunk.next;
+                        result.extend(
+                            self.full_oplog_entries(
+                                agent_id,
+                                latest_version.environment_id,
+                                chunk.entries,
+                            )
+                            .await?,
+                        );
+                        match chunk.next {
+                            Some(next) => cursor = Some(next),
+                            None => break,
                         }
                     }
                     search_oplog_response::Result::Failure(error) => {

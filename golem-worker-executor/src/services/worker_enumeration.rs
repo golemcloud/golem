@@ -17,6 +17,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{Instrument, info, warn};
 
 /// Derives the `modes` argument for `OplogService::scan_for_component` from the
@@ -170,6 +171,11 @@ pub trait WorkerEnumerationService: Send + Sync {
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
 }
 
+/// The number of agents that one storage scan of an agent listing reads at most. The listing
+/// checks its scan budget between scans, so this also bounds how far a listing runs past the time
+/// of its budget.
+const AGENT_SCAN_BATCH_SIZE: u64 = 100;
+
 fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
     if count == 0 || count > i64::MAX as u64 {
         Err(WorkerExecutorError::invalid_request(format!(
@@ -212,7 +218,7 @@ impl DefaultWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>, u64), WorkerExecutorError> {
         let mut workers: Vec<AgentMetadata> = vec![];
 
         let modes = modes_from_filter(&filter);
@@ -221,6 +227,7 @@ impl DefaultWorkerEnumerationService {
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
+        let scanned = keys.len() as u64;
 
         for owned_agent_id in keys {
             // An agent whose oplog failed for good has no metadata to list: it is left out, and
@@ -286,7 +293,7 @@ impl DefaultWorkerEnumerationService {
             }
         }
 
-        Ok((new_cursor.into_option(), workers))
+        Ok((new_cursor.into_option(), workers, scanned))
     }
 }
 
@@ -339,29 +346,40 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             precise = %precise,
             "Enumerating workers"
         );
-        let mut new_cursor: Option<ScanCursor> = Some(cursor);
+        let budget = self.golem_config.limits.scan_budget;
+        let started = Instant::now();
+        let mut scanned = 0u64;
+        let mut new_cursor = cursor;
         let mut workers: Vec<AgentMetadata> = vec![];
 
-        while new_cursor.is_some() && (workers.len() as u64) < count {
-            let new_count = count - (workers.len() as u64);
+        loop {
+            let batch = (count - workers.len() as u64)
+                .min(budget.remaining_entries(scanned))
+                .min(AGENT_SCAN_BATCH_SIZE);
 
-            let (next_cursor, workers_page) = self
+            let (next_cursor, workers_page, batch_scanned) = self
                 .get_internal(
                     environment_id,
                     component_id,
                     filter.clone(),
-                    new_cursor.unwrap_or_default(),
-                    new_count,
+                    new_cursor,
+                    batch,
                     precise,
                 )
                 .await?;
 
             workers.extend(workers_page);
+            scanned += batch_scanned;
 
-            new_cursor = next_cursor;
+            match next_cursor {
+                Some(next_cursor)
+                    if (workers.len() as u64) < count && !budget.is_spent(scanned, started) =>
+                {
+                    new_cursor = next_cursor;
+                }
+                next_cursor => return Ok((next_cursor, workers)),
+            }
         }
-
-        Ok((new_cursor, workers))
     }
 }
 

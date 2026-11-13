@@ -20,8 +20,8 @@ use golem_common::model::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::num::NonZeroUsize;
-use std::time::Duration;
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
@@ -45,6 +45,8 @@ pub struct Limits {
     /// Maximum number of oplog entry reads that hold a full entry in memory at the same time.
     /// Further reads wait for a running read to end.
     pub max_concurrent_oplog_entry_reads: usize,
+    /// Bounds the work of one oplog search or agent listing call. An advanced setting.
+    pub scan_budget: ScanBudget,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
     pub max_tool_attachment_bytes: usize,
@@ -122,6 +124,12 @@ impl SafeDisplay for Limits {
         );
         let _ = writeln!(
             &mut result,
+            "scan budget entries: {}",
+            self.scan_budget.entries
+        );
+        let _ = writeln!(&mut result, "scan budget time: {:?}", self.scan_budget.time);
+        let _ = writeln!(
+            &mut result,
             "max invocation context stack depth: {}",
             self.max_invocation_context_stack_depth
         );
@@ -142,6 +150,41 @@ impl SafeDisplay for Limits {
         );
 
         result
+    }
+}
+
+/// Bounds the work of one oplog search or agent listing call. A call that scans many oplog
+/// entries or agents for few matches returns a partial page with a cursor when the budget is
+/// spent, and the caller continues with the cursor. A call always scans at least one chunk, so
+/// every call makes progress.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ScanBudget {
+    /// The number of oplog entries, or of agents, that one call scans at most.
+    pub entries: NonZeroU64,
+    /// The time after which a call stops scanning at the end of its current chunk.
+    #[serde(with = "humantime_serde")]
+    pub time: Duration,
+}
+
+impl ScanBudget {
+    /// The number of items a call that scanned `scanned` items may still scan.
+    pub fn remaining_entries(&self, scanned: u64) -> u64 {
+        self.entries.get().saturating_sub(scanned)
+    }
+
+    /// Whether a call that started at `started` and scanned `scanned` items has spent the
+    /// budget.
+    pub fn is_spent(&self, scanned: u64, started: Instant) -> bool {
+        scanned >= self.entries.get() || started.elapsed() >= self.time
+    }
+}
+
+impl Default for ScanBudget {
+    fn default() -> Self {
+        Self {
+            entries: NonZeroU64::new(100_000).unwrap(),
+            time: Duration::from_secs(5),
+        }
     }
 }
 
@@ -524,6 +567,7 @@ impl Default for Limits {
             max_oplog_query_page_bytes: 8 * 1024 * 1024,
             max_inline_oplog_entry_size: 1024 * 1024,
             max_concurrent_oplog_entry_reads: 4,
+            scan_budget: ScanBudget::default(),
             max_invocation_context_stack_depth: 1024,
             max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,

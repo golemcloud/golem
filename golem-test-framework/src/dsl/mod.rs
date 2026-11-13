@@ -1291,7 +1291,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
-        | WorkerExecutorError::OplogFailed { .. }) => error.to_string(),
+        | WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::StaleCursor { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,

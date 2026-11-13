@@ -233,6 +233,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         entry.next_oplog_index,
         entry.page_size,
         &entry.query,
+        ctx.state.config.limits.scan_budget,
     )
     .await
 }

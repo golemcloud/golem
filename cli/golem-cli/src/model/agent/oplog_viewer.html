@@ -1030,13 +1030,25 @@ function fetchPage(params) {
   const cursor = params.cursor;
   return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, count: state.live.pageSize, query: params.query });
 }
+// A page has a cursor while the oplog has entries after it. A search page can be empty and still
+// have a cursor, when the server spent its scan budget before a match, so this follows the cursor
+// until a page has entries that `keep` accepts or the cursor ends.
+async function fetchEntries(params, keep) {
+  let page = await fetchPage(params);
+  let entries = normalize(page).filter(keep);
+  while (!entries.length && page.next) {
+    page = await fetchPage({ ...params, cursor: page.next });
+    entries = normalize(page).filter(keep);
+  }
+  return { page, entries };
+}
 function setLoading(on) { state.live.loading = on; renderLiveBar(); }
-// The API hands out a cursor until a page comes back empty; the agent's last oplog index tells
-// earlier whether the loaded window already reached the end.
-function updateHasMore(page, received) {
+// The agent's last oplog index tells earlier than the cursor whether the loaded window already
+// reached the end.
+function updateHasMore(page) {
   const L = state.live; const last = L.meta && L.meta.lastOplogIndex;
   L.next = page.next || null;
-  L.hasMore = !!page.next && received > 0 && !(last && !L.serverQuery && L.hi >= last);
+  L.hasMore = !!page.next && !(last && !L.serverQuery && L.hi >= last);
 }
 function metadataDroppedRegions() {
   const m = state.live && state.live.meta; if (!m) return [];
@@ -1060,10 +1072,9 @@ async function loadWindow(params) {
   try {
     L.serverQuery = params.query ? params.query : null; $('#squery').value = L.serverQuery || '';
     L.from = params.from || null;
-    const page = await fetchPage({ from: L.from, query: L.serverQuery });
-    const entries = normalize(page);
+    const { page, entries } = await fetchEntries({ from: L.from, query: L.serverQuery }, () => true);
     L.lo = entries.length ? entries[0].index : (L.from || 1); L.hi = entries.length ? entries[entries.length - 1].index : L.lo - 1;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     state.openKeys.clear(); state.forceOpen = null;
     setEntries(entries);
     $('#list').scrollTop = 0;
@@ -1074,10 +1085,9 @@ async function loadMore() {
   const L = state.live; if (!L || L.loading || !L.hasMore) return;
   setLoading(true);
   try {
-    const page = await fetchPage({ from: L.from, cursor: L.next, query: L.serverQuery });
-    const entries = normalize(page).filter(e => e.index > L.hi);
+    const { page, entries } = await fetchEntries({ from: L.from, cursor: L.next, query: L.serverQuery }, e => e.index > L.hi);
     if (entries.length) L.hi = entries[entries.length - 1].index;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     if (entries.length) setEntries(state.entries.concat(entries), { keepScroll: true }); else renderLiveBar();
   } catch (e) { toast('Loading failed: ' + e.message); }
   finally { setLoading(false); }
@@ -1110,7 +1120,7 @@ async function pollNewEntries() {
     const page = await fetchPage({ from: L.hi + 1, query: null });
     const entries = normalize(page).filter(e => e.index > L.hi);
     if (entries.length) L.hi = entries[entries.length - 1].index;
-    updateHasMore(page, entries.length);
+    updateHasMore(page);
     if (entries.length) { setEntries(state.entries.concat(entries), { keepScroll: true }); if (L.follow) $('#sentinel').scrollIntoView({ block: 'end' }); }
   } catch (e) { toast('Polling failed: ' + e.message); }
   finally { setLoading(false); }

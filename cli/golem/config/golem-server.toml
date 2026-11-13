@@ -520,6 +520,10 @@ max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
 
+[worker_executor.limits.scan_budget]
+entries = 100000
+time = "5s"
+
 [worker_executor.mcp_transport]
 concurrency = 16
 json_depth = 512
@@ -1519,6 +1523,10 @@ type = "Disabled"
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [worker_executor.limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [worker_executor.mcp_transport]
 # concurrency = 16
