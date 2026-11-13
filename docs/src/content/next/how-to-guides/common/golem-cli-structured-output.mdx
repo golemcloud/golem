@@ -91,6 +91,8 @@ Some commands emit a stream of documents:
 | `agent stream` | `agent.stream` | One document per stream event |
 | `agent oplog` | `agent.oplog` | One document per oplog entry |
 
+`agent oplog --page` reads one page instead and emits one `agent.oplog-page` document. Its `entries` are the `agent.oplog` documents of the page, and its `cursor`, when present, is passed back as `--cursor` to read the next page. A page can be empty and still have a cursor.
+
 For compact `--format json`, each streamed document is emitted as one JSON line. Parse stdout line by line. For `pretty-json`, YAML, and TOON, parse stdout as a sequence or framed stream, not as one JSON object or array.
 
 Structured stream output may be empty if there are no events or entries.

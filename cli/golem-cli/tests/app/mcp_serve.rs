@@ -68,12 +68,20 @@ fn write_manifest(ctx: &TestContext, component: &str, local: &str) {
 
 /// A local server with the counters component deployed to each of `environments`.
 async fn counters_context(environments: &[&str]) -> TestContext {
-    counters_context_with(environments, "").await
+    counters_context_with(environments, "", &[]).await
 }
 
-/// [`counters_context`] with `local` added to the `local` environment of the manifest.
-async fn counters_context_with(environments: &[&str], local: &str) -> TestContext {
+/// [`counters_context`] with `local` added to the `local` environment of the manifest, and with
+/// the environment variables `env` for the server and the CLI.
+async fn counters_context_with(
+    environments: &[&str],
+    local: &str,
+    env: &[(&str, &str)],
+) -> TestContext {
     let mut ctx = TestContext::new();
+    for (key, value) in env {
+        ctx.add_env_var(*key, *value);
+    }
     let fixture = workspace_path().join("test-components/it_agent_counters_release.wasm");
     assert!(
         fixture.is_file(),
@@ -181,6 +189,34 @@ fn error_message(result: &CallToolResult) -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+/// Every page that `tool` returns for `arguments`, from the first one, each call passing the
+/// `cursor` of the previous page as `cursor_argument`.
+async fn follow_pages(
+    client: &RunningService<RoleClient, ()>,
+    tool: &str,
+    mut arguments: Value,
+    cursor_argument: &str,
+) -> Vec<Value> {
+    let mut pages = Vec::new();
+    loop {
+        let page = structured(&call(client, tool, arguments.clone()).await).clone();
+        let cursor = page.get("cursor").cloned();
+        pages.push(page);
+        let Some(cursor) = cursor else {
+            return pages;
+        };
+        arguments[cursor_argument] = cursor;
+        assert!(pages.len() < 1000, "`{tool}` does not reach its last page");
+    }
+}
+
+fn items<'a>(pages: &'a [Value], field: &str) -> Vec<&'a Value> {
+    pages
+        .iter()
+        .flat_map(|page| page[field].as_array().unwrap())
+        .collect()
 }
 
 fn tool_name(row: &CommandRow) -> String {
@@ -295,7 +331,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         ),
         (
             "agent_oplog",
-            &["agent_id", "from", "omit_payloads", "query"],
+            &["agent_id", "cursor", "from", "omit_payloads", "query"],
         ),
         (
             "agent_invoke",
@@ -375,11 +411,15 @@ async fn mcp_serve_reads_return_the_cli_json() {
             json!({"agent_id": agent}),
             vec![cmd::AGENT, cmd::GET, agent],
         ),
-        ("agent list", json!({}), vec![cmd::AGENT, cmd::LIST]),
+        (
+            "agent list",
+            json!({}),
+            vec![cmd::AGENT, cmd::LIST, "--page"],
+        ),
         (
             "agent oplog",
             json!({"agent_id": agent}),
-            vec![cmd::AGENT, "oplog", agent],
+            vec![cmd::AGENT, "oplog", agent, "--page"],
         ),
         (
             "agent files",
@@ -425,11 +465,10 @@ async fn mcp_serve_reads_return_the_cli_json() {
     let refused = call(&client, "agent_revert", revert.clone()).await;
     assert_eq!(error_code(&refused), "confirmation-required");
     let reverts = async || {
-        let oplog = call(&client, "agent_oplog", json!({"agent_id": agent})).await;
-        structured(&oplog)["items"]
-            .as_array()
-            .unwrap()
-            .iter()
+        let pages =
+            follow_pages(&client, "agent_oplog", json!({"agent_id": agent}), "cursor").await;
+        items(&pages, "entries")
+            .into_iter()
             .filter(|item| item["entry"]["type"] == "Revert")
             .count()
     };
@@ -446,7 +485,7 @@ async fn mcp_serve_reads_return_the_cli_json() {
 #[test]
 #[timeout("10 minutes")]
 async fn mcp_serve_destructive_tools_run_only_with_confirm() {
-    let ctx = counters_context_with(&["local"], "    cli:\n      autoConfirm: true").await;
+    let ctx = counters_context_with(&["local"], "    cli:\n      autoConfirm: true", &[]).await;
     let agent = r#"Counter("mcp-confirm")"#;
     invoke(&ctx, "local", agent).await;
 
@@ -809,5 +848,94 @@ async fn mcp_serve_keeps_its_environment_when_it_is_renamed() {
     let old_name = format!("{APP}/local/{agent}");
     let refused = call(&client, "agent_get", json!({"agent_id": old_name})).await;
     assert_eq!(error_code(&refused), "outside-environment", "{refused:?}");
+    client.cancel().await.unwrap();
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_reads_the_oplog_and_the_agent_list_page_by_page() {
+    // Pages of at most 2, and a scan budget of 1 entry, so that a search or a listing call stops
+    // after one storage chunk.
+    let ctx = counters_context_with(
+        &["local"],
+        "",
+        &[
+            ("GOLEM_HTTP_BATCH_SIZE", "2"),
+            ("GOLEM__WORKER_EXECUTOR__LIMITS__SCAN_BUDGET__ENTRIES", "1"),
+        ],
+    )
+    .await;
+    let agents = (1..=5)
+        .map(|n| format!(r#"Counter("page-{n}")"#))
+        .collect::<Vec<_>>();
+    for agent in &agents {
+        invoke(&ctx, "local", agent).await;
+    }
+    let agent = agents[0].as_str();
+    for _ in 0..4 {
+        invoke(&ctx, "local", agent).await;
+    }
+    let client = mcp_client(&ctx, &["-E", "local"]).await;
+
+    // A search with a rare match: one entry of each invocation.
+    let query = "agent-invocation-finished";
+    let search = json!({"agent_id": agent, "query": query});
+    let first = structured(&call(&client, "agent_oplog", search.clone()).await).clone();
+    assert!(first["entries"].as_array().unwrap().len() <= 2, "{first}");
+    let cursor = first["cursor"].as_str().expect("a cursor").to_string();
+
+    let pages = follow_pages(&client, "agent_oplog", search.clone(), "cursor").await;
+    for page in &pages {
+        assert_eq!(page["$type"], "agent.oplog-page");
+        assert!(page["entries"].as_array().unwrap().len() <= 2, "{page}");
+    }
+    assert!(
+        pages
+            .iter()
+            .any(|page| page["entries"] == json!([]) && page.get("cursor").is_some()),
+        "no page ended at the scan budget before a match"
+    );
+    let entries = items(&pages, "entries");
+    assert!(entries.len() >= 5, "{entries:?}");
+    let stream = cli_json(&ctx, &[cmd::AGENT, "oplog", agent, "--query", query]).await;
+    assert_eq!(
+        comparable(&json!(entries)),
+        comparable(&Value::Array(stream)),
+        "the pages are not the CLI's stream"
+    );
+
+    // A cursor past the end of the oplog, or of another query, is stale, not an empty last page.
+    let [_, revision, query_hash] = cursor.split('-').collect::<Vec<_>>()[..] else {
+        panic!("not a cursor: {cursor}");
+    };
+    let mut past_end = search.clone();
+    past_end["cursor"] = json!(format!("1000000-{revision}-{query_hash}"));
+    let refused = call(&client, "agent_oplog", past_end).await;
+    assert_eq!(error_code(&refused), "stale-cursor", "{refused:?}");
+    let other_query =
+        json!({"agent_id": agent, "query": "agent-invocation-started", "cursor": cursor});
+    let refused = call(&client, "agent_oplog", other_query).await;
+    assert_eq!(error_code(&refused), "stale-cursor", "{refused:?}");
+
+    // The agent list pages every agent once.
+    let pages = follow_pages(&client, "agent_list", json!({}), "scan_cursor").await;
+    for page in &pages {
+        assert!(page["agents"].as_array().unwrap().len() <= 2, "{page}");
+    }
+    let agent_ids = |agents: Vec<&Value>| {
+        let mut ids = agents
+            .into_iter()
+            .map(|agent| agent["agentId"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    let paged = agent_ids(items(&pages, "agents"));
+    let listed = cli_json(&ctx, &[cmd::AGENT, cmd::LIST]).await;
+    assert_eq!(
+        paged,
+        agent_ids(listed[0]["agents"].as_array().unwrap().iter().collect())
+    );
+    assert_eq!(paged.len(), agents.len(), "{paged:?}");
     client.cancel().await.unwrap();
 }

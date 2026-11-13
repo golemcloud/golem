@@ -16,10 +16,12 @@
 //!
 //! Each non-interactive row of [`COMMAND_TABLE`] is one tool. Its input schema comes from the
 //! clap arguments of the row's command, without the global flags and the row's CLI-only
-//! arguments; its output schema comes from the command's structured output types. A tool call
-//! becomes the command's argv with the row's fixed flags and `--format json`, which the CLI's own
-//! parser reads and the CLI's own handler runs. The JSON documents that the command prints are the
-//! tool's result.
+//! arguments; its output schema comes from the command's structured output types that are not
+//! streams. A tool call becomes the command's argv with the row's fixed flags and `--format json`,
+//! which the CLI's own parser reads and the CLI's own handler runs. The JSON documents that the
+//! command prints are the tool's result. A row whose command streams, such as `agent oplog`, has a
+//! fixed flag that makes the command print one bounded document instead, such as `--page`, so
+//! that every call reads a bounded amount.
 //!
 //! The server works in the one environment that it resolves at start. Every tool call gets a new
 //! [`Context`], made from the server's context, that is bound to that environment. A destructive
@@ -42,7 +44,8 @@ use crate::log::{
     message_for_output, set_log_output,
 };
 use crate::model::cli_output::{
-    command_output_schema_value, command_output_types, focused_command_output_schema,
+    CLI_OUTPUT_TYPE_FIELD, command_output_schema_value, command_output_types,
+    focused_command_output_schema,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use anyhow::{anyhow, bail};
@@ -66,10 +69,10 @@ pub const CONFIRM_ARGUMENT: &str = "confirm";
 /// What the tool returns as `structuredContent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultShape {
-    /// Every output type of the command emits one document per run; it is the result.
+    /// Every output type of the tool emits one document per run; it is the result.
     Document,
-    /// An output type of the command emits a sequence of documents per run (a finite stream, or
-    /// conditional documents); the result is `{"items": [...]}` with every document in order.
+    /// An output type of the tool emits conditional documents per run; the result is
+    /// `{"items": [...]}` with every document in order.
     Documents,
 }
 
@@ -97,6 +100,8 @@ struct ToolArgument {
     index: Option<usize>,
     /// The positional argument that takes the values after `--`.
     last: bool,
+    /// The largest value that the tool accepts, from the row's `capped_args`.
+    maximum: Option<u64>,
 }
 
 /// One MCP tool: a non-interactive row of the command table.
@@ -105,6 +110,9 @@ pub struct ManagementTool {
     pub row: &'static CommandRow,
     pub shape: ResultShape,
     pub tool: Tool,
+    /// The `$type`s of the documents that a call may return: the command's output types that
+    /// are not streams.
+    output_types: Vec<String>,
     arguments: Vec<ToolArgument>,
 }
 
@@ -179,7 +187,14 @@ fn management_tool(
         if id == CONFIRM_ARGUMENT {
             bail!("`{path}` has an argument named `{CONFIRM_ARGUMENT}`");
         }
-        let argument = tool_argument(arg).map_err(|error| anyhow!("`{path}` `{id}`: {error}"))?;
+        let mut argument =
+            tool_argument(arg).map_err(|error| anyhow!("`{path}` `{id}`: {error}"))?;
+        if let Some((_, maximum)) = row.capped_args.iter().find(|(capped, _)| *capped == id) {
+            if argument.value_type != ValueType::Integer {
+                bail!("`{path}` caps `{id}`, which is not an integer");
+            }
+            argument.maximum = Some(*maximum);
+        }
         properties.insert(id.to_string(), argument_schema(arg, &argument));
         if arg.is_required_set() {
             required.push(Value::String(id.to_string()));
@@ -202,9 +217,12 @@ fn management_tool(
         "additionalProperties": false,
     });
 
-    let output_types = command_output_types(&path)?;
+    let output_types = command_output_types(&path)?
+        .into_iter()
+        .filter(|output_type| schema["definitions"][output_type]["x-golem-output-mode"] != "stream")
+        .collect::<Vec<_>>();
     if output_types.is_empty() {
-        bail!("`{path}` has no JSON output type");
+        bail!("`{path}` has no JSON output type that is not a stream");
     }
     let shape = if output_types
         .iter()
@@ -238,6 +256,7 @@ fn management_tool(
         row,
         shape,
         tool,
+        output_types,
         arguments,
     })
 }
@@ -289,15 +308,19 @@ fn tool_argument(arg: &Arg) -> anyhow::Result<ToolArgument> {
         long: arg.get_long().map(str::to_string),
         index: if positional { arg.get_index() } else { None },
         last: arg.is_last_set(),
+        maximum: None,
     })
 }
 
 fn argument_schema(arg: &Arg, argument: &ToolArgument) -> Value {
-    let value_schema = match &argument.value_type {
+    let mut value_schema = match &argument.value_type {
         ValueType::String => json!({"type": "string"}),
         ValueType::Integer => json!({"type": "integer"}),
         ValueType::OneOf(values) => json!({"type": "string", "enum": values}),
     };
+    if let Some(maximum) = argument.maximum {
+        value_schema["maximum"] = json!(maximum);
+    }
     let mut schema = match argument.kind {
         ArgumentKind::Flag => json!({"type": "boolean"}),
         ArgumentKind::Value => value_schema,
@@ -448,6 +471,11 @@ fn argument_values(
     let scalar = |value: &Value| -> Result<String, String> {
         let text = match (&argument.value_type, value) {
             (ValueType::Integer, Value::Number(number)) if number.is_i64() || number.is_u64() => {
+                if let Some(maximum) = argument.maximum
+                    && number.as_u64().is_some_and(|value| value > maximum)
+                {
+                    return Err(format!("`{}` must be at most {maximum}", argument.id));
+                }
                 number.to_string()
             }
             (ValueType::String | ValueType::OneOf(_), Value::String(text)) => text.clone(),
@@ -822,6 +850,15 @@ fn success(tool: &ManagementTool, stdout: &[u8]) -> CallToolResult {
             );
         }
     };
+    if let Some(other) = documents.iter().find_map(|document| {
+        let output_type = document[CLI_OUTPUT_TYPE_FIELD].as_str().unwrap_or_default();
+        (!tool.output_types.iter().any(|known| known == output_type)).then_some(output_type)
+    }) {
+        return error_result(
+            "command-failed",
+            format!("The command printed a `{other}` document, which this tool does not return"),
+        );
+    }
     match tool.shape {
         ResultShape::Document if documents.len() == 1 => {
             CallToolResult::structured(documents.remove(0))
@@ -871,8 +908,8 @@ fn failure(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, classify, error_envelope, management_tools,
-        tool_call_argv,
+        ArgumentKind, CONFIRM_ARGUMENT, ManagementTool, ResultShape, classify, error_envelope,
+        management_tools, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::interactive::{self, Ask, InteractiveHandler, refuse_prompts};
@@ -1148,6 +1185,73 @@ mod tests {
         };
         assert!(no_stream);
         assert_eq!(arguments, vec!["-5".to_string(), "x".to_string()]);
+    }
+
+    #[test]
+    fn agent_oplog_and_agent_list_read_one_page() {
+        let oplog = argv(
+            "agent_oplog",
+            json!({"agent_id": "A(\"a\")", "cursor": "12-0-", "omit_payloads": true}),
+        )
+        .unwrap();
+        let crate::command::GolemCliSubcommand::Agent {
+            subcommand:
+                crate::command::worker::AgentSubcommand::Oplog {
+                    page,
+                    cursor,
+                    omit_payloads,
+                    ..
+                },
+        } = parse(oplog).subcommand
+        else {
+            panic!("not agent oplog");
+        };
+        assert!(page);
+        assert!(omit_payloads);
+        assert_eq!(cursor.unwrap().next_oplog_index, 12);
+
+        let list = argv("agent_list", json!({"max_count": 50})).unwrap();
+        let crate::command::GolemCliSubcommand::Agent {
+            subcommand:
+                crate::command::worker::AgentSubcommand::List {
+                    page, max_count, ..
+                },
+        } = parse(list).subcommand
+        else {
+            panic!("not agent list");
+        };
+        assert!(page);
+        assert_eq!(max_count, Some(50));
+
+        for name in ["agent_oplog", "agent_list"] {
+            assert!(
+                argv(name, json!({"page": false})).is_err(),
+                "{name} takes `page`"
+            );
+        }
+        let max_count = &tool("agent_list").tool.input_schema["properties"]["max_count"];
+        assert_eq!(max_count["maximum"], 50);
+        let refused = argv("agent_list", json!({"max_count": 51})).unwrap_err();
+        assert!(refused.contains("at most 50"), "{refused}");
+    }
+
+    #[test]
+    fn a_tool_returns_only_its_own_output_types() {
+        let oplog = tool("agent_oplog");
+        assert_eq!(oplog.shape, ResultShape::Document);
+        let page = json!({"$type": "agent.oplog-page", "entries": [], "cursor": "1-0-"});
+        let result = success(&oplog, format!("{page}\n").as_bytes());
+        assert_eq!(result.structured_content, Some(page));
+
+        let entry = json!({"$type": "agent.oplog", "index": 1});
+        let refused = envelope(&success(&oplog, format!("{entry}\n").as_bytes()));
+        assert_eq!(refused["error"], "command-failed");
+        assert!(
+            refused["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("agent.oplog")
+        );
     }
 
     #[test]

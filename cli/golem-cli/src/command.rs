@@ -1600,6 +1600,7 @@ pub mod worker {
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::oplog::OplogCursor;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1749,13 +1750,26 @@ pub mod worker {
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
             ///
+            /// With `--page`, pass back the `cursor` of the previous page instead, with the
+            /// same component selection and filters.
+            ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
             /// When multiple components are selected, the limit is applied separately.
+            /// With `--page`, the limit is the size of the page.
             #[arg(long, short)]
             max_count: Option<u64>,
+            /// Read one page of agents: at most `--max-count` agents (default: the HTTP batch
+            /// size, 50), from the selected components in the order of their names. The output
+            /// has the `cursor` of the next page when there can be more agents; pass it back as
+            /// `--scan-cursor`. A page ends early when the server's scan budget ends a component's
+            /// scan, so a page with a cursor can have fewer agents, or none.
+            ///
+            /// Mutually exclusive with `--refresh`.
+            #[arg(long, conflicts_with = "refresh")]
+            page: bool,
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
@@ -1832,13 +1846,14 @@ pub mod worker {
             agent_id: AgentIdArgs,
         },
         /// Queries and streams an agent's full oplog.
-        /// Structured formats emit one output document per oplog entry.
+        /// Structured formats emit one output document per oplog entry; with `--page`, one
+        /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query.
-            #[arg(long, conflicts_with = "query")]
+            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
+            #[arg(long, conflicts_with_all = ["query", "cursor"])]
             from: Option<u64>,
             #[arg(
                 long,
@@ -1854,6 +1869,18 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long)]
             omit_payloads: bool,
+            /// Read one page of at most the HTTP batch size (50) entries and print it as one
+            /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
+            /// entries after the page. A search page ends early when the server's scan budget ends
+            /// the search, so a page with a cursor can have fewer entries, or none.
+            #[arg(long, conflicts_with_all = ["html", "serve"])]
+            page: bool,
+            /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
+            /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
+            /// index. A cursor of another query, or one past the end of the oplog, is refused as
+            /// stale (`STALE_CURSOR`).
+            #[arg(long, requires = "page")]
+            cursor: Option<OplogCursor>,
             #[command(flatten)]
             viewer: OplogViewerArgs,
         },

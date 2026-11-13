@@ -152,6 +152,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
     registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
     registry_entry!(
+        "AgentOplogPageView",
+        "agent.oplog-page",
+        arb_agent_oplog_page_result
+    ),
+    registry_entry!(
         "AgentPluginToggleResult",
         "agent.plugin-toggle",
         arb_agent_plugin_toggle_result
@@ -832,6 +837,7 @@ fn agent_list_structured_output_masks_secret_config_paths() {
     let output = crate::model::agent::AgentsMetadataResponseView {
         agents: vec![sample_agent_metadata_view()],
         cursors: BTreeMap::new(),
+        cursor: None,
     };
 
     let value = hidden_structured_output(output);
@@ -3638,9 +3644,14 @@ fn arb_agent_list_result() -> OutputDocumentStrategy {
     (
         proptest::collection::vec(arb_agent_metadata_view(), 0..5),
         proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
+        proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(agents, cursors)| crate::model::agent::AgentsMetadataResponseView { agents, cursors },
+            |(agents, cursors, cursor)| crate::model::agent::AgentsMetadataResponseView {
+                agents,
+                cursors,
+                cursor,
+            },
         )
         .prop_map(|output| {
             to_structured_output_value(output).expect("generated DTO should serialize")
@@ -3658,32 +3669,61 @@ fn arb_agent_new_result() -> OutputDocumentStrategy {
 }
 
 fn arb_agent_oplog_result() -> OutputDocumentStrategy {
+    serialized_output(arb_agent_oplog_entry_view())
+}
+
+fn arb_agent_oplog_page_result() -> OutputDocumentStrategy {
     serialized_output(
         (
-            arb_small_u64(),
-            arb_public_oplog_entry_attribution(),
-            prop_oneof![
-                proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
-                arb_typed_value_oplog_entry().prop_map(Into::into),
-                (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
-                    crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
-                        crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
-                            entry_type,
-                            timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
-                            size,
-                        },
-                    )
-                }),
-            ],
+            proptest::collection::vec(arb_agent_oplog_entry_view(), 0..3),
+            proptest::option::of(
+                (arb_small_u64(), arb_small_u64(), "([0-9a-f]{16})?").prop_map(
+                    |(next_oplog_index, current_component_revision, query_hash)| {
+                        golem_common::model::oplog::OplogCursor {
+                            next_oplog_index,
+                            current_component_revision,
+                            query_hash,
+                        }
+                        .to_string()
+                    },
+                ),
+            ),
         )
-            .prop_map(|(index, attribution, entry)| {
-                crate::model::agent::oplog::AgentOplogEntryView {
-                    index,
-                    attribution,
-                    entry,
-                }
-            }),
+            .prop_map(
+                |(entries, cursor)| crate::model::agent::oplog::AgentOplogPageView {
+                    entries,
+                    cursor,
+                },
+            ),
     )
+}
+
+fn arb_agent_oplog_entry_view() -> BoxedStrategy<crate::model::agent::oplog::AgentOplogEntryView> {
+    (
+        arb_small_u64(),
+        arb_public_oplog_entry_attribution(),
+        prop_oneof![
+            proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
+            arb_typed_value_oplog_entry().prop_map(Into::into),
+            (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
+                crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
+                    crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
+                        entry_type,
+                        timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
+                        size,
+                    },
+                )
+            }),
+        ],
+    )
+        .prop_map(
+            |(index, attribution, entry)| crate::model::agent::oplog::AgentOplogEntryView {
+                index,
+                attribution,
+                entry,
+            },
+        )
+        .boxed()
 }
 
 fn arb_public_oplog_entry_attribution()

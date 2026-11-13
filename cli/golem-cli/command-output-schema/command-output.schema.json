@@ -91,6 +91,9 @@
       "$ref": "#/definitions/agent.oplog"
     },
     {
+      "$ref": "#/definitions/agent.oplog-page"
+    },
+    {
       "$ref": "#/definitions/agent.plugin-toggle"
     },
     {
@@ -2102,9 +2105,14 @@
         },
         "cursors": {
           "type": "object",
+          "description": "Without `--page`: the scan cursor of each component that has more agents. Pass one back as `--scan-cursor` with that component selected.",
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "cursor": {
+          "type": "string",
+          "description": "With `--page`: the cursor of the next page, which names the component and its scan cursor. Pass it back unchanged as `--scan-cursor` with `--page`. Absent on the last page."
         }
       },
       "additionalProperties": false
@@ -2163,6 +2171,32 @@
               "$ref": "#/definitions/OmittedOplogEntryContent"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-page": {
+      "type": "object",
+      "description": "One page of an agent's oplog, emitted by `golem agent oplog --page`. Each entry is the `agent.oplog` document that `golem agent oplog` streams for it. A page can be empty and still have a cursor, when the server's scan budget ended a search before a match.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "entries"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-page"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/agent.oplog"
+          }
+        },
+        "cursor": {
+          "type": "string",
+          "description": "The cursor of the next page, present when the oplog has entries after this page. Pass it back unchanged as `--cursor` with the same `--query`."
         }
       },
       "additionalProperties": false
@@ -9812,6 +9846,10 @@
     {
       "type": "agent.oplog",
       "rustType": "AgentOplogEntryView"
+    },
+    {
+      "type": "agent.oplog-page",
+      "rustType": "AgentOplogPageView"
     },
     {
       "type": "agent.plugin-toggle",
