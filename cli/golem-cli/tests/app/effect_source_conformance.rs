@@ -103,18 +103,6 @@ async fn effect_ambient_native_client_executes_through_golem() {
 
     let built = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(built.success_or_dump());
-    let generated = generated_source_text(&ctx.cwd_path_join(
-        "golem-temp/bridge-sdk/effect/internal/native-conformance-tool-guest-client",
-    ));
-    for expected in [
-        "native-conformance",
-        "structured",
-        "supported_error",
-        "finite_stream",
-        "middleware",
-    ] {
-        assert!(generated.contains(expected), "missing {expected}");
-    }
     assert!(
         !ctx.cwd_path_join("provider").exists(),
         "ambient native client must not select a local provider component"

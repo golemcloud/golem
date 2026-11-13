@@ -18,7 +18,7 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentStatusRecord;
 use golem_common::model::agent::ScheduleId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(target_agent_type) = target_component_metadata
                 .metadata
                 .find_agent_type_by_name_ref(agent_type_name)
-            && ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
+            && ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, target_agent_type).is_ok()
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {
@@ -1097,7 +1097,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// method on a never-started ephemeral target also owns the constructor reservation.
     async fn withdraw_pending_invocation(
         &self,
-        instance_guard: &tokio::sync::MutexGuard<'_, WorkerInstance>,
+        instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
         idempotency_key: IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
@@ -1163,7 +1163,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let retirement = worker.retire_durable_stream_producer();
             worker
                 .stop_internal(
-                    false,
+                    crate::worker::StopOrigin::External,
                     None,
                     UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                     FinalWorkerState::Unloaded {
@@ -1172,7 +1172,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     PendingLiveInvocationDisposition::Fail,
                 )
                 .await;
-            match &*worker.lock_non_stopping_worker().await {
+            match worker.lock_non_stopping_worker().await.state() {
                 WorkerInstance::Unloaded { .. } => {}
                 WorkerInstance::CleanupFailed(error) => return Err(error.clone()),
                 _ => {
@@ -1507,6 +1507,7 @@ pub(in crate::worker) fn revert_checked_head(
     snapshot_selection::active_head(status).filter(|update| !is_unselected_automatic(update))
 }
 
-pub(in crate::worker) mod deletion;
-pub(in crate::worker) mod retirement;
-pub(in crate::worker) mod stop;
+pub mod deletion;
+pub mod retirement;
+pub mod state;
+pub mod stop;

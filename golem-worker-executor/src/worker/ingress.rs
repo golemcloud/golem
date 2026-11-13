@@ -871,7 +871,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         Ok(())
     }
-    pub(in crate::worker) fn ensure_component_agent_ingress(
+    pub(crate) fn ensure_component_agent_ingress(
         &self,
         operation: &str,
     ) -> Result<(), WorkerExecutorError> {
@@ -1199,7 +1199,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(instance_guard) = caller_instance_guard.as_ref()
-                && let WorkerInstance::Running(running) = &**instance_guard
+                && let WorkerInstance::Running(running) = instance_guard.state()
             {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
@@ -1332,11 +1332,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
     }
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
-    /// the constructor before a schedule whose commit the caller may still be repairing.
+    /// the constructor before a schedule whose commit the caller may still be repairing. A
+    /// worker that a delete has claimed gives the deletion error, as starting it would.
     pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
+        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1379,16 +1381,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(invocation);
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
-        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
+        let needs_start = matches!(instance_guard.state(), WorkerInstance::Unloaded { .. });
         drop(instance_guard);
         if needs_start {
             Self::start_if_needed(self.clone()).await?;
         }
         Ok(())
+    }
+    /// The number of transient commands, such as file reads, listings and wallet reads, that
+    /// wait in the worker's queue.
+    #[doc(hidden)]
+    pub async fn queued_command_count_for_test(&self) -> usize {
+        self.queue.read().await.len()
     }
     pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
@@ -1410,7 +1418,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::GetWalletCards { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -1467,7 +1475,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // and this method must not start one: the worker already reached a stopped state, which is
         // exactly the "not processing anything until the next explicit start" condition callers
         // wait for.
-        if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
+        if matches!(instance_guard.state(), WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
 
@@ -1478,7 +1486,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         queue.push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
         drop(queue);
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = instance_guard.state() {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 

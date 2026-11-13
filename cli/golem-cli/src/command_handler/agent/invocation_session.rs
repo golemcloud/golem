@@ -45,7 +45,7 @@ use golem_common::model::invocation_session_public::{
     PublicServerMessage,
 };
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
+    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -234,7 +234,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentId,
+    pub parsed_agent_id: ParsedAgentKey,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -825,7 +825,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 fn invocation_selector(
     application_name: &str,
     environment_name: &str,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     method_name: &str,
 ) -> anyhow::Result<InvocationSelector> {
     let constructor_parameters = encode_public_schema_value(
@@ -895,7 +895,7 @@ pub(super) struct ScalarInvocationArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentId,
+    pub parsed_agent_id: ParsedAgentKey,
     pub method_name: String,
     pub method_parameters: SchemaValue,
     pub idempotency_key: IdempotencyKey,

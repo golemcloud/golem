@@ -45,6 +45,9 @@ use crate::services::tool_middleware_release::{
 };
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
+use golem_common::model::agent::schema_evolution::{
+    SchemaEvolutionError, constructor_key_schema, validate_constructor_evolution,
+};
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -58,9 +61,11 @@ use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
 };
+use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::graph::SchemaGraph;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{Blob, RepoError};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -174,6 +179,7 @@ pub struct DeploymentWriteService {
     tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
     native_tool_catalog: Arc<NativeToolCatalog>,
     mcp_import_resolver: Arc<McpImportResolver>,
+    stream_limits: crate::config::DurableStreamRouteLimits,
 }
 
 impl DeploymentWriteService {
@@ -194,6 +200,7 @@ impl DeploymentWriteService {
         tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
         native_tool_catalog: Arc<NativeToolCatalog>,
         mcp_import_resolver: Arc<McpImportResolver>,
+        stream_limits: crate::config::DurableStreamRouteLimits,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -212,6 +219,7 @@ impl DeploymentWriteService {
             tool_middleware_release_service,
             native_tool_catalog,
             mcp_import_resolver,
+            stream_limits,
         }
     }
 
@@ -438,6 +446,38 @@ impl DeploymentWriteService {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
+        // The routing epoch captured above makes the deployment fail if another deployment
+        // changes these baselines before this one commits.
+        let constructor_baselines = self
+            .deployment_repo
+            .list_agent_type_constructor_schemas(environment_id.0)
+            .await?;
+        for incompatibility in constructor_evolution_errors(
+            constructor_baselines,
+            deployment_context
+                .registered_agent_types
+                .values()
+                .map(|registered| &registered.agent_type),
+        ) {
+            if compatibility_check_enabled {
+                errors.push(DeployValidationError::IncompatibleConstructorChange {
+                    agent_type: incompatibility.agent_type_name,
+                    path: incompatibility.path,
+                    reason: incompatibility.description,
+                });
+            } else {
+                warnings.push(
+                    super::DeployValidationWarning::IncompatibleConstructorChange(
+                        golem_common::model::deployment::IncompatibleConstructorChange {
+                            agent_type: incompatibility.agent_type_name,
+                            path: incompatibility.path,
+                            reason: incompatibility.description,
+                        },
+                    ),
+                );
+            }
+        }
+
         let security_schemes_list = self
             .security_scheme_service
             .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
@@ -469,6 +509,7 @@ impl DeploymentWriteService {
             &security_schemes_map,
             &mut errors,
             &mut warnings,
+            &self.stream_limits,
         );
         for (index, import, _) in &mcp_imports {
             if let Some(security_scheme) = &import.security_scheme
@@ -1091,4 +1132,33 @@ impl DeploymentWriteService {
 
         Ok(deployment)
     }
+}
+
+/// Compares each deployed agent type's constructor with the last deployed constructor of
+/// its name, ordered by agent type name. Names without a baseline are new and pass.
+fn constructor_evolution_errors<'a>(
+    baselines: Vec<(String, Blob<SchemaGraph>)>,
+    agent_types: impl IntoIterator<Item = &'a AgentTypeSchema>,
+) -> Vec<SchemaEvolutionError> {
+    let baselines: HashMap<String, SchemaGraph> = baselines
+        .into_iter()
+        .map(|(name, schema)| (name, schema.into_value()))
+        .collect();
+    let mut agent_types: Vec<&AgentTypeSchema> = agent_types.into_iter().collect();
+    agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    agent_types
+        .into_iter()
+        .filter_map(|agent_type| {
+            baselines
+                .get(&agent_type.type_name.0)
+                .map(|baseline| (agent_type, baseline))
+        })
+        .flat_map(|(agent_type, baseline)| {
+            validate_constructor_evolution(
+                &agent_type.type_name,
+                baseline,
+                &constructor_key_schema(agent_type),
+            )
+        })
+        .collect()
 }

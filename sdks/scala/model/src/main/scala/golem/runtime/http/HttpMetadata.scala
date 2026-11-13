@@ -97,8 +97,19 @@ final case class HttpEndpointDetails(
   queryVars: List[QueryVariable],
   authOverride: Option[Boolean],
   corsOverride: Option[List[String]],
-  durableStreams: Option[DurableStreamRouteOptions] = None
+  durableStreams: Option[DurableStreamRouteOptions] = None,
+  mode: Option[HttpRouteMode] = None
 )
+
+sealed trait HttpRouteMode extends Product with Serializable {
+  def wireValue: String
+}
+object HttpRouteMode {
+  case object DurableStreams extends HttpRouteMode { val wireValue = "durable-streams" }
+  case object Plain          extends HttpRouteMode { val wireValue = "plain"           }
+  case object Sse            extends HttpRouteMode { val wireValue = "sse"             }
+  case object WebSocket      extends HttpRouteMode { val wireValue = "web-socket"      }
+}
 
 sealed trait DurableStreamSlotSource extends Product with Serializable
 object DurableStreamSlotSource {
@@ -119,8 +130,5 @@ final case class DurableStreamRouteLoadOptions(
 
 final case class DurableStreamRouteOptions(
   slots: List[DurableStreamSlotOptions],
-  allowExternalWrites: Option[Boolean],
-  allowStreamDelete: Option[Boolean],
-  allowInvocationDelete: Option[Boolean],
   load: Option[DurableStreamRouteLoadOptions]
 )

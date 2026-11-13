@@ -18,9 +18,12 @@ use golem_common::model::agent::{
     AgentMode, AgentPrincipal, AgentTarget, InvocationFreshnessDisposition, Principal,
 };
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::*;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{
+    CreateRequestKind, OplogEntry, OplogIndex, OplogPayload, SpanData,
+};
 use golem_common::model::{
     AgentId, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedAgentId, Timestamp,
 };
@@ -185,7 +188,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         0
     );
 
-    request.idempotency_key = Some(key.into());
+    request.idempotency_key = Some(key.clone().into());
     let first = executor
         .client
         .clone()
@@ -202,6 +205,15 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     );
     assert_eq!(executor.oplog_service_call_count(&target, "create"), 0);
     assert_eq!(executor.oplog_service_call_count(&target, "exists"), 0);
+    let recorded = Worker::get_latest_metadata(
+        seed.all(),
+        &OwnedAgentId::new(seed.get_initial_worker_metadata().environment_id, &target),
+    )
+    .await?
+    .expect("the prepared agent exists")
+    .create_request;
+    assert_eq!(recorded.kind, CreateRequestKind::Phantom);
+    assert_eq!(recorded.idempotency_key, Some(key));
 
     request.freshness_disposition = ProtoFreshness::MayExist as i32;
     let retry = executor
@@ -263,6 +275,66 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     Ok(())
 }
 
+#[test]
+#[timeout("2 minutes")]
+async fn grpc_create_records_its_kind_key_and_principal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let metadata = seed.get_initial_worker_metadata();
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: seed.agent_id(),
+    });
+    for (name, ignore_already_existing, kind) in [
+        ("exclusive-create", false, CreateRequestKind::Exclusive),
+        ("joining-create", true, CreateRequestKind::GetOrCreate),
+    ] {
+        let id = target(&seed, name);
+        let key = IdempotencyKey::fresh();
+        let response = executor
+            .client
+            .clone()
+            .create_worker(CreateWorkerRequest {
+                agent_id: Some(id.agent_id.clone().into()),
+                component_owner_account_id: Some(metadata.created_by.into()),
+                environment_id: Some(metadata.environment_id.into()),
+                ignore_already_existing,
+                auth_ctx: Some(AuthCtx::System.into()),
+                principal: Some(principal.clone().into()),
+                idempotency_key: Some(key.clone().into()),
+                ..Default::default()
+            })
+            .await?
+            .into_inner();
+        assert!(
+            matches!(
+                response.result,
+                Some(create_worker_response::Result::Success(_))
+            ),
+            "{name}: {response:?}"
+        );
+        let requests = executor
+            .stored_oplog(&id.agent_id)
+            .await
+            .into_iter()
+            .filter_map(|entry| match entry {
+                OplogEntry::Create { parameters, .. } => Some(parameters.create_request),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 1, "{name}");
+        assert_eq!(requests[0].kind, kind, "{name}");
+        assert_eq!(requests[0].idempotency_key, Some(key), "{name}");
+        assert_eq!(requests[0].principal, principal, "{name}");
+    }
+    Ok(())
+}
+
 async fn setup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -287,32 +359,42 @@ async fn setup_with_retry_interval(
 )> {
     let context = TestContext::new(last_unique_id);
     let faults = KeyValueStorageFaults::default();
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.active_agents.ttl = CACHE_TTL;
-                config.oplog.max_payload_size = 1;
-                config.durable_stream.reconciliation_interval = retry_interval;
-                config.agent_status_flush.enabled = false;
-            })),
-            wrap_key_value_storage: Some(Arc::new({
-                let faults = faults.clone();
-                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let executor = start_with_overrides(deps, &context, overrides(&faults, retry_interval)).await?;
     let component = executor
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
+    let seed = seed_worker(&executor, &component).await?;
+    Ok((executor, seed, faults))
+}
+
+fn overrides(faults: &KeyValueStorageFaults, retry_interval: Duration) -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.active_agents.ttl = CACHE_TTL;
+            config.oplog.max_payload_size = 1;
+            config.durable_stream.reconciliation_interval = retry_interval;
+            config.agent_status_flush.enabled = false;
+        })),
+        wrap_key_value_storage: Some(Arc::new({
+            let faults = faults.clone();
+            move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+        })),
+        ..Default::default()
+    }
+}
+
+/// Starts the seed agent and returns its unloaded worker, whose dependencies give tests direct
+/// access to the executor's acquisition API.
+async fn seed_worker(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+) -> anyhow::Result<Arc<Worker<TestWorkerCtx>>> {
+    let context = &executor.context;
     let name = agent_id!("Counter", "initialization-test-seed");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     executor
-        .invoke_and_await_agent(&component, &name, "increment", data_value!())
+        .invoke_and_await_agent(component, &name, "increment", data_value!())
         .await?;
     let seed = executor
         .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
@@ -329,7 +411,7 @@ async fn setup_with_retry_interval(
         }
     })
     .await?;
-    Ok((executor, seed, faults))
+    Ok(seed)
 }
 
 fn target(seed: &Worker<TestWorkerCtx>, name: &str) -> OwnedAgentId {
@@ -642,6 +724,159 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             // No guest was admitted by the failed creation, so this is not a fail-stop reload.
             Worker::start_if_needed(worker.clone()).await?;
         }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        overrides(&faults, Duration::from_millis(50)),
+    )
+    .await?;
+    let stored = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let seed = seed_worker(&executor, &stored).await?;
+    let creator_context = InvocationContextStack::fresh();
+    let creator = Principal::Agent(AgentPrincipal {
+        agent_id: seed.agent_id(),
+    });
+    let loaders = ["get-or-create", "existing-only"];
+    for loader in loaders {
+        let id = target(&seed, &format!("restart-creator-{loader}"));
+        faults.fail(
+            "update_status",
+            1,
+            KeyValueStorageError::Other("initial status outage".into()),
+        );
+        let failure = Worker::get_or_create_suspended(
+            seed.all(),
+            &id,
+            None,
+            vec![],
+            None,
+            None,
+            &creator_context,
+            creator.clone(),
+        )
+        .await
+        .err()
+        .expect("creation must report the injected failure");
+        assert!(
+            failure.to_string().contains("initial status outage"),
+            "{loader}"
+        );
+        assert_eq!(
+            Worker::get_latest_metadata(seed.all(), &id)
+                .await?
+                .unwrap()
+                .last_known_status
+                .oplog_idx,
+            OplogIndex::INITIAL,
+            "{loader}"
+        );
+    }
+    drop(seed);
+    drop(executor);
+
+    // The new executor has no resident state for these agents; only their Create entries record
+    // the creating request. Each agent is loaded first by a different anonymous request.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        overrides(&faults, Duration::from_millis(50)),
+    )
+    .await?;
+    let seed = seed_worker(&executor, &stored).await?;
+    for loader in loaders {
+        let id = target(&seed, &format!("restart-creator-{loader}"));
+        if loader == "existing-only" {
+            Worker::interrupt(seed.all(), &id, false, Principal::anonymous()).await?;
+        }
+        let worker = acquire(&seed, &id).await?;
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await
+            .unwrap();
+        let creates = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::Create { parameters, .. } => Some(parameters.create_request.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(creates.len(), 1, "{loader}");
+        let create = &creates[0];
+        assert_eq!(create.kind, CreateRequestKind::GetOrCreate, "{loader}");
+        assert_eq!(create.idempotency_key, None, "{loader}");
+        assert_eq!(create.principal, creator, "{loader}");
+        assert_eq!(create.trace_id, creator_context.trace_id, "{loader}");
+        assert_eq!(
+            create.trace_states, creator_context.trace_states,
+            "{loader}"
+        );
+        let span_ids = |spans: &[SpanData]| {
+            spans
+                .iter()
+                .map(|span| match span {
+                    SpanData::LocalSpan { span_id, .. } | SpanData::ExternalSpan { span_id } => {
+                        span_id.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            span_ids(&create.invocation_context),
+            span_ids(&creator_context.to_oplog_data()),
+            "{loader}"
+        );
+        let pending = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::PendingAgentInvocation {
+                    payload,
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                    ..
+                } => Some((payload, trace_id, trace_states, invocation_context)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pending.len(), 1, "{loader}");
+        let (payload, trace_id, trace_states, invocation_context) = pending[0];
+        let AgentInvocationPayload::AgentInitialization {
+            principal: recorded,
+            ..
+        } = worker
+            .oplog()
+            .download_payload(payload.clone())
+            .await
+            .map_err(anyhow::Error::msg)?
+        else {
+            panic!("expected initialization payload")
+        };
+        assert_eq!(recorded, creator, "{loader}");
+        assert_eq!(trace_id, &create.trace_id, "{loader}");
+        assert_eq!(trace_states, &create.trace_states, "{loader}");
+        assert_eq!(invocation_context, &create.invocation_context, "{loader}");
     }
     Ok(())
 }

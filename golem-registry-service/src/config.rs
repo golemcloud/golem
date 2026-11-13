@@ -277,6 +277,46 @@ pub struct RegistryServiceConfig {
     pub http_server: HttpServerConfig,
     #[serde(default)]
     pub body_limits: RequestBodyLimits,
+    #[serde(default)]
+    pub durable_stream_routes: DurableStreamRouteLimits,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DurableStreamRouteLimits {
+    pub default_concurrent_readers_per_stream: u32,
+    pub max_concurrent_readers_per_stream: u32,
+    pub default_append_requests_per_second_per_stream: u32,
+    pub max_append_requests_per_second_per_stream: u32,
+}
+
+impl Default for DurableStreamRouteLimits {
+    fn default() -> Self {
+        Self {
+            default_concurrent_readers_per_stream: 16,
+            max_concurrent_readers_per_stream: 16,
+            default_append_requests_per_second_per_stream: 100,
+            max_append_requests_per_second_per_stream: 1000,
+        }
+    }
+}
+
+impl DurableStreamRouteLimits {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.default_concurrent_readers_per_stream > 0
+                && self.default_concurrent_readers_per_stream
+                    <= self.max_concurrent_readers_per_stream,
+            "durable_stream_routes reader default must be positive and no greater than the maximum"
+        );
+        anyhow::ensure!(
+            self.default_append_requests_per_second_per_stream > 0
+                && self.default_append_requests_per_second_per_stream
+                    <= self.max_append_requests_per_second_per_stream,
+            "durable_stream_routes append default must be positive and no greater than the maximum"
+        );
+        Ok(())
+    }
 }
 
 impl RegistryServiceConfig {
@@ -293,6 +333,7 @@ impl RegistryServiceConfig {
         self.mcp_oauth.validate()?;
         self.mcp_import.validate()?;
         self.http_server.validate().map_err(anyhow::Error::msg)?;
+        self.durable_stream_routes.validate()?;
         Ok(())
     }
 }
@@ -399,6 +440,11 @@ impl SafeDisplay for RegistryServiceConfig {
             self.http_server.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "request body limits: {:?}", self.body_limits);
+        let _ = writeln!(
+            &mut result,
+            "durable stream route limits: {:?}",
+            self.durable_stream_routes
+        );
 
         result
     }
@@ -521,6 +567,7 @@ impl Default for RegistryServiceConfig {
             mcp_import: McpImportResolverConfig::default(),
             http_server: HttpServerConfig::default(),
             body_limits: RequestBodyLimits::default(),
+            durable_stream_routes: DurableStreamRouteLimits::default(),
         }
     }
 }

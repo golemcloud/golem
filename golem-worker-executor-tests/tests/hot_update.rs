@@ -259,7 +259,7 @@ impl AgentFiles {
         &self,
         executor: &TestWorkerExecutor,
         component: &ComponentDto,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
         path: &str,
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
@@ -281,7 +281,7 @@ impl AgentFiles {
         &self,
         executor: &TestWorkerExecutor,
         component: &ComponentDto,
-        agent_id: &golem_common::model::agent::ParsedAgentId,
+        agent_id: &golem_common::model::agent::ParsedAgentKey,
         paths: &[&str],
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
@@ -4645,7 +4645,7 @@ async fn manual_update_agent_with_load(
     load: &str,
 ) -> anyhow::Result<(
     ComponentDto,
-    golem_common::model::agent::ParsedAgentId,
+    golem_common::model::agent::ParsedAgentKey,
     AgentId,
     ComponentDto,
 )> {
@@ -7621,7 +7621,7 @@ async fn agent_with_a_written_file(
     http_server: &TestHttpServer,
 ) -> anyhow::Result<(
     ComponentDto,
-    golem_common::model::agent::ParsedAgentId,
+    golem_common::model::agent::ParsedAgentKey,
     AgentId,
 )> {
     let component = executor
@@ -7652,7 +7652,7 @@ async fn agent_with_a_written_file(
 async fn written_file(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<Option<String>> {
     executor
         .invoke_and_await_agent(

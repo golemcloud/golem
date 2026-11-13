@@ -14,11 +14,11 @@
 
 use crate::services::HasAll;
 use crate::services::oplog::ArchiveWait;
-use crate::worker::Worker;
+use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentMode, Principal};
-use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -88,6 +88,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 
     /// Gets or creates a worker and starts it
@@ -253,6 +254,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self
             .worker_activator
@@ -271,6 +273,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         parent,
                         invocation_context,
                         principal,
+                        create_intent,
                     )
                     .await
             }
@@ -521,8 +524,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        Worker::get_or_create_suspended(
+        Worker::get_or_create_suspended_with_freshness(
             &self.all,
             owned_agent_id,
             worker_env,
@@ -531,6 +535,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             parent,
             invocation_context,
             principal,
+            InvocationFreshnessDisposition::MayExist,
+            create_intent,
         )
         .await
     }

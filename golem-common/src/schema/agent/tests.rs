@@ -17,7 +17,7 @@ use crate::base_model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snap
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
     AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    ParsedAgentId, contains_stream_in_graph, json_input_schema_value_to_typed_schema_value,
+    ParsedAgentKey, contains_stream_in_graph, json_input_schema_value_to_typed_schema_value,
     reachable_defs, typed_schema_value_with_projected_defs,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
@@ -149,11 +149,11 @@ fn named_field_with_metadata_round_trips() {
     assert_eq!(back, field);
 }
 
-// --- Property: ParsedAgentId fields the type itself owns round-trip ---
+// --- Property: ParsedAgentKey fields the type itself owns round-trip ---
 
 // JSON serde of arbitrary `SchemaValue` trees is not a guaranteed bijection
 // (the schema layer does not adopt JSON-as-wire; see §4.16). These properties
-// only exercise the fields `ParsedAgentId` itself owns, with a fixed inner
+// only exercise the fields `ParsedAgentKey` itself owns, with a fixed inner
 // `TypedSchemaValue`.
 
 fn sample_parameters() -> TypedSchemaValue {
@@ -169,13 +169,13 @@ proptest! {
         phantom_present in any::<bool>(),
     ) {
         let phantom_id = phantom_present.then(Uuid::new_v4);
-        let id = ParsedAgentId::new(
+        let id = ParsedAgentKey::new(
             AgentTypeName("weather-agent".into()),
             sample_parameters(),
             phantom_id,
         );
         let json = serde_json::to_string(&id).unwrap();
-        let back: ParsedAgentId = serde_json::from_str(&json).unwrap();
+        let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(back, id);
     }
 
@@ -183,13 +183,13 @@ proptest! {
     fn parsed_agent_id_agent_type_round_trips(
         type_name in "[a-z][a-z0-9-]{0,32}",
     ) {
-        let id = ParsedAgentId::new(
+        let id = ParsedAgentKey::new(
             AgentTypeName(type_name),
             sample_parameters(),
             None,
         );
         let json = serde_json::to_string(&id).unwrap();
-        let back: ParsedAgentId = serde_json::from_str(&json).unwrap();
+        let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(back, id);
     }
 }
@@ -202,7 +202,7 @@ fn parsed_agent_id_rejects_missing_parameters() {
         "agent_type": "weather-agent",
         "phantom_id": null
     });
-    let res: Result<ParsedAgentId, _> = serde_json::from_value(raw);
+    let res: Result<ParsedAgentKey, _> = serde_json::from_value(raw);
     assert!(res.is_err());
 }
 
@@ -212,7 +212,7 @@ fn parsed_agent_id_accepts_absent_phantom_id() {
         crate::schema::graph::SchemaGraph::anonymous(SchemaType::string()),
         SchemaValue::String("alice".into()),
     );
-    let json = serde_json::to_value(ParsedAgentId::new(
+    let json = serde_json::to_value(ParsedAgentKey::new(
         AgentTypeName("weather-agent".into()),
         parameters.clone(),
         None,
@@ -220,7 +220,7 @@ fn parsed_agent_id_accepts_absent_phantom_id() {
     .unwrap();
     let mut obj = json.as_object().unwrap().clone();
     obj.remove("phantom_id");
-    let back: ParsedAgentId = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+    let back: ParsedAgentKey = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
     assert!(back.phantom_id.is_none());
 }
 

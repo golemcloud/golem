@@ -48,7 +48,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::{
-    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+    AgentMetadataDto, AgentTarget, Principal, ResolvedRevert, RevertWorkerTarget,
 };
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
@@ -642,6 +642,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
+        principal: Principal,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -1901,10 +1902,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
+        principal: Principal,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = source_agent_id.clone();
         let target_agent_id = target_agent_id.clone();
+        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
         self.call_worker_executor(
             source_agent_id.clone(),
             "fork_worker",
@@ -1919,7 +1922,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    principal: Some(principal.clone()),
                 }))
             },
             |response| match response.into_inner() {

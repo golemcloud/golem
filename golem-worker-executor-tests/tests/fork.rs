@@ -751,9 +751,12 @@ impl WorkerProxy for LocalResumeProxy {
         source: &AgentId,
         target: &AgentId,
         cut: &OplogIndex,
+        principal: Principal,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner.fork_worker(source, target, cut, auth).await
+        self.inner
+            .fork_worker(source, target, cut, principal, auth)
+            .await
     }
 
     async fn revert(
@@ -2149,6 +2152,30 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     assert!(cursor.is_none());
     assert_eq!(after.len(), 2, "recovery must not create a second child");
     assert!(after.iter().any(|agent| agent.agent_id == child));
+    let child_requests = executor
+        .stored_oplog(&child)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    assert_eq!(
+        child_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::Fork
+    );
+    assert_eq!(child_requests[0].idempotency_key, None);
+    assert_eq!(
+        child_requests[0].principal,
+        Principal::Agent(golem_common::model::agent::AgentPrincipal {
+            agent_id: source_id.clone(),
+        }),
+        "the child records the forking agent, not the request that created the source"
+    );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())
         .await?

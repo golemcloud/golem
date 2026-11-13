@@ -42,8 +42,8 @@ use crate::services::{
     key_value, oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator,
     worker_enumeration, worker_fork,
 };
-use crate::worker::Worker;
 use crate::worker::invocation::validate_agent_method_invocation;
+use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -61,7 +61,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal, AgentTarget,
-    InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;

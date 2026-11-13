@@ -30,7 +30,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
@@ -69,7 +69,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
 
         // The running loop must not wait for a stopping instance to join this loop.
         let instance = self.instance.lock().await;
-        if !matches!(&*instance, super::WorkerInstance::Running(_))
+        if !matches!(instance.state(), super::WorkerInstance::Running(_))
             || self.owner_retirement_requested.is_cancelled()
         {
             return Ok(None);
@@ -1808,7 +1808,7 @@ fn materialize_call<Ctx: WorkerCtx>(
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     match invocation {
         AgentInvocation::AgentInitialization {
@@ -1962,7 +1962,7 @@ pub fn lower_invocation(
 
 pub fn validate_agent_method_invocation(
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
     method_name: &str,
     input: &SchemaValue,
 ) -> Result<bool, WorkerExecutorError> {
@@ -1987,7 +1987,7 @@ pub fn validate_agent_method_invocation(
 pub(crate) fn invocation_uses_streams(
     invocation: &AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> bool {
     if matches!(invocation, AgentInvocation::ExternalTool { .. }) {
         return true;
@@ -2041,7 +2041,7 @@ fn validate_method_invocation(
 /// component declares zero or multiple types and no id was provided).
 fn resolve_agent_type<'a>(
     component_metadata: &'a ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
 ) -> Result<&'a AgentTypeSchema, WorkerExecutorError> {
     match agent_id {
         Some(id) => component_metadata
@@ -2471,12 +2471,12 @@ mod tests {
         )
     }
 
-    fn agent_id() -> ParsedAgentId {
+    fn agent_id() -> ParsedAgentKey {
         let parameters = TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::record(Vec::new())),
             SchemaValue::Record { fields: Vec::new() },
         );
-        ParsedAgentId::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
