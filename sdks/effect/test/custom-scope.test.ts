@@ -169,6 +169,23 @@ describe("custom durability scopes", () => {
     }).pipe(provide),
   )
 
+  it.effect("finishes a parent only after a child whose admission was pending closed", () =>
+    Effect.gen(function* () {
+      yield* op(
+        "parent",
+        Effect.gen(function* () {
+          yield* Effect.forkDetach(op("child", Effect.void))
+          // Return while the host is still admitting the child.
+          while (!Host.__getEvents().includes("begin:child")) yield* Effect.yieldNow
+        }),
+      )
+      const events = Host.__getEvents()
+      expect(events.indexOf("close:child")).toBeGreaterThan(-1)
+      expect(events.indexOf("close:child")).toBeLessThan(events.indexOf("finish:parent"))
+      expect(Runtime.__entered()).toContainEqual(["child", "parent"])
+    }).pipe(provide),
+  )
+
   it.effect("drops an interrupted operation under its own scope without finishing it", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()
