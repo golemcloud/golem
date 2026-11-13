@@ -407,7 +407,12 @@ async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<V
                         .map(|e| e.to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    return Err(anyhow!("Invalid tool returned by discover-tools: {errors}"));
+                    return Err(match tool.name() {
+                        Some(name) => {
+                            anyhow!("Invalid tool `{name}` returned by discover-tools: {errors}")
+                        }
+                        None => anyhow!("Invalid tool returned by discover-tools: {errors}"),
+                    });
                 }
                 tools.push(tool);
             }
