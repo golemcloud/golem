@@ -17,12 +17,12 @@ use super::*;
 async fn try_resolve_agent_id(
     component_service: Arc<dyn ComponentService>,
     agent_id: &AgentId,
-) -> Option<ParsedAgentId> {
+) -> Option<ParsedAgentKey> {
     if let Ok(component) = component_service
         .get_metadata(agent_id.component_id, None)
         .await
     {
-        ParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
+        ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata).ok()
     } else {
         None
     }

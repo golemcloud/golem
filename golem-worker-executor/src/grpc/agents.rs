@@ -26,6 +26,7 @@ use crate::worker::CreateIntent;
 use golem_common::model::agent::{
     AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
 };
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>

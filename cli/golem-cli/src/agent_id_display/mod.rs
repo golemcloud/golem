@@ -35,7 +35,7 @@ mod render_ts;
 mod tests;
 
 use golem_common::model::agent::text_utils::write_json_escaped;
-use golem_common::schema::agent::{InputSchema, ParsedAgentId};
+use golem_common::schema::agent::{InputSchema, ParsedAgentKey};
 use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue, reachable_defs};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
@@ -150,7 +150,7 @@ pub fn render_schema_value(
 /// known source language are both available, falling back to the raw canonical
 /// id otherwise.
 pub fn render_agent_id_or_raw(
-    parsed: Option<&ParsedAgentId>,
+    parsed: Option<&ParsedAgentKey>,
     source_language: &SourceLanguage,
     raw: &str,
 ) -> String {
@@ -164,7 +164,7 @@ pub fn render_agent_id_or_raw(
 ///
 /// The parameters are rendered using [`render_schema_value`] over each
 /// `Record` field in declaration order.
-pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage) -> String {
+pub fn render_agent_id(parsed: &ParsedAgentKey, source_language: &SourceLanguage) -> String {
     let graph = parsed.parameters.graph();
     let root = parsed.parameters.root_type();
     let value = parsed.parameters.value();

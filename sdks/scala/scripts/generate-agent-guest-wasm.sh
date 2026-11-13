@@ -145,7 +145,7 @@ for role_spec in "${roles[@]}"; do
   echo "[agent-guest] Building $role guest runtime..." >&2
   (
     cd "$wrapper_dir"
-    env -u ARGV0 rustup run stable cargo build \
+    env -u ARGV0 rustup run "$(rustup default | cut -d' ' -f1)" cargo build \
       --target wasm32-wasip2 \
       --target-dir "$target_dir" \
       --release \

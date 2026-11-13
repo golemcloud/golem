@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_uuid;
 mod config;
 pub mod extraction;
 mod invocation;
+mod key;
 mod normalisation;
 mod protobuf;
 mod status;
+
+pub use agent_uuid::AgentUuid;
+pub use key::AgentKey;
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
@@ -62,7 +67,7 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{AgentFingerprint, AgentId, PromiseId, Timestamp};
 use crate::schema::AgentTypeSchema;
-pub use crate::schema::agent::ParsedAgentId;
+pub use crate::schema::agent::ParsedAgentKey;
 use crate::schema::graph::TypedSchemaValue;
 use crate::schema::render::cli_text::value_to_cli_text;
 use crate::schema::schema_type::SchemaType;
@@ -79,7 +84,7 @@ pub enum AgentTarget {
 /// instead of treating failure to parse an agent id as component-wide access.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
-    Agent(Box<ParsedAgentId>),
+    Agent(Box<ParsedAgentKey>),
     /// An ephemeral external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
     OplogProcessor,
@@ -94,7 +99,7 @@ impl ResolvedOwnerContext {
         kind.validate_instance_name(raw_agent_id)?;
         match kind {
             OwnerKind::ComponentAgent if metadata.is_agent() => {
-                ParsedAgentId::parse(raw_agent_id, metadata)
+                ParsedAgentKey::parse(raw_agent_id, metadata)
                     .map(Box::new)
                     .map(Self::Agent)
                     .map_err(|error| error.to_string())
@@ -108,7 +113,7 @@ impl ResolvedOwnerContext {
         }
     }
 
-    pub fn agent(&self) -> Option<&ParsedAgentId> {
+    pub fn agent(&self) -> Option<&ParsedAgentKey> {
         match self {
             Self::Agent(agent) => Some(agent),
             Self::ComponentBaseline | Self::OplogProcessor => None,
@@ -264,15 +269,20 @@ impl AgentTypeSchemaResolver for &AgentTypeSchema {
     }
 }
 
-impl ParsedAgentId {
+impl ParsedAgentKey {
     pub fn try_new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, String> {
-        let parsed = Self::new(agent_type, parameters, phantom_id);
-        AgentId::validate_length(&parsed.to_string())?;
-        Ok(parsed)
+        let key = AgentKey::new(agent_type, parameters).map_err(|err| err.to_string())?;
+        let text = match phantom_id {
+            Some(phantom_id) => format!("{key}[{phantom_id}]"),
+            None => key.to_string(),
+        };
+        AgentId::validate_length(&text)?;
+        let (agent_type, parameters) = key.into_parts();
+        Ok(Self::new(agent_type, parameters, phantom_id))
     }
 
     pub fn new_auto_phantom(
@@ -300,42 +310,14 @@ impl ParsedAgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        use crate::model::agent::structural_format::{
-            normalize_structural, parse_structural_typed,
-        };
-        use crate::schema::schema_type::NamedFieldType;
-
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
-        let agent_type_name = AgentTypeName(agent_type_name.to_string());
         let phantom_id = phantom_id_str
             .map(Uuid::parse_str)
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
-        let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let root = SchemaType::record(
-            agent_type
-                .constructor
-                .input_schema
-                .fields()
-                .iter()
-                .filter(|field| {
-                    matches!(
-                        field.source,
-                        crate::schema::agent::FieldSource::UserSupplied
-                    )
-                })
-                .map(|field| NamedFieldType {
-                    name: field.name.clone(),
-                    body: field.schema.clone(),
-                    metadata: field.metadata.clone(),
-                })
-                .collect(),
-        );
-        let value =
-            parse_structural_typed(&normalize_structural(param_list), &agent_type.schema, &root)
-                .map_err(|e| e.to_string())?;
-        let parameters = typed_constructor_parameters(&agent_type, value);
+        let (key, agent_type) = AgentKey::parse_parts(agent_type_name, param_list, resolver)?;
+        let (agent_type_name, parameters) = key.into_parts();
         let agent_id = Self::try_new(agent_type_name, parameters, phantom_id)?;
         Ok((agent_id, agent_type))
     }
@@ -365,7 +347,7 @@ impl ParsedAgentId {
     }
 }
 
-impl Display for ParsedAgentId {
+impl Display for ParsedAgentKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use crate::model::agent::structural_format::format_structural_typed;
         let rendered = format_structural_typed(&self.parameters).map_err(|_| std::fmt::Error)?;
@@ -381,9 +363,19 @@ pub fn typed_constructor_parameters(
     agent_type: &AgentTypeSchema,
     value: SchemaValue,
 ) -> TypedSchemaValue {
+    let root = constructor_parameter_record(agent_type);
+    // The result is a single-root carrier, so project the agent graph's defs to
+    // exactly those reachable from this constructor record instead of cloning
+    // the whole multi-root registry.
+    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+}
+
+/// The record of a constructor's user-supplied parameters: the type of an agent key's
+/// parameters. Agent config fields are not part of it.
+pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType {
     use crate::schema::schema_type::NamedFieldType;
 
-    let root = SchemaType::record(
+    SchemaType::record(
         agent_type
             .constructor
             .input_schema
@@ -401,12 +393,9 @@ pub fn typed_constructor_parameters(
                 metadata: field.metadata.clone(),
             })
             .collect(),
-    );
-    // The result is a single-root carrier, so project the agent graph's defs to
-    // exactly those reachable from this constructor record instead of cloning
-    // the whole multi-root registry.
-    crate::schema::agent::typed_schema_value_with_projected_defs(&agent_type.schema, root, value)
+    )
 }
+
 /// Status of an idempotency key lookup on a worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
 #[serde(rename_all = "camelCase")]
@@ -438,7 +427,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -453,7 +442,7 @@ impl AgentId {
         agent_id: S,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
+        Self::from_agent_id(component_id, &ParsedAgentKey::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
@@ -493,7 +482,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match ParsedAgentId::normalize_text(id) {
+        match ParsedAgentKey::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(

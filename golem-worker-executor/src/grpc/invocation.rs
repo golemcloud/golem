@@ -14,7 +14,7 @@
 
 use super::{
     AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, HasComponentService, Instrument,
-    InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentId, UsesAllDeps, Worker, WorkerCtx,
+    InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentKey, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorImpl, info_span,
 };
 use crate::worker::CreateIntent;
@@ -427,7 +427,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get_metadata(agent_id.component_id, None)
             .await?;
         let is_ephemeral =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+            ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
                 .ok()
                 .and_then(|parsed_agent_id| {
                     component
