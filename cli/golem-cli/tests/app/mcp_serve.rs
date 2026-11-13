@@ -196,15 +196,23 @@ fn properties(tool: &Tool) -> BTreeSet<String> {
         .collect()
 }
 
-/// Removes what differs between two reads of the same state: the time of the read, and the
-/// order of invocation context attributes, which the server keeps in a hash map.
+/// Removes what differs between two reads of the same state: the time of the read, the order of
+/// invocation context attributes, which the server keeps in a hash map, and the live fields of an
+/// agent's metadata. Those come from the executor's status record, which can change while the
+/// agent is idle, such as when it grows its memory or is suspended.
 fn comparable(value: &Value) -> Value {
     const TIME_FIELDS: &[&str] = &["generatedAt"];
+    const LIVE_AGENT_FIELDS: &[&str] =
+        &["totalLinearMemorySize", "status", "pendingInvocationCount"];
     match value {
         Value::Object(object) => Value::Object(
             object
                 .iter()
                 .filter(|(key, _)| !TIME_FIELDS.contains(&key.as_str()))
+                .filter(|(key, _)| {
+                    !(object.contains_key("totalLinearMemorySize")
+                        && LIVE_AGENT_FIELDS.contains(&key.as_str()))
+                })
                 .map(|(key, value)| {
                     let mut value = comparable(value);
                     if key == "attributes"
