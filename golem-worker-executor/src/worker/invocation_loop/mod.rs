@@ -1259,7 +1259,8 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// The index of the `AgentInvocationFinished` entry of the last invocation of the Store that
     /// can change the state of the agent, replayed or live, as
     /// `DurableWorkerCtx::last_state_change` gives it. Only the `Periodic` policy sets and reads
-    /// it: a periodic snapshot is needed only when it is after the last automatic snapshot record.
+    /// it: a periodic snapshot is needed only when it is after the automatic snapshot record that a
+    /// start would select.
     last_state_change: Option<OplogIndex>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,

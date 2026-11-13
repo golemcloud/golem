@@ -110,13 +110,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         let SnapshotPolicy::Periodic { period } = self.parent.snapshot_policy() else {
             return PeriodicSnapshotAction::NotNeeded;
         };
-        if !state_changed_since_snapshot(
-            self.last_state_change,
-            status
-                .last_automatic_snapshot
-                .as_ref()
-                .map(|last| last.index),
-        ) {
+        let enabled = self.parent.filesystem_snapshots_enabled();
+        let holding_state = self.parent.read_exclusions(|exclusions| {
+            crate::worker::snapshot_selection::periodic_snapshot_holding_state(
+                status, exclusions, enabled,
+            )
+        });
+        if !state_changed_since_snapshot(self.last_state_change, holding_state) {
             return PeriodicSnapshotAction::NotNeeded;
         }
 
@@ -596,10 +596,11 @@ pub(super) fn snapshot_baseline_timestamp(
         .unwrap_or(created_at)
 }
 
-/// Whether the state changed at `last_state_change` after the last automatic snapshot record at
-/// `last_snapshot`. An agent whose state did not change since its last record needs no periodic
-/// snapshot, so an idle agent writes none. A snapshot that wrote no record, such as a skipped one,
-/// leaves the change in place, and the next period tries again.
+/// Whether the state changed at `last_state_change` after `last_snapshot`, the automatic snapshot
+/// record that holds the state, which a start would select. An agent whose state did not change
+/// since that record needs no periodic snapshot, so an idle agent writes none. A snapshot that
+/// wrote no record, such as a skipped one, or a record that no start can use, such as one whose
+/// upload failed, leaves the change in place, and the next period tries again.
 pub(super) fn state_changed_since_snapshot(
     last_state_change: Option<OplogIndex>,
     last_snapshot: Option<OplogIndex>,
