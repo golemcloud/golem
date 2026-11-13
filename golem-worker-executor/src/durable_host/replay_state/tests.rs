@@ -3498,6 +3498,7 @@ async fn read_invocation_finished(
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
     rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
         .await
+        .map(|finished| finished.map(|(_, result)| result))
 }
 
 fn test_invocation_wallet_pin() -> InvocationWalletPin {
@@ -3557,10 +3558,13 @@ async fn replayed_finished_naming_the_replayed_invocation_is_accepted() {
     ])
     .await;
 
-    assert!(matches!(
-        read_invocation_finished(&rs).await,
-        Ok(Some(AgentInvocationResult::AgentInitialization))
-    ));
+    let (finished_index, result) = rs
+        .get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+        .await
+        .unwrap()
+        .expect("expected the matching invocation terminal");
+    assert_eq!(finished_index, OplogIndex::from_u64(2));
+    assert!(matches!(result, AgentInvocationResult::AgentInitialization));
 }
 
 async fn replay_invocation_with_error(
