@@ -812,6 +812,7 @@ impl WorkerGrpcApi {
                     auth,
                     request.context,
                     request.principal,
+                    request.idempotency_key.map(Into::into),
                 )
                 .await?
         } else {
@@ -824,6 +825,7 @@ impl WorkerGrpcApi {
                     auth,
                     request.context,
                     request.principal,
+                    request.idempotency_key.map(Into::into),
                 )
                 .await?
         };

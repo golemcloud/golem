@@ -397,11 +397,6 @@ oplog_payload! {
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
         },
-        GolemRpcActivate {
-            remote_agent_id: AgentId,
-            method_name: String,
-            decision: Result<(), SerializableRpcError>,
-        },
         GolemToolResponseSecretHoldAdmission {
             value: TypedSchemaValue,
             #[schema(skip)]
@@ -674,7 +669,7 @@ oplog_payload! {
             result: Result<(Vec<u8>, Option<u64>), String>
         },
         GolemRpcCreate {
-            target_fingerprint: AgentFingerprint,
+            result: Result<AgentFingerprint, SerializableRpcError>,
             target_environment_id: EnvironmentId
         },
         P3KeyvalueIncomingValueStream {
@@ -775,9 +770,6 @@ oplog_payload! {
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
-        },
-        GolemRpcActivate {
-            result: Result<AgentFingerprint, SerializableRpcError>
         },
         GolemToolResponseSecretHoldAdmission {
             admitted: bool,
@@ -1059,7 +1051,6 @@ pub mod host_functions {
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents, denied = denied::golem_api::agents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
-        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemToolAwaitInvokeResults => "golem::tool::internal", "await-invoke-results", GolemToolAwaitInvokeResults, GolemToolAwaitInvokeResults),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),

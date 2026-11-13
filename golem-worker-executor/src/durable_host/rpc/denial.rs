@@ -15,7 +15,7 @@
 use super::{
     FutureInvokeResultEntry, FutureInvokeResultState, RpcCallTarget, WasmRpcEntry,
     WasmRpcEntryPayload, embedded_invocation_span_builder, invocation_metadata,
-    invocation_target_agent_id, restore_embedded_span,
+    restore_embedded_span,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::BegunCall;
@@ -159,21 +159,6 @@ pub(super) async fn replay_async_rpc_denial<Ctx: WorkerCtx>(
     bake_closed_async_error(ctx, metadata, denied_rpc_failure(response.result)?)
 }
 
-pub(super) async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_invoke_and_await_denial_from_begun(ctx, begun, remote_agent_id, method_name, error)
-        .await
-}
-
 pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable, Ctx>,
@@ -195,20 +180,6 @@ pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
-pub(super) async fn persist_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_invoke_denial_from_begun(ctx, begun, remote_agent_id, method_name, error).await
-}
-
 pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     begun: BegunCall<GolemRpcWasmRpcInvoke, NotCancellable, Ctx>,
@@ -228,29 +199,6 @@ pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
         })
         .await?;
     Ok(Err(denied_rpc_failure(response.result)?.into()))
-}
-
-pub(super) async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: &Resource<WasmRpcEntry>,
-    logical_remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<AsyncInvocationWithMetadata> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_async_invoke_denial_from_begun(
-        ctx,
-        begun,
-        resource,
-        logical_remote_agent_id,
-        method_name,
-        error,
-    )
-    .await
 }
 
 pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
@@ -403,47 +351,6 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     let span = restore_embedded_span(ctx, &started)?;
     finish_span_in_memory(ctx, span.span_id())?;
     bake_closed_async_error(ctx, metadata, denied_rpc_failure(response.result)?)
-}
-
-fn bake_closed_async_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    metadata: InvocationMetadata,
-    details: String,
-) -> anyhow::Result<AsyncInvocationWithMetadata> {
-    let future = ctx.table().push(FutureInvokeResultEntry {
-        payload: Box::new(FutureInvokeResultState::Baked {
-            result: Ok(Err(InternalRpcError::Denied { details })),
-        }),
-        child_pollables: Vec::new(),
-        drop_pending: false,
-    })?;
-    Ok(AsyncInvocationWithMetadata { future, metadata })
-}
-
-pub(super) async fn bake_recorded_async_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: &Resource<WasmRpcEntry>,
-    logical_remote_agent_id: &OwnedAgentId,
-    error: RpcError,
-    idempotency_key: IdempotencyKey,
-) -> anyhow::Result<AsyncInvocationWithMetadata> {
-    let details = rpc_denied_details(error);
-    let ephemeral_logical_agent_id = {
-        let payload = ctx
-            .table()
-            .get(resource)?
-            .payload
-            .downcast_ref::<WasmRpcEntryPayload>()
-            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
-        payload.ephemeral_logical_agent_id.clone()
-    };
-    let remote_agent_id = invocation_target_agent_id(
-        logical_remote_agent_id,
-        ephemeral_logical_agent_id.as_ref(),
-        &idempotency_key,
-    )?;
-    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-    bake_closed_async_denial(ctx, metadata, details)
 }
 
 pub(super) async fn persist_schedule_denial<Ctx: WorkerCtx>(

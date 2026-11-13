@@ -136,6 +136,20 @@ pub trait Rpc: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError>;
 
+    /// Explicit creation observes the constructor outcome; preparation never starts execution.
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError>;
+
     async fn create_demand(
         &self,
         target: AgentTarget,

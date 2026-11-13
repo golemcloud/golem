@@ -210,6 +210,34 @@ struct StreamingRemoteRpc {
 
 #[async_trait]
 impl Rpc for StreamingRemoteRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -483,19 +511,28 @@ impl WorkerProxy for LocalResumeProxy {
         }
     }
 
-    async fn start(
+    async fn create(
         &self,
         agent: &OwnedAgentId,
-        method: &str,
         caller: &AgentId,
         env: HashMap<String, String>,
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
         self.inner
-            .start(agent, method, caller, env, stack, config, principal, auth)
+            .create(
+                agent,
+                caller,
+                env,
+                stack,
+                config,
+                principal,
+                auth,
+                idempotency_key,
+            )
             .await
     }
 

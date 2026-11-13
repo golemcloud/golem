@@ -327,6 +327,23 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 
 #[async_trait]
 impl Rpc for FingerprintMismatchRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        _self_env: &[(String, String)],
+        _self_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        Ok(Box::new(FixedDemand {
+            fingerprint: self.live_fingerprint,
+        }))
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -413,6 +430,23 @@ impl Rpc for FingerprintMismatchRpc {
 
 #[async_trait]
 impl Rpc for ActivationFailureRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        _self_env: &[(String, String)],
+        _self_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        Err(WorkerExecutorError::PermissionDenied {
+            details: "activation denied".to_string(),
+        })
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -499,6 +533,24 @@ impl Rpc for ActivationFailureRpc {
 
 #[async_trait]
 impl Rpc for RecordingEnvRpc {
+    async fn create_and_initialize(
+        &self,
+        _target: AgentTarget,
+        _environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        _self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        _self_stack: InvocationContextStack,
+        _config: Vec<AgentConfigEntryDto>,
+        _auth_ctx: &AuthCtx,
+        _idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        *self.activation_env.lock().unwrap() = Some(self_env.to_vec());
+        Ok(Box::new(FixedDemand {
+            fingerprint: self.fingerprint,
+        }))
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
@@ -666,41 +718,6 @@ async fn deferred_activation_fingerprint_mismatch_is_a_host_failure_not_rpc_resu
         result.is_err(),
         "fingerprint mismatch is a replay/activation violation and must be an outer host failure, not a completed RPC result: {result:?}"
     );
-}
-
-#[test]
-async fn first_authorized_call_activates_a_new_durable_target_without_a_prior_fingerprint() {
-    let rpc = Arc::new(FingerprintMismatchRpc {
-        live_fingerprint: AgentFingerprint(Uuid::from_u128(11)),
-        invoke_called: AtomicBool::new(false),
-    });
-
-    let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-        None,
-        rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
-        IdempotencyKey::new("first-authorized-activation".to_string()),
-        "run".to_string(),
-        SchemaValue::Tuple { elements: vec![] },
-        AccountId::new(),
-        agent_id("caller"),
-        vec![],
-        vec![],
-        InvocationContextStack::fresh(),
-        None,
-        AuthCtx::system(),
-        Some(RpcTargetActivation {
-            target_fingerprint: None,
-            env: vec![],
-            config: vec![],
-        }),
-        InvocationFreshnessDisposition::MayExist,
-        None,
-    )
-    .await;
-
-    result.unwrap().unwrap();
-    assert!(rpc.invoke_called.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -1078,32 +1095,6 @@ fn deferred_ephemeral_target_never_requests_replay_activation() {
     assert!(target.deferred_activation().is_none());
     assert_eq!(
         target.target_creation_data().0,
-        vec![("KEY".to_string(), "value".to_string())]
-    );
-}
-
-#[test]
-fn pinned_ephemeral_identity_skips_durable_activation() {
-    let target = initial_target_activation(vec![], vec![], true);
-
-    assert!(matches!(
-        target,
-        WasmRpcTargetActivation::DeferredEphemeral { .. }
-    ));
-    assert!(target.deferred_activation().is_none());
-}
-
-#[test]
-fn deferred_durable_target_activates_without_a_replay_fingerprint() {
-    let target = WasmRpcTargetActivation::DeferredDurable {
-        env: vec![("KEY".to_string(), "value".to_string())],
-        config: vec![],
-    };
-
-    let activation = target.deferred_activation().unwrap();
-    assert_eq!(activation.target_fingerprint, None);
-    assert_eq!(
-        activation.env,
         vec![("KEY".to_string(), "value".to_string())]
     );
 }

@@ -1712,9 +1712,9 @@ impl TestWorkerExecutor {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<golem_worker_executor::services::active_agents::ActiveAgent<TestWorkerCtx>>>
     {
-        self.additional_test_deps
-            .active_agents
-            .get()?
+        self.services
+            .as_ref()?
+            .active_agents()
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -1801,8 +1801,13 @@ impl TestWorkerExecutor {
     /// Returns whether a Worker shell is currently in `ActiveAgents` without
     /// refreshing its last-access time.
     pub async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        match self.additional_test_deps.active_agents.get() {
-            Some(active_agents) => active_agents.contains_cached_agent(owned_agent_id).await,
+        match self.services.as_ref() {
+            Some(services) => {
+                services
+                    .active_agents()
+                    .contains_cached_agent(owned_agent_id)
+                    .await
+            }
             None => false,
         }
     }
@@ -9450,6 +9455,7 @@ pub struct RecordingRpc {
     inner: Arc<dyn Rpc>,
     method_name: String,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    call_count: Arc<AtomicUsize>,
 }
 
 impl RecordingRpc {
@@ -9462,7 +9468,12 @@ impl RecordingRpc {
             inner,
             method_name: method_name.into(),
             attempts,
+            call_count: Arc::default(),
         }
+    }
+
+    pub fn call_count(&self) -> Arc<AtomicUsize> {
+        self.call_count.clone()
     }
 }
 
@@ -9477,6 +9488,34 @@ impl FailingRpc {
 
 #[async_trait]
 impl Rpc for RecordingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -9485,6 +9524,7 @@ impl Rpc for RecordingRpc {
         owner: &AgentId,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .cancel_scheduled_invocation(target, key, receipt, owner, auth)
             .await
@@ -9498,6 +9538,7 @@ impl Rpc for RecordingRpc {
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .schedule_invocation(
                 owned_agent_id,
@@ -9523,6 +9564,7 @@ impl Rpc for RecordingRpc {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .create_demand(
                 target,
@@ -9556,6 +9598,7 @@ impl Rpc for RecordingRpc {
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<SchemaValue, ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         if method_name == self.method_name {
             self.attempts.lock().unwrap().push(idempotency_key.clone());
         }
@@ -9593,6 +9636,7 @@ impl Rpc for RecordingRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
+        self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
             .invoke(
                 target,
@@ -9614,6 +9658,33 @@ impl Rpc for RecordingRpc {
 
 #[async_trait]
 impl Rpc for FailingRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,

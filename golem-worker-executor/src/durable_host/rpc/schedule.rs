@@ -14,7 +14,7 @@
 
 use super::execution::known_fresh_dispatch_allowed;
 use super::{
-    CancellationTokenEntry, RpcCallTarget, RpcTargetAdmission, WasmRpcEntry, WasmRpcEntryPayload,
+    CancellationTokenEntry, RpcCallTarget, WasmRpcEntry, WasmRpcEntryPayload,
     ensure_rpc_target_activated, find_agent_method, invocation_metadata, persist_schedule_denial,
     persist_schedule_denial_from_begun, reject_non_await_scope_card, remote_method_uses_streams,
 };
@@ -223,29 +223,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )))
             })?;
 
-        let admission = match self
-            .authorize_and_record_rpc_target_activation(
-                &this,
-                &logical_remote_agent_id,
-                &method_name,
-            )
-            .await?
-        {
-            Ok(admission) => admission,
-            Err(denial) => {
-                if denial.activation_decision.is_some() {
-                    return Ok(Err(denial.error));
-                }
-                return persist_schedule_denial(
-                    self,
-                    logical_remote_agent_id,
-                    datetime,
-                    method_name,
-                    denial.error,
-                )
-                .await;
-            }
-        };
+        let target =
+            self.outbound_agent_method_target(&this, &logical_remote_agent_id, &method_name)?;
 
         let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
             begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
@@ -257,9 +236,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
         let call = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
-                if let RpcTargetAdmission::LiveOnly(target) = &admission
-                    && let Err(error) = self.authorize_live_permission(target).await?
-                {
+                if let Err(error) = self.authorize_live_permission(&target).await? {
                     return persist_schedule_denial_from_begun(
                         self,
                         begun,

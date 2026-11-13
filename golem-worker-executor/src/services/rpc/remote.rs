@@ -159,6 +159,45 @@ impl Rpc for RemoteInvocationRpc {
         })
     }
 
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        _self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        let AgentTarget::Current(agent_id) = target;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let fingerprint = self
+            .worker_proxy
+            .create(
+                &owned_agent_id,
+                self_agent_id,
+                HashMap::from_iter(self_env.to_vec()),
+                self_stack,
+                config,
+                caller_agent_principal(self_agent_id),
+                auth_ctx,
+                Some(idempotency_key),
+            )
+            .await
+            .map_err(|error| match error {
+                WorkerProxyError::Unauthorized(details) => {
+                    WorkerExecutorError::permission_denied(details)
+                }
+                other => other.into(),
+            })?;
+        Ok(Box::new(LoggingDemand::new(
+            owned_agent_id.agent_id(),
+            fingerprint,
+        )))
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,
