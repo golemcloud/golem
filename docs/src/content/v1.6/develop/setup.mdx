@@ -27,7 +27,7 @@ Generated projects include compatible versions of `effect` and `@golemcloud/effe
 Developing **Golem agents** in **Rust** requires **Rust 1.99.1** (`rustc` and `cargo`) and the WASM target used by Golem 1.6.
 
 <Callout type="warning">
-Golem 1.6 does not support agents built with Rust 1.100 or newer yet. Rust 1.100 changes how a WebAssembly component starts, and agents built with it can fail to resume after an update or a restart. Build Golem 1.6 agents with Rust 1.99.1, also when a newer stable Rust is installed.
+Golem 1.6 does not support agents built with Rust 1.100 or newer yet. Rust 1.100 changes how a WebAssembly component starts, and agents built with it can fail to resume after an update or a restart. Build Golem 1.6 agents with Rust 1.99.1, also when a newer stable Rust is installed. From Golem 1.6.4, `golem build` stops with an error when the application builds with Rust 1.100 or newer.
 </Callout>
 
 #### Installing Rust
