@@ -2722,7 +2722,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         None,
         indices[2],
-        Some("needle"),
     )
     .await
     .unwrap();
@@ -2751,17 +2750,8 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
 
     // A read of another query, or a read without a query, refuses the cursor.
     for query in [Some("needles"), Some(""), None] {
-        let result = oplog_page_start(
-            oplog_service.clone(),
-            &owned_agent_id,
-            AgentMode::Durable,
-            Some(cursor.clone()),
-            OplogIndex::INITIAL,
-            query,
-        )
-        .await;
         assert_eq!(
-            result,
+            check_oplog_cursor_query(&owned_agent_id, Some(&cursor), query),
             Err(WorkerExecutorError::StaleCursor {
                 agent_id: owned_agent_id.agent_id.clone(),
                 next_oplog_index: indices[7],
@@ -2770,6 +2760,10 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             "a read of {query:?} must refuse the cursor of a search for \"needle\""
         );
     }
+    assert_eq!(
+        check_oplog_cursor_query(&owned_agent_id, Some(&cursor), Some("needle")),
+        Ok(())
+    );
 
     // The cursor continues where the first search stopped, with the revision it carries.
     let (start, revision) = oplog_page_start(
@@ -2778,7 +2772,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         Some(cursor),
         OplogIndex::INITIAL,
-        Some("needle"),
     )
     .await
     .unwrap();
@@ -2827,7 +2820,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                 query_hash: OplogCursor::query_hash(Some("needle")),
             }),
             OplogIndex::INITIAL,
-            Some("needle"),
         )
         .await;
         match result {

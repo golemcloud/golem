@@ -16,9 +16,9 @@ use super::{
     GetOplogEntryRequest, GetOplogEntryResponse, GetOplogRequest, GetOplogResponse, HasAll,
     HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedSemaphorePermit,
     PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
-    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id,
-    get_public_oplog_entry, get_public_oplog_page, golem, min, oplog_page_cursor, oplog_page_start,
-    search_public_oplog_page,
+    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
+    extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page, golem, min,
+    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -52,6 +52,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let cursor = request.cursor.map(Into::into);
+        check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), None)?;
 
         let component_service = self.component_service();
         let identity = self
@@ -71,9 +73,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
-            request.cursor.map(Into::into),
+            cursor,
             OplogIndex::from_u64(request.from_oplog_index),
-            None,
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -171,6 +172,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let cursor = request.cursor.map(Into::into);
+        check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), Some(&request.query))?;
 
         let component_service = self.component_service();
         let identity = self
@@ -190,9 +193,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
-            request.cursor.map(Into::into),
+            cursor,
             OplogIndex::INITIAL,
-            Some(&request.query),
         )
         .await?;
         let chunk = search_public_oplog_page(
