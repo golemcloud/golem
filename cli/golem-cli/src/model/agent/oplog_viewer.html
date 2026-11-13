@@ -272,7 +272,7 @@ const KINDS = {
   CardTransferStarted: ['CARD TRANSFER STARTED', 'card', 1], CardTransferred: ['CARD TRANSFER ADMITTED', 'card', 1],
   CardRevokedCascade: ['CARD REVOKED CASCADE', 'card', 1], CardTransferConfirmed: ['CARD TRANSFER CONFIRMED', 'card', 1],
   StreamRegistered: ['STREAM REGISTERED', 'stream', 1], StreamItems: ['STREAM ITEMS', 'stream', 1],
-  StreamEnd: ['STREAM END', 'stream', 1], StreamCancel: ['STREAM CANCEL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
+  StreamTerminal: ['STREAM TERMINAL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
   Omitted: ['OMITTED ENTRY', 'lifecycle'],
 };
 const CATEGORIES = ['invocation', 'host', 'error', 'log', 'region', 'lifecycle', 'update', 'snapshot', 'resource', 'plugin', 'retry', 'card', 'stream'];
@@ -599,7 +599,7 @@ function summary(e) {
     case 'SpanClosed': return [span('val', 'span ' + p.spanFinished.spanId + ' closed' + (p.resourceStartIndex != null ? ' · opened at #' + idxOf(p.resourceStartIndex) : ''))];
     case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
     case 'RemoveRetryPolicy': return [span('fn', p.name)];
-    case 'StreamRegistered': case 'StreamItems': case 'StreamEnd': case 'StreamCancel': case 'StreamSession': return [span('val', typedText(p.record, 160))];
+    case 'StreamRegistered': case 'StreamItems': case 'StreamTerminal': case 'StreamSession': return [span('val', typedText(p.record, 160))];
     case 'CardEventQueued': return [span('val', `${p.event.type} · card ${p.event.cardId}`)];
     case 'CardInstalled': case 'CardRevoked': case 'CardExpired': case 'CardDerived': case 'CardInstallFailed': return [span('val', `card ${p.cardId}` + (p.reason ? ' · ' + p.reason : '') + (p.walletGeneration != null ? ` · wallet generation ${p.walletGeneration}` : ''))];
     case 'CardTransferStarted': case 'CardTransferred': case 'CardTransferConfirmed': return [span('val', `transfer ${p.transferId} · card ${p.cardId || p.sourceCardId}`)];

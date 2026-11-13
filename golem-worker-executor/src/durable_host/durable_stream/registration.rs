@@ -15,7 +15,7 @@
 use super::index::registration_coordinate_depth;
 use super::*;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, PartialEq)]
 /// Durable handles and the session record produced while materializing result streams.
 pub struct ResultStreamRegistration {
     pub handles: Vec<DurableStreamHandle>,
@@ -596,15 +596,18 @@ impl DurableStreamStore {
                                 consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
                                 source: source.clone(),
                                 epoch,
-                                role: StreamCancelRole::OutputConsumer,
-                                reason: StreamCancelReason::Cancelled,
-                                details: None,
+                                cancellation: StreamCancellationRequest {
+                                    direction: SessionStreamRole::Output,
+                                    side: StreamEndpointSide::Consumer,
+                                    authored_by: StreamTerminalAuthor::Host,
+                                    terminal: StreamTerminal::Failed(StreamError::Interrupted("output slot deleted".into())),
+                                },
                             }
                         )),
                     ));
                     if let Some((sequence, attribution)) = terminal {
                         let offset = StreamOffset::new(OplogIndex::from_u64(first_index.as_u64() + result.len() as u64), 0);
-                        result.push(DurableStreamOplogRecord::Cancel(attribution, StreamCancelRecord {
+                        result.push(DurableStreamOplogRecord::Terminal(attribution, StreamTerminalRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             stream_id: match &source {
                                 StreamRecordReference::Local(local_id) => *local_id,
@@ -612,10 +615,9 @@ impl DurableStreamStore {
                             },
                             sequence,
                             offset,
-                            authored_by: StreamTerminalAuthor::Protocol,
-                            role: StreamCancelRole::OutputConsumer,
-                            reason: StreamCancelReason::Cancelled,
-                            details: None,
+                            authored_by: StreamTerminalAuthor::Host,
+                            origin: StreamTerminalOrigin::Control,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted("output slot deleted".into())),
                         }));
                     }
                     if applied_locally {
@@ -630,9 +632,12 @@ impl DurableStreamStore {
                                         consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
                                         source,
                                         epoch,
-                                        role: StreamCancelRole::OutputConsumer,
-                                        reason: StreamCancelReason::Cancelled,
-                                        details: None,
+                                        cancellation: StreamCancellationRequest {
+                                            direction: SessionStreamRole::Output,
+                                            side: StreamEndpointSide::Consumer,
+                                            authored_by: StreamTerminalAuthor::Host,
+                                            terminal: StreamTerminal::Failed(StreamError::Interrupted("output slot deleted".into())),
+                                        },
                                     },
                                 },
                             )),
@@ -715,7 +720,7 @@ impl DurableStreamStore {
                         session_record = Some(record);
                     }
                 }
-                OplogEntry::StreamCancel {
+                OplogEntry::StreamTerminal {
                     entity_parent_start_index,
                     record,
                     ..
@@ -725,7 +730,7 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    let event = index.apply_cancel(
+                    let event = index.apply_terminal(
                         oplog_index,
                         entity_parent_start_index,
                         record,

@@ -3217,7 +3217,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two owner-relative journals are authoritative, nothing else.** A producer records
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` in its own oplog. Its persisted
+  `StreamRegistered`/`StreamItems`/`StreamTerminal` in its own oplog. Its persisted
   `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every
   cross-record source is explicit `StreamRecordReference::{Local, Foreign}`; a received handle
   remains `Foreign` even when it happens to name the receiving oplog's owner. Consumer records
@@ -3236,8 +3236,9 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
-  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; the first selected
+  terminal fences competing terminals. Completed replay still validates the recorded terminal.
+  Terminal outputs reconstruct from committed records without reattachment.
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
@@ -3433,7 +3434,9 @@ Four exactly-once contracts coexist and must not be conflated: RPC exactly-once 
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
 exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
-stream, protocol terminal fencing guest terminals). A change that
+stream, the first terminal fencing competing terminals). Terminal origin is independent of
+author and outcome: reconstruction validates the recorded prefix, then reproduces a `Source`
+terminal exactly or stops at a `Control` terminal without waiting for the source. A change that
 satisfies one does not imply the others.
 
 Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved

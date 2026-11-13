@@ -14,6 +14,7 @@
 
 #[cfg(test)]
 use super::AttachmentActivity;
+use super::AttachmentTerminalState;
 use super::{
     AcceptedAttachmentWriteEnd, Arc, AtomicBool, AtomicU64, AttachmentCharge, AttachmentMemory,
     AttachmentMode, AttachmentReservationOutcome, AttachmentState, AttachmentTrackingRollback,
@@ -41,13 +42,8 @@ impl ByteAttachment {
                 accepted_completion_bytes: 0,
                 accepted_bytes: 0,
                 delivered_bytes: 0,
-                terminal: None,
-                terminal_pending: false,
-                owner_terminal_reserved: false,
-                terminal_end: None,
+                terminal: AttachmentTerminalState::Open,
                 owner_fenced: false,
-                host_resource_exhausted: false,
-                terminal_item_delivered: false,
                 producer_active: true,
                 consumer_active: true,
                 guest_watchers: 0,
@@ -75,13 +71,8 @@ impl ByteAttachment {
                 accepted_completion_bytes: 0,
                 accepted_bytes: 0,
                 delivered_bytes: 0,
-                terminal: None,
-                terminal_pending: false,
-                owner_terminal_reserved: false,
-                terminal_end: None,
+                terminal: AttachmentTerminalState::Open,
                 owner_fenced: false,
-                host_resource_exhausted: false,
-                terminal_item_delivered: false,
                 producer_active: true,
                 consumer_active: false,
                 guest_watchers: 0,
@@ -104,13 +95,9 @@ impl ByteAttachment {
     pub(super) fn configure(&self, mode: AttachmentMode) -> bool {
         let reader = {
             let mut state = self.state.lock().unwrap();
-            if state.mode != AttachmentMode::Pending {
+            if !state.configure_mode(mode) {
                 return false;
             }
-            if mode == AttachmentMode::Live {
-                state.accepted_completion_bytes = 0;
-            }
-            state.mode = mode;
             state.reader_waker.take()
         };
         tracing::debug!(attachment = ?(self as *const Self), ?mode, "configured tool attachment");
@@ -170,9 +157,7 @@ impl ByteAttachment {
             let mut state = self.state.lock().unwrap();
             if matches!(
                 state.mode,
-                AttachmentMode::Pending
-                    | AttachmentMode::Live
-                    | AttachmentMode::Completion { published: false }
+                AttachmentMode::Pending | AttachmentMode::Live | AttachmentMode::CompletionStaged
             ) {
                 state.chunks.clear();
                 state.buffered_bytes = 0;
@@ -189,13 +174,9 @@ impl ByteAttachment {
     pub(super) fn publish_completion(&self) -> bool {
         let reader = {
             let mut state = self.state.lock().unwrap();
-            let AttachmentMode::Completion { published: false } = state.mode else {
-                return false;
-            };
-            if state.terminal.is_none() {
+            if !state.publish_completion() {
                 return false;
             }
-            state.mode = AttachmentMode::Completion { published: true };
             state.reader_waker.take()
         };
         self.changed.notify_waiters();
@@ -209,22 +190,8 @@ impl ByteAttachment {
         self.memory.abort_tracking();
         let reader = {
             let mut state = self.state.lock().unwrap();
-            if state.owner_fenced || state.terminal.is_none() {
+            if !state.publish_no_body() {
                 return false;
-            }
-            match state.mode {
-                AttachmentMode::Pending => {
-                    state.chunks.clear();
-                    state.buffered_bytes = 0;
-                    state.mode = AttachmentMode::TerminalOnly;
-                }
-                AttachmentMode::Completion { published: false } => {
-                    state.mode = AttachmentMode::Completion { published: true };
-                }
-                AttachmentMode::Live
-                | AttachmentMode::Completion { published: true }
-                | AttachmentMode::TerminalOnly
-                | AttachmentMode::Discard => {}
             }
             state.reader_waker.take()
         };
@@ -250,19 +217,17 @@ impl ByteAttachment {
         let terminal = terminal_metadata(&cause);
         let reader = {
             let mut state = self.state.lock().unwrap();
-            if let Some(selected) = &state.terminal {
-                return if close_cause_eq(selected, &cause) {
-                    Ok(())
-                } else {
-                    Err(StreamWriteError::Closed(selected.clone()))
-                };
+            let consumer_cancelled = matches!(cause, ByteStreamCloseCause::ConsumerCancelled);
+            if !state
+                .terminal
+                .select_local(cause, host_resource_exhausted)?
+            {
+                return Ok(());
             }
-            if matches!(cause, ByteStreamCloseCause::ConsumerCancelled) {
+            if consumer_cancelled {
                 state.chunks.clear();
                 state.buffered_bytes = 0;
             }
-            state.terminal = Some(cause);
-            state.host_resource_exhausted = host_resource_exhausted;
             state.reader_waker.take()
         };
         tracing::debug!(
@@ -284,16 +249,9 @@ impl ByteAttachment {
         let (reader, selected_terminal) = {
             let mut state = self.state.lock().unwrap();
             state.owner_fenced = true;
-            state.owner_terminal_reserved = false;
             state.chunks.clear();
             state.buffered_bytes = 0;
-            let selected_terminal = state.terminal.is_none() || state.terminal_pending;
-            if selected_terminal {
-                state.terminal = Some(ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled));
-                state.terminal_pending = false;
-                state.terminal_end = None;
-                state.host_resource_exhausted = false;
-            }
+            let selected_terminal = state.terminal.fence();
             (state.reader_waker.take(), selected_terminal)
         };
         self.changed.notify_waiters();
@@ -319,20 +277,10 @@ impl ByteAttachment {
             if state.mode != AttachmentMode::Pending || !state.chunks.is_empty() {
                 return Ok(false);
             }
-            let (selected_terminal, result) = if let Some(selected) = &state.terminal {
-                (
-                    false,
-                    if close_cause_eq(selected, &cause) {
-                        Ok(())
-                    } else {
-                        Err(StreamWriteError::Closed(selected.clone()))
-                    },
-                )
-            } else {
-                state.terminal = Some(cause);
-                (true, Ok(()))
-            };
-            state.mode = AttachmentMode::TerminalOnly;
+            let result = state.terminal.select_local(cause, false);
+            let selected_terminal = matches!(result, Ok(true));
+            let result = result.map(|_| ());
+            state.prepare_terminal_only();
             (state.reader_waker.take(), selected_terminal, result)
         };
         self.changed.notify_waiters();
@@ -387,8 +335,8 @@ impl ByteAttachment {
         if len > self.limit {
             {
                 let state = self.state.lock().unwrap();
-                if let Some(cause) = &state.terminal {
-                    return Err(StreamWriteError::Closed(cause.clone()));
+                if let Some(cause) = state.terminal.selected_cause() {
+                    return Err(StreamWriteError::Closed(cause));
                 }
                 if state.mode == AttachmentMode::Discard {
                     return Ok(None);
@@ -407,8 +355,8 @@ impl ByteAttachment {
             notified.as_mut().enable();
             let plan = {
                 let state = self.state.lock().unwrap();
-                if let Some(cause) = &state.terminal {
-                    return Err(StreamWriteError::Closed(cause.clone()));
+                if let Some(cause) = state.terminal.selected_cause() {
+                    return Err(StreamWriteError::Closed(cause));
                 }
                 if self.memory.tracking_pending() {
                     WritePlan::Wait
@@ -416,7 +364,7 @@ impl ByteAttachment {
                     match state.mode {
                         AttachmentMode::Discard => WritePlan::Discard,
                         AttachmentMode::Pending | AttachmentMode::Live => WritePlan::Accept,
-                        AttachmentMode::Completion { .. } => {
+                        AttachmentMode::CompletionStaged | AttachmentMode::CompletionPublished => {
                             if len > self.limit.saturating_sub(state.accepted_completion_bytes) {
                                 WritePlan::ResourceExhausted
                             } else {
@@ -477,9 +425,7 @@ impl ByteAttachment {
             notified.as_mut().enable();
             let terminal = {
                 let state = self.state.lock().unwrap();
-                (!state.terminal_pending)
-                    .then(|| state.terminal.clone())
-                    .flatten()
+                state.terminal.available_cause()
             };
             if let Some(cause) = terminal {
                 return cause;
@@ -494,8 +440,10 @@ impl ByteAttachment {
             state.consumer_active = false;
             state.chunks.clear();
             state.buffered_bytes = 0;
-            let selected_terminal = if state.terminal.is_none() {
-                state.terminal = Some(ByteStreamCloseCause::ConsumerCancelled);
+            let selected_terminal = if !state.terminal.is_selected() {
+                let _ = state
+                    .terminal
+                    .select_local(ByteStreamCloseCause::ConsumerCancelled, false);
                 true
             } else {
                 false
@@ -539,15 +487,17 @@ impl ByteAttachment {
 
     pub(super) fn metadata(&self) -> ToolAttachmentMetadata {
         let state = self.state.lock().unwrap();
-        let terminal = state.terminal.as_ref().map(terminal_metadata);
+        let terminal = state
+            .terminal
+            .selected_cause()
+            .as_ref()
+            .map(terminal_metadata);
         ToolAttachmentMetadata {
             mode: match state.mode {
                 AttachmentMode::Pending => ToolAttachmentModeMetadata::Pending,
                 AttachmentMode::Live => ToolAttachmentModeMetadata::Live,
-                AttachmentMode::Completion { published: false } => {
-                    ToolAttachmentModeMetadata::CompletionStaged
-                }
-                AttachmentMode::Completion { published: true } => {
+                AttachmentMode::CompletionStaged => ToolAttachmentModeMetadata::CompletionStaged,
+                AttachmentMode::CompletionPublished => {
                     ToolAttachmentModeMetadata::CompletionPublished
                 }
                 AttachmentMode::TerminalOnly => ToolAttachmentModeMetadata::TerminalOnly,
@@ -560,13 +510,13 @@ impl ByteAttachment {
             charged_bytes: self.charged_bytes.load(Ordering::Acquire),
             backpressured: matches!(state.mode, AttachmentMode::Live)
                 && state.buffered_bytes >= self.limit
-                && state.terminal.is_none()
+                && !state.terminal.is_selected()
                 && state.producer_active
                 && state.consumer_active,
-            terminal_selected: state.terminal.is_some(),
+            terminal_selected: state.terminal.is_selected(),
             terminal,
             owner_fenced: state.owner_fenced,
-            host_resource_exhausted: state.host_resource_exhausted,
+            host_resource_exhausted: state.terminal.host_resource_exhausted(),
             producer_operation_active: self.producer_operation.load(Ordering::Acquire),
             producer_active: state.producer_active,
             consumer_active: state.consumer_active,

@@ -1375,6 +1375,8 @@ struct MockRegistryService {
     exact_calls: std::sync::Mutex<Vec<ExactKey>>,
     live_calls: std::sync::Mutex<Vec<LiveKey>>,
     exact_gate: std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    environment_gate:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
 }
 
 impl MockRegistryService {
@@ -1554,7 +1556,24 @@ impl RegistryService for MockRegistryService {
         &self,
         _: EnvironmentId,
     ) -> Result<EnvironmentState, RegistryServiceError> {
-        unimplemented!()
+        let gate = self.environment_gate.lock().unwrap().clone();
+        if let Some((started, release)) = gate {
+            started.notify_one();
+            release.notified().await;
+        }
+        let agent_type_name = AgentTypeName("Router".to_string());
+        Ok(EnvironmentState {
+            agent_deployment_details: HashMap::from([(
+                agent_type_name.clone(),
+                golem_service_base::model::AgentDeploymentDetails {
+                    agent_type_name,
+                    webhook_prefix_authority_and_path: Some("router.example/callback".to_string()),
+                },
+            )]),
+            agent_secrets: HashMap::new(),
+            retry_policies: Vec::new(),
+            tool_deployment: None,
+        })
     }
     async fn get_agent_secret_revision(
         &self,
@@ -1723,6 +1742,35 @@ async fn exact_revision_service_rejects_a_response_for_another_revision() {
         requested_revision
     );
     assert_eq!(registry.exact_calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+#[timeout("30s")]
+async fn environment_state_survives_initial_caller_cancellation() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *registry.environment_gate.lock().unwrap() = Some((started.clone(), release.clone()));
+    let service = registry.service();
+    let initial = tokio::spawn({
+        let service = service.clone();
+        async move { service.get_agent_secrets(environment).await }
+    });
+    started.notified().await;
+    initial.abort();
+    assert!(initial.await.unwrap_err().is_cancelled());
+    release.notify_one();
+
+    let deployment = service
+        .get_agent_deployment(environment, &AgentTypeName("Router".to_string()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        deployment.webhook_prefix_authority_and_path.as_deref(),
+        Some("router.example/callback")
+    );
 }
 
 #[test]

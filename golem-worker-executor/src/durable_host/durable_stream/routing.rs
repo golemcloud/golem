@@ -15,6 +15,7 @@
 use super::attachment::attachment_lease_expiry;
 use super::*;
 use crate::services::rpc::RpcError;
+use golem_common::model::durable_stream::StreamCancellationRequest;
 
 /// Attachment control that resolves the producer owner before each durable operation.
 pub struct RoutedStreamAttachmentControl {
@@ -191,17 +192,10 @@ impl RoutedStreamAttachmentControl {
     pub async fn cancel_stream(
         &self,
         key: StreamAttachmentKey,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        cancellation: StreamCancellationRequest,
     ) -> Result<bool, StreamStoreError> {
-        self.execute(StreamAttachmentControlOperation::Cancel {
-            key,
-            role,
-            reason,
-            details,
-        })
-        .await
+        self.execute(StreamAttachmentControlOperation::Cancel { key, cancellation })
+            .await
     }
 }
 

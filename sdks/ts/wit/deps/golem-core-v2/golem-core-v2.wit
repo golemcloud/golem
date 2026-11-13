@@ -648,6 +648,20 @@ interface types {
         value: schema-value-tree,
     }
 
+    /// The producer's failure, independent of a reader dropping its stream.
+    variant stream-error {
+        failed(typed-schema-value),
+        trapped(string),
+        /// An invocation cancellation request was recorded and honoured.
+        cancelled,
+        /// The producing invocation completed with its writer still open.
+        abandoned,
+        interrupted(string),
+        resource-exhausted(string),
+    }
+
+    type stream-outcome = result<_, stream-error>;
+
     /// A declared tool failure shared by invocation and oplog interfaces.
     record custom-tool-error {
         /// The selected declared error-case name, independent of payload shape.

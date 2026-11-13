@@ -28,6 +28,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
@@ -14982,10 +14983,10 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::{
-        ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest,
-        InvocationStart, ResumeAttach, ResumeOperation, StreamCursor, ToolByteStreamRole,
-        input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-        invocation_session_result,
+        ExternalToolInvocation, InputStreamItem, InvocationRequest, InvocationStart, ResumeAttach,
+        ResumeOperation, StreamCursor, StreamDirection, StreamEnd, StreamTerminalAuthor,
+        ToolByteStreamRole, input_stream_item, invocation_request, invocation_response,
+        invocation_session_completion, invocation_session_result,
     };
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -15230,11 +15231,19 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .await?;
     sender
         .send(InvocationRequest {
-            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id: stdin_id,
-                sequence: bytes.len() as u64,
+                producer_sequence: bytes.len() as u64,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(
+                    StreamTerminal::Finished
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                ),
                 durable_stream_id: stdin_stream_id,
                 epoch: accepted.epoch,
+                ..Default::default()
             })),
         })
         .await?;
@@ -15247,7 +15256,12 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 assert_eq!(item.transport_stream_id, stdout_id);
                 output.extend(item.packed_u8);
             }
-            Some(invocation_response::Response::OutputEnd(end)) => {
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert_eq!(
+                    StreamTerminal::try_from(end.outcome.clone().expect("terminal outcome"))
+                        .map_err(anyhow::Error::msg)?,
+                    StreamTerminal::Finished
+                );
                 assert_eq!(end.transport_stream_id, stdout_id);
                 assert!(!ended);
                 ended = true;
@@ -15371,8 +15385,14 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 ));
                 completed_finished = true;
             }
-            Some(invocation_response::Response::OutputItem(_))
-            | Some(invocation_response::Response::OutputEnd(_)) => {}
+            Some(invocation_response::Response::OutputItem(_)) => {}
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                assert_eq!(
+                    StreamTerminal::try_from(end.outcome.expect("terminal outcome"))
+                        .map_err(anyhow::Error::msg)?,
+                    StreamTerminal::Finished
+                );
+            }
             other => anyhow::bail!("unexpected completed session response: {other:?}"),
         }
     }
@@ -22852,10 +22872,11 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
 }
 
 /// How the client closes the stdin of an external tool call.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum StdinClose {
     Cancel,
     End,
+    Terminal(StreamTerminal),
 }
 
 /// What `streaming run` writes to stdout first in the modes that these tests use.
@@ -22911,11 +22932,6 @@ async fn start_external_run_of(
     tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
     golem_api_grpc::proto::golem::worker::InvocationAccepted,
 )> {
-    use golem_api_grpc::proto::golem::worker::{
-        ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
-        invocation_response,
-    };
-    let metadata = executor.get_worker_metadata(worker_id).await?;
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -22928,6 +22944,26 @@ async fn start_external_run_of(
             fields: vec![SchemaValue::String(mode.to_string())],
         },
     );
+    start_external_tool_command(executor, context, worker_id, tool, "run", input).await
+}
+
+async fn start_external_tool_command(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    tool: &str,
+    command: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    use golem_api_grpc::proto::golem::worker::{
+        ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
+        invocation_response,
+    };
+    let metadata = executor.get_worker_metadata(worker_id).await?;
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     sender
         .send(InvocationRequest {
@@ -22947,7 +22983,7 @@ async fn start_external_run_of(
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
                 external_tool: Some(ExternalToolInvocation {
                     tool_name: tool.to_string(),
-                    command_path: vec!["run".to_string()],
+                    command_path: vec![command.to_string()],
                     input: Some(input.try_into().map_err(anyhow::Error::msg)?),
                     stdin: true,
                     stdout: true,
@@ -22972,13 +23008,52 @@ async fn start_external_run_of(
     Ok((sender, responses, accepted))
 }
 
+async fn local_stream_id_of_external_role(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    role: golem_api_grpc::proto::golem::worker::ToolByteStreamRole,
+) -> anyhow::Result<golem_common::model::durable_stream::LocalStreamId> {
+    use golem_common::model::durable_stream::{LocalStreamId, StreamId};
+    use golem_worker_executor::durable_host::durable_session::durable_stream_mapping_from_proto;
+
+    let mapping = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(role as i32))
+        .expect("accepted tool stream role");
+    let handle = durable_stream_mapping_from_proto(mapping.clone())
+        .map_err(anyhow::Error::msg)?
+        .handle;
+    assert_eq!(&handle.producer, worker_id);
+    let mut matching = Vec::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        if matches!(entry.entry, PublicOplogEntry::StreamRegistered(_))
+            && StreamId::derive(
+                handle.producer_environment_id,
+                &handle.producer,
+                handle.expected_producer_fingerprint,
+                entry.oplog_index,
+            )? == handle.stream_id
+        {
+            matching.push(LocalStreamId(entry.oplog_index));
+        }
+    }
+    assert_eq!(
+        matching.len(),
+        1,
+        "the accepted role must identify one local registration"
+    );
+    Ok(matching[0])
+}
+
 /// The request with which the client closes the stdin of an accepted external tool call.
 fn stdin_close_request(
     accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
     close: StdinClose,
 ) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
     use golem_api_grpc::proto::golem::worker::{
-        InputStreamEnd, InvocationRequest, StreamCancel, StreamCancelReason, StreamCancelRole,
+        InvocationRequest, StreamDirection, StreamEnd, StreamTerminalAuthor as ProtoTerminalAuthor,
         ToolByteStreamRole, invocation_request,
     };
     let stdin = accepted
@@ -22988,25 +23063,24 @@ fn stdin_close_request(
         .expect("stdin role");
     let transport_stream_id = stdin.transport_stream_id;
     let durable_stream_id = stdin.handle.as_ref().unwrap().stream_id;
+    let terminal = match close {
+        StdinClose::Cancel => StreamTerminal::Failed(StreamError::Interrupted(
+            "stream producer cancelled".to_string(),
+        )),
+        StdinClose::End => StreamTerminal::Finished,
+        StdinClose::Terminal(terminal) => terminal,
+    };
     InvocationRequest {
-        request: Some(match close {
-            StdinClose::Cancel => invocation_request::Request::StreamCancel(StreamCancel {
-                transport_stream_id,
-                producer_sequence: 0,
-                role: StreamCancelRole::InputProducer as i32,
-                reason: StreamCancelReason::Cancelled as i32,
-                details: None,
-                durable_stream_id,
-                epoch: accepted.epoch,
-                durable_offset: Vec::new(),
-            }),
-            StdinClose::End => invocation_request::Request::InputEnd(InputStreamEnd {
-                transport_stream_id,
-                sequence: 0,
-                durable_stream_id,
-                epoch: accepted.epoch,
-            }),
-        }),
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+            transport_stream_id,
+            producer_sequence: 0,
+            direction: StreamDirection::Input as i32,
+            authored_by: ProtoTerminalAuthor::Guest as i32,
+            outcome: Some(terminal.try_into().expect("stdin terminal")),
+            durable_stream_id,
+            epoch: accepted.epoch,
+            durable_offset: Vec::new(),
+        })),
     }
 }
 
@@ -23017,18 +23091,52 @@ async fn stdout_of_a_successful_run(
     responses: &mut tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
     awaited: &str,
 ) -> anyhow::Result<Vec<u8>> {
+    stdout_of_a_successful_run_with_terminal(responses, awaited, None).await
+}
+
+async fn stdout_of_a_successful_run_with_terminal(
+    responses: &mut tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    awaited: &str,
+    expected_terminal: Option<(u64, StreamTerminal)>,
+) -> anyhow::Result<Vec<u8>> {
     use golem_api_grpc::proto::golem::worker::{
-        invocation_response, invocation_session_completion, invocation_session_result,
+        StreamDirection, StreamTerminalAuthor, invocation_response, invocation_session_completion,
+        invocation_session_result,
     };
     use golem_common::model::oplog::PublicExternalToolResult;
     tokio::time::timeout(Duration::from_secs(60), async {
         let mut stdout = Vec::new();
         let mut succeeded = false;
         let mut finished = false;
+        let mut terminal_seen = false;
         while let Some(response) = responses.message().await? {
             match response.response {
                 Some(invocation_response::Response::OutputItem(item)) => {
+                    if let Some((stream_id, _)) = &expected_terminal {
+                        assert_eq!(item.transport_stream_id, *stream_id);
+                        assert!(!terminal_seen, "stdout bytes followed its terminal");
+                    }
                     stdout.extend(item.packed_u8);
+                }
+                Some(invocation_response::Response::StreamEnd(end))
+                    if end.direction == StreamDirection::Output as i32 =>
+                {
+                    if let Some((stream_id, terminal)) = &expected_terminal {
+                        assert_eq!(end.transport_stream_id, *stream_id);
+                        assert!(!terminal_seen, "stdout has more than one terminal");
+                        assert_eq!(end.authored_by, StreamTerminalAuthor::Host as i32);
+                        assert_eq!(end.direction, StreamDirection::Output as i32);
+                        assert_eq!(
+                            end.producer_sequence,
+                            RUN_MARKER.len() as u64 + stdout.len() as u64
+                        );
+                        assert_eq!(
+                            StreamTerminal::try_from(end.outcome.expect("stdout terminal"))
+                                .map_err(anyhow::Error::msg)?,
+                            *terminal,
+                        );
+                        terminal_seen = true;
+                    }
                 }
                 Some(invocation_response::Response::Result(result)) => {
                     let Some(invocation_session_result::Result::ToolResult(result)) = result.result
@@ -23058,6 +23166,10 @@ async fn stdout_of_a_successful_run(
         }
         anyhow::ensure!(succeeded, "the session ended without a tool result");
         anyhow::ensure!(finished, "the session ended without its completion");
+        anyhow::ensure!(
+            expected_terminal.is_none() || terminal_seen,
+            "the session ended without the typed stdout terminal"
+        );
         Ok(stdout)
     })
     .await
@@ -23240,7 +23352,10 @@ async fn stdin_cancel_reaches_a_tool_that_computes(
     // The body computes for a while before the client cancels.
     tokio::time::sleep(Duration::from_secs(1)).await;
     let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
-    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    assert_eq!(
+        ended.stdout_after_marker,
+        "stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")"
+    );
     Ok(())
 }
 
@@ -23291,7 +23406,10 @@ async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
         "the owner was suspended while a client held the stdin of its tool call open"
     );
     let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
-    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    assert_eq!(
+        ended.stdout_after_marker,
+        "stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")"
+    );
     assert_eq!(ended.executor.instance_load_count(&ended.worker_id), loads);
     Ok(())
 }
@@ -23331,18 +23449,363 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let call = start_an_external_tool_call(
+    use golem_api_grpc::proto::golem::worker::ToolByteStreamRole;
+    use golem_common::model::durable_stream::{
+        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+    };
+    use golem_schema::schema::IntoTypedSchemaValue;
+
+    let typed_failure = (917u64, "producer rejected".to_string()).into_typed_schema_value()?;
+    let typed_message = format!("{typed_failure:?}");
+    for (terminal, expected_stdout) in [
+        (
+            StreamTerminal::Failed(StreamError::Cancelled),
+            "stdin-cancelled".to_string(),
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Abandoned),
+            "stdin-failed:ByteStreamFailure::Abandoned".to_string(),
+        ),
+        (
+            StreamTerminal::Failed(StreamError::ResourceExhausted("input limit".into())),
+            "stdin-failed:ByteStreamFailure::ResourceExhausted".to_string(),
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Trapped("producer trapped".into())),
+            "stdin-failed:ByteStreamFailure::Failed(\"producer trapped\")".to_string(),
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Failed(Box::new(typed_failure))),
+            format!("stdin-failed:ByteStreamFailure::Failed({typed_message:?})"),
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Interrupted("stream producer cancelled".into())),
+            "stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")".to_string(),
+        ),
+        (StreamTerminal::Finished, "stdin-eof".to_string()),
+    ] {
+        let call = start_an_external_tool_call(
+            last_unique_id,
+            deps,
+            provider,
+            caller,
+            "stdin-or-spin",
+            Default::default(),
+        )
+        .await?;
+        let stdin_id = local_stream_id_of_external_role(
+            &call.executor,
+            &call.worker_id,
+            &call.accepted,
+            ToolByteStreamRole::Stdin,
+        )
+        .await?;
+        let ended =
+            close_the_stdin_of_an_external_tool_call(call, StdinClose::Terminal(terminal.clone()))
+                .await?;
+        assert_eq!(ended.stdout_after_marker, expected_stdout, "{terminal:?}");
+        let mut matching = Vec::new();
+        for entry in ended
+            .executor
+            .get_oplog(&ended.worker_id, OplogIndex::INITIAL)
+            .await?
+        {
+            if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                if record.stream_id == stdin_id {
+                    matching.push(record);
+                }
+            }
+        }
+        assert_eq!(
+            matching.len(),
+            1,
+            "the original stdin terminal: {terminal:?}"
+        );
+        assert_eq!(matching[0].authored_by, StreamTerminalAuthor::Guest);
+        assert_eq!(matching[0].origin, StreamTerminalOrigin::Source);
+        assert_eq!(matching[0].sequence, 0);
+        assert_eq!(matching[0].terminal, terminal);
+        the_agent_answers_after_a_restart(deps, ended, Default::default()).await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn external_tool_stdout_failures_are_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::ToolByteStreamRole;
+    use golem_common::model::durable_stream::{
+        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+    };
+
+    for (mode, error) in [
+        (
+            "explicit-stdout-cancelled",
+            StreamError::Interrupted("tool output cancelled".into()),
+        ),
+        ("explicit-stdout-abandoned", StreamError::Abandoned),
+        (
+            "explicit-stdout-resource-exhausted",
+            StreamError::ResourceExhausted("tool output attachment limit".into()),
+        ),
+        (
+            "explicit-stdout-failure",
+            StreamError::Interrupted("stream producer failed".into()),
+        ),
+    ] {
+        let call = start_an_external_tool_call(
+            last_unique_id,
+            deps,
+            provider,
+            caller,
+            mode,
+            Default::default(),
+        )
+        .await?;
+        let durable_stdout_id = local_stream_id_of_external_role(
+            &call.executor,
+            &call.worker_id,
+            &call.accepted,
+            ToolByteStreamRole::Stdout,
+        )
+        .await?;
+        let RunningExternalToolCall {
+            context,
+            environment_state,
+            executor,
+            worker_id,
+            sender,
+            mut responses,
+            accepted,
+            mut stdout,
+        } = call;
+        let stdout_id = accepted
+            .stream_mappings
+            .iter()
+            .find(|mapping| {
+                mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+            })
+            .expect("stdout role")
+            .transport_stream_id;
+        let terminal = StreamTerminal::Failed(error);
+        stdout.extend(
+            stdout_of_a_successful_run_with_terminal(
+                &mut responses,
+                mode,
+                Some((stdout_id, terminal.clone())),
+            )
+            .await?,
+        );
+        assert_eq!(stdout, RUN_MARKER, "{mode}");
+        let mut matching = Vec::new();
+        for entry in executor.get_oplog(&worker_id, OplogIndex::INITIAL).await? {
+            if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                if record.stream_id == durable_stdout_id {
+                    matching.push(record);
+                }
+            }
+        }
+        assert_eq!(matching.len(), 1, "the original stdout terminal: {mode}");
+        assert_eq!(matching[0].authored_by, StreamTerminalAuthor::Host);
+        assert_eq!(matching[0].origin, StreamTerminalOrigin::Source);
+        assert_eq!(matching[0].sequence, RUN_MARKER.len() as u64);
+        assert_eq!(matching[0].terminal, terminal);
+        drop(sender);
+        drop(responses);
+        the_agent_answers_after_a_restart(
+            deps,
+            EndedExternalToolCall {
+                stdout_after_marker: String::new(),
+                context,
+                environment_state,
+                executor,
+                worker_id,
+            },
+            Default::default(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn external_tool_stdout_attachment_limit_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        StreamDirection, StreamTerminalAuthor as ProtoTerminalAuthor, ToolByteStreamRole,
+        invocation_response, invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::durable_stream::{
+        StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
+    };
+    use golem_common::model::oplog::PublicExternalToolResult;
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.max_tool_attachment_bytes = 64;
+            config.retry.max_attempts = 0;
+        })),
+        ..Default::default()
+    };
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
         last_unique_id,
         deps,
         provider,
         caller,
-        "stdin-or-spin",
-        Default::default(),
+        "external-stdout-attachment-limit",
+        overrides.clone(),
     )
     .await?;
-    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
-    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
-    the_agent_answers_after_a_restart(deps, cancelled).await
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "path".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String(
+                "stdout-over:/external-stdout-limit.bin".to_string(),
+            )],
+        },
+    );
+    let (sender, mut responses, accepted) = start_external_tool_command(
+        &executor,
+        &context,
+        &worker_id,
+        "capable-streaming",
+        "run-capable",
+        input,
+    )
+    .await?;
+    let durable_stdout_id = local_stream_id_of_external_role(
+        &executor,
+        &worker_id,
+        &accepted,
+        ToolByteStreamRole::Stdout,
+    )
+    .await?;
+    let stdout_id = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32))
+        .expect("stdout role")
+        .transport_stream_id;
+    sender
+        .send(stdin_close_request(&accepted, StdinClose::End))
+        .await?;
+    let terminal = StreamTerminal::Failed(StreamError::ResourceExhausted(
+        "tool output attachment limit".into(),
+    ));
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mut terminal_seen = false;
+        let mut result_seen = false;
+        let mut finished = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    anyhow::bail!("the rejected stdout write published bytes: {item:?}");
+                }
+                Some(invocation_response::Response::StreamEnd(end)) => {
+                    assert!(!terminal_seen, "stdout must end once");
+                    assert_eq!(end.transport_stream_id, stdout_id);
+                    assert_eq!(end.authored_by, ProtoTerminalAuthor::Host as i32);
+                    assert_eq!(end.direction, StreamDirection::Output as i32);
+                    assert_eq!(end.producer_sequence, 0);
+                    assert_eq!(
+                        StreamTerminal::try_from(end.outcome.expect("stdout terminal"))
+                            .map_err(anyhow::Error::msg)?,
+                        terminal,
+                    );
+                    terminal_seen = true;
+                }
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::ToolResult(result)) = result.result
+                    else {
+                        anyhow::bail!("expected the tool result");
+                    };
+                    let result: PublicExternalToolResult =
+                        result.try_into().map_err(anyhow::Error::msg)?;
+                    assert_eq!(
+                        result,
+                        PublicExternalToolResult::Failure(
+                            SerializableToolRpcError::ResourceExhausted(
+                                "tool stdout exceeded the attachment byte limit".into(),
+                            )
+                        ),
+                    );
+                    result_seen = true;
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    assert!(
+                        matches!(
+                            completion.outcome,
+                            Some(invocation_session_completion::Outcome::Success(_))
+                        ),
+                        "the tool's quota failure must remain a structured result: {completion:?}"
+                    );
+                    finished = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(terminal_seen && result_seen && finished);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut matching = Vec::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+            let record = StreamTerminalRecord::from_value(params.record.value())
+                .map_err(anyhow::Error::msg)?;
+            if record.stream_id == durable_stdout_id {
+                matching.push(record);
+            }
+        }
+    }
+    assert_eq!(
+        matching.len(),
+        1,
+        "the original host-selected stdout terminal"
+    );
+    assert_eq!(matching[0].authored_by, StreamTerminalAuthor::Host);
+    assert_eq!(matching[0].origin, StreamTerminalOrigin::Source);
+    assert_eq!(matching[0].sequence, 0);
+    assert_eq!(matching[0].terminal, terminal);
+    drop(sender);
+    drop(responses);
+    the_agent_answers_after_a_restart(
+        deps,
+        EndedExternalToolCall {
+            stdout_after_marker: String::new(),
+            context,
+            environment_state,
+            executor,
+            worker_id,
+        },
+        overrides,
+    )
+    .await
 }
 
 /// Covers a tool body whose stdin is cancelled while it waits on a clock, with no earlier host
@@ -23367,8 +23830,11 @@ async fn a_stdin_cancelled_during_a_single_wait_is_replayed_after_a_restart(
     )
     .await?;
     let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
-    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
-    the_agent_answers_after_a_restart(deps, cancelled).await
+    assert_eq!(
+        cancelled.stdout_after_marker,
+        "stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")"
+    );
+    the_agent_answers_after_a_restart(deps, cancelled, Default::default()).await
 }
 
 /// Covers a tool body that made host calls while it read its stdin, and read the end of its
@@ -23393,7 +23859,7 @@ async fn a_stdin_cancelled_after_a_completed_wait_is_replayed_after_a_restart(
         provider,
         caller,
         StdinClose::Cancel,
-        "first;stdin-cancelled",
+        "first;stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")",
     )
     .await
 }
@@ -23443,7 +23909,7 @@ async fn a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
     read_stdout_of_an_external_tool_call_until(&mut call, b"first;").await?;
     let closed = close_the_stdin_of_an_external_tool_call(call, close).await?;
     assert_eq!(closed.stdout_after_marker, expected_stdout_after_marker);
-    the_agent_answers_after_a_restart(deps, closed).await
+    the_agent_answers_after_a_restart(deps, closed, Default::default()).await
 }
 
 /// Reads the stdout of a running external tool call until what it wrote after the marker ends
@@ -23488,7 +23954,10 @@ async fn read_stdout_of_an_external_tool_call_until(
 async fn the_agent_answers_after_a_restart(
     deps: &WorkerExecutorTestDependencies,
     ended: EndedExternalToolCall,
+    overrides: TestExecutorOverrides,
 ) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::StreamTerminalRecord;
+
     let EndedExternalToolCall {
         context,
         environment_state,
@@ -23496,6 +23965,18 @@ async fn the_agent_answers_after_a_restart(
         worker_id,
         ..
     } = ended;
+    let mut terminals_before_restart = Vec::new();
+    for entry in executor.get_oplog(&worker_id, OplogIndex::INITIAL).await? {
+        if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+            let record = StreamTerminalRecord::from_value(params.record.value())
+                .map_err(anyhow::Error::msg)?;
+            terminals_before_restart.push((entry.oplog_index, record));
+        }
+    }
+    assert!(
+        !terminals_before_restart.is_empty(),
+        "the completed tool call must have committed stream terminals before reconstruction"
+    );
     drop(executor);
 
     let executor = start_with_overrides(
@@ -23503,7 +23984,7 @@ async fn the_agent_answers_after_a_restart(
         &context,
         TestExecutorOverrides {
             environment_state_service: Some(environment_state),
-            ..Default::default()
+            ..overrides
         },
     )
     .await?;
@@ -23526,6 +24007,23 @@ async fn the_agent_answers_after_a_restart(
         "the replay of the ended call must not fail"
     );
     next_call?;
+    for (index, expected) in terminals_before_restart {
+        let mut recovered = Vec::new();
+        for entry in &oplog {
+            if let PublicOplogEntry::StreamTerminal(params) = &entry.entry {
+                let record = StreamTerminalRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                if record.stream_id == expected.stream_id {
+                    recovered.push((entry.oplog_index, record));
+                }
+            }
+        }
+        assert_eq!(
+            recovered,
+            vec![(index, expected)],
+            "reconstruction must preserve each stream terminal without appending another one"
+        );
+    }
     Ok(())
 }
 
@@ -23632,10 +24130,9 @@ fn stdin_close_request_after(
     use golem_api_grpc::proto::golem::worker::invocation_request;
     let mut request = stdin_close_request(accepted, close);
     match &mut request.request {
-        Some(invocation_request::Request::StreamCancel(cancel)) => {
-            cancel.producer_sequence = bytes_sent;
+        Some(invocation_request::Request::StreamEnd(end)) => {
+            end.producer_sequence = bytes_sent;
         }
-        Some(invocation_request::Request::InputEnd(end)) => end.sequence = bytes_sent,
         _ => unreachable!("a stdin close is a cancel or an end"),
     }
     request
@@ -23722,24 +24219,25 @@ impl RunningExternalToolCall {
     }
 }
 
-/// The role and the details of each stream cancel in the oplog of an agent, in the order of the
-/// oplog.
+/// The cancellation terminals in the oplog of an agent, in oplog order.
 async fn stream_cancels(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
-) -> anyhow::Result<
-    Vec<(
-        golem_common::model::durable_stream::StreamCancelRole,
-        String,
-    )>,
-> {
-    use golem_common::model::durable_stream::StreamCancelRecord;
+) -> anyhow::Result<Vec<golem_common::model::durable_stream::StreamTerminalRecord>> {
+    use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalRecord};
     let mut cancels = Vec::new();
     for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
-        if let PublicOplogEntry::StreamCancel(cancel) = &entry.entry {
-            let record = StreamCancelRecord::from_value(cancel.record.value())
+        if let PublicOplogEntry::StreamTerminal(terminal) = &entry.entry {
+            let record = StreamTerminalRecord::from_value(terminal.record.value())
                 .map_err(anyhow::Error::msg)?;
-            cancels.push((record.role, record.details.unwrap_or_default()));
+            if matches!(
+                record.terminal,
+                StreamTerminal::ConsumerCancelled { .. }
+                    | StreamTerminal::Failed(StreamError::Cancelled)
+                    | StreamTerminal::Failed(StreamError::Interrupted(_))
+            ) {
+                cancels.push(record);
+            }
         }
     }
     Ok(cancels)
@@ -23880,8 +24378,8 @@ async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
         .expect_err("the tool read a clean end for a stdin that the client cancelled");
     let failure = format!("{failure:#}");
     assert!(
-        failure.contains("ByteStreamFailure::Cancelled"),
-        "the call did not fail on the cancelled read of the tool: {failure}"
+        failure.contains("ByteStreamFailure::Failed(\\\"stream producer failed\\\")"),
+        "the call did not fail on the interrupted read of the tool: {failure}"
     );
     Ok(())
 }

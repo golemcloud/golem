@@ -24,6 +24,7 @@ use golem_common::model::durable_stream::{
     ExternalProducerId, PersistedInvocationTarget, StreamHandleReadRequest, StreamItemsPayload,
     StreamOffset, StreamRegistrationInvocation, StreamSessionExpiredRecord,
     StreamSessionExpiryPolicy, StreamSessionExpiryRefreshedRecord, StreamSessionKey,
+    StreamTerminal, StreamTerminalAuthor,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -1592,10 +1593,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             epoch: producer.epoch,
             sequence: producer.sequence,
         });
+        let terminal = request
+            .close
+            .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished));
         let retained_bytes = DurableStreamStore::external_input_reservation(
             payload.as_ref(),
+            terminal.as_ref(),
             external_producer.as_ref(),
-        );
+        )
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let worker = self.clone();
         let session_key =
             producer.qualify_session(&StreamRegistrationInvocation::Local(prepared.session_key));
@@ -1731,7 +1737,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             &slot.session,
                             handle.stream_id,
                             payload,
-                            request.close,
+                            terminal,
                             external_producer,
                             expiry_refresh,
                         )

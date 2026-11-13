@@ -19,7 +19,7 @@
 //! loss replays the exact attempt. Only an authoritative attachment-state rejection changes
 //! Resume to Takeover (or vice versa); epoch rejection is terminal rather than guessed around.
 
-use golem_api_grpc::proto::golem::worker::{InvocationAccepted, InvocationStart, StreamCancel};
+use golem_api_grpc::proto::golem::worker::{InvocationAccepted, InvocationStart, StreamEnd};
 use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -78,9 +78,7 @@ pub enum HttpSessionEvent {
     Accepted(InvocationAccepted),
     Result(Box<golem_api_grpc::proto::golem::worker::InvocationSessionResult>),
     OutputItem(golem_api_grpc::proto::golem::worker::OutputStreamItem),
-    OutputEnd(golem_api_grpc::proto::golem::worker::OutputStreamEnd),
-    OutputError(golem_api_grpc::proto::golem::worker::OutputStreamError),
-    StreamCancel(StreamCancel),
+    StreamEnd(StreamEnd),
     Finished(golem_api_grpc::proto::golem::worker::InvocationSessionCompletion),
     Error(HttpSessionError),
 }
@@ -91,9 +89,7 @@ impl std::fmt::Debug for HttpSessionEvent {
             Self::Accepted(_) => "Accepted",
             Self::Result(_) => "Result",
             Self::OutputItem(_) => "OutputItem",
-            Self::OutputEnd(_) => "OutputEnd",
-            Self::OutputError(_) => "OutputError",
-            Self::StreamCancel(_) => "StreamCancel",
+            Self::StreamEnd(_) => "StreamEnd",
             Self::Finished(_) => "Finished",
             Self::Error(_) => "Error",
         })

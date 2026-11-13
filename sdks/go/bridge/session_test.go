@@ -272,7 +272,10 @@ func consumeInput(c *fakeConn, channel uint32) []any {
 				items = append(items, float64(b))
 			}
 			ack(c, channel, uint64(len(items)), false)
-		case "inputStreamEnd":
+		case "stream-end":
+			if r.m["direction"] != "input" || r.m["outcome"].(map[string]any)["kind"] != "finished" {
+				c.t.Fatalf("unexpected input terminal: %v", r.m)
+			}
 			ack(c, channel, uint64(len(items)), true)
 			return items
 		default:
@@ -303,11 +306,11 @@ func outputItem(c *fakeConn, channel uint32, sequence uint64, cursor string, val
 }
 
 func outputEnd(c *fakeConn, channel uint32, sequence uint64, cursor string, outcome map[string]any) {
-	m := map[string]any{"channel": channel, "outcome": outcome, "sequence": itoa(sequence)}
+	m := map[string]any{"channel": channel, "direction": "output", "outcome": outcome, "sequence": itoa(sequence)}
 	if cursor != "" {
 		m["cursorToken"] = cursor
 	}
-	c.send("outputStreamEnd", m)
+	c.send("stream-end", m)
 }
 
 func finished(c *fakeConn) {
@@ -338,7 +341,7 @@ func TestStreamsFlowBothWays(t *testing.T) {
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 10)
 		outputItem(c, 2, 1, "c1", 20)
-		outputEnd(c, 2, 2, "c2", map[string]any{"kind": "ok"})
+		outputEnd(c, 2, 2, "c2", map[string]any{"kind": "finished"})
 		finished(c)
 		c.waitClose()
 	})
@@ -384,7 +387,7 @@ func TestAResumedSessionContinuesAfterTheLastDeliveredItem(t *testing.T) {
 			}
 			acceptAs(c, resume, key, "sess2", inputMapping(5, "", "in", 1, true), outputMapping(6, "out"))
 			outputItem(c, 6, 1, "c1", 20)
-			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -434,7 +437,7 @@ func TestPackedBytesResumeMidBatch(t *testing.T) {
 			}
 			acceptAs(c, resume, key, "sess", inputMapping(5, "", "in", 3, true), outputMapping(6, "out"))
 			c.sendBinary("output-u8", 6, 0, "c4", []byte{1, 2, 3, 4})
-			outputEnd(c, 6, 4, "c5", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 4, "c5", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -522,7 +525,7 @@ func TestAProducerFailureEndsTheStream(t *testing.T) {
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 1)
-		outputEnd(c, 2, 1, "c1", map[string]any{"kind": "error", "code": "producer-error", "message": "boom"})
+		outputEnd(c, 2, 1, "c1", map[string]any{"kind": "failed", "error": map[string]any{"kind": "trapped", "message": "boom"}})
 		finished(c)
 		c.waitClose()
 	})
@@ -546,8 +549,8 @@ func TestClosingAStreamCancelsIt(t *testing.T) {
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 1)
-		cancelled <- c.expect("streamCancel").m
-		outputEnd(c, 2, 1, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+		cancelled <- c.expect("stream-end").m
+		outputEnd(c, 2, 1, "", map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"})
 		finished(c)
 		c.waitClose()
 	})
@@ -563,7 +566,7 @@ func TestClosingAStreamCancelsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := <-cancelled
-	if m["channel"] != float64(2) || m["reason"] != "consumer-drop" {
+	if m["channel"] != float64(2) || m["direction"] != "output" || m["sequence"] != "0" || !reflect.DeepEqual(m["outcome"], map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"}) {
 		t.Fatalf("cancelled with %v", m)
 	}
 }
@@ -577,7 +580,7 @@ func TestAFailingSourceIsUnavailable(t *testing.T) {
 		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
 		c.expect("inputStreamItem")
 		ack(c, 1, 1, false)
-		cancelled <- c.expect("streamCancel").m
+		cancelled <- c.expect("stream-end").m
 		c.send("invocationFinished", map[string]any{"outcome": map[string]any{
 			"kind": "failure", "code": "invocation-failed", "message": "input unavailable",
 		}})
@@ -594,16 +597,16 @@ func TestAFailingSourceIsUnavailable(t *testing.T) {
 	if !errors.As(err, &failed) || failed.Code != "invocation-failed" {
 		t.Fatalf("got %v", err)
 	}
-	if m := <-cancelled; m["reason"] != "source-unavailable" {
-		t.Fatalf("cancelled with %v", m)
+	if m := <-cancelled; m["direction"] != "input" || m["sequence"] != "1" || !reflect.DeepEqual(m["outcome"], map[string]any{"kind": "failed", "error": map[string]any{"kind": "interrupted", "message": "disk gone"}}) {
+		t.Fatalf("failed with %v", m)
 	}
 }
 
-// A caller that gives up before the result cancels the streams it sent.
+// A caller that gives up detaches without authoring stream terminals.
 func TestGivingUpCancelsTheCall(t *testing.T) {
 	cancelled := make(chan map[string]any, 1)
 	// The client sends input items only once it holds the acceptance, so the
-	// first item tells the test that giving up now must cancel the stream.
+	// first item tells the test that the attachment is live.
 	streaming := make(chan struct{})
 	server := newFakeServer(t, func(c *fakeConn) {
 		start := c.expect("invocationStart")
@@ -611,17 +614,18 @@ func TestGivingUpCancelsTheCall(t *testing.T) {
 		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
 		first := true
 		for {
-			r := c.read()
+			r := c.readUntilClose()
 			switch r.kind {
 			case "inputStreamItem":
 				if first {
 					first = false
 					close(streaming)
 				}
-			case "streamCancel":
+			case "stream-end":
 				cancelled <- r.m
 				return
 			case "":
+				cancelled <- nil
 				return
 			}
 		}
@@ -645,11 +649,11 @@ func TestGivingUpCancelsTheCall(t *testing.T) {
 	}
 	select {
 	case m := <-cancelled:
-		if m["reason"] != "cancelled" {
-			t.Fatalf("cancelled with %v", m)
+		if m != nil {
+			t.Fatalf("detach authored a terminal: %v", m)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the server never heard the cancellation")
+		t.Fatal("the socket did not detach")
 	}
 }
 
@@ -664,17 +668,18 @@ func TestARefusedSecondClaimLeavesTheRunningCallAlone(t *testing.T) {
 		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
 		first := true
 		for {
-			r := c.read()
+			r := c.readUntilClose()
 			switch r.kind {
 			case "inputStreamItem":
 				if first {
 					first = false
 					close(streaming)
 				}
-			case "streamCancel":
+			case "stream-end":
 				cancelled <- r.m
 				return
 			case "":
+				cancelled <- nil
 				return
 			}
 		}
@@ -706,11 +711,11 @@ func TestARefusedSecondClaimLeavesTheRunningCallAlone(t *testing.T) {
 	}
 	select {
 	case m := <-cancelled:
-		if m["reason"] != "cancelled" {
-			t.Fatalf("cancelled with %v", m)
+		if m != nil {
+			t.Fatalf("detach authored a terminal: %v", m)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the server never heard the cancellation")
+		t.Fatal("the socket did not detach")
 	}
 	if n := server.connections(); n != 1 {
 		t.Fatalf("the refused call connected: %d connections", n)
@@ -823,9 +828,9 @@ func TestAnItemItsSchemaRefusesFailsTheCall(t *testing.T) {
 					t.Errorf("the server got %v", v)
 				}
 				ack(c, 1, 1, false)
-			case "streamCancel":
-				if r.m["reason"] != "source-unavailable" {
-					t.Errorf("cancelled with %v", r.m)
+			case "stream-end":
+				if r.m["direction"] != "input" || r.m["outcome"].(map[string]any)["error"].(map[string]any)["kind"] != "interrupted" {
+					t.Errorf("failed with %v", r.m)
 				}
 			}
 		}
@@ -843,7 +848,7 @@ func TestAnItemItsSchemaRefusesFailsTheCall(t *testing.T) {
 	}
 	select {
 	case kinds := <-seen:
-		if !reflect.DeepEqual(kinds, []string{"inputStreamItem", "streamCancel"}) {
+		if !reflect.DeepEqual(kinds, []string{"inputStreamItem", "stream-end"}) {
 			t.Fatalf("the server got %v", kinds)
 		}
 	case <-time.After(10 * time.Second):
@@ -950,7 +955,7 @@ func TestAPartlyAcknowledgedBatchStaysInFlight(t *testing.T) {
 		}
 		ack(c, 1, 2, false)
 		ack(c, 1, 5, false)
-		if end := c.expect("inputStreamEnd"); end.m["sequence"] != "5" {
+		if end := c.expect("stream-end"); end.m["sequence"] != "5" {
 			t.Errorf("the end came at %v", end.m["sequence"])
 		}
 		ack(c, 1, 5, true)
@@ -990,10 +995,10 @@ func TestANestedInputStreamFlowsOnItsOwnChannel(t *testing.T) {
 			case r.kind == "inputStreamItem" && r.m["channel"] == float64(3):
 				nested = append(nested, r.m["value"].(map[string]any)["value"])
 				ack(c, 3, uint64(len(nested)), false)
-			case r.kind == "inputStreamEnd" && r.m["channel"] == float64(1):
+			case r.kind == "stream-end" && r.m["channel"] == float64(1):
 				ack(c, 1, 1, true)
 				outerEnded = true
-			case r.kind == "inputStreamEnd" && r.m["channel"] == float64(3):
+			case r.kind == "stream-end" && r.m["channel"] == float64(3):
 				ack(c, 3, uint64(len(nested)), true)
 				nestedEnded = true
 			default:
@@ -1045,9 +1050,9 @@ func TestAReplayedUnreadItemBindsItsInnerStreamAgain(t *testing.T) {
 				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
 				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
 			})
-			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "finished"})
 			outputItem(c, 6, 0, "i0", 7)
-			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -1080,9 +1085,9 @@ func TestClosingAStreamWakesItsWaitingReader(t *testing.T) {
 		start := c.expect("invocationStart")
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
-		c.expect("streamCancel")
+		c.expect("stream-end")
 		<-checked
-		outputEnd(c, 2, 0, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+		outputEnd(c, 2, 0, "", map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"})
 		finished(c)
 		c.waitClose()
 	})
@@ -1156,7 +1161,7 @@ func TestAReplayedItemThatWaitedForSpaceBindsItsInnerStreamAgain(t *testing.T) {
 			for i := range items {
 				sendItem(c, 5, i, []any{})
 			}
-			outputEnd(c, 5, items, "end", map[string]any{"kind": "ok"})
+			outputEnd(c, 5, items, "end", map[string]any{"kind": "finished"})
 			finished(c)
 			<-closed.Done()
 		},
@@ -1209,7 +1214,7 @@ func TestARefusedResumeIsRetriedAsATakeover(t *testing.T) {
 			takeover = c.expect("resumeAttach")
 			acceptAs(c, takeover, key, "sess2", outputMapping(6, "out"))
 			outputItem(c, 6, 1, "c1", 20)
-			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -1396,8 +1401,8 @@ func TestAnInnerItemMayArriveBeforeItsOuterItemIsReplayed(t *testing.T) {
 				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
 				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
 			})
-			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
-			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "finished"})
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -1435,7 +1440,7 @@ func TestAReplayAfterCloseDoesNotFailTheSession(t *testing.T) {
 				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
 				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
 			})
-			c.expect("streamCancel")
+			c.expect("stream-end")
 			c.drop()
 		},
 		func(c *fakeConn) {
@@ -1481,11 +1486,11 @@ func TestClosingAStreamStopsTheStreamsItsUnreadItemsCarried(t *testing.T) {
 				"channel": 2, "cursorToken": "c0", "mappings": []any{outputMapping(3, "inner")}, "sequence": "0",
 				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
 			})
-			c.expect("streamCancel")
+			c.expect("stream-end")
 			for i := 0; i < maxQueuedItems+2; i++ {
 				outputItem(c, 3, uint64(i), "i"+itoa(uint64(i)), uint32(i))
 			}
-			outputEnd(c, 2, 1, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+			outputEnd(c, 2, 1, "", map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"})
 			close(gotEnd)
 			c.waitClose()
 		},
@@ -1531,12 +1536,12 @@ func TestAStreamHoldsItsItemsUntilAValueReturnsIt(t *testing.T) {
 			close(resumed)
 			outputItem(c, 6, 0, "i0", 7)
 			outputItem(c, 6, 1, "i1", 8)
-			outputEnd(c, 6, 2, "i2", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 2, "i2", map[string]any{"kind": "finished"})
 			c.send("outputStreamItem", map[string]any{
 				"channel": 5, "cursorToken": "c0", "mappings": []any{}, "sequence": "0",
 				"value": map[string]any{"kind": "stream", "value": map[string]any{"streamToken": "inner"}},
 			})
-			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "ok"})
+			outputEnd(c, 5, 1, "c1", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -1590,7 +1595,7 @@ func TestHeldFramesOfAStreamAStoppedStreamTypesKeepItsSequence(t *testing.T) {
 			key = start.m["idempotencyKey"]
 			accept(c, start, "sess")
 			streamResult(c, 2, "out", nestedU32StreamGraph)
-			c.expect("streamCancel")
+			c.expect("stream-end")
 			c.drop()
 		},
 		func(c *fakeConn) {
@@ -1693,7 +1698,7 @@ func TestAStreamNeverReturnedDoesNotKeepTheInvocationOpen(t *testing.T) {
 			key = start.m["idempotencyKey"]
 			accept(c, start, "sess")
 			streamResult(c, 2, "out", nestedU32StreamGraph)
-			c.expect("streamCancel")
+			c.expect("stream-end")
 			c.drop()
 		},
 		func(c *fakeConn) {
@@ -1701,8 +1706,8 @@ func TestAStreamNeverReturnedDoesNotKeepTheInvocationOpen(t *testing.T) {
 			acceptAs(c, resume, key, "sess2", outputMapping(5, "out"), outputMapping(6, "inner"))
 			close(resumed)
 			outputItem(c, 6, 0, "i0", 7)
-			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "ok"})
-			outputEnd(c, 5, 0, "", map[string]any{"kind": "cancelled", "reason": "consumer-drop"})
+			outputEnd(c, 6, 1, "i1", map[string]any{"kind": "finished"})
+			outputEnd(c, 5, 0, "", map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"})
 			finished(c)
 			c.waitClose()
 		},
@@ -1793,7 +1798,7 @@ func TestASlowReaderKeepsItsConnection(t *testing.T) {
 		for i := range items {
 			outputItem(c, 2, uint64(i), "c"+itoa(uint64(i)), uint32(i))
 		}
-		outputEnd(c, 2, uint64(items), "end", map[string]any{"kind": "ok"})
+		outputEnd(c, 2, uint64(items), "end", map[string]any{"kind": "finished"})
 		finished(c)
 		<-closed.Done()
 	})
@@ -1908,7 +1913,7 @@ func TestReconnectsAfterAnImmediateCloseBackOff(t *testing.T) {
 		start := c.expect("invocationStart")
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
-		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "finished"})
 		finished(c)
 		c.waitClose()
 	})
@@ -1944,8 +1949,8 @@ func faultyItemCall(t *testing.T, arg schema.SchemaValue) ([]string, error) {
 				break
 			}
 			got = append(got, r.kind)
-			if r.kind == "streamCancel" && r.m["reason"] != "source-unavailable" {
-				t.Errorf("cancelled with %v", r.m)
+			if r.kind == "stream-end" && r.m["outcome"].(map[string]any)["error"].(map[string]any)["kind"] != "interrupted" {
+				t.Errorf("failed with %v", r.m)
 			}
 		}
 		seen <- got
@@ -2042,7 +2047,7 @@ func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
 			if tc.is != nil && !errors.Is(err, tc.is) {
 				t.Fatalf("got %v, want one that is %v", err, tc.is)
 			}
-			if !reflect.DeepEqual(got, []string{"streamCancel"}) {
+			if !reflect.DeepEqual(got, []string{"stream-end"}) {
 				t.Fatalf("the server got %v", got)
 			}
 		})
@@ -2059,7 +2064,7 @@ func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {
 		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
 		c.expect("inputStreamItem")
 		ack(c, 1, 1, false)
-		cancelled <- c.expect("streamCancel").m
+		cancelled <- c.expect("stream-end").m
 		noResult(c)
 		finished(c)
 		c.waitClose()
@@ -2073,8 +2078,8 @@ func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {
 	if err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(source))); err != nil {
 		t.Fatalf("a failing source failed the call: %v", err)
 	}
-	if m := <-cancelled; m["reason"] != "source-unavailable" {
-		t.Fatalf("cancelled with %v", m)
+	if m := <-cancelled; m["direction"] != "input" || m["sequence"] != "1" || !reflect.DeepEqual(m["outcome"], map[string]any{"kind": "failed", "error": map[string]any{"kind": "interrupted", "message": "disk gone"}}) {
+		t.Fatalf("failed with %v", m)
 	}
 }
 
@@ -2146,7 +2151,7 @@ func TestARetryableUpgradeStatusIsRetried(t *testing.T) {
 		start := c.expect("invocationStart")
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
-		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "finished"})
 		finished(c)
 		c.waitClose()
 	})
@@ -2265,7 +2270,7 @@ func TestTheWindowStartsAgainAfterAcceptance(t *testing.T) {
 			resume := c.expect("resumeAttach")
 			acceptAs(c, resume, key, "sess2", outputMapping(6, "out"))
 			outputItem(c, 6, 1, "c1", 20)
-			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -2288,7 +2293,7 @@ func TestNoReconnectLimitKeepsRetrying(t *testing.T) {
 		start := c.expect("invocationStart")
 		accept(c, start, "sess")
 		streamResult(c, 2, "out", u32StreamGraph)
-		outputEnd(c, 2, 0, "end", map[string]any{"kind": "ok"})
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "finished"})
 		finished(c)
 		c.waitClose()
 	})
@@ -2335,7 +2340,7 @@ func TestARetryableRejectionAfterAcceptanceResumes(t *testing.T) {
 			}
 			acceptAs(c, resume, key, "sess2", outputMapping(6, "out"))
 			outputItem(c, 6, 1, "c1", 20)
-			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "ok"})
+			outputEnd(c, 6, 2, "c2", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},
@@ -2449,7 +2454,7 @@ func TestStableConnectionsKeepTheCallAlivePastTheWindow(t *testing.T) {
 			resume := c.expect("resumeAttach")
 			acceptAs(c, resume, k, "sess", outputMapping(2, "out"))
 			outputItem(c, 2, 1, "c1", 20)
-			outputEnd(c, 2, 2, "c2", map[string]any{"kind": "ok"})
+			outputEnd(c, 2, 2, "c2", map[string]any{"kind": "finished"})
 			finished(c)
 			c.waitClose()
 		},

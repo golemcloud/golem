@@ -1890,9 +1890,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await,
             Err(StreamStoreError::Oplog(_))
@@ -1905,9 +1908,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await
                 .unwrap()

@@ -21,8 +21,7 @@ use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
@@ -926,28 +925,14 @@ oplog_entry! {
             record: TypedSchemaValue,
         }
     },
-    /// Records a stream's unique successful or error-context terminal.
-    StreamEnd {
+    /// Records a stream's unique terminal.
+    StreamTerminal {
         hint: true
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamEndRecord>,
-            summary: Option<DurableStreamEventSummary>,
-        }
-        public {
-            record: TypedSchemaValue,
-        }
-    },
-    /// Records a stream's unique role-aware cancellation terminal.
-    StreamCancel {
-        hint: true
-        wit_raw_type: "raw-durable-stream-record-parameters"
-        wit_public_type: "durable-stream-record-parameters"
-        raw {
-            entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamCancelRecord>,
+            record: payload::OplogPayload<StreamTerminalRecord>,
             summary: Option<DurableStreamEventSummary>,
         }
         public {

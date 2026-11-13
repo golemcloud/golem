@@ -106,6 +106,29 @@ def terminal():
     raise AssertionError("terminal rejection caused another attachment attempt")
 
 
+def finish_cancelled_output(conn, channel):
+    cancelled = receive(conn)
+    assert cancelled == dict(
+        version=1, type="stream-end", channel=channel, direction="output", sequence="0",
+        outcome=dict(kind="consumer-cancelled", details="cancelled"),
+    ), cancelled
+    if mode == "output-cancel-race":
+        send(conn, type="outputStreamItem", channel=channel, sequence="1",
+             cursorToken="cursor-2", mappings=[], value=dict(kind="u8", value=43))
+    if mode != "output-cancel-after-resume-head":
+        send(conn, type="stream-end", channel=channel, direction="output",
+             sequence="3" if mode == "output-cancel-partial-packed" else "2",
+             outcome=dict(kind="finished"))
+    send(conn, type="invocationFinished", outcome=dict(kind="success"))
+    signal, _ = listener.accept()
+    with signal:
+        request = b""
+        while b"\r\n\r\n" not in request:
+            request += read_exact(signal, 1)
+        assert request.startswith(b"GET /cancelled ")
+        signal.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+
+
 # A closed port: the client gives up after its reconnect window.
 if mode == "start-closed":
     listener.close()
@@ -258,14 +281,103 @@ if mode == "stable-reset":
         )
         send(
             conn,
-            type="outputStreamEnd",
+            type="stream-end",
             channel=2,
+            direction="output",
             sequence="2",
             cursorToken="cursor-end",
-            outcome={"kind": "ok"},
+            outcome={"kind": "finished"},
         )
         send(conn, type="invocationFinished", outcome={"kind": "success"})
     assert time.monotonic() - started >= 1.0
+    listener.close()
+    sys.exit(0)
+
+if mode in ("input-prefetch-delayed", "input-prefetch-before-attachment"):
+    with connect() as conn:
+        start = receive(conn)
+        provisional = start["methodParameters"]["value"]["provisionalRef"]
+        send(conn, type="invocationAccepted", attemptId=start["attemptId"],
+             idempotencyKey=start["idempotencyKey"], sessionToken="prefetch-session",
+             mappings=[dict(direction="input", channel=1, streamToken="input",
+                            provisionalRef=provisional,
+                            inputHighWater=dict(sequence="0", terminal=False))])
+        frame = receive_frame(conn)
+        size = struct.unpack("!I", frame[:4])[0]
+        metadata = json.loads(frame[4:4 + size])
+        assert metadata["kind"] == "input-u8" and metadata["sequence"] == "0"
+        assert frame[4 + size:] == bytes([42])
+        send(conn, type="invocationResult", mappings=[], result=dict(
+            kind="value", graph={"root": {"kind": "tuple", "value": {"elements": []}}},
+            value={"kind": "tuple", "value": {"elements": []}}))
+        # The actor cannot advance this input until the prefix receives its ACK.
+        signal, _ = listener.accept()
+        with signal:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += read_exact(signal, 1)
+            assert request.startswith(b"GET /diagnostic-admitted ")
+            signal.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        send(conn, type="inputStreamAck", channel=1,
+             highestContiguousSequence="1", terminal=False, mappings=[])
+        terminal_message = receive(conn)
+        assert terminal_message["type"] == "stream-end"
+        assert terminal_message["sequence"] == "1"
+        assert terminal_message["outcome"]["error"]["kind"] == "interrupted"
+        assert "delayed 界🦄 diagnostic" in terminal_message["outcome"]["error"]["message"]
+        send(conn, type="inputStreamAck", channel=1,
+             highestContiguousSequence="1", terminal=True, mappings=[])
+        send(conn, type="invocationFinished", outcome=dict(kind="success"))
+    listener.close()
+    sys.exit(0)
+
+if mode in ("input-failure-replay", "input-eof-replay"):
+    with connect() as conn:
+        start = receive(conn)
+        provisional = start["methodParameters"]["value"]["provisionalRef"]
+        send(
+            conn, type="invocationAccepted", attemptId=start["attemptId"],
+            idempotencyKey=start["idempotencyKey"], sessionToken="input-session",
+            mappings=[dict(direction="input", channel=1, streamToken="input",
+                           provisionalRef=provisional,
+                           inputHighWater=dict(sequence="0", terminal=False))],
+        )
+        item = receive(conn)
+        assert item["type"] == "inputStreamItem" and item["sequence"] == "0"
+        send(conn, type="inputStreamAck", channel=1,
+             highestContiguousSequence="1", terminal=False, mappings=[])
+        terminal_message = receive(conn)
+        assert terminal_message["type"] == "stream-end"
+        assert terminal_message["direction"] == "input"
+        assert terminal_message["sequence"] == "1"
+        outcome = terminal_message["outcome"]
+        if mode == "input-failure-replay":
+            assert outcome["kind"] == "failed"
+            assert outcome["error"]["kind"] == "interrupted"
+            assert "source diagnostic" in outcome["error"]["message"]
+        else:
+            assert outcome == {"kind": "finished"}
+    for channel in (5, 6):
+        with connect() as conn:
+            resume = receive(conn)
+            assert resume["type"] == "resumeAttach"
+            assert resume["operation"] == "resume"
+            send(
+                conn, type="invocationAccepted", attemptId=resume["attemptId"],
+                idempotencyKey=start["idempotencyKey"], sessionToken="input-session",
+                mappings=[dict(direction="input", channel=channel, streamToken="input",
+                               inputHighWater=dict(sequence="1", terminal=False))],
+            )
+            replay = receive(conn)
+            assert replay == dict(terminal_message, channel=channel)
+            send(conn, type="inputStreamAck", channel=channel,
+                 highestContiguousSequence="1", terminal=channel == 6, mappings=[])
+            if channel == 6:
+                send(conn, type="invocationResult", mappings=[], result=dict(
+                    kind="value", graph={"root": {"kind": "tuple", "value": {"elements": []}}},
+                    value={"kind": "tuple", "value": {"elements": []}},
+                ))
+                send(conn, type="invocationFinished", outcome={"kind": "success"})
     listener.close()
     sys.exit(0)
 
@@ -332,15 +444,23 @@ with connect() as conn:
             "value": {"kind": "stream", "value": {"streamToken": "output"}},
         },
     )
-    send(
-        conn,
-        type="outputStreamItem",
-        channel=2,
-        sequence="0",
-        cursorToken="cursor-1",
-        mappings=[],
-        value={"kind": "u8", "value": 42},
-    )
+    if mode == "output-cancel-partial-packed":
+        metadata = json.dumps(dict(version=1, kind="output-u8", channel=2,
+                                   sequence="0", itemCount="3", cursorToken="cursor-packed"),
+                              separators=(",", ":")).encode()
+        data = struct.pack("!I", len(metadata)) + metadata + bytes([42, 43, 44])
+        header = bytes([130, len(data)]) if len(data) < 126 else b"\x82\x7e" + struct.pack("!H", len(data))
+        conn.sendall(header + data)
+    else:
+        send(
+            conn,
+            type="outputStreamItem",
+            channel=2,
+            sequence="0",
+            cursorToken="cursor-1",
+            mappings=[],
+            value={"kind": "u8", "value": 42},
+        )
     # The client signals only after consuming the item and storing its cursor.
     signal, _ = listener.accept()
     with signal:
@@ -352,6 +472,59 @@ with connect() as conn:
         signal.sendall(
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         )
+    if mode == "output-admission-cancel":
+        for channel in (11, 12):
+            cancelled = receive(conn)
+            assert cancelled == dict(version=1, type="stream-end", channel=channel,
+                                     direction="output", sequence="0",
+                                     outcome=dict(kind="consumer-cancelled", details="cancelled")), cancelled
+        signal, _ = listener.accept()
+        with signal:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += read_exact(signal, 1)
+            assert request.startswith(b"GET /audit-done ")
+            signal.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        listener.close()
+        sys.exit(0)
+    if mode == "terminal-accounting":
+        for expected_kind in ("prefix", "terminal", "prefix", "terminal", "prefix"):
+            frame = receive_frame(conn)
+            if expected_kind == "prefix":
+                metadata_length = struct.unpack("!I", frame[:4])[0]
+                metadata = json.loads(frame[4:4 + metadata_length])
+                assert metadata["kind"] == "input-u8"
+                assert frame[4 + metadata_length:] == bytes([42])
+            else:
+                message = json.loads(frame)
+                assert message["type"] == "stream-end"
+                assert message["outcome"]["error"]["kind"] == "interrupted"
+                assert "界" in message["outcome"]["error"]["message"]
+        signal, _ = listener.accept()
+        with signal:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += read_exact(signal, 1)
+            assert request.startswith(b"GET /audit-done ")
+            signal.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        listener.close()
+        sys.exit(0)
+    if mode in ("output-cancel-race", "output-cancel-partial-packed", "output-cancel-after-resume-head"):
+        if mode == "output-cancel-after-resume-head":
+            conn.close()
+            with connect() as resumed:
+                resume = receive(resumed)
+                assert resume["operation"] == "resume"
+                assert resume["outputCursors"] == ["cursor-1"]
+                send(resumed, type="invocationAccepted", attemptId=resume["attemptId"],
+                     idempotencyKey=start["idempotencyKey"], sessionToken="new-session",
+                     mappings=[dict(direction="output", channel=3, streamToken="output")])
+                # No output frame advances this attachment before the cancellation.
+                finish_cancelled_output(resumed, 3)
+        else:
+            finish_cancelled_output(conn, 2)
+        listener.close()
+        sys.exit(0)
     # The accepted connection outlives the reconnect window and the stable
     # time; the window starts again when it is lost.
     if mode == "window-reset":
@@ -443,13 +616,22 @@ with connect() as conn:
         mappings=[],
         value={"kind": "u8", "value": 43},
     )
+    outcome = {"kind": "finished"}
+    if mode == "output-failed":
+        outcome = dict(kind="failed", error=dict(kind="failed", value=dict(
+            graph={"root": {"kind": "string", "value": {}}},
+            value={"kind": "string", "value": "application failure"},
+        )))
+    elif mode == "output-consumer-cancelled":
+        outcome = dict(kind="consumer-cancelled", details="server consumer stopped")
     send(
         conn,
-        type="outputStreamEnd",
+        type="stream-end",
         channel=3,
+        direction="output",
         sequence="2",
         cursorToken="cursor-end",
-        outcome={"kind": "ok"},
+        outcome=outcome,
     )
     send(conn, type="invocationFinished", outcome={"kind": "success"})
 listener.close()
