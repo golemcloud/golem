@@ -1518,11 +1518,7 @@ impl AgentCommandHandler {
         Ok(views)
     }
 
-    /// One page of agents across `components`, in the order of their names, under one budget of
-    /// `count` agents. The page ends at the first component scan that returns a cursor, because
-    /// the server's page limit or its scan budget ended that scan, or when `count` agents are
-    /// listed. The cursor of the next page is `<component name>/<scan cursor>`, with an empty
-    /// scan cursor when the next page starts at the beginning of that component.
+    /// One page of agents across `components`, in the order of their names; see [`read_page`].
     async fn list_agents_page(
         &self,
         mut components: Vec<ComponentDto>,
@@ -1532,58 +1528,35 @@ impl AgentCommandHandler {
         count: u64,
         precise: bool,
     ) -> anyhow::Result<AgentsMetadataResponseView> {
-        if count == 0 {
-            bail!("A page needs a --max-count of at least 1");
-        }
         components.sort_by(|a, b| a.component_name.0.cmp(&b.component_name.0));
-        let (mut position, mut scan_cursor) = match cursor {
-            None => (0, None),
-            Some(cursor) => {
-                let Some((component_name, scan_cursor)) = cursor.as_str().split_once('/') else {
-                    bail!("Invalid page cursor: {cursor}");
-                };
-                let Some(position) = components
-                    .iter()
-                    .position(|component| component.component_name.0 == component_name)
-                else {
-                    bail!(
-                        "The page cursor is for the component {component_name}, which is not selected"
-                    );
-                };
-                (
-                    position,
-                    ScanCursor::new(scan_cursor.to_string()).into_option(),
-                )
-            }
-        };
-
-        let mut view = AgentsMetadataResponseView::default();
-        let mut remaining = count;
-        while let Some(component) = components.get(position) {
-            if remaining == 0 {
-                view.cursor = Some(format!("{}/", component.component_name));
-                break;
-            }
-            let (agents, next_scan_cursor) = self
-                .list_component_agents(
+        let names = components
+            .iter()
+            .map(|component| component.component_name.0.as_str())
+            .collect::<Vec<_>>();
+        let (agents, cursor) = read_page(
+            &names,
+            cursor,
+            count,
+            async |position, scan_cursor, limit| {
+                let component = &components[position];
+                self.list_component_agents(
                     &component.component_name,
                     &component.id,
                     Some(filters),
                     mode_overlay,
-                    scan_cursor.take().as_ref(),
-                    Some(remaining),
+                    scan_cursor.as_ref(),
+                    Some(limit),
                     precise,
                 )
-                .await?;
-            remaining = remaining.saturating_sub(agents.len() as u64);
-            view.agents.extend(self.agent_views(agents).await?);
-            if let Some(next_scan_cursor) = next_scan_cursor {
-                view.cursor = Some(format!("{}/{}", component.component_name, next_scan_cursor));
-                break;
-            }
-            position += 1;
-        }
-        Ok(view)
+                .await
+            },
+        )
+        .await?;
+        Ok(AgentsMetadataResponseView {
+            agents: self.agent_views(agents).await?,
+            cursors: Default::default(),
+            cursor,
+        })
     }
 
     async fn cmd_interrupt(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
@@ -3476,6 +3449,63 @@ pub(super) fn parse_method_argument_schema_value(
     parsed
 }
 
+/// One page of at most `count` items across the components named in `component_names`, in their
+/// order, under one budget. `scan(position, scan_cursor, limit)` lists at most `limit` items of
+/// the component at `position` from `scan_cursor`, and gives the scan cursor of its next items.
+/// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
+/// The cursor of the next page is `<component name>/<scan cursor>`, with an empty scan cursor
+/// when the next page starts at the beginning of that component.
+async fn read_page<T>(
+    component_names: &[&str],
+    cursor: Option<&ScanCursor>,
+    count: u64,
+    mut scan: impl AsyncFnMut(
+        usize,
+        Option<ScanCursor>,
+        u64,
+    ) -> anyhow::Result<(Vec<T>, Option<ScanCursor>)>,
+) -> anyhow::Result<(Vec<T>, Option<String>)> {
+    if count == 0 {
+        bail!("A page needs a --max-count of at least 1");
+    }
+    let (mut position, mut scan_cursor) = match cursor {
+        None => (0, None),
+        Some(cursor) => {
+            let Some((component_name, scan_cursor)) = cursor.as_str().split_once('/') else {
+                bail!("Invalid page cursor: {cursor}");
+            };
+            let Some(position) = component_names
+                .iter()
+                .position(|name| *name == component_name)
+            else {
+                bail!(
+                    "The page cursor is for the component {component_name}, which is not selected"
+                );
+            };
+            (
+                position,
+                ScanCursor::new(scan_cursor.to_string()).into_option(),
+            )
+        }
+    };
+
+    let mut items = Vec::new();
+    let mut remaining = count;
+    while let Some(component_name) = component_names.get(position) {
+        if remaining == 0 {
+            return Ok((items, Some(format!("{component_name}/"))));
+        }
+        let (listed, next_scan_cursor) = scan(position, scan_cursor.take(), remaining).await?;
+        remaining = remaining.saturating_sub(listed.len() as u64);
+        items.extend(listed);
+        if let Some(next_scan_cursor) = next_scan_cursor {
+            return Ok((items, Some(format!("{component_name}/{next_scan_cursor}"))));
+        }
+        position += 1;
+    }
+    Ok((items, None))
+}
+
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     cursor.to_string()
 }
@@ -3714,10 +3744,11 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter, build_repl_agent_id,
         is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
-        parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
-        split_agent_id, validate_ordinary_agent_type, validate_public_invocation_agent_id,
+        parse_method_parameters_with_error_table, pending_update_progress, read_page,
+        render_revert_command, split_agent_id, validate_ordinary_agent_type,
+        validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3738,6 +3769,77 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    /// Reads every page of `components` (name and item count) with pages of `count`, over a fake
+    /// scan whose scan cursor is the index of the next item. Gives each page's items and cursor,
+    /// and each scan's component position and scan cursor.
+    async fn read_all_pages(
+        components: &[(&str, usize)],
+        count: u64,
+    ) -> (
+        Vec<(Vec<String>, Option<String>)>,
+        Vec<(usize, Option<String>)>,
+    ) {
+        let names = components.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let mut pages = Vec::new();
+        let mut scans = Vec::new();
+        let mut cursor = None::<ScanCursor>;
+        loop {
+            let (items, next) = read_page(
+                &names,
+                cursor.as_ref(),
+                count,
+                async |position, scan_cursor: Option<ScanCursor>, limit| {
+                    scans.push((position, scan_cursor.as_ref().map(ToString::to_string)));
+                    let (name, len) = components[position];
+                    let start = scan_cursor.map_or(0, |cursor| cursor.as_str().parse().unwrap());
+                    let end = (start + limit as usize).min(len);
+                    let items = (start..end).map(|item| format!("{name}#{item}")).collect();
+                    let next = (end < len).then(|| ScanCursor::new(end.to_string()));
+                    Ok((items, next))
+                },
+            )
+            .await
+            .unwrap();
+            pages.push((items, next.clone()));
+            let Some(next) = next else {
+                return (pages, scans);
+            };
+            cursor = Some(ScanCursor::new(next));
+            assert!(pages.len() < 100, "the pages do not end");
+        }
+    }
+
+    #[test]
+    async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
+        let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
+        assert_eq!(
+            pages,
+            vec![
+                (
+                    vec!["a:x#0".to_string(), "a:x#1".to_string()],
+                    Some("b:y/".to_string())
+                ),
+                (
+                    vec!["b:y#0".to_string(), "b:y#1".to_string()],
+                    Some("b:y/2".to_string())
+                ),
+                (vec!["b:y#2".to_string()], None),
+            ]
+        );
+        // The cursor `b:y/` starts `b:y` at its beginning, and no scan asks for 0 items.
+        assert_eq!(
+            scans,
+            vec![(0, None), (1, None), (1, Some("2".to_string()))]
+        );
+
+        // The last component ending at the limit ends the pages.
+        let (pages, _) = read_all_pages(&[("a:x", 1), ("b:y", 1)], 2).await;
+        assert_eq!(
+            pages,
+            vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
+        );
+    }
 
     #[test]
     fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
