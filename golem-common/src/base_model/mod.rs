@@ -944,6 +944,64 @@ pub fn render_config_path(path: &[String]) -> String {
     path.join(".")
 }
 
+/// Parse authored config and secret paths without recasing their segments.
+pub fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+    let mut keys = Vec::new();
+    let mut buf = String::new();
+
+    let mut chars = input.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                // escape next char
+                let next = chars
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("dangling escape"))?;
+                buf.push(next);
+            }
+
+            '"' => {
+                in_quotes = !in_quotes;
+            }
+
+            '.' if !in_quotes => {
+                push_agent_config_path_segment(&mut keys, &mut buf)?;
+            }
+
+            _ => buf.push(c),
+        }
+    }
+
+    if in_quotes {
+        return Err(anyhow::anyhow!("unterminated quote"));
+    }
+
+    push_agent_config_path_segment(&mut keys, &mut buf)?;
+
+    Ok(keys)
+}
+
+fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> anyhow::Result<()> {
+    let segment = buf.trim();
+
+    if segment.is_empty() {
+        return Err(anyhow::anyhow!("empty path segment"));
+    }
+
+    if segment.contains('.') {
+        return Err(anyhow::anyhow!(
+            "path segments must not contain '.'; use separate segments instead"
+        ));
+    }
+
+    keys.push(segment.to_string());
+    buf.clear();
+
+    Ok(())
+}
+
 #[cfg(feature = "full")]
 fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
     use heck::ToLowerCamelCase;
