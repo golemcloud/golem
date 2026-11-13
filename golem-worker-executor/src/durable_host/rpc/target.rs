@@ -75,7 +75,6 @@ use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 
@@ -484,7 +483,7 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
     };
     match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
-            let attributes = HashMap::from([
+            let attributes = BTreeMap::from([
                 (
                     "name".to_string(),
                     AttributeValue::String("rpc-connection".to_string()),

@@ -30,7 +30,7 @@ use desert_rust::{
     SerializationContext,
 };
 use nonempty_collections::NEVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -202,7 +202,7 @@ impl From<OplogEntry> for OplogEnrichmentEntry {
 /// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(transparent)]
-pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+pub struct AttributeMap(pub BTreeMap<String, AttributeValue>);
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
@@ -319,19 +319,19 @@ pub struct SpanAttributes {
 }
 
 impl std::ops::Deref for AttributeMap {
-    type Target = HashMap<String, AttributeValue>;
+    type Target = BTreeMap<String, AttributeValue>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl From<HashMap<String, AttributeValue>> for AttributeMap {
-    fn from(map: HashMap<String, AttributeValue>) -> Self {
+impl From<BTreeMap<String, AttributeValue>> for AttributeMap {
+    fn from(map: BTreeMap<String, AttributeValue>) -> Self {
         Self(map)
     }
 }
 
-impl From<AttributeMap> for HashMap<String, AttributeValue> {
+impl From<AttributeMap> for BTreeMap<String, AttributeValue> {
     fn from(map: AttributeMap) -> Self {
         map.0
     }
@@ -457,7 +457,7 @@ pub enum SpanData {
         start: Timestamp,
         parent_id: Option<SpanId>,
         linked_context: Option<Vec<SpanData>>,
-        attributes: HashMap<String, AttributeValue>,
+        attributes: BTreeMap<String, AttributeValue>,
         inherited: bool,
     },
     ExternalSpan {

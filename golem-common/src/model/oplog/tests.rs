@@ -65,7 +65,7 @@ use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, Variant
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;
 
@@ -179,7 +179,7 @@ fn start_desert_roundtrip() {
             parent_span_id: Some(SpanId::generate()),
             links: vec![],
             started_at: Timestamp::now_utc().rounded(),
-            attributes: AttributeMap(HashMap::from([(
+            attributes: AttributeMap(BTreeMap::from([(
                 "name".into(),
                 AttributeValue::String("operation".into()),
             )])),
@@ -212,7 +212,7 @@ fn end_and_cancelled_desert_roundtrip_with_spans() {
             }),
             span_attributes: Some(SpanAttributes {
                 span_id: span_id.clone(),
-                attributes: AttributeMap(HashMap::from([(
+                attributes: AttributeMap(BTreeMap::from([(
                     "result".into(),
                     AttributeValue::String("ok".into()),
                 )])),
@@ -787,7 +787,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
         InvocationContextSpan::local()
             .rounded()
             .parent(Some(creator_context.spans.first().clone()))
-            .with_attributes(HashMap::from([(
+            .with_attributes(BTreeMap::from([(
                 "request".to_string(),
                 AttributeValue::String("create".to_string()),
             )]))
@@ -2791,7 +2791,7 @@ mod scope_projection {
     };
     use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, Timestamp, TransactionId};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use test_r::test;
 
     fn idx(i: u64) -> OplogIndex {
@@ -2926,7 +2926,7 @@ mod scope_projection {
                 parent_span_id: None,
                 links: Vec::new(),
                 started_at: Timestamp::now_utc(),
-                attributes: AttributeMap(HashMap::new()),
+                attributes: AttributeMap(BTreeMap::new()),
                 kind: SpanKind::Internal,
             }));
         }

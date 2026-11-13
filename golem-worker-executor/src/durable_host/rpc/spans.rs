@@ -27,7 +27,7 @@ use golem_common::model::oplog::SpanKind;
 use golem_common::model::oplog::SpanOutcome;
 use golem_common::model::oplog::SpanStarted;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub(super) fn invocation_metadata(
@@ -98,7 +98,7 @@ pub(super) fn embedded_invocation_span_started(
     function_name: &str,
     idempotency_key: &IdempotencyKey,
 ) -> SpanStarted {
-    let attributes = HashMap::from([
+    let attributes = BTreeMap::from([
         (
             "name".to_string(),
             AttributeValue::String("rpc-invocation".to_string()),

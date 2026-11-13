@@ -1145,13 +1145,13 @@ fn oracle_fixture() -> OplogSnapshot {
         AgentInvocationStartedParams, CompletionDeliveredParams, EndParams, StartParams,
     };
     use golem_common::model::oplog::{AgentInitializationParameters, DurableFunctionType};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     let timestamp = Timestamp::from(1234_u64);
     let span_id = SpanId::from_string("1").unwrap();
     let parent_id = SpanId::from_string("2").unwrap();
     let trace_id = TraceId::from_string("11111111111111111111111111111111").unwrap();
-    let attributes = HashMap::from([
+    let attributes = BTreeMap::from([
         ("agent_id".into(), AttributeValue::String("owner".into())),
         (
             "agent_parameters".into(),
@@ -1210,7 +1210,7 @@ fn oracle_fixture() -> OplogSnapshot {
     };
     let update = SpanAttributes {
         span_id: SpanId::from_string("3").unwrap(),
-        attributes: AttributeMap(HashMap::from([
+        attributes: AttributeMap(BTreeMap::from([
             ("bytes".into(), AttributeValue::String("4".into())),
             ("result".into(), AttributeValue::String("known".into())),
         ])),
