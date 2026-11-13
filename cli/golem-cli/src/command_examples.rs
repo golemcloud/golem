@@ -286,6 +286,10 @@ pub const AGENT_LIST: &str = "Examples:
   golem-cli agent list --max-count 10
   golem-cli agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
+  # One page across all selected components; pass the page's `cursor` back for the next one
+  golem-cli --format json agent list --page --max-count 10
+  golem-cli --format json agent list --page --max-count 10 --scan-cursor '<cursor-of-previous-page>'
+
   # Force fresh status for each agent
   golem-cli agent list --precise
 
@@ -352,6 +356,10 @@ pub const AGENT_OPLOG: &str = "Examples:
 
   # In structured formats, each oplog entry is emitted as a separate document
   golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'
+
+  # Read one page as one `agent.oplog-page` document; pass its `cursor` back for the next one
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")' --query 'error' --page
+  golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")' --query 'error' --page --cursor '<cursor-of-previous-page>'
 
   # Explore the oplog in an interactive viewer served locally (loads pages on demand, opens the browser)
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --serve
