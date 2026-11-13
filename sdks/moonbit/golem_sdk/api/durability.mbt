@@ -33,8 +33,7 @@ fn DurableFunctionType::to_raw(
 /// is dropped without triggering a retry. If recovery later replays the incomplete invocation,
 /// the body runs again.
 ///
-/// Sequential and properly nested execution only. Do not detach tasks or callbacks that outlive
-/// the body, including on failure. See `durable_async` for the concurrency restriction.
+/// The body cannot suspend. A task spawned in it aborts the invocation when the body returns.
 pub fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
@@ -58,9 +57,17 @@ pub fn[
       function_type.to_raw(),
     ) {
     Live(invocation) => {
+      install_task_context_hooks()
+      let frame = @async_core.push_task_context_frame(capture_caller=false)
       let mut consumed = false
-      defer (if !consumed { invocation.drop() })
+      defer {
+        if !consumed {
+          invocation.drop()
+        }
+        @async_core.pop_task_context_frame(frame)
+      }
       let result = body()
+      frame.check_joined()
       let response = @model.typed_schema_value_to_wit(
         @schema.try_into_typed_schema_value(result),
       )
@@ -79,12 +86,12 @@ pub fn[
 /// The live invocation remains active while the asynchronous body is suspended. Replayed
 /// invocations return immediately without evaluating the body.
 ///
-/// Sequential and properly nested execution only. The body may await host calls when no unrelated
-/// guest work runs during the wait. Do not overlap it with other tasks, including ordinary host
-/// calls: sibling effects can acquire the wrong scope and cause incorrect replay or invocation
-/// failure. Misuse is not reliably detected. Await each nested operation and do not detach tasks.
-/// Stop and join outstanding work before the body exits, including on failure or cancellation.
-/// A task group's eventual join does not make concurrent custom scopes supported.
+/// The invocation's scope follows the task that runs the body: other tasks of the same agent
+/// invocation, and their host calls, are not attributed to it while the body waits. Tasks spawned
+/// in the body, including stream and future producers, inherit the scope. Join spawned tasks
+/// before the body returns; a task still running when the body exits aborts the invocation. The
+/// operation waits for the stream and future producers the body started, and cancels them when
+/// the body fails.
 pub async fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
@@ -102,20 +109,32 @@ pub async fn[
     @schema.try_into_typed_schema_value(request),
   )
   match
-    @raw_durability.begin_custom_durable_invocation(
+    @raw_durability.begin_custom_durable_invocation_async(
       function_name,
       request,
       function_type.to_raw(),
     ) {
     Live(invocation) => {
-      let mut consumed = false
-      defer (if !consumed { invocation.drop() })
+      install_task_context_hooks()
+      let frame = @async_core.push_task_context_frame(capture_caller=true)
+      invocation.enter()
+      let mut finished = false
+      defer {
+        if !finished {
+          @async_core.protect_from_cancel(() => {
+            frame.settle(cancel_producers=true)
+          })
+        }
+        invocation.drop()
+        @async_core.pop_task_context_frame(frame)
+      }
       let result = body()
+      frame.settle()
       let response = @model.typed_schema_value_to_wit(
         @schema.try_into_typed_schema_value(result),
       )
-      consumed = true
-      invocation.finish(response, forced_commit)
+      invocation.finish_async(response, forced_commit)
+      finished = true
       result
     }
     Replayed(invocation) =>
@@ -150,4 +169,24 @@ fn[Response : @schema.FromSchema] decode_durable_replay(
   }
   let response = @model_host.typed_schema_value_from_wit(invocation.response)
   @schema.from_value_as(response.value)
+}
+
+///|
+let task_context_hooks_installed : Ref[Bool] = Ref(false)
+
+///|
+/// Lets the async runtime switch the custom invocation context of the current
+/// task whenever it switches coroutines.
+fn install_task_context_hooks() -> Unit {
+  guard !task_context_hooks_installed.val else { return }
+  @async_core.install_task_context_hooks(
+    exchange=next => {
+      let @raw_durability.CustomInvocationContext(previous) = @raw_durability.exchange_custom_invocation_context(
+        next.map(handle => @raw_durability.CustomInvocationContext(handle)),
+      )
+      previous
+    },
+    drop=handle => @raw_durability.CustomInvocationContext(handle).drop(),
+  )
+  task_context_hooks_installed.val = true
 }

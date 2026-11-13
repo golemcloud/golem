@@ -26,6 +26,7 @@ use test_r::{sequential_suite, tag_suite, test_dep};
 pub mod active_agents;
 pub mod agent;
 pub mod agent_sdk_go;
+pub mod agent_sdk_moonbit;
 pub mod agent_sdk_ts;
 pub mod api;
 mod blob_mutation_storage;
@@ -145,6 +146,7 @@ tag_suite!(websocket, group4);
 tag_suite!(agent, group4);
 tag_suite!(agent_sdk_ts, group4);
 tag_suite!(agent_sdk_go, group4);
+tag_suite!(agent_sdk_moonbit, group4);
 tag_suite!(durability, group4);
 tag_suite!(effect_permissions, group4);
 tag_suite!(permission_cards_scala, group4);
@@ -488,4 +490,10 @@ test_component!(
     "agent_sdk_go",
     "golem_it_agent_sdk_go",
     "golem-it:agent-sdk-go"
+);
+test_component!(
+    agent_sdk_moonbit,
+    "agent_sdk_moonbit",
+    "golem_it_agent_sdk_moonbit",
+    "golem-it:agent-sdk-moonbit"
 );
