@@ -171,9 +171,10 @@ pub trait WorkerEnumerationService: Send + Sync {
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
 }
 
-/// The number of agents that one storage scan of an agent listing reads at most. The listing
-/// checks its scan budget between scans, so this also bounds how far a listing runs past the time
-/// of its budget.
+/// The number of keys that an agent listing asks one storage scan for. The storage takes it as a
+/// hint and can return more or fewer keys (Redis `SCAN COUNT`), so a batch is not truncated: the
+/// listing charges the keys the scan examined and checks its scan budget between scans. The budget
+/// can therefore overshoot by one batch, in keys and in time.
 const AGENT_SCAN_BATCH_SIZE: u64 = 100;
 
 fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
@@ -222,12 +223,11 @@ impl DefaultWorkerEnumerationService {
         let mut workers: Vec<AgentMetadata> = vec![];
 
         let modes = modes_from_filter(&filter);
-        let (new_cursor, keys) = self
+        let (new_cursor, keys, scanned) = self
             .oplog_service
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
-        let scanned = keys.len() as u64;
 
         for owned_agent_id in keys {
             // An agent whose oplog failed for good has no metadata to list: it is left out, and

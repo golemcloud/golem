@@ -508,7 +508,7 @@ Golem provides APIs to read and search an agent's persisted oplog.
 
 Each oplog entry describes a recorded operation or lifecycle event. You can either read all entries or supply a search expression to return only matching entries.
 
-Results are paginated. Read successive batches until the query returns no more entries. For CLI usage, see [Observability](/next/develop/observability).
+Results are paginated. Read successive batches until `get-next` returns no batch. A batch can be empty before the end: a search stops at the scan budget of the executor and continues with the next call. For CLI usage, see [Observability](/next/develop/observability).
 
 ### Invocation context
 

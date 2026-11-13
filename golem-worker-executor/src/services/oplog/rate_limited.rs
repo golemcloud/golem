@@ -674,7 +674,7 @@ impl OplogService for RateLimitedOplogService {
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         self.inner
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await

@@ -22,12 +22,13 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     search_oplog_response,
 };
 use golem_common::base_model::worker_filter::StringFilterComparator;
+use golem_common::config::RedisConfig;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, AgentId, PromiseId, ScanCursor};
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::golem_config::ScanBudget;
+use golem_worker_executor::services::golem_config::{IndexedStorageConfig, ScanBudget};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -353,6 +354,99 @@ async fn agent_list_with_an_unbounded_count_stops_at_the_scan_budget(
     assert!(
         calls >= AGENTS.div_ceil(BUDGET),
         "{calls} calls listed {AGENTS} agents with a budget of {BUDGET}"
+    );
+    Ok(())
+}
+
+/// Redis `SCAN COUNT` is a hint: a scan returns the keys of whole hash buckets, so one storage
+/// batch can hold more keys than the budget. A call lists the whole batch and stops after it, and
+/// the cursors skip no agent and repeat none.
+#[test]
+#[timeout("10m")]
+async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const AGENTS: usize = 100;
+    // A database of its own holds only the oplogs of this test, so that the agents share hash
+    // buckets and Redis returns batches of more than one agent. It is emptied first, because a
+    // Redis that outlives a test run keeps the oplogs of earlier runs.
+    const DATABASE: u16 = 1;
+    deps.redis.flush_db(DATABASE);
+    let context = TestContext::new(last_unique_id);
+    let indexed_storage = RedisConfig {
+        host: deps.redis.public_host(),
+        port: deps.redis.public_port(),
+        database: DATABASE.into(),
+        key_prefix: context.redis_prefix(),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.indexed_storage = IndexedStorageConfig::Redis(indexed_storage.clone());
+                config.limits.scan_budget = ScanBudget {
+                    entries: NonZeroU64::MIN,
+                    time: Duration::from_secs(3600),
+                };
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let mut expected = BTreeSet::new();
+    for i in 0..AGENTS {
+        let worker_id = executor
+            .start_agent(
+                &component.id,
+                agent_id!("GolemHostApi", format!("redis-scan-budget-{i}")),
+            )
+            .await?;
+        expected.insert(worker_id.agent_id);
+    }
+
+    let mut pages: Vec<Vec<String>> = Vec::new();
+    let mut cursor = ScanCursor::default();
+    loop {
+        let (next, agents) = executor
+            .get_workers_metadata(&component.id, None, cursor, i64::MAX as u64, false)
+            .await?;
+        pages.push(
+            agents
+                .into_iter()
+                .map(|agent| agent.agent_id.agent_id)
+                .collect(),
+        );
+        match next {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+
+    let listed = pages.iter().flatten().cloned().collect::<Vec<_>>();
+    let unique = listed.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(listed.len(), unique.len(), "an agent was listed twice");
+    assert_eq!(unique, expected);
+    // A batch without keys costs nothing, so a call stops only after a batch with keys. With a
+    // budget of one key, that is its first such batch, whatever its size.
+    let (last, stopped) = pages.split_last().unwrap();
+    let sizes = stopped.iter().map(Vec::len).collect::<Vec<_>>();
+    assert!(
+        !stopped.is_empty() && sizes.iter().all(|size| *size > 0),
+        "every call that the budget stopped must list one batch, got pages of {sizes:?} and a last page of {}",
+        last.len()
+    );
+    assert!(
+        sizes.iter().any(|size| *size > 1),
+        "no batch held more than one agent, got pages of {sizes:?}"
     );
     Ok(())
 }

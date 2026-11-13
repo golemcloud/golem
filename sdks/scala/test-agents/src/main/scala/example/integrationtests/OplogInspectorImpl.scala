@@ -53,7 +53,9 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
     sb.append(s"=== Searching oplog for '$text' ===\n")
 
     val search = OplogApi.SearchOplog(meta.agentId, text)
-    search.getNext() match {
+    // A page is empty when the search stops at its scan budget before a match, so read on until
+    // a page has results or the search ends.
+    Iterator.continually(search.getNext()).find(_.forall(_.nonEmpty)).flatten match {
       case None =>
         sb.append("No matching entries.\n")
       case Some(results) =>

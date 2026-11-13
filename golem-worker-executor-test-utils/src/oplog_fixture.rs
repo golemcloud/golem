@@ -271,7 +271,7 @@ impl OplogService for OplogFixtureService {
         mode: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>, u64), WorkerExecutorError> {
         self.inner
             .scan_for_component(environment, component, mode, cursor, count)
             .await
