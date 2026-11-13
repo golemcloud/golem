@@ -23,17 +23,20 @@ use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
     PublicInvocationWalletPin, WalletVersionToken,
 };
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     AgentInvocationStartedParams, CancelledParams, EndParams, PendingAgentInvocationParams,
-    StartParams,
+    SnapshotParams, StartParams, SuccessfulUpdateParams,
 };
 use golem_common::model::oplog::{
     AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
-    PublicOplogEntry, SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome, SpanStarted,
+    PublicOplogEntry, PublicSnapshotData, RawSnapshotData, SpanAttributes, SpanFinished, SpanKind,
+    SpanLink, SpanOutcome, SpanStarted, UpdateDescription,
 };
-use golem_common::model::{AgentInvocationPayload, Empty, Timestamp};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentInvocationPayload, Empty, OplogIndex, Timestamp};
 use golem_common::schema::SchemaValue;
 use test_r::test;
 use uuid::Uuid;
@@ -294,6 +297,7 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
         active_cards: vec![card.clone().into()],
         wallet_generation: 73,
         filesystem_snapshot: None,
+        bootstrap: Some(bootstrap()),
     };
 
     let encoded = oplog::OplogEntry::try_from(entry).unwrap();
@@ -301,6 +305,7 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
     let golem_common::model::oplog::OplogEnrichmentEntry::Other(OplogEntry::Snapshot {
         active_cards,
         wallet_generation,
+        bootstrap: decoded_bootstrap,
         ..
     }) = decoded
     else {
@@ -308,6 +313,88 @@ fn raw_snapshot_wit_roundtrip_preserves_wallet_state() {
     };
     assert_eq!(active_cards, vec![card.into()]);
     assert_eq!(wallet_generation, 73);
+    assert_eq!(decoded_bootstrap, Some(bootstrap()));
+}
+
+fn bootstrap() -> OplogRegion {
+    OplogRegion {
+        start: OplogIndex::from_u64(3),
+        end: OplogIndex::from_u64(7),
+    }
+}
+
+#[test]
+fn raw_update_wit_roundtrip_preserves_bootstrap_ranges() {
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = [
+        OplogEntry::SuccessfulUpdate {
+            timestamp,
+            target_revision: ComponentRevision::new(2).unwrap(),
+            new_component_size: 100,
+            new_total_linear_memory_size: None,
+            new_active_plugins: Default::default(),
+            snapshot_assisted_details: None,
+            bootstrap: Some(bootstrap()),
+        },
+        OplogEntry::PendingUpdate {
+            timestamp,
+            description: UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: ComponentRevision::new(2).unwrap(),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(9),
+                snapshot_revision: ComponentRevision::new(1).unwrap(),
+                filesystem_snapshot: None,
+                snapshot_bootstrap: Some(bootstrap()),
+            },
+            update_attempt_index: Some(OplogIndex::from_u64(10)),
+        },
+    ];
+
+    for entry in entries {
+        let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
+        assert_eq!(
+            golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
+            entry.into()
+        );
+    }
+}
+
+#[test]
+fn public_wit_projection_preserves_bootstrap_ranges() {
+    let timestamp = Timestamp::now_utc().rounded();
+    let snapshot = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp,
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: None,
+        bootstrap: Some(bootstrap()),
+    });
+    let oplog::PublicOplogEntry::Snapshot(snapshot) =
+        oplog::PublicOplogEntry::try_from(snapshot).unwrap()
+    else {
+        panic!("expected public snapshot")
+    };
+    let wit_bootstrap = snapshot.bootstrap.unwrap();
+    assert_eq!((wit_bootstrap.start, wit_bootstrap.end), (3, 7));
+
+    let update = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
+        timestamp,
+        target_revision: ComponentRevision::new(2).unwrap(),
+        new_component_size: 100,
+        new_active_plugins: Default::default(),
+        snapshot_assisted_details: None,
+        bootstrap: Some(bootstrap()),
+    });
+    let oplog::PublicOplogEntry::SuccessfulUpdate(update) =
+        oplog::PublicOplogEntry::try_from(update).unwrap()
+    else {
+        panic!("expected public successful update")
+    };
+    let wit_bootstrap = update.bootstrap.unwrap();
+    assert_eq!((wit_bootstrap.start, wit_bootstrap.end), (3, 7));
 }
 
 #[test]

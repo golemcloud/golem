@@ -137,6 +137,7 @@ message RawSnapshotAssistedAutomaticUpdate {
   uint64 snapshot_index = 4;
   uint64 snapshot_revision = 5;
   optional string filesystem_snapshot = 6;
+  optional RawOplogRegion snapshot_bootstrap = 7;
 }
 
 message RawSnapshotBasedUpdate {
@@ -335,6 +336,7 @@ message RawSuccessfulUpdateParameters {
   repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
   optional uint64 new_total_linear_memory_size = 4;
   optional RawSnapshotAssistedUpdateDetails snapshot_assisted_details = 5;
+  optional RawOplogRegion bootstrap = 6;
 }
 
 message RawSnapshotAssistedUpdateDetails {
@@ -425,6 +427,7 @@ message RawSnapshotParameters {
   repeated bytes active_cards = 3;
   uint64 wallet_generation = 4;
   optional string filesystem_snapshot = 5;
+  optional RawOplogRegion bootstrap = 6;
 }
 
 message RawSnapshotConfirmedParameters {

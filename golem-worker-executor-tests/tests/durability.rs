@@ -1641,10 +1641,18 @@ async fn automatic_snapshot_every_2nd_invocation(
         .await?;
 
     // Construction counts as an invocation; align subsequent snapshots with even increments.
-    let initial = executor
-        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
-        .await?;
-    assert_eq!(initial.into_typed::<u32>()?, 0);
+    // This read also captures the state that the core initializer derived from its random seed
+    // while the agent was created. The seed is recorded before the first snapshot, so recovery
+    // from a snapshot must reproduce it by replaying the initializer's recorded host calls.
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
@@ -1677,6 +1685,17 @@ async fn automatic_snapshot_every_2nd_invocation(
                 PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now"
             )),
         "core initializer must record a clock call before the snapshot"
+    );
+    assert!(
+        oplog
+            .iter()
+            .take_while(|entry| !matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "random::insecure_seed::insecure_seed"
+            )),
+        "core initializer must record its random seed before the snapshot"
     );
     let snapshot_count = oplog
         .iter()
@@ -1721,6 +1740,143 @@ async fn automatic_snapshot_every_2nd_invocation(
         result_after_restart.into_typed::<u32>()?,
         11,
         "Counter should include the increment replayed after the automatic snapshot"
+    );
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "snapshot recovery must replay the initializer's recorded random seed"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// While recovery replays a bootstrap block, the core initializer may make only direct read
+/// calls. An idempotency key that the initializer generated is a recorded write in the block, so
+/// recovery rejects the periodic snapshot that names the block, and the start recovers by full
+/// replay with the same initializer state.
+#[test]
+#[tracing::instrument]
+#[timeout("120s")]
+async fn a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .with_env(
+            "SnapshotCounter",
+            vec![(
+                "INITIALIZER_GENERATES_IDEMPOTENCY_KEY".to_string(),
+                "1".to_string(),
+            )],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "initializer-write");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let initializer_seed_hash = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    for expected in 1..=2 {
+        let count = executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(count, expected);
+    }
+    let last_finished = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .rev()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .expect("the second increment has completed")
+        .oplog_index;
+    let (oplog, newest, bootstrap) = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let newest = oplog.iter().rev().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(params) if entry.oplog_index > last_finished => {
+                    Some((entry.oplog_index, params.bootstrap.clone()))
+                }
+                _ => None,
+            });
+            if let Some((newest, bootstrap)) = newest {
+                break Ok::<_, anyhow::Error>((oplog, newest, bootstrap));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second increment should commit its automatic snapshot")?;
+    let bootstrap = bootstrap.expect("the core initializer made durable calls");
+    assert!(
+        oplog.iter().any(|entry| bootstrap.contains(entry.oplog_index)
+            && matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::api::generate_idempotency-key"
+            )),
+        "the bootstrap block {bootstrap} must hold the idempotency key that the core initializer generated"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let count_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    // The start stores the rejected records before it publishes readiness.
+    let rejected = executor.rejected_automatic_snapshots(&worker_id).await?;
+    let initializer_seed_hash_after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "initializer_seed_hash",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+
+    assert!(
+        rejected.contains(&newest),
+        "recovery must reject the newest snapshot {newest}, but rejected {rejected:?}"
+    );
+    assert_eq!(count_after_restart, 2);
+    assert_eq!(
+        initializer_seed_hash_after_restart, initializer_seed_hash,
+        "full replay must replay the initializer's recorded random seed"
     );
 
     drop(executor);

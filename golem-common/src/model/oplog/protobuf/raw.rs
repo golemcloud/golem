@@ -285,6 +285,7 @@ fn update_description_to_proto(
             snapshot_index,
             snapshot_revision,
             filesystem_snapshot,
+            snapshot_bootstrap,
         } => Ok(RawUpdateDescription {
             description: Some(Description::SnapshotAssistedAutomatic(
                 RawSnapshotAssistedAutomaticUpdate {
@@ -294,6 +295,7 @@ fn update_description_to_proto(
                     snapshot_index: snapshot_index.into(),
                     snapshot_revision: snapshot_revision.into(),
                     filesystem_snapshot: filesystem_snapshot.map(String::from),
+                    snapshot_bootstrap: snapshot_bootstrap.map(oplog_region_to_proto),
                 },
             )),
         }),
@@ -310,6 +312,24 @@ fn update_description_to_proto(
                 filesystem_snapshot: filesystem_snapshot.map(String::from),
             })),
         }),
+    }
+}
+
+fn oplog_region_to_proto(
+    region: crate::model::regions::OplogRegion,
+) -> golem_api_grpc::proto::golem::worker::RawOplogRegion {
+    golem_api_grpc::proto::golem::worker::RawOplogRegion {
+        start: region.start.into(),
+        end: region.end.into(),
+    }
+}
+
+fn oplog_region_from_proto(
+    region: golem_api_grpc::proto::golem::worker::RawOplogRegion,
+) -> crate::model::regions::OplogRegion {
+    crate::model::regions::OplogRegion {
+        start: OplogIndex::from_u64(region.start),
+        end: OplogIndex::from_u64(region.end),
     }
 }
 
@@ -368,6 +388,7 @@ fn update_description_from_proto(
                     .filesystem_snapshot
                     .map(|name| name.parse())
                     .transpose()?,
+                snapshot_bootstrap: update.snapshot_bootstrap.map(oplog_region_from_proto),
             })
         }
         Description::SnapshotBased(snap) => Ok(UpdateDescription::SnapshotBased {
@@ -619,6 +640,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 new_total_linear_memory_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
                 ..
             } => Entry::SuccessfulUpdate(RawSuccessfulUpdateParameters {
                 target_revision: target_revision.into(),
@@ -633,6 +655,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         snapshot_index: details.snapshot_index.into(),
                     }
                 }),
+                bootstrap: bootstrap.map(oplog_region_to_proto),
             }),
             OplogEntry::FailedUpdate {
                 target_revision,
@@ -753,6 +776,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 active_cards,
                 wallet_generation,
                 filesystem_snapshot,
+                bootstrap,
                 ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
@@ -763,6 +787,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .collect::<Result<Vec<_>, _>>()?,
                 wallet_generation,
                 filesystem_snapshot: filesystem_snapshot.map(String::from),
+                bootstrap: bootstrap.map(oplog_region_to_proto),
             }),
             OplogEntry::SnapshotConfirmed {
                 filesystem_snapshot,
@@ -1299,6 +1324,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                             })
                         })
                         .transpose()?,
+                    bootstrap: p.bootstrap.map(oplog_region_from_proto),
                 })
             }
             Entry::FailedUpdate(p) => {
@@ -1456,6 +1482,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .filesystem_snapshot
                         .map(|name| name.parse())
                         .transpose()?,
+                    bootstrap: p.bootstrap.map(oplog_region_from_proto),
                 })
             }
             Entry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {

@@ -2394,6 +2394,7 @@ async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
             active_cards: Vec::new(),
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         invocation_started(pin.clone()),
         start_now(),
@@ -14525,12 +14526,14 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             1,
             None,
             Default::default(),
+            None,
             None,
         ),
         start_now(),
@@ -14670,6 +14673,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             active_cards: vec![selected.clone()],
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         start_now(),
         OplogEntry::CardDerived {
@@ -15149,4 +15153,186 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
         drain.await;
         drop(contention);
     }
+}
+
+async fn bootstrap_cursor_over(
+    oplog: &Arc<InMemoryOplog>,
+    skip_through: u64,
+    target: u64,
+    tail: BootstrapTail,
+) -> ReplayState {
+    ReplayState::new_for_bootstrap(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(skip_through),
+        OplogIndex::from_u64(target),
+        tail,
+    )
+    .await
+    .expect("failed to build bootstrap cursor")
+}
+
+async fn oplog_of(entries: Vec<OplogEntry>) -> Arc<InMemoryOplog> {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    oplog
+}
+
+/// The history `[RecoverySucceeded, resolution 2..=3, now 4..=5, resolution 6..=7]`, whose
+/// bootstrap block is the `now` call at `4..=5`.
+fn history_with_bootstrap_block() -> Vec<OplogEntry> {
+    vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_resolution(),
+        end_for(2, 5),
+        start_now(),
+        end_for(4, 42),
+        start_resolution(),
+        end_for(6, 7),
+    ]
+}
+
+async fn claim_and_resolve(rs: &ReplayState, name: HostFunctionName) -> (u64, u64) {
+    let handle = rs
+        .claim_concurrent_start(&name, &DurableFunctionType::ReadLocal)
+        .await
+        .unwrap();
+    let start = u64::from(handle.start_idx());
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => (start, u64::from(end_idx)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn strict_bootstrap_cursor_replays_its_block_after_history_that_the_main_cursor_replays_later()
+ {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    bootstrap.ensure_bootstrap_consumed().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(bootstrap.at_replay_tail());
+    assert!(!bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "a bootstrap cursor records no replay events, not even ReplayFinished"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(main.has_replay_remaining());
+    assert_eq!(
+        claim_and_resolve(&main, HostFunctionName::MonotonicClockResolution).await,
+        (2, 3)
+    );
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_a_durable_call_after_its_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let memory = replay_linear_memory();
+    claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await;
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert!(matches!(
+        switched,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(!bootstrap.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 2);
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_an_unconsumed_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let unconsumed = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let empty = bootstrap_cursor_over(&oplog, 1, 1, BootstrapTail::Strict).await;
+
+    assert!(matches!(
+        unconsumed.ensure_bootstrap_consumed().await,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(empty.at_replay_tail());
+    assert!(
+        !empty.is_live_published(),
+        "an exhausted bootstrap cursor does not publish live at construction"
+    );
+    empty.ensure_bootstrap_consumed().await.unwrap();
+}
+
+#[test]
+async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Live).await;
+    let memory = replay_linear_memory();
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert_eq!(switched, Some(OplogIndex::from_u64(5)));
+    assert!(bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        memory.reconciliation_grant_bytes(1),
+        2,
+        "the live switch of a bootstrap cursor leaves the linear memory in replay"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(!main.is_live_published());
 }

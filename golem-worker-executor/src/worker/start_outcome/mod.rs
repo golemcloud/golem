@@ -713,7 +713,10 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         // load as `ManualLoadFailed`, an exited guest as `ManualLoadExited` and an interrupted
         // load as `ManualLoadInterrupted`, so the other load rows of this column are not reached.
         // An interrupted load passes its interrupt: the update stays pending, and the next start
-        // loads the snapshot again.
+        // loads the snapshot again. A divergence comes from the core initializer of the target on
+        // its bootstrap cursor: a call that the cursor does not admit, or a call that an earlier
+        // attempt recorded and this one does not make. It repeats on every start, so it fails the
+        // update.
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::TargetUnsupported => coded(Code::TargetUnsupported),
@@ -727,7 +730,8 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             | Problem::LoadUnavailable
             | Problem::LoadFailed
             | Problem::RecoveryRequired
-            | Problem::Interrupted => fail,
+            | Problem::Interrupted
+            | Problem::Divergence => fail,
             Problem::Disabled => coded(Code::RestoreNeedsFilesystemSnapshots),
             Problem::Restore(RestoreClass::Lost) => coded(Code::ManualSnapshotUnavailable),
             Problem::Restore(RestoreClass::Fixed) => coded(Code::SnapshotRestoreFailed),
@@ -898,6 +902,7 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
                 selected_index(head).map_or_else(|| "?".to_string(), |index| index.to_string()),
                 raw_text(error)
             ),
+            Column::ManualPending => format!("Manual update failed: {}", raw_text(error)),
             _ => format!("Automatic update failed: {}", raw_text(error)),
         },
         RawStartError::TargetFetch(_)

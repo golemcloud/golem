@@ -82,8 +82,3 @@ message ResourceDescription {
   string resource_owner = 3;
   string resource_name = 4;
 }
-
-message OplogRegion {
-  uint64 start = 1;
-  uint64 end = 2;
-}

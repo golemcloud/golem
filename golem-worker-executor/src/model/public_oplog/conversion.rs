@@ -425,6 +425,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 new_total_linear_memory_size: _,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             } => {
                 let metadata = components
                     .get_metadata(owner_component_id, Some(target_revision))
@@ -454,6 +455,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             snapshot_index: details.snapshot_index,
                         }
                     }),
+                    bootstrap,
                 }))
             }
             OplogEntry::FailedUpdate {
@@ -645,6 +647,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 data,
                 mime_type,
                 filesystem_snapshot,
+                bootstrap,
                 ..
             } => {
                 let bytes: Vec<u8> = oplog_service
@@ -660,6 +663,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     data: snapshot_data,
                     filesystem_snapshot: filesystem_snapshot.map(String::from),
+                    bootstrap,
                 }))
             }
             OplogEntry::SnapshotConfirmed {

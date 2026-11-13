@@ -528,6 +528,8 @@ declare module 'golem:api/oplog@1.5.0' {
     newComponentSize: bigint;
     newActivePlugins: PluginInstallationDescription[];
     snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+    /** The entries of the durable calls that the target revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -684,6 +686,8 @@ declare module 'golem:api/oplog@1.5.0' {
     data: SnapshotData;
     /** The filesystem snapshot taken with the application snapshot, if any */
     filesystemSnapshot?: string;
+    /** The entries of the durable calls that the running revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   /**
    * The store holds the named filesystem snapshot from this point
@@ -984,6 +988,8 @@ declare module 'golem:api/oplog@1.5.0' {
     snapshotRevision: ComponentRevision;
     /** The filesystem snapshot of the selected record, if it has one */
     filesystemSnapshot?: string;
+    /** The bootstrap range of the selected record, if it has one */
+    snapshotBootstrap?: OplogRegion;
   };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;
@@ -1021,6 +1027,8 @@ declare module 'golem:api/oplog@1.5.0' {
     newComponentSize: bigint;
     newActivePlugins: EnvironmentPluginGrantId[];
     snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+    /** The entries of the durable calls that the target revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type ResourceTypeId = {
     name: string;
@@ -1056,6 +1064,8 @@ declare module 'golem:api/oplog@1.5.0' {
     activeCards: Uint8Array[];
     walletGeneration: bigint;
     filesystemSnapshot?: string;
+    /** The entries of the durable calls that the running revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;

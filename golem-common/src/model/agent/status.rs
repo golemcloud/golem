@@ -32,7 +32,7 @@ use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::oplog::{
     self, AgentResourceId, FilesystemSnapshotName, OplogEntry, OplogIndex, QueuedCardEvent,
 };
-use crate::model::regions::DeletedRegions;
+use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
     AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
@@ -493,6 +493,8 @@ pub struct AutomaticSnapshot {
     pub component_revision: ComponentRevision,
     /// The filesystem snapshot that the entry names, with its confirmation.
     pub files: SnapshotFiles,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
@@ -544,6 +546,7 @@ impl AutomaticSnapshot {
             index: self.index,
             component_revision: self.component_revision,
             filesystem_snapshot,
+            bootstrap: self.bootstrap,
         })
     }
 }
@@ -560,6 +563,8 @@ pub struct UsableAutomaticSnapshot {
     /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
     /// `None` when the entry has no filesystem snapshot name.
     pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// Contains status information about a worker according to a given oplog index.
@@ -1342,6 +1347,11 @@ pub struct AuthoritativeSnapshot {
     /// snapshot-assisted automatic update selected.
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
+    /// The bootstrap range that the successful update names: the entries of the durable calls
+    /// that the target revision's core initializer claimed while the update instantiated it, its
+    /// own block for a snapshot-based update and the selected record's block for a
+    /// snapshot-assisted one.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1422,6 +1432,7 @@ impl PendingUpdateKind {
                 snapshot_index,
                 snapshot_revision,
                 filesystem_snapshot,
+                snapshot_bootstrap,
                 ..
             } => Self::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index: *source_revision_start_index,
@@ -1429,6 +1440,7 @@ impl PendingUpdateKind {
                     index: *snapshot_index,
                     component_revision: *snapshot_revision,
                     filesystem_snapshot: filesystem_snapshot.clone(),
+                    bootstrap: snapshot_bootstrap.clone(),
                 },
             })),
             oplog::UpdateDescription::SnapshotBased {

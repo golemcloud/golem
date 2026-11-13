@@ -515,12 +515,14 @@ fn with_candidates(last: u64, previous: Option<u64>) -> AgentStatusRecord {
             timestamp: Timestamp::from(1_000),
             component_revision: ComponentRevision::INITIAL,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: previous.map(|previous| {
             golem_common::model::UsableAutomaticSnapshot {
                 index: OplogIndex::from_u64(previous),
                 component_revision: ComponentRevision::INITIAL,
                 filesystem_snapshot: None,
+                bootstrap: None,
             }
         }),
         ..AgentStatusRecord::default()
@@ -963,6 +965,7 @@ fn sample_status() -> AgentStatusRecord {
                         index: OplogIndex::from_u64(7),
                         component_revision: ComponentRevision::new(3).unwrap(),
                         filesystem_snapshot: Some(assisted_name.clone()),
+                        bootstrap: None,
                     },
                 },
             )),
@@ -972,6 +975,7 @@ fn sample_status() -> AgentStatusRecord {
         kind: golem_common::model::AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: Some(assisted_name),
         },
+        bootstrap: None,
     });
     status
 }

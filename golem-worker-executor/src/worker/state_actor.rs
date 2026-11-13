@@ -1792,6 +1792,7 @@ mod tests {
                     }
                     (name, _) => golem_common::model::SnapshotFiles::named(name.cloned()),
                 },
+                bootstrap: None,
             }),
             ..AgentStatusRecord::default()
         }
@@ -1816,6 +1817,7 @@ mod tests {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: Some(name.clone()),
+            bootstrap: None,
         };
         let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
             crate::worker::status::update_status_with_new_entries(
