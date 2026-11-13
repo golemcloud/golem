@@ -462,10 +462,9 @@ async fn go_streaming_template_durable_streams_walkthrough() {
     streaming_template_walkthrough("go", "appendExternal", "readExternal").await;
 }
 
-#[test]
-#[timeout("10 minutes")]
-async fn external_durable_streams_golem_gateway_e2e() {
-    let mut ctx = TestContext::new();
+/// Copies the release WASMs of the components `golem-it:external-durable-streams` and
+/// `golem-it:agent-sdk-rust` to `external-durable-streams.wasm` and `agent-sdk-rust.wasm`.
+fn copy_two_component_fixtures(ctx: &TestContext) {
     for name in ["external-durable-streams", "agent-sdk-rust"] {
         let fixture = workspace_path().join(format!(
             "test-components/golem_it_{}_release.wasm",
@@ -477,6 +476,141 @@ async fn external_durable_streams_golem_gateway_e2e() {
         );
         fs::copy(&fixture, ctx.cwd_path_join(format!("{name}.wasm"))).unwrap();
     }
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn agent_list_pages_cross_the_components_of_an_application() {
+    let mut ctx = TestContext::new();
+    copy_two_component_fixtures(&ctx);
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: two-component-agent-list
+        environments:
+          local:
+            server: local
+        components:
+          golem-it:external-durable-streams:
+            componentWasm: external-durable-streams.wasm
+          golem-it:agent-sdk-rust:
+            componentWasm: agent-sdk-rust.wasm
+    "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    // The pages read the components in the order of their names, so `agent-sdk-rust` comes
+    // first. Its three agents fill one page of two and a half of the next one.
+    const FIRST: &str = "golem-it:agent-sdk-rust";
+    const SECOND: &str = "golem-it:external-durable-streams";
+    let agents = (1..=3)
+        .map(|n| format!(r#"RichTypesAgent("list-{n}")"#))
+        .chain((1..=4).map(|n| format!(r#"ExternalDurableStreams("list-{n}")"#)));
+    for agent in agents {
+        let output = ctx.cli([cmd::AGENT, cmd::NEW, agent.as_str()]).await;
+        assert!(output.success_or_dump());
+    }
+
+    let list = async |args: &[&str]| -> Value {
+        let mut command = vec![cmd::AGENT, cmd::LIST];
+        command.extend(args);
+        command.extend([flag::FORMAT, "json"]);
+        let output = ctx.cli(command).await;
+        assert!(output.success_or_dump());
+        output.stdout_json::<Value>().remove(0)
+    };
+    let keys = |page: &Value| -> Vec<(String, String)> {
+        page["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| {
+                (
+                    agent["componentName"].as_str().unwrap().to_string(),
+                    agent["agentId"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+
+    let mut pages = Vec::new();
+    let mut cursor = None::<String>;
+    loop {
+        let mut args = vec!["--page", "--max-count", "2"];
+        if let Some(cursor) = &cursor {
+            args.extend(["--scan-cursor", cursor.as_str()]);
+        }
+        let page = list(&args).await;
+        assert!(
+            keys(&page).len() <= 2,
+            "a page has more than 2 agents: {page}"
+        );
+        cursor = page["cursor"].as_str().map(str::to_string);
+        pages.push(keys(&page));
+        if cursor.is_none() {
+            break;
+        }
+        assert!(pages.len() < 100, "the pages do not end");
+    }
+    assert!(
+        pages
+            .iter()
+            .any(|page| page.iter().any(|(c, _)| c == FIRST)
+                && page.iter().any(|(c, _)| c == SECOND)),
+        "no page crosses from {FIRST} to {SECOND}: {pages:?}"
+    );
+    let paged = pages.concat();
+    let components = paged.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>();
+    assert!(
+        components.is_sorted(),
+        "the pages do not read the components in name order: {components:?}"
+    );
+    let mut sorted = paged.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        paged.len(),
+        "the pages repeat an agent: {paged:?}"
+    );
+    let mut listed = keys(&list(&[]).await);
+    listed.sort();
+    assert_eq!(sorted, listed);
+    assert_eq!(listed.len(), 7, "{listed:?}");
+
+    // A cursor with an empty scan part starts at the beginning of its component.
+    let second = list(&["--page", "--scan-cursor", &format!("{SECOND}/")]).await;
+    let mut second_keys = keys(&second);
+    second_keys.sort();
+    let expected = listed
+        .iter()
+        .filter(|(c, _)| c == SECOND)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(second_keys, expected);
+    assert!(second.get("cursor").is_none(), "{second}");
+
+    // A cursor of a component that is not selected is refused.
+    for (selection, cursor) in [
+        (vec![flag::COMPONENT_NAME, FIRST], format!("{SECOND}/")),
+        (vec![], "golem-it:missing/".to_string()),
+    ] {
+        let mut command = vec![cmd::AGENT, cmd::LIST, "--page", "--scan-cursor", &cursor];
+        command.extend(selection);
+        let output = ctx.cli(command).await;
+        assert!(!output.success(), "{cursor} is not refused");
+        assert!(output.stderr_contains("which is not selected"), "{cursor}");
+    }
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn external_durable_streams_golem_gateway_e2e() {
+    let mut ctx = TestContext::new();
+    copy_two_component_fixtures(&ctx);
     ctx.start_server().await;
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
