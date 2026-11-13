@@ -75,7 +75,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["--version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::RUSTC_MIN)),
-        install_hint: "Install stable Rust using your system package manager or rustup (example: rustup install stable && rustup default stable)",
+        install_hint: "Install Rust 1.99.1 with rustup and pin it in the application with rust-toolchain.toml; Golem 1.6 does not support agents built with Rust 1.100 or newer (example: rustup toolchain install 1.99.1 --target wasm32-wasip2)",
         severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
