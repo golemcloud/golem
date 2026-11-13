@@ -1707,17 +1707,22 @@ pub mod worker {
             #[arg(long, conflicts_with = "agent_type_name")]
             component_name: Option<ComponentName>,
 
-            /// Filter for agent metadata in form of `property op value`.
+            /// Filter for agent metadata in form of `property op value`, combined with
+            /// `and`, `or`, `not` and parentheses.
             ///
             /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
             /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required
-            /// and the value itself must not contain spaces.
+            /// Spaces around the operator are required. `not` binds tightest, then `and`,
+            /// then `or`; keywords are case-insensitive.
+            /// Quote a value with `"` when it contains whitespace outside parentheses, starts
+            /// with `(` or `"`, or has unbalanced parentheses or quotes; inside quotes use `\"`
+            /// and `\\`. Agent IDs such as `Counter("a b", 2)` need no extra quotes.
             ///
             /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
-            /// `status == Running`, `env.var1 == value`, `name like %worker%`.
+            /// `status == Running`, `env.var1 == value`, `name like worker`,
+            /// `(status == Failed or status == Retrying) and not env.MODE == test`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
             filter: Vec<String>,

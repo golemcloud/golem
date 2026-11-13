@@ -4098,6 +4098,7 @@ dependencies = [
  "pretty_assertions",
  "prometheus",
  "proptest",
+ "prost",
  "prost-types",
  "quote",
  "rand 0.9.5",

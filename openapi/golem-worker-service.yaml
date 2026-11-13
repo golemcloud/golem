@@ -484,7 +484,7 @@ paths:
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker, and it has no predefined meaning.
       parameters:
       - name: component_id
@@ -4104,11 +4104,16 @@ components:
       title: CompleteParameters
       required:
       - oplogIdx
+      - fingerprint
       - data
       properties:
         oplogIdx:
           type: integer
           format: uint64
+        fingerprint:
+          type: string
+          format: uuid
+          description: Fingerprint of the agent incarnation that created the promise.
         data:
           type: array
           items:

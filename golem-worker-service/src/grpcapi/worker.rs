@@ -50,6 +50,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OwnedAgentId,
+    PromiseId,
 };
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
@@ -880,9 +881,21 @@ impl WorkerGrpcApi {
             .complete_parameters
             .ok_or_else(|| bad_request_error("Missing complete parameters"))?;
 
+        let fingerprint = AgentFingerprint(
+            parameters
+                .fingerprint
+                .ok_or_else(|| bad_request_error("Missing fingerprint"))?
+                .into(),
+        );
+        let promise_id = PromiseId {
+            agent_id,
+            fingerprint,
+            oplog_idx: OplogIndex::from_u64(parameters.oplog_idx),
+        };
+
         let result = self
             .worker_service
-            .complete_promise(&agent_id, parameters.oplog_idx, parameters.data, auth)
+            .complete_promise(promise_id, parameters.data, auth)
             .await?;
 
         Ok(result)

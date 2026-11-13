@@ -1144,6 +1144,23 @@ jobs:
       - name: Test feature-gated validation with default features
         run: cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
 
+  # The compile-fail tests use trybuild, which runs cargo, so they cannot run in the unit tests.
+  # The expected compiler output is the output of a toolchain without rust-src, as setup-rust
+  # installs it.
+  golem-schema-derive:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-cargo-make: 'false'
+      - name: Test the compile errors of the derive macros
+        run: cargo test -p golem-schema-derive --test compile_fail -- --nocapture --report-time
+
   golem-client:
     runs-on: blacksmith
     env:
@@ -1962,6 +1979,7 @@ jobs:
       - config-checks
       - middleware-unit-tests
       - golem-schema-guest
+      - golem-schema-derive
       - worker-tests
       - managed-xfs-tests
       - apfs-tests

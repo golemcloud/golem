@@ -40,7 +40,9 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
-use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, PromiseId, ScanCursor,
+};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
@@ -458,8 +460,7 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn complete_promise(
         &self,
-        _: &AgentId,
-        _: u64,
+        _: &PromiseId,
         _: Vec<u8>,
         _: EnvironmentId,
         _: AuthCtx,

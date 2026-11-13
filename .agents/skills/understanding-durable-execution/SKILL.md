@@ -121,9 +121,28 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -257,9 +276,9 @@ replay tolerance.
 
 ## Worker lifecycle and reconstruction
 
-`WorkerLifecycle` (`worker/lifecycle/state.rs`) owns the private `WorkerInstance` phase under the existing lifecycle mutex. Callers inspect `state()` and use named transitions for initialization, permit admission, Store attempts, stop and deletion; they cannot replace the phase directly. `transition()` lends a phase-specific handle that borrows the lifecycle exclusively. Initialization and permit-admission transitions consume these handles, so callers cannot use a transition from the wrong phase or reuse a completed handle. After releasing and reacquiring the lock, asynchronous permit callbacks still check their attempt identity. Initialization publishes `resolved` only after installing the unloaded outcome and clearing creation provenance. The cell is the lock-free completion boundary; `initialization_request` remains available across construction failures. `Running` owns an invocation loop, not a particular Store: one loop can make several Store attempts. Waiting and running phases each own a required task handle.
+`WorkerLifecycle` (`worker/lifecycle/state.rs`) owns the private `WorkerInstance` phase under the existing lifecycle mutex. Callers inspect `state()` and use named transitions for initialization, permit admission, Store attempts, stop and deletion; they cannot replace the phase directly. `transition()` lends a phase-specific handle that borrows the lifecycle exclusively. Initialization and permit-admission transitions consume these handles, so callers cannot use a transition from the wrong phase or reuse a completed handle. After releasing and reacquiring the lock, asynchronous permit callbacks still check their attempt identity. Initialization publishes `resolved` only after installing the unloaded outcome and clearing creation provenance. The cell is the lock-free completion boundary; `initialization_request` remains available across construction failures. `Running` owns an invocation loop, not a particular Store: one loop can make several Store attempts. Waiting and running phases each own a required task handle. A failed start leaves a durable agent `Unloaded` with its `startup_failure`: admission returns that error until the next start runs the agent again. An ephemeral agent goes to the separate `Inactive` phase instead (`StartupFailure::new` chooses by agent mode). A reconstructed observation-only agent and every failed ephemeral start enter it; every start and admission returns its error, and only deletion or a cleanup failure replaces it. `EphemeralInvocationState` stays separate: it records which invocation was accepted, so a same-key retry or a result lookup is not permission to execute again.
 
-Stopping retains the existing lock/effect split. `begin_stop` returns an active `StopPhase` containing a consuming phase-specific capability that owns its extracted payload and exclusively borrows its runtime slot. Running and stopping capabilities distinguish invocation-loop and external origins; their methods expose only the corresponding completion or external-stop operation. The private `StopTransition` is not available to callers. Waiting and loop-running completion return `StopCompletion`, which retains task resources through resident waiter resolution. The fallback is installed before awaited effects; cancellation or unwind leaves cleanup failure retained when known. Inactive phases are left unchanged. An invocation-loop stop completes without joining itself. An external stop consumes the running handle, installs `Stopping` and returns `StopResult`; its caller releases the lifecycle lock before joining. Overlapping stops merge cleanup failure before deletion before unload, and failing pending live invocations wins over preserving them. Finalization reacquires the lock, resolves resident waiters and then notifies stop waiters. `Deleting` retains its runtime phase and deletion progress. `UnloadCleanup` stays separate because a bounded unload result does not prove final physical cleanup.
+Stopping retains the existing lock/effect split. `begin_stop` returns an active `StopPhase` containing a consuming phase-specific capability that owns its extracted payload and exclusively borrows its runtime slot. Running and stopping capabilities distinguish invocation-loop and external origins; their methods expose only the corresponding completion or external-stop operation. The private `StopTransition` is not available to callers. Waiting and loop-running completion return `StopCompletion`, which retains task resources through resident waiter resolution. The fallback is installed before awaited effects; cancellation or unwind leaves cleanup failure retained when known, and an `Inactive` agent stays inactive. Phases without a runtime are left unchanged. An invocation-loop stop completes without joining itself. An external stop consumes the running handle, installs `Stopping` and returns `StopResult`; its caller releases the lifecycle lock before joining. Overlapping stops merge cleanup failure before deletion before inactivity before unload, and failing pending live invocations wins over preserving them. Finalization reacquires the lock, resolves resident waiters and then notifies stop waiters. `Deleting` retains its runtime phase and deletion progress. `UnloadCleanup` stays separate because a bounded unload result does not prove final physical cleanup.
 
 `OwnerExecution` installs the replay cursor and live wallet together in `OwnerReplayGeneration`.
 Startup seals old append tasks, takes the card boundary, commits the horizon and selects the wallet

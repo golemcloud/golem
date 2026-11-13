@@ -905,8 +905,12 @@ type OplogIndex = uint64
 // complete that promise from an arbitrary external source, while Golem
 // agents can await for this completion.
 type PromiseId struct {
-	AgentId  AgentId
-	OplogIdx uint64
+	AgentId AgentId
+	// Fingerprint of the agent incarnation that created the promise. A deleted and
+	// re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+	// of the deleted incarnation do not reach the new one.
+	Fingerprint Uuid
+	OplogIdx    uint64
 }
 
 //go:wasmimport golem:core/types@2.0.0 [resource-drop]quota-token

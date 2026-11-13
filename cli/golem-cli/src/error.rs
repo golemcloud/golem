@@ -583,8 +583,9 @@ pub mod service {
 
     pub fn display_promise_id(promise_id: PromiseId) -> String {
         format!(
-            "{}/{}",
+            "{}/{}/{}",
             display_agent_id(promise_id.agent_id),
+            promise_id.fingerprint,
             promise_id.oplog_idx
         )
     }

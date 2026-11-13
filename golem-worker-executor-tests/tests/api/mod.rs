@@ -37,8 +37,8 @@ use golem_common::model::{
     IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig, ScanCursor,
     StringFilterComparator,
 };
-use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_service_base::clients::registry::{
     RegistryService, RegistryServiceError, ResourceUsageUpdate,
@@ -3773,15 +3773,8 @@ async fn promise(
 
     info!("Completing promise to resume worker");
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     let result = fiber.await??;
@@ -3796,6 +3789,337 @@ async fn promise(
         SchemaValue::List {
             elements: vec![SchemaValue::U8(42)]
         }
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn promise_of_a_deleted_incarnation_does_not_reach_the_recreated_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::promise::promise_namespace_of;
+    use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+
+    let context = TestContext::new(last_unique_id);
+    let storage: Arc<std::sync::Mutex<Option<Arc<dyn KeyValueStorage + Send + Sync>>>> =
+        Arc::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let storage = storage.clone();
+                move |inner| {
+                    *storage.lock().unwrap() = Some(inner.clone());
+                    inner
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let storage = storage
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the executor uses key-value storage");
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", "promise-incarnations");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let old_promise_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let old_promise_id = promise_id_from_value(&old_promise_value);
+    // A completed promise has both its pending and its completed row.
+    executor.complete_promise(&old_promise_id, vec![0]).await?;
+    let old_namespace = promise_namespace_of(&worker_id, old_promise_id.fingerprint);
+    assert!(
+        !storage
+            .with("test", "keys")
+            .keys(old_namespace.clone())
+            .await
+            .map_err(|e| anyhow!(e))?
+            .is_empty()
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace)
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new(),
+        "delete must remove the deleted incarnation's promises"
+    );
+
+    // Before any re-creation, the deleted incarnation's promise is gone from storage.
+    let error = executor
+        .complete_promise(&old_promise_id, vec![1])
+        .await
+        .expect_err("completing a promise of a deleted agent must fail");
+    assert!(
+        format!("{error:?}").contains("PromiseNotFound"),
+        "unexpected error: {error:?}"
+    );
+
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let new_promise_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let new_promise_id = promise_id_from_value(&new_promise_value);
+    assert_eq!(new_promise_id.agent_id, old_promise_id.agent_id);
+    assert_ne!(new_promise_id.fingerprint, old_promise_id.fingerprint);
+
+    // The new incarnation restarts its oplog, so its promises can reuse the deleted
+    // incarnation's oplog indexes. An ID that differs from the new promise only in the
+    // fingerprint must not reach it.
+    let colliding_promise_id = PromiseId {
+        fingerprint: old_promise_id.fingerprint,
+        ..new_promise_id.clone()
+    };
+    for promise_id in [&old_promise_id, &colliding_promise_id] {
+        let error = executor
+            .complete_promise(promise_id, vec![1])
+            .await
+            .expect_err("an old incarnation's promise ID must not complete the new promise");
+        assert!(
+            format!("{error:?}").contains("PromiseNotFound"),
+            "unexpected error for {promise_id}: {error:?}"
+        );
+    }
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let mut fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    crate::raw_params(vec![new_promise_value]),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+    tokio::select! {
+        result = &mut fiber => {
+            return Err(anyhow!("the new promise was not pending: {:?}", result??));
+        }
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+    executor.complete_promise(&new_promise_id, vec![2]).await?;
+    assert_eq!(
+        fiber.await??.into_return_value(),
+        Some(SchemaValue::List {
+            elements: vec![SchemaValue::U8(2)]
+        })
+    );
+
+    // The new incarnation cannot await the old incarnation's promise either.
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "await_promise",
+            crate::raw_params(vec![old_promise_value]),
+        )
+        .await
+        .expect_err("awaiting the old promise ID must fail");
+    assert!(
+        format!("{error:?}").contains("not created by the current agent"),
+        "unexpected error: {error:?}"
+    );
+
+    Ok(())
+}
+
+/// Agent deletion and an ordinary completion of one of the deleted incarnation's promises race.
+/// The completion is paused between its check that the promise exists and its write of the
+/// result. Deletion must not remove the incarnation's promises while that write is outstanding:
+/// the write would then land after the removal and leave a row that nothing removes.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn promise_completion_racing_agent_deletion_leaves_no_row_of_the_deleted_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::promise::promise_namespace_of;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageLabelledApi};
+
+    struct DurableStateRemovalReached(Arc<tokio::sync::Notify>);
+
+    #[async_trait]
+    impl WorkerDeletionHook for DurableStateRemovalReached {
+        async fn before_stage(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            stage: WorkerDeletionStage,
+        ) -> Result<(), WorkerExecutorError> {
+            if stage == WorkerDeletionStage::DurableStateRemoved {
+                self.0.notify_one();
+            }
+            Ok(())
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let storage: Arc<Mutex<Option<Arc<dyn KeyValueStorage + Send + Sync>>>> = Arc::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                let storage = storage.clone();
+                move |inner| {
+                    *storage.lock().unwrap() = Some(inner.clone());
+                    Arc::new(FaultInjectingKeyValueStorage::new(inner, faults.clone()))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let storage = storage
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the executor uses key-value storage");
+    let removal_reached = Arc::new(tokio::sync::Notify::new());
+    executor.set_worker_deletion_hook(Arc::new(DurableStateRemovalReached(
+        removal_reached.clone(),
+    )));
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "promise-completion-racing-delete");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let old_promise_id = promise_id_from_value(
+        &executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?,
+    );
+    let old_namespace = promise_namespace_of(&worker_id, old_promise_id.fingerprint);
+
+    // A completion first checks that the promise exists, then writes its result; both storage
+    // calls are labelled `complete`. The first gate lets the check through and arms the second,
+    // which holds the write.
+    let check = faults.pause_next("complete");
+    let mut completion = tokio::spawn({
+        let executor = executor.clone();
+        let promise_id = old_promise_id.clone();
+        async move { executor.complete_promise(&promise_id, vec![1]).await }.in_current_span()
+    });
+    check.entered().await;
+    let write = faults.pause_next("complete");
+    check.release();
+    tokio::select! {
+        _ = write.entered() => {}
+        result = &mut completion => bail!("the completion did not reach its write: {result:?}"),
+    }
+
+    let mut deletion = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    removal_reached.notified().await;
+    // Deletion now removes the incarnation's durable state, promises included. It must wait for
+    // the paused write; the bound only ends the wait for a deletion that must not finish.
+    let early_deletion = tokio::time::timeout(Duration::from_secs(3), &mut deletion).await;
+    let deletion_finished_during_write = early_deletion.is_ok();
+    write.release();
+    let completion = completion.await?;
+    match early_deletion {
+        Ok(deletion) => deletion??,
+        Err(_) => deletion.await??,
+    }
+
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace.clone())
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new(),
+        "no promise row of the deleted incarnation may remain"
+    );
+    assert!(
+        !deletion_finished_during_write,
+        "deletion finished while a completion was between its check and its write"
+    );
+    completion?;
+
+    // The re-created agent's promise is untouched by the deleted incarnation's completion.
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let new_promise_id = promise_id_from_value(
+        &executor
+            .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?,
+    );
+    assert_ne!(new_promise_id.fingerprint, old_promise_id.fingerprint);
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(promise_namespace_of(&worker_id, new_promise_id.fingerprint))
+            .await
+            .map_err(|e| anyhow!(e))?
+            .len(),
+        1,
+        "the re-created agent's promise must be pending and uncompleted"
+    );
+    assert_eq!(
+        storage
+            .with("test", "keys")
+            .keys(old_namespace)
+            .await
+            .map_err(|e| anyhow!(e))?,
+        Vec::<String>::new()
     );
 
     Ok(())
@@ -3852,15 +4176,8 @@ async fn p3_promise_suspend_survives_executor_restart(
         .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     executor
@@ -3890,14 +4207,8 @@ async fn p3_promise_suspend_survives_executor_restart(
     Ok(())
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
-    let SchemaValue::Record { fields } = promise_id_value else {
-        panic!("Expected a record for PromiseId");
-    };
-    let SchemaValue::U64(oplog_idx) = fields[1] else {
-        panic!("Expected u64 oplog-idx field");
-    };
-    OplogIndex::from_u64(oplog_idx)
+fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
+    PromiseId::from_value(value).expect("expected a promise ID returned by the guest")
 }
 
 #[test]
@@ -4221,15 +4532,8 @@ async fn get_workers_opaque_cursor_replays_after_restart(
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: caller_id.clone(),
-                oplog_idx,
-            },
-            Vec::new(),
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), Vec::new())
         .await?;
     let pages = executor
         .invoke_and_await_agent_with_key(
@@ -6099,14 +6403,12 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 .all()
                 .promise_service();
             executor.delete_worker(&worker_id).await?;
-            let before = if recreate {
+            let (before, promise_fingerprint) = if recreate {
                 executor
                     .start_agent(&component.id, counter_id.clone())
                     .await?;
-                assert_ne!(
-                    executor.get_worker_metadata(&worker_id).await?.fingerprint,
-                    original.fingerprint
-                );
+                let replacement = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+                assert_ne!(replacement, original.fingerprint);
                 executor
                     .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
                     .await?;
@@ -6122,14 +6424,17 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 .await?;
                 executor.retire_unloaded_worker(&owned).await?;
                 assert!(!executor.worker_is_cached(&owned).await);
-                Some(executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)
+                (
+                    Some(executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+                    replacement,
+                )
             } else {
-                None
+                (None, original.fingerprint)
             };
             // Reuse the public promise identity deliberately: stale delivery must not
             // complete a replacement's promise at the same oplog index.
             let promise_id = promises
-                .create(&worker_id, OplogIndex::from_u64(42))
+                .create(&worker_id, promise_fingerprint, OplogIndex::from_u64(42))
                 .await?;
             let promise = promises.poll(promise_id.clone()).await?;
             let action = match kind {
@@ -8340,16 +8645,8 @@ async fn cancelling_pending_invocations(
     let cancel4 = executor.cancel_invocation(&worker_id, &stored_ik4).await;
 
     // Extract oplog_idx from promise value to complete it
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
-
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx,
-            },
-            vec![42],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id_value), vec![42])
         .await?;
 
     // get_value should be 5 + 7 = 12 (ik1 already done, ik2 cancelled, ik3 goes through)
@@ -11597,15 +11894,8 @@ impl ParkedCaller {
         executor: &TestWorkerExecutor,
         payload: Vec<u8>,
     ) -> anyhow::Result<()> {
-        let oplog_idx = extract_oplog_idx_from_promise_id(&self.promise_id);
         executor
-            .complete_promise(
-                &PromiseId {
-                    agent_id: self.agent_id.clone(),
-                    oplog_idx,
-                },
-                payload,
-            )
+            .complete_promise(&promise_id_from_value(&self.promise_id), payload)
             .await?;
         Ok(())
     }
@@ -11837,12 +12127,6 @@ async fn duplicate_request_checks_do_not_read_more_for_longer_invocations(
             .await?
             .into_return_value()
             .expect("create_promise must return an id");
-        let SchemaValue::Record { fields } = &promise_id else {
-            panic!("expected promise id record")
-        };
-        let SchemaValue::U64(promise_index) = fields[1] else {
-            panic!("expected promise id oplog index")
-        };
         let key = IdempotencyKey::fresh();
         let started = executor.oplog_max_index(&worker_id).await?;
         executor
@@ -11889,13 +12173,7 @@ async fn duplicate_request_checks_do_not_read_more_for_longer_invocations(
         );
 
         executor
-            .complete_promise(
-                &PromiseId {
-                    agent_id: worker_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(promise_index),
-                },
-                vec![5],
-            )
+            .complete_promise(&promise_id_from_value(&promise_id), vec![5])
             .await?;
         let result = executor
             .invoke_and_await_agent_with_key(

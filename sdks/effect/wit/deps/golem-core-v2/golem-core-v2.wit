@@ -118,6 +118,10 @@ interface types {
     /// agents can await for this completion.
     record promise-id {
         agent-id: agent-id,
+        /// Fingerprint of the agent incarnation that created the promise. A deleted and
+        /// re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+        /// of the deleted incarnation do not reach the new one.
+        fingerprint: uuid,
         oplog-idx: oplog-index,
     }
 

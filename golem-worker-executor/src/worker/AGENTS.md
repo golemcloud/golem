@@ -51,7 +51,9 @@ Ephemeral agents are fail-stop. Before an ephemeral instance runs guest code,
 `Worker::begin_ephemeral_execution` commits a `Restart` entry under the instance mutex; the status
 fold sets `ephemeral_execution_begun` permanently. Once it is set, `reconstructed_ephemeral` exists
 only for observation and invocation result lookup, and the instance must never be started again
-(`INACTIVE_EPHEMERAL_AGENT_ERROR`). The one exception is an agent that never began and still holds
+(`INACTIVE_EPHEMERAL_AGENT_ERROR`). The lifecycle holds this as the `Inactive` phase, which a failed
+ephemeral start also enters; a durable agent's failed start stays a retryable
+`Unloaded { startup_failure }`. The one exception is an agent that never began and still holds
 its constructor reservation (`never_started_ephemeral_admission`): it may accept one method when it
 has none yet, as when a schedule repair finds the target its first attempt created, and it may run
 one accepted scheduled method cold. A scheduled ephemeral target is created at schedule time with
