@@ -118,5 +118,5 @@ url = ["dep:url", "golem-schema/url"]
 golem-schema = { path = "../../../golem-schema", version = "0.0.0", default-features = false, features = ["rich-validation"] }
 test-r = "3.0.9"
 proptest = "1.4.0"
-trybuild = "1.0.116"
+trybuild = "1.0.122"
 criterion = "0.5"
