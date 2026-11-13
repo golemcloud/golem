@@ -629,40 +629,27 @@ pub(crate) enum GuestCallSettlementError {
 /// Permanent guest instruction failures and uncaught wasm exceptions that a tool boundary can
 /// record as its own terminal.
 /// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
-/// does not establish guest origin. Keep the allowlist aligned with `TrapType::from_error`.
+/// does not establish guest origin. Agent and tool classification share the instruction predicate.
 pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
-    if error.chain().any(|cause| {
-        cause.is::<GolemSpecificWasmTrap>()
-            || cause.is::<ClassifiedHostError>()
-            || cause.is::<SemanticTrapRetryOverrideMarker>()
-            || cause.is::<DurableCallTrapContextMarker>()
-            || cause.is::<DurableRecoveryFailure>()
-            || cause.is::<UnreadableOplog>()
-            || cause.is::<WorkerExecutorError>()
-            || cause.is::<InterruptKind>()
-            || cause.is::<wasmtime_wasi::I32Exit>()
-    }) {
+    fn has_cause<T: std::error::Error + Send + Sync + 'static>(error: &wasmtime::Error) -> bool {
+        // Typed anyhow context is downcastable but is not an item in the source chain.
+        error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
+    }
+
+    if has_cause::<GolemSpecificWasmTrap>(error)
+        || has_cause::<ClassifiedHostError>(error)
+        || has_cause::<SemanticTrapRetryOverrideMarker>(error)
+        || has_cause::<DurableCallTrapContextMarker>(error)
+        || has_cause::<DurableRecoveryFailure>(error)
+        || has_cause::<UnreadableOplog>(error)
+        || has_cause::<WorkerExecutorError>(error)
+        || has_cause::<InterruptKind>(error)
+        || has_cause::<wasmtime_wasi::I32Exit>(error)
+    {
         return None;
     }
 
-    let permanent = matches!(
-        error.root_cause().downcast_ref::<wasmtime::Trap>(),
-        Some(
-            wasmtime::Trap::StackOverflow
-                | wasmtime::Trap::UnreachableCodeReached
-                | wasmtime::Trap::MemoryOutOfBounds
-                | wasmtime::Trap::TableOutOfBounds
-                | wasmtime::Trap::IndirectCallToNull
-                | wasmtime::Trap::BadSignature
-                | wasmtime::Trap::IntegerOverflow
-                | wasmtime::Trap::IntegerDivisionByZero
-                | wasmtime::Trap::BadConversionToInteger
-                | wasmtime::Trap::HeapMisaligned
-                | wasmtime::Trap::NullReference
-                | wasmtime::Trap::AtomicWaitNonSharedMemory
-                | wasmtime::Trap::UncaughtException,
-        )
-    ) || error.root_cause().is::<wasmtime::ThrownException>();
+    let permanent = crate::model::deterministic_guest_trap(error.root_cause());
     permanent.then(|| {
         error
             .chain()
@@ -3165,6 +3152,9 @@ mod tests {
             Trap::HeapMisaligned,
             Trap::NullReference,
             Trap::AtomicWaitNonSharedMemory,
+            Trap::CastFailure,
+            Trap::ArrayOutOfBounds,
+            Trap::AllocationTooLarge,
         ] {
             let error = wasmtime::Error::from_anyhow(trap.into());
             assert_eq!(
@@ -3232,6 +3222,16 @@ mod tests {
         let instruction_trap = || anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached);
         for failure in [
             anyhow::anyhow!("unclassified host failure"),
+            anyhow::Error::new(wasmtime::Trap::CastFailure)
+                .context(GolemSpecificWasmTrap::WorkerExceededMemoryLimit),
+            anyhow::Error::new(wasmtime::Trap::ArrayOutOfBounds)
+                .context(GolemSpecificWasmTrap::WorkerOutOfMemory),
+            mark_durable_call_trap_context(
+                anyhow::Error::new(wasmtime::Trap::AllocationTooLarge),
+                DurableCallTrapContext {
+                    retry_from: OplogIndex::from_u64(17),
+                },
+            ),
             anyhow::Error::new(ClassifiedHostError {
                 kind: HostFailureKind::Permanent,
                 message: "permanent host failure".into(),
