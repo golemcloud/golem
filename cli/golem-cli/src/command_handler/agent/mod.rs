@@ -2866,19 +2866,15 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let rendered = if let Some(service_error) = error
+        let previous_invocation_failed = error
             .downcast_ref::<ServiceError>()
-            .filter(|service_error| service_error.is_previous_invocation_failed())
-        {
-            service_error.render()
-        } else if let Some(failure) = error
-            .downcast_ref::<invocation_session::InvocationFailure>()
-            .filter(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed)
-        {
-            failure.to_string()
-        } else {
+            .is_some_and(|service_error| service_error.is_previous_invocation_failed())
+            || error
+                .downcast_ref::<invocation_session::InvocationFailure>()
+                .is_some_and(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed);
+        if !previous_invocation_failed {
             return error;
-        };
+        }
 
         let command = render_revert_command(
             &crate::command_name(),
@@ -2890,11 +2886,11 @@ impl AgentCommandHandler {
             &agent_id_match.agent_id,
         );
 
-        anyhow!(
-            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            rendered,
-            command,
-        )
+        // The original error stays the source, so that its code and details reach structured
+        // error reports; `{:#}` prints the hint and then the original error.
+        error.context(format!(
+            "The previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {command}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.\n\nThe error of the server"
+        ))
     }
 
     async fn interrupt_agent(
