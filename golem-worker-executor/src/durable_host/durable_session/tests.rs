@@ -2193,7 +2193,7 @@ async fn output_drains_preserve_typed_terminals_authors_and_source_origin() {
                         None,
                         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: identity.invocation.idempotency_key.clone(),
+                            session_key: identity.invocation.idempotency_key,
                             attachment_id,
                             attempt_id,
                             epoch: 1,
@@ -3949,7 +3949,7 @@ async fn scalar_source_failures_reproduce_their_recorded_terminal() {
         let streams = StreamSession::new(
             producer.clone(),
             oplog.clone(),
-            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
             [],
         );
         let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
@@ -5657,7 +5657,7 @@ async fn protocol_failure_preserves_author_and_terminal_after_cold_reconstructio
     let session = open_local_session(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         mappings.clone(),
     )
     .await

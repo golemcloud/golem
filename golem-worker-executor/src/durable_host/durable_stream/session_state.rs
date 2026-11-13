@@ -1960,10 +1960,8 @@ mod tests {
             };
             let intent = StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    owner.invocation.idempotency_key.clone(),
-                ),
-                consumer_invocation: owner.invocation.idempotency_key.clone(),
+                session_key: StreamRegistrationInvocation::Local(owner.invocation.idempotency_key),
+                consumer_invocation: owner.invocation.idempotency_key,
                 source: binding(&mapping).source,
                 epoch: 3,
                 cancellation: StreamCancellationRequest {

@@ -159,7 +159,7 @@ async fn routed_stream_session(
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            identity.invocation.idempotency_key.clone(),
+            identity.invocation.idempotency_key,
             OplogPayload::Inline(Box::new(
                 golem_common::model::AgentInvocationPayload::SaveSnapshot,
             )),
@@ -174,7 +174,7 @@ async fn routed_stream_session(
             None,
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.idempotency_key.clone(),
+                session_key: identity.invocation.idempotency_key,
                 attachment_id,
                 attempt_id,
                 epoch: 1,

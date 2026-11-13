@@ -400,7 +400,7 @@ async fn persisted_metadata_restores_entity_attribution() {
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = producer.register(None, request).await.unwrap().value;
     let reference =
-        StreamRegistrationInvocation::Local(fixture.identity.invocation.idempotency_key.clone());
+        StreamRegistrationInvocation::Local(fixture.identity.invocation.idempotency_key);
     producer
         .append_session_record_attributed(
             None,
@@ -2642,7 +2642,7 @@ async fn host_observation_includes_native_append_before_its_mutation() {
     let consumer = fixture.producer().await;
     let session = fixture.identity.invocation.clone();
     let reader = local_reader(2, 0);
-    let reference = StreamRegistrationInvocation::Local(session.idempotency_key.clone());
+    let reference = StreamRegistrationInvocation::Local(session.idempotency_key);
     let item = |ordinal, bytes| {
         consumer_item_record(
             reference.clone(),
