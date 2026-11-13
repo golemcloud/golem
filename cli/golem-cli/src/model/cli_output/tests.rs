@@ -1368,6 +1368,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1384,6 +1385,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -5946,6 +5948,12 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    agent_types: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                            golem_common::model::agent::AgentTypeName("agent".to_string()),
+                        )),
+                    )]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -5985,6 +5993,25 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    agent_types: BTreeMap::from_iter([
+                        (
+                            "agent".to_string(),
+                            golem_common::model::diff::HashOf::form_value(
+                                golem_common::schema::agent::AgentTypeSchema {
+                                    description: "changed".to_string(),
+                                    ..sample_agent_type_schema(
+                                        golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                    )
+                                },
+                            ),
+                        ),
+                        (
+                            "added".to_string(),
+                            golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                                golem_common::model::agent::AgentTypeName("added".to_string()),
+                            )),
+                        ),
+                    ]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -6832,20 +6859,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_hash(),
         arb_small_u64(),
         proptest::collection::vec(
-            (
-                proptest::option::of(any::<u32>()),
-                proptest::option::of(arb_small_string()),
-                arb_small_string(),
-            )
-                .prop_map(|(import_index, upstream_tool_name, reason)| {
-                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
-                        golem_common::model::deployment::McpImportDiscovery {
-                            import_index,
-                            upstream_tool_name,
-                            reason,
-                        },
-                    )
-                }),
+            prop_oneof![
+                (
+                    proptest::option::of(any::<u32>()),
+                    proptest::option::of(arb_small_string()),
+                    arb_small_string(),
+                )
+                    .prop_map(|(import_index, upstream_tool_name, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                            golem_common::model::deployment::McpImportDiscovery {
+                                import_index,
+                                upstream_tool_name,
+                                reason,
+                            },
+                        )
+                    }),
+                (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                    |(agent_type, path, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::IncompatibleConstructorChange(
+                            golem_common::model::deployment::IncompatibleConstructorChange {
+                                agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                                path,
+                                reason,
+                            },
+                        )
+                    }
+                ),
+            ],
             0..4,
         ),
     )

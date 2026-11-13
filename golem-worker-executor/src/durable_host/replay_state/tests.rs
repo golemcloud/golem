@@ -15151,9 +15151,7 @@ async fn strict_bootstrap_cursor_diverges_on_a_durable_call_after_its_block() {
         ))
         .await
         .unwrap();
-    let switched = bootstrap
-        .finish_bootstrap_replay()
-        .await;
+    let switched = bootstrap.finish_bootstrap_replay().await;
 
     assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
     assert!(matches!(
@@ -15205,10 +15203,7 @@ async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() 
         ))
         .await
         .unwrap();
-    let switched = bootstrap
-        .finish_bootstrap_replay()
-        .await
-        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await.unwrap();
 
     assert_eq!(claimed, (4, 5));
     assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));

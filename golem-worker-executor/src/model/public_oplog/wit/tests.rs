@@ -775,6 +775,13 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                 local_agent_config: Vec::new(),
                 original_phantom_id: Some(phantom_id),
                 instance_id,
+                create_request: golem_common::model::oplog::CreateRequest::new(
+                    golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                    None,
+                    golem_common::model::agent::Principal::anonymous(),
+                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
+                    ),
+                ),
             }),
         };
         let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()

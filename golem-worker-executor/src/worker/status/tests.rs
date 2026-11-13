@@ -4499,6 +4499,13 @@ impl TestCaseBuilder {
                         local_agent_config: Vec::new(),
                         original_phantom_id: None,
                         instance_id,
+                        create_request: golem_common::model::oplog::CreateRequest::new(
+                            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                            None,
+                            golem_common::model::agent::Principal::anonymous(),
+                            &golem_common::model::invocation_context::InvocationContextStack::fresh(
+                            ),
+                        ),
                     },
                 )),
                 expected_status: status.clone(),

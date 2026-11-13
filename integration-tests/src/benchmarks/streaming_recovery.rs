@@ -22,7 +22,7 @@ use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
@@ -80,7 +80,7 @@ pub struct RecoveryIteration {
     environment: String,
     deadline: tokio::time::Instant,
     warm_agent: Option<AgentId>,
-    agents: Vec<ParsedAgentId>,
+    agents: Vec<ParsedAgentKey>,
     gates: Vec<PromiseId>,
     expected: Vec<Vec<(u32, u32)>>,
     streams: Vec<Vec<StreamId>>,

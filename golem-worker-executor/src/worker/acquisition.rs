@@ -111,6 +111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context_stack,
             principal,
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
     }
@@ -124,6 +125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -139,6 +141,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context_stack,
                 principal,
                 freshness_disposition,
+                create_intent,
             )
             .await
     }
@@ -193,6 +196,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
         mut freshness_disposition: InvocationFreshnessDisposition,
+        create_intent: CreateIntent,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -208,6 +212,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context_stack,
                 principal.clone(),
                 freshness_disposition,
+                create_intent.clone(),
             )
             .await?;
             if worker.agent_mode() != AgentMode::Ephemeral {
@@ -316,6 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context_stack,
             principal,
             freshness_disposition,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -349,7 +355,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_metadata(owned_agent_id.component_id(), None)
             .await?;
         let parsed_agent_id =
-            match ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata) {
+            match ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata) {
                 Ok(parsed_agent_id) => parsed_agent_id,
                 Err(_) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
                     return Ok(());
@@ -465,7 +471,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             instance: Arc::new(Mutex::new(WorkerLifecycle::unresolved())),
             unload_cleanup: StdMutex::new(None),
             resolved: OnceCell::new(),
-            initialization_request: StdMutex::new(None),
+            unpublished_create: AtomicBool::new(false),
         })
     }
     /// Joins final cleanup after the caller has fenced and stopped the runtime. Unlike the
@@ -474,14 +480,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn wait_for_unload_cleanup(&self) -> Result<(), WorkerExecutorError> {
         let instance = self.instance.lock().await;
         let cleanup = self.unload_cleanup.lock().unwrap().clone();
-        let missing_cleanup_error = match instance.deletion_runtime() {
-            WorkerInstance::CleanupFailed(error) if cleanup.is_none() => Some(error.clone()),
-            WorkerInstance::Running(_)
-            | WorkerInstance::Stopping(_)
-            | WorkerInstance::WaitingForPermit(_) => Some(WorkerExecutorError::runtime(
+        let missing_cleanup_error = if instance.runtime_active() {
+            Some(WorkerExecutorError::runtime(
                 "worker runtime has not stopped before cleanup wait",
-            )),
-            _ => None,
+            ))
+        } else {
+            instance
+                .cleanup_failure()
+                .filter(|_| cleanup.is_none())
+                .cloned()
         };
         drop(instance);
         if let Some(error) = missing_cleanup_error {
@@ -502,9 +509,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
+        create_intent: CreateIntent,
     ) -> Result<(), WorkerExecutorError> {
         loop {
             let worker = self.clone();
+            let create_intent = create_intent.clone();
             let worker_env = worker_env.clone();
             let worker_agent_config = worker_agent_config.clone();
             let parent = parent.clone();
@@ -517,14 +526,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .lock_lifecycle(&worker.owned_agent_id.agent_id)
                     .await;
-                let freshness_disposition =
-                    if worker.initialization_request.lock().unwrap().is_some() {
-                        // A failed attempt committed Create. Even a KnownFresh request must reload
-                        // that incarnation rather than create another one.
-                        InvocationFreshnessDisposition::MayExist
-                    } else {
-                        freshness_disposition
-                    };
+                let freshness_disposition = if worker.unpublished_create.load(Ordering::Acquire) {
+                    // A failed attempt committed Create. Even a KnownFresh request must reload
+                    // that incarnation rather than create another one.
+                    InvocationFreshnessDisposition::MayExist
+                } else {
+                    freshness_disposition
+                };
                 let metadata = Self::get_or_create_worker_metadata(
                     &worker.deps,
                     &mut lifecycle,
@@ -533,17 +541,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_env,
                     worker_agent_config,
                     parent,
+                    &principal,
+                    &invocation_context_stack,
                     freshness_disposition,
                     creation_mode,
+                    &create_intent,
                 )
                 .await;
-                worker
-                    .finish_construction(
-                        start,
-                        metadata,
-                        Some((invocation_context_stack, principal)),
-                    )
-                    .await
+                worker.finish_construction(start, metadata).await
             }
             .boxed();
             let (started, result) = self.initialize_with(build).await;
@@ -563,7 +568,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
-        principal: Principal,
+        _principal: Principal,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
@@ -600,13 +605,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
                 })
             });
-            worker
-                .finish_construction(
-                    start,
-                    metadata,
-                    Some((InvocationContextStack::fresh(), principal)),
-                )
-                .await
+            worker.finish_construction(start, metadata).await
         }
         .boxed();
         self.initialize_with(build).await.1
@@ -638,7 +637,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let published = match instance.transition() {
                             LifecycleTransition::Initializing(initializing) => match result {
                                 Ok((data, reconstructed_ephemeral)) => {
-                                    worker.initialization_request.lock().unwrap().take();
+                                    worker.unpublished_create.store(false, Ordering::Release);
                                     initializing.complete_initialization(
                                         reconstructed_ephemeral
                                             .then(inactive_ephemeral_agent_error),
@@ -721,7 +720,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         start: std::time::Instant,
         metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
-        initialization: Option<(InvocationContextStack, Principal)>,
     ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
         let mut metadata = match metadata {
             Ok(result) => result,
@@ -736,22 +734,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.deps.extra_deps(),
         );
         let construction_oplog = metadata.oplog.clone();
-        let (worker, reconstructed_ephemeral) =
-            match self.prepare_worker_data(metadata, initialization).await {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    // The caller retains the cold lifecycle guard until all attempt-owned actors,
-                    // transfers and monitors have exited. Persisted data belongs to the next retry.
-                    let error = match construction_oplog.stop_and_wait().await {
-                        Ok(()) => error,
-                        Err(cleanup_error) => WorkerExecutorError::runtime(format!(
-                            "{error}; failed to stop construction work: {cleanup_error}"
-                        )),
-                    };
-                    crate::metrics::wasm::record_create_worker_failure(&error);
-                    return Err(error);
-                }
-            };
+        let (worker, reconstructed_ephemeral) = match self.prepare_worker_data(metadata).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // The caller retains the cold lifecycle guard until all attempt-owned actors,
+                // transfers and monitors have exited. Persisted data belongs to the next retry.
+                let error = match construction_oplog.stop_and_wait().await {
+                    Ok(()) => error,
+                    Err(cleanup_error) => WorkerExecutorError::runtime(format!(
+                        "{error}; failed to stop construction work: {cleanup_error}"
+                    )),
+                };
+                crate::metrics::wasm::record_create_worker_failure(&error);
+                return Err(error);
+            }
+        };
         crate::metrics::wasm::record_create_worker(start.elapsed());
 
         Ok((worker, reconstructed_ephemeral))
@@ -759,7 +756,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn prepare_worker_data(
         self: &Arc<Self>,
         metadata: GetOrCreateWorkerResult,
-        initialization: Option<(InvocationContextStack, Principal)>,
     ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
         let deps = &self.deps;
         let owned_agent_id = self.owned_agent_id.clone();
@@ -778,7 +774,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // An unpublished local creation has never admitted a guest invocation. Retrying that
         // same creation is not reconstruction of a previously running ephemeral agent.
         let reconstructed_ephemeral =
-            reconstructed_ephemeral && self.initialization_request.lock().unwrap().is_none();
+            reconstructed_ephemeral && !self.unpublished_create.load(Ordering::Acquire);
         // A reconstructed ephemeral agent that never began executing may still run the work it
         // accepted; nothing of it has run yet, so this is its first execution, not a restart.
         let never_started_admission = reconstructed_ephemeral
@@ -792,17 +788,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })
             .flatten();
         let reconstructed_ephemeral = reconstructed_ephemeral && never_started_admission.is_none();
-        let initialization = {
-            let mut request = self.initialization_request.lock().unwrap();
-            if newly_created {
-                // Retain provenance only after this request actually created the incarnation.
-                *request = initialization;
-                request.clone()
-            } else {
-                request.clone().or(initialization)
-            }
-        };
         if newly_created {
+            self.unpublished_create.store(true, Ordering::Release);
             let initial_status = current_status.load_full().as_ref().clone();
             deps.worker_service()
                 .update_cached_status(
@@ -1017,13 +1004,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
 
-        // A crash may leave only Create. The initialization reservation excludes ordinary
-        // invocation admission; the status actor still performs the persisted dedupe.
-        if let (Some(agent_id), Some((invocation_context, principal))) =
-            (worker.owner_context.agent(), initialization)
+        // A crash may leave only Create. The initialization runs with the identity of the request
+        // that created the agent, whichever request loads it now. The initialization reservation
+        // excludes ordinary invocation admission; the status actor still performs the persisted
+        // dedupe.
+        if let Some(agent_id) = worker.owner_context.agent()
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
         {
+            let create_request = &worker.initial_worker_metadata.create_request;
+            let invocation_context = create_request.invocation_context();
+            let principal = create_request.principal.clone();
             let idempotency_key = self.initialization_idempotency_key();
             let (_, entry) = self
                 .pending_invocation_entry(
@@ -1124,7 +1115,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug_assert_eq!(component_id, owned_agent_id.component_id());
         if let Some(agent_type_name) = &initial_worker_metadata.agent_type_name {
             debug_assert_eq!(
-                ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
+                ParsedAgentKey::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
                 Ok(agent_type_name),
             );
         }
@@ -1225,8 +1216,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
+        principal: &Principal,
+        invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
+        create_intent: &CreateIntent,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         // Captured once, here, and cached for the life of the oplog. One live oplog is one
         // ownership generation. Re-reading the epoch per write would only let a losing executor
@@ -1366,6 +1360,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
+                    create_request: create_intent.request(
+                        agent_id.as_ref().and_then(|id| id.phantom_id),
+                        principal.clone(),
+                        &invocation_context
+                            .clone()
+                            .limit_depth(this.config().limits.max_invocation_context_stack_depth),
+                    ),
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1408,6 +1409,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         local_agent_config,
                         original_phantom_id: initial_worker_metadata.original_phantom_id,
                         instance_id,
+                        create_request: initial_worker_metadata.create_request.clone(),
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

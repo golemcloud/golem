@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+use super::super::call_agent::principal_from_request;
 use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{RichRequest, RouteExecutionResult};
@@ -125,6 +126,7 @@ impl DurableStreamsHandler {
         if initial_content.len() > self.max_append_body_bytes {
             return Ok(response(StatusCode::PAYLOAD_TOO_LARGE));
         }
+        let principal = principal_from_request(request)?;
         let executor_content_type = (!initial_content.is_empty() && content_type.is_some())
             .then(|| canonical_content_type(declared_slot.representation).to_owned());
         let result = self
@@ -149,6 +151,7 @@ impl DurableStreamsHandler {
                     initial_content,
                     closed,
                     expiry_policy,
+                    principal: Some(principal.into()),
                 },
             )
             .await?;

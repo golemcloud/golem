@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
-use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, ParsedAgentKey};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::schema::agent::typed_schema_value_with_projected_defs;
 use golem_common::schema::schema_type::SecretSpec;
@@ -65,7 +65,7 @@ fn secret_config_payload_type<'a>(
 
 pub fn ensure_required_agent_secrets_are_configured(
     agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
     component: &Component,
 ) -> Result<(), WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -148,7 +148,7 @@ pub fn ensure_required_agent_secrets_are_configured(
 
 pub fn parse_worker_creation_agent_config(
     worker_agent_config: Vec<AgentConfigEntryDto>,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&ParsedAgentKey>,
     component: &Component,
 ) -> Result<Vec<TypedAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
@@ -306,7 +306,7 @@ mod tests {
     use super::*;
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::agent_secret::{
         AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
@@ -379,7 +379,7 @@ mod tests {
             wasm_hash: Hash::empty(),
             object_store_key: String::new(),
         };
-        let agent_id = ParsedAgentId::new(
+        let agent_id = ParsedAgentKey::new(
             agent_type_name,
             TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
@@ -459,7 +459,7 @@ mod tests {
             wasm_hash: Hash::empty(),
             object_store_key: String::new(),
         };
-        let agent_id = ParsedAgentId::new(
+        let agent_id = ParsedAgentKey::new(
             agent_type_name,
             TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
@@ -555,7 +555,7 @@ mod tests {
             wasm_hash: Hash::empty(),
             object_store_key: String::new(),
         };
-        let agent_id = ParsedAgentId::new(
+        let agent_id = ParsedAgentKey::new(
             agent_type_name,
             TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),

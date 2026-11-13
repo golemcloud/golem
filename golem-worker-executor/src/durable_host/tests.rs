@@ -533,7 +533,7 @@ fn ephemeral_restart_decisions_are_terminal() {
 fn ephemeral_replay_is_only_for_typed_owner_initialization() {
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 
-    let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+    let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentKey::new(
         AgentTypeName("counter".to_string()),
         TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::string()),

@@ -21,7 +21,7 @@ use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, invocation_session_completion, invocation_session_result,
 };
-use golem_common::model::agent::{ParsedAgentId, Principal};
+use golem_common::model::agent::{ParsedAgentKey, Principal};
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
@@ -153,7 +153,7 @@ impl RawHandler {
             .as_ref()
             .ok_or(RequestHandlerError::RawBadGateway)?;
         let key = IdempotencyKey::fresh();
-        let logical = ParsedAgentId::try_new(
+        let logical = ParsedAgentKey::try_new(
             router.agent_type.clone(),
             TypedSchemaValue::new(
                 router.constructor_input.graph.clone(),

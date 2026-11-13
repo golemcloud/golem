@@ -77,7 +77,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
             WorkerInstance::Unloaded { .. } | WorkerInstance::CleanupFailed(_) => None,
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => None,
+            WorkerInstance::Deleting(_) => None,
             WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => None,
         };
 
@@ -269,7 +269,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false
             }
             // TODO: this probably wants to cooperate with memory free up
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
+            WorkerInstance::Deleting(_) => {
                 debug!(
                     "Worker {} is deleting, cannot be used to free up memory",
                     self.owned_agent_id

@@ -28,8 +28,8 @@ use super::{
     MutexGuard, Notify, Oplog, OplogEntry, OplogEntryLookupResult, OplogIndex, OplogOps,
     OplogRegion, OplogScopeProjection, Ordering, OwnedAgentId, PublishedPosition, QuotaClass,
     ReplayCallHandle, ReplayCursor, ReplayEvent, ReplayStarts, ReplayState, ReplayToLiveOutcome,
-    ReplayTransitionPhase, Resolution, RetainedStart, RetainedStartCounts,
-    ScannedRecoveryMetadata, StartClaimAttempt, StartsByInvocationId, StreamObservationPositions,
+    ReplayTransitionPhase, Resolution, RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata,
+    StartClaimAttempt, StartsByInvocationId, StreamObservationPositions,
     ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
 #[cfg(any(test, feature = "test-utils"))]

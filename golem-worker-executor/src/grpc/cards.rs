@@ -15,7 +15,7 @@
 use super::{
     AuthCtx, CanStartWorker, CardId, DeliverCardTransferRequest, GetAgentWalletRequest,
     GetAgentWalletResponse, GetAgentWalletSuccess, HasAll, HasComponentService,
-    InvocationFreshnessDisposition, PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, ParsedAgentId,
+    InvocationFreshnessDisposition, PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, ParsedAgentKey,
     StoredCard, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     agent_monomorphization_context, card_matches_agent_recipient, extract_owned_agent_id, golem,
 };
@@ -29,9 +29,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<GetAgentWalletResponse, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let worker = self.get_or_create(&request).await?;
+        let worker = self.get_existing_running(&request).await?;
 
-        let wallet_cards = worker.get_wallet_cards().await?;
+        let wallet_cards =
+            Self::not_found_if_deleting(&worker, worker.get_wallet_cards().await).await?;
         let wallet_cards = wallet_cards
             .into_iter()
             .map(|card| golem_common::serialization::serialize(&card))
@@ -101,7 +102,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .get_metadata(owned_agent_id.agent_id.component_id, None)
                 .await?;
             let parsed_agent_id =
-                ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
                     .map_err(|error| {
                         WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
                     })?;

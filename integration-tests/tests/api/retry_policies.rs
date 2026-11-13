@@ -17,7 +17,7 @@ use golem_common::base_model::retry_policy::{
     ApiCountBoxPolicy, ApiPeriodicPolicy, ApiPredicate, ApiPredicateTrue, ApiPredicateValue,
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
 };
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
@@ -61,7 +61,7 @@ fn simple_policy() -> UntypedJsonBody {
 async fn wait_for_retry_policy_visibility<T: TestDsl + Sync>(
     user: &T,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     policy_name: &str,
     expected: bool,
 ) -> anyhow::Result<()> {

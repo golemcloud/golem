@@ -38,7 +38,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentMode, AgentTarget, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentTarget, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -3969,7 +3969,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 
