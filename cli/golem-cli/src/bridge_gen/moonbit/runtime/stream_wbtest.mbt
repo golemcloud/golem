@@ -146,7 +146,7 @@ async test "AgentStream delivers items once and becomes terminal" {
 ///|
 async test "AgentStream cancel is affine and reports its reason once" {
   let reasons : Array[String] = []
-  let stream : AgentStream[Int] = AgentStream::from_next(fn() { None }, on_cancel=fn(
+  let stream : AgentStream[Int32] = AgentStream::from_next(fn() { None }, on_cancel=fn(
     reason,
   ) {
     reasons.push(reason)
@@ -159,12 +159,20 @@ async test "AgentStream cancel is affine and reports its reason once" {
 ///|
 test "stream protocol message is canonical v1 JSON" {
   inspect(
-    protocol_message("streamCancel", [
+    protocol_message("stream-end", [
       ("channel", json_int(2)),
-      ("reason", Json::string("consumer-drop")),
+      ("direction", Json::string("output")),
+      (
+        "outcome",
+        obj([
+          ("details", Json::string("consumer-drop")),
+          ("kind", Json::string("consumer-cancelled")),
+        ]),
+      ),
+      ("sequence", Json::string("0")),
     ]),
     content=(
-      #|{"channel":2,"reason":"consumer-drop","type":"streamCancel","version":1}
+      #|{"channel":2,"direction":"output","outcome":{"details":"consumer-drop","kind":"consumer-cancelled"},"sequence":"0","type":"stream-end","version":1}
     ),
   )
 }
@@ -241,24 +249,48 @@ test "packed u8 envelope carries every logical byte in one prompt batch" {
 }
 
 ///|
+test "server input failures preserve their typed outcome" {
+  for kind in ["trapped", "interrupted"] {
+    let outcome = Json::object({
+      "kind": Json::string("failed"),
+      "error": Json::object({
+        "kind": Json::string(kind),
+        "message": Json::string("callee failed"),
+      }),
+    })
+    let message = expect_object(
+      Json::object({
+        "version": json_uint(1U),
+        "type": Json::string("stream-end"),
+        "channel": json_uint(1U),
+        "direction": Json::string("input"),
+        "sequence": Json::string("0"),
+        "outcome": outcome,
+      }),
+    )
+    assert_eq(validate_server_stream_end(message), "input")
+  }
+}
+
+///|
 test "strict protocol JSON rejects unknown fields and variants" {
   let valid = expect_object(
     @json.parse(
       (
-        #|{"channel":1,"reason":"cancelled","type":"streamCancel","version":1}
+        #|{"channel":1,"direction":"input","outcome":{"kind":"consumer-cancelled"},"sequence":"0","type":"stream-end","version":1}
       ),
     ),
   )
-  validate_message_fields(valid, "streamCancel")
+  validate_message_fields(valid, "stream-end")
   let unknown = expect_object(
     @json.parse(
       (
-        #|{"channel":1,"extra":true,"reason":"cancelled","type":"streamCancel","version":1}
+        #|{"channel":1,"direction":"input","extra":true,"outcome":{"kind":"consumer-cancelled"},"sequence":"0","type":"stream-end","version":1}
       ),
     ),
   )
   inspect(
-    raises(() => validate_message_fields(unknown, "streamCancel")),
+    raises(() => validate_message_fields(unknown, "stream-end")),
     content="true",
   )
   inspect(raises(() => validate_message_fields(valid, "bogus")), content="true")
@@ -360,7 +392,7 @@ test "strict protocol JSON rejects duplicate members at every depth" {
 
 ///|
 async test "MemoryReader owns a detached receive actor" {
-  let delivered : @aqueue.Queue[Int] = @aqueue.Queue(kind=@aqueue.Blocking(1))
+  let delivered : @aqueue.Queue[Int32] = @aqueue.Queue(kind=@aqueue.Blocking(1))
   let owner = @io.MemoryReader(async fn(_) {
     @async.sleep(1)
     delivered.put(7)
@@ -386,7 +418,7 @@ async test "packed u8 input prefetch is bounded and non-blocking" {
   let input = context.inputs[0]
   inspect((input.next)() is Some(U8Value(1)), content="true")
   @async.sleep(1)
-  let prefetched : Array[Int] = []
+  let prefetched : Array[Int32] = []
   for ;; {
     match (input.try_next)() {
       Some(Some(U8Value(value))) => prefetched.push(value)
@@ -417,4 +449,253 @@ test "partial packed ACK retains exactly the undelivered suffix" {
     fail("expected packed suffix")
   }
   inspect(suffix, content="b\"\\x02\\x03\"")
+}
+
+///|
+test "stream terminal preserves every producer failure and cancellation details" {
+  assert_true(
+    decode_stream_outcome(parse_strict_json("{\"kind\":\"finished\"}")) is None,
+  )
+  for details in ["", ",\"details\":null", ",\"details\":\"dropped\""] {
+    let error = decode_stream_outcome(
+      parse_strict_json("{\"kind\":\"consumer-cancelled\"\{details}}"),
+    )
+    assert_true(error is Some(ConsumerCancelled(_)))
+  }
+  for
+    entry in [
+      ("trapped", StreamFailure::Trapped("diagnostic")),
+      ("interrupted", StreamFailure::Interrupted("diagnostic")),
+      ("resource-exhausted", StreamFailure::ResourceExhausted("diagnostic")),
+      ("cancelled", StreamFailure::Cancelled),
+      ("abandoned", StreamFailure::Abandoned),
+    ] {
+    let (kind, expected) = entry
+    let fields = [("kind", Json::string(kind))]
+    if kind != "cancelled" && kind != "abandoned" {
+      fields.push(("message", Json::string("diagnostic")))
+    }
+    let error = decode_stream_outcome(
+      obj([("kind", Json::string("failed")), ("error", obj(fields))]),
+    )
+    assert_eq(error, Some(StreamFailed(expected)))
+  }
+  let graph = parse_strict_json("{\"root\":{\"kind\":\"string\",\"value\":{}}}")
+  let value = parse_strict_json(
+    "{\"kind\":\"string\",\"value\":\"application failure\"}",
+  )
+  let error = decode_stream_outcome(
+    obj([
+      ("kind", Json::string("failed")),
+      (
+        "error",
+        obj([
+          ("kind", Json::string("failed")),
+          ("value", obj([("graph", graph), ("value", value)])),
+        ]),
+      ),
+    ]),
+  )
+  assert_eq(error, Some(StreamFailed(Failed(graph~, value~))))
+  assert_true(Show::to_string(error.unwrap()).contains("application failure"))
+  let cancelled : BridgeError = ConsumerCancelled(Some("consumer diagnostic"))
+  assert_eq(
+    Show::to_string(cancelled),
+    "Stream consumer cancelled: consumer diagnostic",
+  )
+}
+
+///|
+test "stream terminal rejects unknown outcomes errors and malformed payloads" {
+  for
+    value in [
+      "{\"kind\":\"ok\"}", "{\"kind\":\"finished\",\"message\":\"extra\"}", "{\"kind\":\"consumer-cancelled\",\"details\":1}",
+      "{\"kind\":\"failed\",\"error\":{\"kind\":\"unknown\"}}", "{\"kind\":\"failed\",\"error\":{\"kind\":\"trapped\"}}",
+      "{\"kind\":\"failed\",\"error\":{\"kind\":\"cancelled\",\"message\":\"extra\"}}",
+      "{\"kind\":\"failed\",\"error\":{\"kind\":\"failed\",\"value\":{\"graph\":{\"root\":{\"kind\":\"string\",\"value\":{}}},\"value\":{\"kind\":\"u8\",\"value\":42}}}}",
+    ] {
+    assert_true(raises(() => decode_stream_outcome(parse_strict_json(value))))
+  }
+}
+
+///|
+test "server stream terminal uses explicit direction and canonical sequence" {
+  let message = expect_object(
+    parse_strict_json(
+      "{\"version\":1,\"type\":\"stream-end\",\"channel\":1,\"direction\":\"input\",\"sequence\":\"0\",\"outcome\":{\"kind\":\"consumer-cancelled\"}}",
+    ),
+  )
+  assert_eq(validate_server_stream_end(message), "input")
+  message["outcome"] = obj([("kind", Json::string("finished"))])
+  assert_eq(validate_server_stream_end(message), "input")
+  message["direction"] = Json::string("output")
+  message["cursorToken"] = Json::null()
+  assert_eq(validate_server_stream_end(message), "output")
+  message["sequence"] = Json::string("01")
+  assert_true(raises(() => validate_server_stream_end(message)))
+  message["sequence"] = Json::string("0")
+  message["direction"] = Json::string("unknown")
+  assert_true(raises(() => validate_server_stream_end(message)))
+}
+
+///|
+async test "packed input failure transfers the diagnostic out of its prefetch queue" {
+  for prefix in [false, true] {
+    let pulled = Ref(false)
+    let source : AgentStream[Byte] = AgentStream::from_next(() => {
+      if prefix && !pulled.val {
+        pulled.val = true
+        Some(b'\x2a')
+      } else {
+        raise BridgeError("界🦄")
+      }
+    })
+    let context = StreamEncodeContext::new()
+    ignore(
+      register_input_stream(
+        context,
+        source,
+        value => U8Value(value.to_int()),
+        u8_public_codec(),
+        wire_kind="u8",
+      ),
+    )
+    let input = context.inputs[0]
+    @async.sleep(1)
+    assert_true(input.failure.bytes > 0)
+    assert_eq(context.replay_bytes.val, input.failure.bytes)
+    assert_false(input.source_failed)
+    assert_true(input.failure.diagnostic.contains("界🦄"))
+    if prefix {
+      assert_eq((input.next)(), Some(U8Value(42)))
+      try (input.try_next)() catch {
+        @aqueue.QueueAlreadyClosed => ()
+        error => raise error
+      } noraise {
+        _ => fail("expected the prefetched failure")
+      }
+    } else {
+      try (input.next)() catch {
+        @aqueue.QueueAlreadyClosed => ()
+        error => raise error
+      } noraise {
+        _ => fail("expected the initial failure")
+      }
+    }
+    try (input.try_next)() catch {
+      @aqueue.QueueAlreadyClosed => ()
+      error => raise error
+    } noraise {
+      _ => fail("the prefetch queue must not retain the diagnostic")
+    }
+    (input.cancel)()
+    assert_eq(context.replay_bytes.val, 0)
+    assert_eq(input.failure.diagnostic, "")
+  }
+}
+
+///|
+async test "packed input cancellation releases an unobserved prefetched diagnostic" {
+  let pulled = Ref(false)
+  let source : AgentStream[Byte] = AgentStream::from_next(() => {
+    if !pulled.val {
+      pulled.val = true
+      Some(b'\x2a')
+    } else {
+      raise BridgeError("界🦄")
+    }
+  })
+  let context = StreamEncodeContext::new()
+  ignore(
+    register_input_stream(
+      context,
+      source,
+      value => U8Value(value.to_int()),
+      u8_public_codec(),
+      wire_kind="u8",
+    ),
+  )
+  let input = context.inputs[0]
+  @async.sleep(1)
+  assert_true(source.terminal)
+  assert_true(context.replay_bytes.val > 0)
+  (input.cancel)()
+  assert_eq(context.replay_bytes.val, 0)
+  assert_eq(input.failure.diagnostic, "")
+  try (input.try_next)() catch {
+    @aqueue.QueueAlreadyClosed => ()
+    error => raise error
+  } noraise {
+    _ => fail("cancellation must release the prefix and diagnostic")
+  }
+}
+
+///|
+async test "prefetch admits combined diagnostics before attachment and rejects excess bytes" {
+  let context = StreamEncodeContext::new()
+  for _ in 0..<2 {
+    let source : AgentStream[Byte] = AgentStream::from_next(() => {
+      raise BridgeError("界".repeat(3 * 1024 * 1024))
+    })
+    ignore(
+      register_input_stream(
+        context,
+        source,
+        value => U8Value(value.to_int()),
+        u8_public_codec(),
+        wire_kind="u8",
+      ),
+    )
+  }
+  @async.sleep(1)
+  let retained = context.inputs.filter(input => input.failure.bytes > 0)
+  let rejected = context.inputs.filter(input => input.failure.rejected)
+  assert_eq(retained.length(), 1)
+  assert_eq(rejected.length(), 1)
+  assert_eq(context.replay_bytes.val, retained[0].failure.bytes)
+  assert_true(context.replay_bytes.val > 9 * 1024 * 1024)
+  assert_true(context.replay_bytes.val <= MAX_INPUT_REPLAY_BYTES)
+  assert_eq(rejected[0].failure.diagnostic, "")
+  assert_true(
+    raises(() => {
+      retain_input_failure(rejected[0], BridgeError("rejected source"))
+    }),
+  )
+  for input in context.inputs {
+    (input.cancel)()
+  }
+  @async.sleep(1)
+  assert_eq(context.replay_bytes.val, 0)
+  for input in context.inputs {
+    assert_eq(input.failure.bytes, 0)
+    assert_eq(input.failure.diagnostic, "")
+  }
+}
+
+///|
+async test "cancelled prefetch owner cannot admit a late diagnostic" {
+  let gate = @cond.Cond()
+  let source : AgentStream[Byte] = AgentStream::from_next(async fn() {
+    gate.wait()
+    raise BridgeError("late 界🦄 failure")
+  })
+  let context = StreamEncodeContext::new()
+  ignore(
+    register_input_stream(
+      context,
+      source,
+      value => U8Value(value.to_int()),
+      u8_public_codec(),
+      wire_kind="u8",
+    ),
+  )
+  @async.sleep(1)
+  let input = context.inputs[0]
+  (input.cancel)()
+  gate.broadcast()
+  @async.sleep(1)
+  assert_true(input.failure.disposed)
+  assert_eq(context.replay_bytes.val, 0)
+  assert_eq(input.failure.bytes, 0)
+  assert_eq(input.failure.diagnostic, "")
 }

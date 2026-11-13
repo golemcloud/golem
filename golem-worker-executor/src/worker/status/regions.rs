@@ -44,10 +44,11 @@ pub(crate) struct RegionFold {
 /// `Jump` and `Revert` entries add skipped regions. A successful snapshot-based update commits
 /// the history up to and including its `PendingUpdate` entry, and a successful snapshot-assisted
 /// automatic update commits the history up to and including its selected record, both read from
-/// the paired queue element; either also commits the bootstrap range that its `SuccessfulUpdate`
-/// entry names. A failed snapshot-based or snapshot-assisted update commits the history of its
-/// attempt, between its `PendingUpdate` entry (the strategy entry of a snapshot-assisted update)
-/// and its `FailedUpdate` entry. The override is the history up to and including the
+/// the paired queue element. A snapshot-based update also commits the bootstrap range of its
+/// target that its `SuccessfulUpdate` entry names; the range that a snapshot-assisted update names
+/// is the range of its selected record, inside the committed history. A failed snapshot-based
+/// update commits the history of its attempt, between its `PendingUpdate` and its `FailedUpdate`
+/// entries. The override is the history up to and including the
 /// `PendingUpdate` entry of a snapshot-based queue head. Entries in a deleted region change only
 /// the manual admissions of the queue.
 pub(crate) fn fold_regions_from(
@@ -226,27 +227,30 @@ fn fold(
 
 /// The history that a successful update of `applied` makes skipped: the history up to and
 /// including the `PendingUpdate` entry of a snapshot-based update, or the history up to and
-/// including the record that a snapshot-assisted automatic update selected, and for both the
-/// `bootstrap` range of the target.
+/// including the record that a snapshot-assisted automatic update selected. A snapshot-based
+/// update also makes the `bootstrap` range of its target skipped.
 fn committed_update_regions(
     applied: &PendingUpdateRef,
     bootstrap: Option<&OplogRegion>,
 ) -> Vec<OplogRegion> {
-    let prefix = match &applied.kind {
-        PendingUpdateKind::Automatic => return Vec::new(),
+    match &applied.kind {
+        PendingUpdateKind::Automatic => Vec::new(),
         PendingUpdateKind::SnapshotAssistedAutomatic(selection) => {
-            prefix_through(selection.snapshot.index)
+            vec![prefix_through(selection.snapshot.index)]
         }
-        PendingUpdateKind::SnapshotBased { .. } => prefix_through(applied.oplog_index),
-    };
-    std::iter::once(prefix).chain(bootstrap.cloned()).collect()
+        PendingUpdateKind::SnapshotBased { .. } => {
+            std::iter::once(prefix_through(applied.oplog_index))
+                .chain(bootstrap.cloned())
+                .collect()
+        }
+    }
 }
 
 /// The history that a failed update of `attempted`, whose `FailedUpdate` entry is at `failed`,
-/// makes skipped: the entries that the attempts of a snapshot-based or snapshot-assisted update
-/// recorded before `failed`, which belong to the target revision. The attempts begin after the
-/// `PendingUpdate` entry of the element (the strategy entry of a snapshot-assisted update) and
-/// after `last_outcome`, the outcome of the queue element before it, whose history stays.
+/// makes skipped: the entries that the attempts of a snapshot-based update recorded before
+/// `failed`, which belong to the target revision. The attempts begin after its `PendingUpdate`
+/// entry and after `last_outcome`, the outcome of the queue element before it, whose history
+/// stays.
 fn failed_attempt_region(
     attempted: &PendingUpdateRef,
     last_outcome: Option<OplogIndex>,
@@ -256,14 +260,9 @@ fn failed_attempt_region(
         outcome.max(attempted.oplog_index)
     });
     match &attempted.kind {
-        PendingUpdateKind::SnapshotBased { .. }
-        | PendingUpdateKind::SnapshotAssistedAutomatic(_)
-            if attempts_after.next() < failed =>
-        {
-            Some(OplogRegion::from_index_range(
-                attempts_after.next()..=failed.previous(),
-            ))
-        }
+        PendingUpdateKind::SnapshotBased { .. } if attempts_after.next() < failed => Some(
+            OplogRegion::from_index_range(attempts_after.next()..=failed.previous()),
+        ),
         _ => None,
     }
 }

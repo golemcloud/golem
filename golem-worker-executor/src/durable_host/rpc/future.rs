@@ -150,10 +150,18 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     mut handle: FutureInvokeCallHandle,
     request: &HostRequestGolemRpcInvoke,
+    streaming: Option<&DurableStreamingTaskParams>,
     span_id: &SpanId,
     this_rep: u32,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
     handle.close_span_on_cancellation(span_id.clone());
+    if let Some(streaming) = streaming {
+        streaming
+            .streams
+            .cancel_unbound_rpc_inputs(&[])
+            .await
+            .map_err(SessionError::into_trap)?;
+    }
     let worker_proxy = accessor.with(|mut access| access.get().worker_proxy());
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
@@ -388,7 +396,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // cancelled" response, so replay delivers the same result here.
                             drop(task);
                             return cancel_in_flight_get(
-                                accessor, handle, &request, &span_id, this_rep,
+                                accessor,
+                                handle,
+                                &request,
+                                streaming.as_ref(),
+                                &span_id,
+                                this_rep,
                             )
                             .await;
                         }
@@ -507,7 +520,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     // handling as the live-path cancellation race above.
                                     drop(task);
                                     return cancel_in_flight_get(
-                                        accessor, live, &request, &span_id, this_rep,
+                                        accessor,
+                                        live,
+                                        &request,
+                                        streaming.as_ref(),
+                                        &span_id,
+                                        this_rep,
                                     )
                                     .await;
                                 }
@@ -752,6 +770,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             /// best-effort cancel the remote invocation.
             Cancel {
                 handle: FutureInvokeCallHandle,
+                streaming: Option<DurableStreamingTaskParams>,
                 remote_agent_id: AgentId,
                 idempotency_key: IdempotencyKey,
                 span_id: SpanId,
@@ -770,6 +789,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             match state {
                 FutureInvokeResultState::Active {
                     handle,
+                    streaming,
                     request,
                     span_id,
                     cancel_token,
@@ -779,9 +799,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         let remote_agent_id = request.remote_agent_id.clone();
                         let idempotency_key = request.idempotency_key.clone();
                         let span_id = span_id.clone();
+                        let streaming = streaming.clone();
                         *state = FutureInvokeResultState::Cancelled;
                         CancelPlan::Cancel {
                             handle,
+                            streaming,
                             remote_agent_id,
                             idempotency_key,
                             span_id,
@@ -804,12 +826,20 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
         if let CancelPlan::Cancel {
             mut handle,
+            streaming,
             remote_agent_id,
             idempotency_key,
             span_id,
         } = plan
         {
             handle.close_span_on_cancellation(span_id.clone());
+            if let Some(streaming) = streaming {
+                streaming
+                    .streams
+                    .cancel_unbound_rpc_inputs(&[])
+                    .await
+                    .map_err(SessionError::into_trap)?;
+            }
             // Best-effort remote cancellation, only meaningful for a live call — on replay the
             // recorded `Cancelled` is re-applied without re-issuing the side effect.
             if handle.is_live() {

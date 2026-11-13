@@ -945,6 +945,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed, replayed or live, and can change the state of the agent.
+    pub(crate) fn last_state_change(&self) -> Option<OplogIndex> {
+        self.state.last_state_change
+    }
+
     pub(crate) fn live_stream_event_capacity(&self) -> usize {
         self.state
             .config
@@ -1211,6 +1217,12 @@ struct PrivateDurableWorkerState {
     /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
     read_only_method_name: Option<String>,
 
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed and can change the state of the agent, replayed or live. A `read_only` agent
+    /// method cannot. Replay sets it from the history after the baseline of the start, so after a
+    /// restart it still points at a change that no later automatic snapshot record holds.
+    last_state_change: Option<OplogIndex>,
+
     /// Oplog-processor plugin calls are admitted by the operator when the plugin is installed,
     /// outside the per-agent permission-card model. This is set only while dispatching the
     /// executor-created `ProcessOplogEntries` invocation and reset before invocation teardown.
@@ -1391,6 +1403,7 @@ impl WakeupScheduler {
             .promise_service
             .create(
                 &self.owned_agent_id.agent_id,
+                self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
             .await?;
@@ -1622,8 +1635,10 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Refuses `call` with a divergence while a bootstrap cursor replays the bootstrap block of
-    /// the core initializer.
+    /// Refuses `call` with a divergence while the core initializer runs on a bootstrap cursor,
+    /// which replays its bootstrap block or records the block of an update target. Every later
+    /// start from the restore point that names the block replays it on a strict cursor, which
+    /// holds no invocation and no owner wallet and can only return recorded results.
     fn refuse_on_bootstrap_cursor(
         &self,
         call: impl std::fmt::Display,
@@ -1636,7 +1651,7 @@ impl PrivateDurableWorkerState {
             Err(WorkerExecutorError::unexpected_oplog_entry(
                 "a direct read call of the core initializer",
                 format!(
-                    "the core initializer may only make direct read calls while it replays its bootstrap block, but it called {call}"
+                    "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
                 ),
             ))
         } else {

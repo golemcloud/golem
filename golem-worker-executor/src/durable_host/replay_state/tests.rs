@@ -1247,16 +1247,12 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
     rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(6);
     assert!(rs.disposal_admission_refusal(&operation).await.is_err());
     rs.cursor.state.lock().await.entity_replay_horizon = OplogIndex::from_u64(7);
-    rs.set_replay_target(OplogIndex::from_u64(6), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(6)).await.unwrap();
     assert_eq!(
         rs.disposal_admission_refusal(&operation).await.unwrap(),
         None
     );
-    rs.set_replay_target(OplogIndex::from_u64(7), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
     rs.cursor.state.lock().await.skipped_regions =
         DeletedRegions::from_regions([OplogRegion::from_range(7..=7)]);
     let reads = oplog.reads.lock().unwrap().clone();
@@ -1569,7 +1565,7 @@ async fn growing_replay_target_revokes_published_live_state() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target, None)
+        .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target");
 
@@ -1604,7 +1600,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target, None)
+        .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target while settling");
     drop(reconstruction);
@@ -1671,7 +1667,7 @@ async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
         .await
         .unwrap();
     replay
-        .set_replay_target(grown_start, None)
+        .set_replay_target(grown_start)
         .await
         .expect("failed to grow replay target over a recorded Start");
     drop(reconstruction);
@@ -1844,7 +1840,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
 
     let new_target = oplog.add(end_for(2, 1)).await.unwrap();
     replay
-        .set_replay_target(new_target, None)
+        .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target with the missing terminal");
     assert_eq!(
@@ -1914,7 +1910,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .await
         .unwrap();
     replay
-        .set_replay_target(new_target, None)
+        .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target while settling");
     let second_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
@@ -3483,7 +3479,9 @@ fn invocation_finished() -> OplogEntry {
 async fn read_invocation_finished(
     rs: &ReplayState,
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-    rs.get_oplog_entry_agent_invocation_finished().await
+    rs.get_oplog_entry_agent_invocation_finished()
+        .await
+        .map(|finished| finished.map(|(_, result)| result))
 }
 
 #[test]
@@ -4494,8 +4492,8 @@ fn consumer_observation_with_parent(
 ) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-        StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamConsumerObservation, StreamConsumerTerminalRecord, StreamOffset,
+        StreamRegistrationInvocation, StreamSessionRecord, StreamTerminal,
     };
     let observation = if guest {
         StreamConsumerObservation::Guest { parent_start_index }
@@ -4518,7 +4516,8 @@ fn consumer_observation_with_parent(
             reader_id,
             source_offset,
             consumer_read_ordinal: 1,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         })
     } else {
         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
@@ -4715,11 +4714,11 @@ async fn attachment_index_excludes_custom_owned_effects_but_preserves_ordinary_r
 
             // Rebuilding an extended target must preserve the same ownership classification.
             replay
-                .set_replay_target(OplogIndex::from_u64(3), None)
+                .set_replay_target(OplogIndex::from_u64(3))
                 .await
                 .unwrap();
             replay
-                .set_replay_target(OplogIndex::from_u64(10), None)
+                .set_replay_target(OplogIndex::from_u64(10))
                 .await
                 .unwrap();
             assert!(
@@ -4917,7 +4916,7 @@ async fn attachment_index_hydrates_external_body_only_on_demand() {
         None
     );
     replay
-        .set_replay_target(OplogIndex::from_u64(3), None)
+        .set_replay_target(OplogIndex::from_u64(3))
         .await
         .unwrap();
     assert_eq!(
@@ -5021,11 +5020,11 @@ async fn attachment_index_retains_deleted_original_for_reobservation() {
         Some((source, Some((OplogIndex::from_u64(5), 5))))
     );
     replay
-        .set_replay_target(OplogIndex::from_u64(3), None)
+        .set_replay_target(OplogIndex::from_u64(3))
         .await
         .unwrap();
     replay
-        .set_replay_target(OplogIndex::from_u64(5), None)
+        .set_replay_target(OplogIndex::from_u64(5))
         .await
         .unwrap();
     let accepted =
@@ -5082,7 +5081,7 @@ async fn attachment_terminal_index_preserves_source_across_target_changes() {
     .unwrap();
     for target in [5, 4, 5] {
         replay
-            .set_replay_target(OplogIndex::from_u64(target), None)
+            .set_replay_target(OplogIndex::from_u64(target))
             .await
             .unwrap();
         assert_eq!(
@@ -6588,22 +6587,16 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     let marker = OplogIndex::from_u64(7);
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
-    rs.set_replay_target(OplogIndex::from_u64(4), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
     assert_eq!(
         rs.invocation_finish_before(marker),
         None,
         "a finish after the replay target is not visible"
     );
-    rs.set_replay_target(finish, None).await.unwrap();
+    rs.set_replay_target(finish).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
-    rs.set_replay_target(OplogIndex::from_u64(4), None)
-        .await
-        .unwrap();
-    rs.set_replay_target(OplogIndex::from_u64(8), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
     rs.get_oplog_entry_agent_invocation_started()
@@ -7103,7 +7096,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                     for entry in suffix {
                         oplog.add(entry).await.unwrap();
                     }
-                    rs.set_replay_target(OplogIndex::from_u64(6), None)
+                    rs.set_replay_target(OplogIndex::from_u64(6))
                         .await
                         .expect("target growth must ignore deleted completion markers");
                 }
@@ -7248,7 +7241,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     .expect("failed to build replay state");
     let marker_idx = oplog.add(discarded_for(2)).await.unwrap();
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
-    rs.set_replay_target(marker_idx, None)
+    rs.set_replay_target(marker_idx)
         .await
         .expect("growing the target over the recorded marker must be idempotent");
 
@@ -8621,9 +8614,7 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     }
     assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
-    rs.set_replay_target(OplogIndex::from_u64(4), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
@@ -8635,9 +8626,7 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     assert!(rs.has_unclaimed_retained_starts());
     assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
-    rs.set_replay_target(OplogIndex::from_u64(2), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(2)).await.unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
     assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 }
@@ -10192,7 +10181,7 @@ async fn transaction_interleaved_markers_resolve_by_owner_without_blocking_scope
     rs.await_resolution(root).await.unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
     // Cutting the replay target hides B's confirmation without hiding A's confirmation.
-    rs.set_replay_target(OplogIndex::from_u64(10), None)
+    rs.set_replay_target(OplogIndex::from_u64(10))
         .await
         .unwrap();
     assert!(
@@ -10200,7 +10189,7 @@ async fn transaction_interleaved_markers_resolve_by_owner_without_blocking_scope
             .is_committed_remote_transaction(OplogIndex::from_u64(4)))
             .is_none()
     );
-    rs.set_replay_target(OplogIndex::from_u64(13), None)
+    rs.set_replay_target(OplogIndex::from_u64(13))
         .await
         .unwrap();
     assert!(
@@ -11672,9 +11661,7 @@ async fn entity_wallet_prefix_retains_preclaim_hints_and_prunes_future_starts() 
             2
         );
         if prune {
-            rs.set_replay_target(OplogIndex::from_u64(3), None)
-                .await
-                .unwrap();
+            rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
         } else {
             let mut handle = claim_rejected_tool_reconstruction(&rs, OplogIndex::INITIAL).await;
             let mut reconstruction = handle.take_historical_reconstruction().unwrap();
@@ -11750,9 +11737,7 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
     assert!(rs.at_replay_tail());
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
-    rs.set_replay_target(OplogIndex::from_u64(3), None)
-        .await
-        .unwrap();
+    rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
     drop(contention);
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
@@ -11784,7 +11769,7 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     assert_eq!(published.cards[&historical.card_id()].as_ref(), &historical);
     assert_eq!(published.generation, 2);
     assert_eq!(*oplog.reads.lock().unwrap(), reads);
-    assert!(rs.set_replay_target(index, None).await.is_err());
+    assert!(rs.set_replay_target(index).await.is_err());
     assert!(wallet.validate_current().is_err());
     assert!(wallet.lock_boundary().await.is_err());
     assert!(Arc::ptr_eq(&published, &wallet.snapshot()));
@@ -13407,7 +13392,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
 #[test_r::timeout("30s")]
 async fn disposal_refusal_without_collection_preserves_recorded_calls() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamCancelRole,
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamEndpointSide,
         StreamRecordReference, StreamRegistrationInvocation,
     };
     use golem_common::model::oplog::attachment::{
@@ -13467,7 +13452,8 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
                     source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                     role: SessionStreamRole::Input,
                 }),
-                role: StreamCancelRole::InputConsumer,
+                direction: SessionStreamRole::Input,
+                side: StreamEndpointSide::Consumer,
             }
         } else {
             SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
@@ -15224,99 +15210,4 @@ async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() 
     );
     assert_eq!(main.last_replayed_index(), main_position);
     assert!(!main.is_live_published());
-}
-
-#[test]
-async fn a_skip_region_adjacent_to_a_skipped_region_is_passed_by_a_cursor_at_the_old_target() {
-    let oplog = oplog_of(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        start_now(),
-        end_for(3, 1),
-    ])
-    .await;
-    let rs = test_replay_state(
-        test_agent_id(),
-        oplog.clone() as Arc<dyn Oplog>,
-        DeletedRegions::from_regions([OplogRegion::from_range(3..=4)]),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
-    for entry in [
-        start_now(),
-        end_for(5, 2),
-        start_resolution(),
-        end_for(7, 3),
-    ] {
-        oplog.add(entry).await.unwrap();
-    }
-
-    rs.set_replay_target(
-        OplogIndex::from_u64(8),
-        Some(OplogRegion::from_range(5..=6)),
-    )
-    .await
-    .unwrap();
-    let position = rs.last_replayed_index();
-    let claimed = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
-
-    assert_eq!(position, OplogIndex::from_u64(6));
-    assert_eq!(claimed, (7, 8));
-    assert!(rs.at_replay_tail());
-    assert!(!rs.has_unclaimed_retained_starts());
-}
-
-#[test]
-async fn a_skip_region_adjacent_to_a_skipped_region_is_passed_by_a_cursor_below_the_old_target() {
-    let oplog = oplog_of(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        start_resolution(),
-        end_for(2, 1),
-        start_now(),
-        end_for(4, 2),
-    ])
-    .await;
-    let rs = test_replay_state(
-        test_agent_id(),
-        oplog.clone() as Arc<dyn Oplog>,
-        DeletedRegions::from_regions([OplogRegion::from_range(4..=5)]),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
-    for entry in [
-        start_now(),
-        end_for(6, 3),
-        start_resolution(),
-        end_for(8, 4),
-    ] {
-        oplog.add(entry).await.unwrap();
-    }
-
-    rs.set_replay_target(
-        OplogIndex::from_u64(9),
-        Some(OplogRegion::from_range(6..=7)),
-    )
-    .await
-    .unwrap();
-    let position = rs.last_replayed_index();
-    let first = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
-    let second = claim_and_resolve(&rs, HostFunctionName::MonotonicClockResolution).await;
-
-    assert_eq!(position, OplogIndex::from_u64(1));
-    assert_eq!(first, (2, 3));
-    assert_eq!(second, (8, 9));
-    assert!(
-        !rs.has_unclaimed_retained_starts(),
-        "the cursor skips the merged region 4..=7 instead of retaining the Start at 6"
-    );
 }

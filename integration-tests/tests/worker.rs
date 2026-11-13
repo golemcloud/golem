@@ -25,7 +25,7 @@ use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
 use golem_client::model::WorkersMetadataRequest;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, AgentMode,
 };
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
@@ -596,6 +596,32 @@ async fn invalid_worker_enumeration_requests_return_http_400(
     Ok(())
 }
 
+/// Lists every agent of the component that matches the filter, following the cursors.
+async fn list_all_agents(
+    user: &impl TestDsl,
+    component_id: &ComponentId,
+    filter: &AgentFilter,
+    count: u64,
+) -> anyhow::Result<Vec<AgentId>> {
+    let mut cursor = ScanCursor::default();
+    let mut listed = Vec::new();
+    loop {
+        let (next_cursor, values) = user
+            .get_workers_metadata(component_id, Some(filter.clone()), cursor, count, true)
+            .await?;
+        assert!(
+            values.len() as u64 <= count,
+            "a page has {} agents, more than its count of {count}",
+            values.len()
+        );
+        listed.extend(values.into_iter().map(|metadata| metadata.agent_id));
+        match next_cursor {
+            Some(next_cursor) => cursor = next_cursor,
+            None => return Ok(listed),
+        }
+    }
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -621,8 +647,25 @@ async fn get_running_workers(
     let response = Arc::new(Mutex::new("running".to_string()));
     let response_clone = response.clone();
 
+    // Ephemeral agents stay running while their request to `/hang` waits for the release.
+    let hang_requests = Arc::new(AtomicU64::new(0));
+    let hang_requests_clone = hang_requests.clone();
+    let (release_hang, hang_released) = tokio::sync::watch::channel(false);
+
     let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
+        let route = Router::new()
+            .route(
+                "/hang",
+                get(move || {
+                    let mut hang_released = hang_released.clone();
+                    hang_requests_clone.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        let _ = hang_released.wait_for(|released| *released).await;
+                        "released"
+                    }
+                }),
+            )
+            .route(
             "/poll",
             get(move |query: Query<HashMap<String, String>>| {
                 async move {
@@ -693,6 +736,37 @@ async fn get_running_workers(
         }
 
         sleep(Duration::from_secs(1)).await;
+    }
+
+    let ephemeral_count = 3;
+    let hang_url = format!("http://localhost:{host_http_port}/hang");
+    let mut ephemeral_ids = HashSet::new();
+    for _ in 0..ephemeral_count {
+        let name = agent_id!("EphemeralHttpClient4");
+        let key = IdempotencyKey::fresh();
+        let physical = name
+            .with_ephemeral_invocation_phantom(&key)
+            .map_err(|e| anyhow!(e))?;
+        ephemeral_ids
+            .insert(AgentId::from_agent_id(component.id, &physical).map_err(|e| anyhow!(e))?);
+        user.invoke_agent_with_key(
+            &component,
+            &name,
+            &key,
+            "get_for_quota_wait",
+            data_value!(hang_url.clone()),
+        )
+        .await?;
+    }
+    let start = tokio::time::Instant::now();
+    while hang_requests.load(Ordering::SeqCst) < ephemeral_count {
+        if start.elapsed() > polling_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for the ephemeral agents' requests. Only {}/{ephemeral_count} arrived",
+                hang_requests.load(Ordering::SeqCst)
+            ));
+        }
+        sleep(Duration::from_millis(100)).await;
     }
 
     // Testing looking for a single worker - with retry for eventual consistency
@@ -777,49 +851,61 @@ async fn get_running_workers(
         start.elapsed()
     );
 
-    // Testing looking for running workers - with retry for eventual consistency
+    // A `status == Running` filter without a cursor first asks the executors for their running
+    // agents. A count of 100 fits every match, so that answer is the whole listing. A count of 2
+    // does not, so the listing pages through the full enumeration. Both must list the same
+    // agents, with the same default of durable agents only when the filter names no mode.
     info!("Phase 3: Looking for running workers");
-    let start = tokio::time::Instant::now();
-    loop {
-        let mut cursor = ScanCursor::default();
-        let mut enum_results = Vec::new();
-        loop {
-            let (next_cursor, values) = user
-                .get_workers_metadata(
-                    &component.id,
-                    Some(AgentFilter::new_status(
-                        FilterComparator::Equal,
-                        AgentStatus::Running,
-                    )),
-                    cursor,
-                    workers_count,
-                    true,
-                )
-                .await?;
-            enum_results.extend(values);
-            if let Some(next_cursor) = next_cursor {
-                cursor = next_cursor;
-            } else {
-                break;
+    let running = || AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    let mode = |mode| AgentFilter::new_mode(FilterComparator::Equal, mode);
+    let all_ids: HashSet<AgentId> = agent_ids.union(&ephemeral_ids).cloned().collect();
+    let cases = [
+        ("no mode", running(), &agent_ids),
+        (
+            "durable",
+            running().and(mode(AgentMode::Durable)),
+            &agent_ids,
+        ),
+        (
+            "ephemeral",
+            running().and(mode(AgentMode::Ephemeral)),
+            &ephemeral_ids,
+        ),
+        (
+            "both modes",
+            running().and(mode(AgentMode::Durable).or(mode(AgentMode::Ephemeral))),
+            &all_ids,
+        ),
+    ];
+    for (label, filter, expected) in cases {
+        for count in [100, 2] {
+            let start = tokio::time::Instant::now();
+            loop {
+                let listed = list_all_agents(&user, &component.id, &filter, count).await?;
+                let listed_set: HashSet<AgentId> = listed.iter().cloned().collect();
+                assert_eq!(
+                    listed.len(),
+                    listed_set.len(),
+                    "{label}, count {count}: an agent is listed twice"
+                );
+                if &listed_set == expected {
+                    break;
+                }
+                if start.elapsed() > enum_deadline {
+                    return Err(anyhow!(
+                        "{label}, count {count}: missing {:?}, unexpected {:?}",
+                        expected.difference(&listed_set).collect::<Vec<_>>(),
+                        listed_set.difference(expected).collect::<Vec<_>>()
+                    ));
+                }
+                sleep(Duration::from_millis(200)).await;
             }
         }
-        if !enum_results.is_empty() && enum_results.len() <= workers_count as usize {
-            break;
-        }
-        if start.elapsed() > enum_deadline {
-            return Err(anyhow!(
-                "Timed out waiting for at least one running worker. Got {} running workers",
-                enum_results.len()
-            ));
-        }
-        sleep(Duration::from_millis(200)).await;
     }
-    info!(
-        "Phase 3 complete: found running workers in {:?}",
-        start.elapsed()
-    );
+    info!("Phase 3 complete: listed the running workers through both paths");
 
     info!("Phase 4: Sending stop signal to workers");
+    release_hang.send(true)?;
     *response.lock().unwrap() = "stop".to_string();
 
     // Wait for all workers to become Idle in parallel with a generous timeout

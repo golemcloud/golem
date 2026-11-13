@@ -15,14 +15,14 @@
 use super::probe::ConsumerJournalInspection;
 use super::registration::{registered_stream, registration_record};
 use super::{
-    AgentError, AttachedStreamSegmentSource, CommittedProducerStreamEvent,
-    CommittedProducerStreamEventPayload, ConsumerAttachmentStatus, ConsumerJournalSummary,
-    DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
-    DurableStreamStore, ExternalAppendOutcome, ExternalProducer, IndexedConsumerJournal,
-    NestedStreamWrite, ProducerMetadataKey, ProducerOutputRegistration, ProducerOutputSource,
-    ProducerRegistrationRequest, ProducerStreamIndex, RecoveryTopology, RegisteredStream,
-    ResultStreamRegistration, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-    StreamAttachmentState, StreamSegmentSource, StreamStoreError,
+    AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
+    ConsumerAttachmentStatus, ConsumerJournalSummary, DurableCatchUpReader, DurableLiveStreamBus,
+    DurableLiveStreamBusError, DurableStreamCommit, DurableStreamStore, ExternalAppendOutcome,
+    ExternalProducer, IndexedConsumerJournal, NestedStreamWrite, ProducerMetadataKey,
+    ProducerOutputRegistration, ProducerOutputSource, ProducerRegistrationRequest,
+    ProducerStreamIndex, RecoveryTopology, RegisteredStream, ResultStreamRegistration,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentState,
+    StreamSegmentSource, StreamStoreError,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogOps, OplogReadSource,
@@ -40,14 +40,13 @@ use golem_common::base_model::durable_stream::{
     PersistedStreamInvocationDescriptor, STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
     STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StartAttemptDescriptor,
     StreamAttachmentFinalizationReason, StreamAttachmentKey, StreamBindingRecord,
-    StreamCancelReason, StreamCancelRole, StreamCascadeDependentResult,
-    StreamConsumerDeletingRecord, StreamConsumerItemValueRecord, StreamEndResult, StreamId,
-    StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamRecordReference,
-    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRootKind,
-    StreamSessionExpiryPolicy, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamCascadeDependentResult, StreamConsumerDeletingRecord, StreamConsumerItemValueRecord,
+    StreamError, StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+    StreamRecordReference, StreamRegistrationCoordinate, StreamRegistrationInvocation,
+    StreamRootKind, StreamSessionExpiryPolicy, StreamSessionMapping, StreamSessionMappingRecord,
     StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord, StreamSessionRecord,
-    StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
-    StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -2210,9 +2209,15 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
     live.prepare_attachment(attachment_key(&identity, handle.stream_id), 100)
         .await
         .unwrap();
-    live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
-        .await
-        .unwrap();
+    live.end(
+        None,
+        handle.stream_id,
+        1,
+        StreamTerminalAuthor::Guest,
+        StreamTerminal::Finished,
+    )
+    .await
+    .unwrap();
 
     let attributed = oplog
         .entries()
@@ -2222,7 +2227,7 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
                 entry,
                 OplogEntry::StreamRegistered { .. }
                     | OplogEntry::StreamItems { .. }
-                    | OplogEntry::StreamEnd { .. }
+                    | OplogEntry::StreamTerminal { .. }
                     | OplogEntry::StreamSession { .. }
             )
         })
@@ -2371,6 +2376,7 @@ async fn retention_entry_budget_evicts_batches_instead_of_packed_items() {
             offset: StreamOffset::new(OplogIndex::from_u64(sequence + 1), 0),
             packed_u8_batch_end: None,
             terminal_author: None,
+            terminal_origin: None,
             nested_handles: Vec::new(),
             nested_references: Vec::new(),
             payload: CommittedProducerStreamEventPayload::Value(vec![1]),
@@ -2412,6 +2418,7 @@ async fn retained_segment_returns_prefix_at_encoded_byte_bound() {
             offset: StreamOffset::new(OplogIndex::from_u64(sequence + 1), 0),
             packed_u8_batch_end: None,
             terminal_author: None,
+            terminal_origin: None,
             nested_handles: Vec::new(),
             nested_references: Vec::new(),
             payload: CommittedProducerStreamEventPayload::Value(vec![
@@ -2500,7 +2507,13 @@ async fn cursor_validation_point_reads_without_historical_event_cache() {
             .expect("oplog write");
     }
     producer
-        .end(None, handle.stream_id, 3, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            3,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
     let high_water = producer.input_high_water(handle.stream_id).await.unwrap();
@@ -3144,9 +3157,8 @@ async fn replacing_a_source_cancellation_fences_the_old_drain_without_losing_the
         .cancel_open(
             None,
             handle.stream_id,
-            StreamCancelRole::OutputConsumer,
-            StreamCancelReason::GuestDrop,
-            None,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::ConsumerCancelled { details: None },
         )
         .await
         .unwrap();
@@ -3670,7 +3682,11 @@ async fn reobserved_input_allows_source_loss_overlay() {
         parent_start_index: None,
     };
     consumer
-        .append_session_record(None, record.clone())
+        .prepare_consumer_observation(None, record.clone())
+        .await
+        .unwrap()
+        .enqueue(None)
+        .unwrap()
         .await
         .unwrap();
     let original_index = consumer.oplog.current_oplog_index().await;
@@ -3689,7 +3705,14 @@ async fn reobserved_input_allows_source_loss_overlay() {
         unreachable!()
     };
     item.reobserves = Some(original_index);
-    consumer.append_session_record(None, record).await.unwrap();
+    consumer
+        .prepare_consumer_observation(None, record)
+        .await
+        .unwrap()
+        .enqueue(None)
+        .unwrap()
+        .await
+        .unwrap();
     let result = consumer
         .commit_source_unavailable_overlay(None, key.clone(), reader_id, offsets[1], 1)
         .await;
@@ -3924,7 +3947,13 @@ async fn complete_value_journal_releases_dependency_only_after_the_source_termin
         .unwrap()
         .value[0];
     let terminal_offset = live
-        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            1,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap()
         .value;
@@ -4235,9 +4264,8 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
                     reader_id,
                     source_offset: StreamOffset::new(OplogIndex::INITIAL, 0),
                     consumer_read_ordinal: 0,
-                    terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
-                        StreamEndResult::Ok,
-                    ),
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::Finished,
                 },
             ),
         )
@@ -4295,7 +4323,13 @@ async fn producer_journal_restarts_and_replays_without_appending() {
         })
     );
     let terminal = live_producer
-        .end(None, stream_id, 2, StreamEndResult::Ok)
+        .end(
+            None,
+            stream_id,
+            2,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -4334,7 +4368,13 @@ async fn producer_journal_restarts_and_replays_without_appending() {
     );
     assert!(
         restarted
-            .end(None, stream_id, 2, StreamEndResult::Ok)
+            .end(
+                None,
+                stream_id,
+                2,
+                StreamTerminalAuthor::Guest,
+                StreamTerminal::Finished
+            )
             .await
             .unwrap()
             .replayed
@@ -4359,7 +4399,7 @@ async fn producer_journal_restarts_and_replays_without_appending() {
     );
     assert_eq!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     );
     assert!(reader.next().await.unwrap().is_none());
 }
@@ -4385,9 +4425,15 @@ async fn closed_export_reports_terminal_state_before_final_page() {
         .await
         .unwrap()
         .value;
-    live.end(None, handle.stream_id, 4, StreamEndResult::Ok)
-        .await
-        .unwrap();
+    live.end(
+        None,
+        handle.stream_id,
+        4,
+        StreamTerminalAuthor::Guest,
+        StreamTerminal::Finished,
+    )
+    .await
+    .unwrap();
     let read = live
         .read_by_handle(StreamHandleReadRequest {
             handle,
@@ -4403,6 +4449,91 @@ async fn closed_export_reports_terminal_state_before_final_page() {
     assert_eq!(read.events.len(), 2);
     assert_eq!(read.next_offset, Some(offsets[1]));
     assert!(read.next_offset < read.head_offset);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn export_cancelled_flag_distinguishes_interim_terminal_outcomes_after_recovery() {
+    use golem_common::model::durable_stream::StreamHandleReadRequest;
+    use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+    for (terminal, cancelled) in [
+        (StreamTerminal::Finished, false),
+        (StreamTerminal::ConsumerCancelled { details: None }, true),
+        (StreamTerminal::Failed(StreamError::Cancelled), true),
+        (
+            StreamTerminal::Failed(StreamError::Interrupted("deleted slot".into())),
+            true,
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Trapped("producer trap".into())),
+            false,
+        ),
+        (StreamTerminal::Failed(StreamError::Abandoned), false),
+        (
+            StreamTerminal::Failed(StreamError::ResourceExhausted("quota".into())),
+            false,
+        ),
+        (
+            StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::u64()),
+                SchemaValue::U64(917),
+            )))),
+            false,
+        ),
+    ] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let registration = root_registration(&identity);
+        let handle = live
+            .register(None, registration.clone())
+            .await
+            .unwrap()
+            .value;
+        live.write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![3, 19]),
+        )
+        .await
+        .unwrap();
+        live.end(
+            None,
+            handle.stream_id,
+            2,
+            StreamTerminalAuthor::Host,
+            terminal.clone(),
+        )
+        .await
+        .unwrap();
+        let recovered = producer(oplog.clone(), &identity, None).await;
+        let recovered_handle = recovered
+            .handle_for_coordinate(&registration.coordinate)
+            .await
+            .unwrap()
+            .unwrap();
+        let count = oplog.length().await;
+        for (store, handle) in [(live, handle), (recovered, recovered_handle)] {
+            let head = store.stream_head(&handle).await.unwrap();
+            assert!(head.closed);
+            assert_eq!(head.cancelled, cancelled, "{terminal:?}");
+            let read = store
+                .read_by_handle(StreamHandleReadRequest {
+                    handle,
+                    after: None,
+                    max_items: 1,
+                    max_bytes: 10,
+                    wait_millis: 0,
+                })
+                .await
+                .unwrap();
+            assert!(read.closed && read.next_offset < read.head_offset);
+            assert_eq!(read.cancelled, cancelled, "{terminal:?}");
+        }
+        assert_eq!(oplog.length().await, count);
+    }
 }
 
 #[test]
@@ -4442,8 +4573,14 @@ async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit()
     let terminal = tokio::spawn({
         let live = live.clone();
         async move {
-            live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
-                .await
+            live.end(
+                None,
+                handle.stream_id,
+                1,
+                StreamTerminalAuthor::Guest,
+                StreamTerminal::Finished,
+            )
+            .await
         }
     });
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
@@ -4655,9 +4792,15 @@ async fn future_cursor_live_reads_wait_for_deadline_or_closure() {
     .await
     .unwrap();
     assert!(futures::poll!(waiting.as_mut()).is_pending());
-    live.end(None, handle.stream_id, 1, StreamEndResult::Ok)
-        .await
-        .unwrap();
+    live.end(
+        None,
+        handle.stream_id,
+        1,
+        StreamTerminalAuthor::Guest,
+        StreamTerminal::Finished,
+    )
+    .await
+    .unwrap();
     let closed = waiting.await.unwrap();
     assert!(closed.closed);
     assert!(closed.events.is_empty());
@@ -4706,7 +4849,7 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![31, 44])),
-        true,
+        Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
         None,
     );
     let read = async {
@@ -4728,7 +4871,7 @@ async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort(
             CommittedProducerStreamEventPayload::PackedU8(19),
             CommittedProducerStreamEventPayload::PackedU8(31),
             CommittedProducerStreamEventPayload::PackedU8(44),
-            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok),
+            CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished),
         ]
     );
     assert!(
@@ -4946,9 +5089,8 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
             live.cancel_open(
                 None,
                 handle.stream_id,
-                StreamCancelRole::OutputConsumer,
-                StreamCancelReason::Cancelled,
-                None,
+                StreamTerminalAuthor::Host,
+                StreamTerminal::ConsumerCancelled { details: None },
             )
             .await
         }
@@ -5048,7 +5190,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
                 &session,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
-                false,
+                None,
                 Some(external),
             )
             .await
@@ -5065,7 +5207,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
-            false,
+            None,
             Some(external),
         )
         .await
@@ -5148,7 +5290,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
                 &session,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![7])),
-                false,
+                None,
                 Some(external),
             )
             .await
@@ -5164,7 +5306,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
-            false,
+            None,
             Some(external),
         )
         .await
@@ -5198,7 +5340,7 @@ async fn provisional_external_append_retains_entity_attribution() {
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![7])),
-        true,
+        Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
         Some(ExternalProducer {
             id: ExternalProducerId::Client("attributed-producer".into()),
             epoch: 1,
@@ -5263,7 +5405,7 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
                 &identity.invocation,
                 handle.stream_id,
                 None,
-                true,
+                Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                 own_end.then_some(ExternalProducer {
                     id: ExternalProducerId::Attached,
                     epoch: 0,
@@ -5290,8 +5432,8 @@ async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reloa
             assert_eq!(
                 error,
                 if own_end {
-                    StreamStoreError::FencedByTerminal(CommittedProducerStreamEventPayload::End(
-                        StreamEndResult::Ok,
+                    StreamStoreError::FencedByTerminal(Box::new(
+                        recovered.terminal_event(&handle).await.unwrap().unwrap(),
                     ))
                 } else {
                     StreamStoreError::ClosedByOtherProducer
@@ -5379,7 +5521,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::Values(vec![vec![20], vec![30]])),
-            false,
+            None,
             Some(client.clone()),
         )
         .await
@@ -5407,7 +5549,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
                 &identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::Values(vec![vec![20], vec![30]])),
-                false,
+                None,
                 Some(client),
             )
             .await
@@ -5457,7 +5599,7 @@ async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retr
             &identity.invocation,
             handle.stream_id,
             None,
-            true,
+            Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
             Some(ExternalProducer {
                 id: ExternalProducerId::Attached,
                 epoch: 0,
@@ -5548,7 +5690,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
                 vec![30],
                 vec![31]
             ])),
-            false,
+            None,
             None,
         ),
     );
@@ -5593,7 +5735,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
         &identity.invocation,
         child.stream_id,
         None,
-        true,
+        Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
         Some(ExternalProducer {
             id: ExternalProducerId::Attached,
             epoch: 0,
@@ -5635,7 +5777,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
                 &identity.invocation,
                 handle.stream_id,
                 None,
-                true,
+                Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                 Some(ExternalProducer {
                     id: ExternalProducerId::Attached,
                     epoch: 0,
@@ -5651,7 +5793,7 @@ async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_
             &identity.invocation,
             handle.stream_id,
             None,
-            true,
+            Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
             None,
         )
         .await
@@ -5710,7 +5852,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
-            false,
+            None,
             Some(p0.clone()),
         )
         .await
@@ -5724,7 +5866,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
-            false,
+            None,
             Some(p0.clone())
         ),
         live.append_external_input(
@@ -5732,7 +5874,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
-            false,
+            None,
             Some(p0)
         ),
     );
@@ -5748,7 +5890,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
-            false,
+            None,
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p1".into()),
                 epoch: 1,
@@ -5764,7 +5906,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![1, 2])),
-            false,
+            None,
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p1".into()),
                 epoch: 1,
@@ -5784,7 +5926,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
-            false,
+            None,
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p1".into()),
                 epoch: 1,
@@ -5804,7 +5946,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![3])),
-            false,
+            None,
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p1".into()),
                 epoch: 2,
@@ -5821,7 +5963,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![4])),
-            false,
+            None,
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p1".into()),
                 epoch: 1,
@@ -5848,7 +5990,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![4])),
-            true,
+            Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
             Some(ExternalProducer {
                 id: ExternalProducerId::Client("p2".into()),
                 epoch: 0,
@@ -5867,7 +6009,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
             &identity.invocation,
             handle.stream_id,
             None,
-            true,
+            Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
             None
         )
         .await
@@ -5886,7 +6028,7 @@ async fn external_append_producer_retries_epochs_close_and_recovery() {
                 &identity.invocation,
                 handle.stream_id,
                 Some(StreamItemsPayload::PackedU8(vec![9])),
-                false,
+                None,
                 None
             )
             .await
@@ -5926,7 +6068,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
         &identity.invocation,
         handle.stream_id,
         Some(StreamItemsPayload::PackedU8(vec![1])),
-        false,
+        None,
         Some(producer_tuple("first", 0)),
     )
     .await
@@ -5937,7 +6079,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
             &identity.invocation,
             handle.stream_id,
             None,
-            true,
+            Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
             Some(producer_tuple("first", 1)),
         )
         .await
@@ -5956,7 +6098,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
                     &identity.invocation,
                     handle.stream_id,
                     None,
-                    true,
+                    Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                     Some(producer_tuple("first", 1)),
                 )
                 .await
@@ -5981,7 +6123,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
                         &identity.invocation,
                         handle.stream_id,
                         None,
-                        true,
+                        Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                         Some(request),
                     )
                     .await
@@ -5996,7 +6138,7 @@ async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
                     &identity.invocation,
                     handle.stream_id,
                     Some(StreamItemsPayload::PackedU8(vec![1])),
-                    false,
+                    None,
                     Some(producer_tuple("first", 0)),
                 )
                 .await
@@ -6041,15 +6183,15 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
         .cancel_open(
             None,
             handle.stream_id,
-            StreamCancelRole::InputConsumer,
-            StreamCancelReason::GuestDrop,
-            None,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::ConsumerCancelled { details: None },
         )
         .await
         .unwrap();
     let oplog_length = oplog.committed_length();
+    let selected = producer.terminal_event(&handle).await.unwrap().unwrap();
 
-    assert!(matches!(
+    assert_eq!(
         producer
             .write_items(
                 None,
@@ -6058,28 +6200,24 @@ async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(StreamStoreError::FencedByTerminal(
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer,
-                reason: StreamCancelReason::GuestDrop,
-                details: None,
-            }
-        ))
-    ));
+        Err(StreamStoreError::FencedByTerminal(Box::new(
+            selected.clone()
+        )))
+    );
     assert_eq!(oplog.committed_length(), oplog_length);
 
-    assert!(matches!(
+    assert_eq!(
         producer
-            .end(None, handle.stream_id, 64, StreamEndResult::Ok)
+            .end(
+                None,
+                handle.stream_id,
+                64,
+                StreamTerminalAuthor::Guest,
+                StreamTerminal::Finished
+            )
             .await,
-        Err(StreamStoreError::FencedByTerminal(
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer,
-                reason: StreamCancelReason::GuestDrop,
-                details: None,
-            }
-        ))
-    ));
+        Err(StreamStoreError::FencedByTerminal(Box::new(selected)))
+    );
     assert_eq!(oplog.committed_length(), oplog_length);
 }
 
@@ -6454,7 +6592,9 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
         .end_open(
             None,
             handle.stream_id,
-            StreamEndResult::ErrorContext(b"invocation failed".to_vec()),
+            StreamTerminalAuthor::Host,
+            StreamTerminalOrigin::Control,
+            StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
         )
         .await
         .unwrap();
@@ -6463,7 +6603,9 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
         .end_open(
             None,
             handle.stream_id,
-            StreamEndResult::ErrorContext(b"ignored duplicate".to_vec()),
+            StreamTerminalAuthor::Host,
+            StreamTerminalOrigin::Control,
+            StreamTerminal::Failed(StreamError::Trapped("ignored duplicate".into())),
         )
         .await
         .unwrap();
@@ -6476,8 +6618,8 @@ async fn protocol_terminalization_closes_an_open_stream_once() {
     ));
     assert!(matches!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(details))
-            if details == b"invocation failed"
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(StreamError::Trapped(details)))
+            if details == "invocation failed"
     ));
     assert!(reader.next().await.unwrap().is_none());
 }
@@ -6853,7 +6995,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             .unwrap()
             .value;
         producer
-            .end(None, existing.stream_id, 0, StreamEndResult::Ok)
+            .end(
+                None,
+                existing.stream_id,
+                0,
+                StreamTerminalAuthor::Guest,
+                StreamTerminal::Finished,
+            )
             .await
             .unwrap();
         request.coordinate = StreamRegistrationCoordinate::Root {
@@ -6920,13 +7068,11 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
             assert_eq!(
                 event.payload,
                 if position == 0 {
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::OutputConsumer,
-                        reason: StreamCancelReason::Cancelled,
-                        details: None,
-                    }
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                        StreamError::Interrupted("output slot deleted".into()),
+                    ))
                 } else {
-                    CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
                 }
             );
             assert!(reader.next().await.unwrap().is_none());
@@ -7099,7 +7245,13 @@ async fn catch_up_joins_live_without_a_gap_or_duplicate() {
         .await
         .unwrap();
     producer
-        .end(None, registered.value.stream_id, 1, StreamEndResult::Ok)
+        .end(
+            None,
+            registered.value.stream_id,
+            1,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -7108,7 +7260,7 @@ async fn catch_up_joins_live_without_a_gap_or_duplicate() {
     );
     assert!(matches!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
     assert!(reader.next().await.unwrap().is_none());
 }
@@ -7150,14 +7302,20 @@ async fn replay_publication_is_deduplicated_at_the_live_reader() {
             .replayed
     );
     producer
-        .end(None, registered.value.stream_id, 1, StreamEndResult::Ok)
+        .end(
+            None,
+            registered.value.stream_id,
+            1,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
     let terminal = reader.next().await.unwrap().unwrap();
     assert_eq!(terminal.producer_sequence, 1);
     assert!(matches!(
         terminal.payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
 }
 
@@ -7458,10 +7616,11 @@ async fn encoded_size_rejection_has_no_durable_effect_and_sequence_can_retry() {
             None,
             stream_id,
             0,
-            StreamItemsPayload::Values(vec![vec![1]]),
+            StreamItemsPayload::PackedU8(vec![173; MAX_PACKED_U8_STREAM_ITEM_SIZE]),
         )
         .await
         .unwrap();
+    assert_eq!(written.value.len(), MAX_PACKED_U8_STREAM_ITEM_SIZE);
     assert_eq!(
         written.value[0].producer_oplog_index(),
         OplogIndex::from_u64(2)
@@ -7776,7 +7935,13 @@ async fn forwarded_inline_input_defers_completion_until_terminal_after_recovery(
         );
         if local {
             recovered
-                .end(None, handle.stream_id, 0, StreamEndResult::Ok)
+                .end(
+                    None,
+                    handle.stream_id,
+                    0,
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::Finished,
+                )
                 .await
                 .unwrap();
             assert!(
@@ -8112,17 +8277,14 @@ async fn recursive_value_limit_commits_only_one_protocol_resource_exhausted_term
     let mut reader = producer.catch_up(registered.value, None).await.unwrap();
     let terminal = reader.next().await.unwrap().unwrap();
     assert_eq!(terminal.producer_sequence, 0);
-    assert_eq!(
-        terminal.terminal_author,
-        Some(StreamTerminalAuthor::Protocol)
-    );
-    let CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(bytes)) =
-        terminal.payload
+    assert_eq!(terminal.terminal_author, Some(StreamTerminalAuthor::Host));
+    let CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+        StreamError::ResourceExhausted(details),
+    )) = terminal.payload
     else {
         panic!("expected resource exhaustion stream terminal")
     };
-    let error: AgentError = golem_common::serialization::deserialize(&bytes).unwrap();
-    assert_eq!(error.to_string(), "\"ResourceExhausted\"");
+    assert_eq!(details, "stream resource limit exceeded");
 
     assert!(matches!(
         producer
@@ -8497,14 +8659,19 @@ async fn stream_terminals_wake_session_recovery_after_fold_but_items_do_not() {
                     live.cancel_open(
                         None,
                         handle.stream_id,
-                        StreamCancelRole::InputConsumer,
-                        StreamCancelReason::GuestDrop,
-                        None,
+                        StreamTerminalAuthor::Host,
+                        StreamTerminal::ConsumerCancelled { details: None },
                     )
                     .await
                 } else {
-                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
-                        .await
+                    live.end_open(
+                        None,
+                        handle.stream_id,
+                        StreamTerminalAuthor::Host,
+                        StreamTerminalOrigin::Control,
+                        StreamTerminal::Finished,
+                    )
+                    .await
                 }
             }
         });
@@ -8585,8 +8752,14 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
             let live = live.clone();
             async move {
                 if lifecycle {
-                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
-                        .await
+                    live.end_open(
+                        None,
+                        handle.stream_id,
+                        StreamTerminalAuthor::Host,
+                        StreamTerminalOrigin::Control,
+                        StreamTerminal::Finished,
+                    )
+                    .await
                 } else {
                     live.write_items(
                         None,
@@ -8628,7 +8801,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
         assert_eq!(
             second.payload.payload,
             if lifecycle {
-                CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
             } else {
                 CommittedProducerStreamEventPayload::Value(vec![7])
             }
@@ -8720,9 +8893,8 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
                 live.cancel_open(
                     None,
                     stream_id,
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminal::ConsumerCancelled { details: None },
                 )
                 .await
             }));
@@ -8765,11 +8937,9 @@ async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission(
             assert!(previous < terminal.offset);
             assert_eq!(
                 terminal.payload.payload,
-                CommittedProducerStreamEventPayload::Cancel {
-                    role: StreamCancelRole::OutputConsumer,
-                    reason: StreamCancelReason::Cancelled,
+                CommittedProducerStreamEventPayload::Terminal(StreamTerminal::ConsumerCancelled {
                     details: None,
-                }
+                })
             );
         }
         for write in writes {
@@ -8833,7 +9003,10 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             identity.invocation.clone(),
             None,
             Err(error.clone()),
-            StreamCancelReason::InvocationFailed,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped(
+                String::from_utf8_lossy(&error).into_owned(),
+            )),
         ));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(50), &mut finishing)
@@ -8873,8 +9046,8 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                 let mut reader = current.catch_up(handle.clone(), None).await.unwrap();
                 assert_eq!(
                     reader.next().await.unwrap().unwrap().payload,
-                    CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(
-                        error.clone()
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                        StreamError::Trapped(String::from_utf8_lossy(&error).into_owned())
                     ))
                 );
             }
@@ -8891,7 +9064,8 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                     identity.invocation.clone(),
                     None,
                     Err(vec![99; error_len]),
-                    StreamCancelReason::InvocationFailed,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 ),
             )
             .await
@@ -8941,7 +9115,8 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
         identity.invocation.clone(),
         None,
         Err(vec![83; 128]),
-        StreamCancelReason::InvocationFailed,
+        StreamTerminalAuthor::Host,
+        StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
     ));
     assert!(
         tokio::time::timeout(Duration::from_millis(50), &mut finishing)
@@ -9038,7 +9213,10 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
                         session,
                         None,
                         Err(vec![19, 31]),
-                        StreamCancelReason::InvocationFailed,
+                        StreamTerminalAuthor::Host,
+                        StreamTerminal::Failed(StreamError::Trapped(
+                            String::from_utf8_lossy(&[19, 31]).into_owned(),
+                        )),
                     )
                     .await
                 }
@@ -9079,17 +9257,16 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
             if deleting {
                 assert!(matches!(
                     terminal.payload.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        reason: StreamCancelReason::ProducerDeleting,
-                        ..
-                    }
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                        StreamError::Interrupted(_)
+                    ))
                 ));
             } else {
                 assert_eq!(
                     terminal.payload.payload,
-                    CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(vec![
-                        19, 31
-                    ]))
+                    CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+                        StreamError::Trapped(String::from_utf8_lossy(&[19, 31]).into_owned())
+                    ))
                 );
             }
         }
@@ -9160,7 +9337,17 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
     let blocked_terminal = tokio::spawn({
         let producer = live_producer.clone();
         let stream_id = registered.value.stream_id;
-        async move { producer.end(None, stream_id, 2, StreamEndResult::Ok).await }
+        async move {
+            producer
+                .end(
+                    None,
+                    stream_id,
+                    2,
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::Finished,
+                )
+                .await
+        }
     });
     while oplog.committed_length() < 4 {
         tokio::task::yield_now().await;
@@ -9175,7 +9362,7 @@ async fn commit_completes_before_backpressured_item_and_terminal_fanout() {
     assert_eq!(catch_up.next().await.unwrap().unwrap().producer_sequence, 1);
     assert!(matches!(
         catch_up.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
 }
 
@@ -9300,7 +9487,17 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
     let blocked_terminal = tokio::spawn({
         let producer = live_producer.clone();
         let stream_id = registered.value.stream_id;
-        async move { producer.end(None, stream_id, 2, StreamEndResult::Ok).await }
+        async move {
+            producer
+                .end(
+                    None,
+                    stream_id,
+                    2,
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::Finished,
+                )
+                .await
+        }
     });
     while oplog.committed_length() < 4 {
         tokio::task::yield_now().await;
@@ -9317,7 +9514,7 @@ async fn restart_recovers_an_item_and_terminal_after_commit_before_fanout() {
     assert_eq!(catch_up.next().await.unwrap().unwrap().producer_sequence, 1);
     assert!(matches!(
         catch_up.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
 }
 
@@ -9391,6 +9588,7 @@ async fn terminal_delivery_does_not_wait_for_live_reader_cleanup() {
                 offset: StreamOffset::new(OplogIndex::from_u64(1), 0),
                 packed_u8_batch_end: Some(StreamOffset::new(OplogIndex::from_u64(1), 0)),
                 terminal_author: None,
+                terminal_origin: None,
                 nested_handles: Vec::new(),
                 nested_references: Vec::new(),
                 payload: CommittedProducerStreamEventPayload::PackedU8(7),
@@ -9401,9 +9599,10 @@ async fn terminal_delivery_does_not_wait_for_live_reader_cleanup() {
                 offset: StreamOffset::new(OplogIndex::from_u64(2), 0),
                 packed_u8_batch_end: None,
                 terminal_author: None,
+                terminal_origin: Some(StreamTerminalOrigin::Source),
                 nested_handles: Vec::new(),
                 nested_references: Vec::new(),
-                payload: CommittedProducerStreamEventPayload::End(StreamEndResult::Ok),
+                payload: CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished),
             },
         ]),
         join_high_water: None,
@@ -9432,7 +9631,7 @@ async fn terminal_delivery_does_not_wait_for_live_reader_cleanup() {
         .unwrap();
     assert!(matches!(
         terminal.payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
     release_tx.send(()).unwrap();
     lock_task.await.unwrap();
@@ -9475,7 +9674,13 @@ async fn completed_terminal_catch_up_reader_releases_live_reader_capacity() {
         .await
         .unwrap();
     producer
-        .end(None, registered.value.stream_id, 0, StreamEndResult::Ok)
+        .end(
+            None,
+            registered.value.stream_id,
+            0,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap();
 
@@ -9485,7 +9690,7 @@ async fn completed_terminal_catch_up_reader_releases_live_reader_capacity() {
         .unwrap();
     assert!(matches!(
         completed.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
     assert!(completed.next().await.unwrap().is_none());
 
@@ -9601,17 +9806,23 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                     session_key,
                     None,
                     Err(b"failed".to_vec()),
-                    golem_common::base_model::durable_stream::StreamCancelReason::InvocationFailed,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 )
                 .await
         })
     };
     let write_result = writing.await.unwrap();
     finishing.await.unwrap().unwrap();
+    let selected = live_producer.terminal_event(&root).await.unwrap().unwrap();
     assert!(
-        write_result.is_ok() || matches!(&write_result, Err(StreamStoreError::SessionFinished(_)))
+        write_result.is_ok()
+            || write_result
+                == Err(StreamStoreError::FencedByTerminal(Box::new(
+                    selected.clone()
+                )))
     );
-    assert!(matches!(
+    assert_eq!(
         live_producer
             .write_items(
                 None,
@@ -9620,8 +9831,10 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(StreamStoreError::SessionFinished(_))
-    ));
+        Err(StreamStoreError::FencedByTerminal(Box::new(
+            selected.clone()
+        )))
+    );
 
     let entries = oplog.entries();
     let OplogEntry::StreamSession {
@@ -9635,7 +9848,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
 
     drop(live_producer);
     let restarted = producer(oplog, &identity, None).await;
-    assert!(matches!(
+    assert_eq!(
         restarted
             .write_items(
                 None,
@@ -9644,8 +9857,8 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                 StreamItemsPayload::Values(vec![vec![2]]),
             )
             .await,
-        Err(StreamStoreError::SessionFinished(_))
-    ));
+        Err(StreamStoreError::FencedByTerminal(Box::new(selected)))
+    );
 }
 
 #[test]
@@ -9713,7 +9926,7 @@ async fn byte_output_drain_publishes_only_the_live_suffix() {
     assert_eq!(terminal.payload.producer_sequence, 4);
     assert_eq!(
         terminal.payload.payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(20), subscription.recv())
@@ -9786,4 +9999,548 @@ fn an_unreadable_oplog_keeps_its_type_through_stream_and_session_errors() {
             .cloned(),
         Some(expected)
     );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn competing_terminals_select_one_event_and_replay_after_restart() {
+    for author in [
+        StreamTerminalAuthor::Guest,
+        StreamTerminalAuthor::Host,
+        StreamTerminalAuthor::Protocol,
+    ] {
+        for failure in [
+            StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader dropped".into()),
+            },
+        ] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let live = producer(oplog.clone(), &identity, None).await;
+            let handle = live
+                .register(None, root_registration(&identity))
+                .await
+                .unwrap()
+                .value;
+            let (finished, failed) = tokio::join!(
+                live.end(
+                    None,
+                    handle.stream_id,
+                    0,
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::Finished
+                ),
+                live.cancel(handle.stream_id, 0, author, failure.clone()),
+            );
+            assert_ne!(finished.is_ok(), failed.is_ok());
+            let source_won = finished.is_ok();
+            let (selected_author, selected_terminal, loser) = if source_won {
+                (
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::Finished,
+                    failed,
+                )
+            } else {
+                (author, failure, finished)
+            };
+            let selected = live.terminal_event(&handle).await.unwrap().unwrap();
+            assert_eq!(
+                loser,
+                Err(StreamStoreError::FencedByTerminal(Box::new(
+                    selected.clone()
+                )))
+            );
+            assert_eq!(oplog.committed_length(), 2);
+            drop(live);
+            let restarted = producer(oplog.clone(), &identity, None).await;
+            let replay = if source_won {
+                restarted
+                    .end(
+                        None,
+                        handle.stream_id,
+                        0,
+                        selected_author,
+                        selected_terminal.clone(),
+                    )
+                    .await
+            } else {
+                restarted
+                    .cancel(
+                        handle.stream_id,
+                        0,
+                        selected_author,
+                        selected_terminal.clone(),
+                    )
+                    .await
+            };
+            assert!(replay.unwrap().replayed);
+            assert_eq!(
+                restarted
+                    .end(
+                        None,
+                        handle.stream_id,
+                        1,
+                        selected_author,
+                        selected_terminal.clone()
+                    )
+                    .await,
+                Err(StreamStoreError::FencedByTerminal(Box::new(
+                    selected.clone()
+                )))
+            );
+            restarted
+                .end_open(
+                    None,
+                    handle.stream_id,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminalOrigin::Control,
+                    StreamTerminal::Finished,
+                )
+                .await
+                .unwrap();
+            restarted
+                .cancel_open(
+                    None,
+                    handle.stream_id,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminal::ConsumerCancelled { details: None },
+                )
+                .await
+                .unwrap();
+            let mut reader = restarted.catch_up(handle, None).await.unwrap();
+            let event = reader.next().await.unwrap().unwrap();
+            assert_eq!(event, selected);
+            assert_eq!(event.terminal_author, Some(selected_author));
+            assert_eq!(
+                event.terminal_origin,
+                Some(if source_won {
+                    StreamTerminalOrigin::Source
+                } else {
+                    StreamTerminalOrigin::Control
+                })
+            );
+            assert_eq!(
+                event.payload,
+                CommittedProducerStreamEventPayload::Terminal(selected_terminal)
+            );
+            assert!(reader.next().await.unwrap().is_none());
+            assert_eq!(oplog.committed_length(), 2);
+        }
+    }
+}
+
+#[test]
+async fn terminal_origin_distinguishes_retries_and_controls_source_cancellation() {
+    for origin in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control] {
+        for author in [
+            StreamTerminalAuthor::Guest,
+            StreamTerminalAuthor::Host,
+            StreamTerminalAuthor::Protocol,
+        ] {
+            for terminal in [
+                StreamTerminal::Failed(StreamError::Interrupted("source stopped".into())),
+                StreamTerminal::ConsumerCancelled { details: None },
+            ] {
+                let identity = identity();
+                let oplog = Arc::new(TestOplog::default());
+                let live = producer(oplog.clone(), &identity, None).await;
+                let handle = live
+                    .register(None, root_registration(&identity))
+                    .await
+                    .unwrap()
+                    .value;
+                assert!(live.terminal_event(&handle).await.unwrap().is_none());
+                if origin == StreamTerminalOrigin::Source {
+                    live.end(None, handle.stream_id, 0, author, terminal.clone())
+                        .await
+                        .unwrap();
+                } else {
+                    live.cancel(handle.stream_id, 0, author, terminal.clone())
+                        .await
+                        .unwrap();
+                }
+                drop(live);
+                let cold = producer(oplog.clone(), &identity, None).await;
+                let selected = cold.terminal_event(&handle).await.unwrap().unwrap();
+                assert_eq!(selected.terminal_origin, Some(origin));
+                assert_eq!(selected.terminal_author, Some(author));
+                let mut invalid = handle.clone();
+                invalid.expected_producer_fingerprint = AgentFingerprint(Uuid::new_v4());
+                assert_eq!(
+                    cold.terminal_event(&invalid).await,
+                    Err(StreamStoreError::InvalidHandle)
+                );
+                let cancellation = CancellationToken::new();
+                let registration =
+                    cold.register_source_cancellation(handle.stream_id, cancellation.clone());
+                let end = cold
+                    .end(None, handle.stream_id, 0, author, terminal.clone())
+                    .await;
+                let cancel = cold
+                    .cancel(handle.stream_id, 0, author, terminal.clone())
+                    .await;
+                if origin == StreamTerminalOrigin::Source {
+                    assert!(end.unwrap().replayed);
+                    assert_eq!(
+                        cancel,
+                        Err(StreamStoreError::FencedByTerminal(Box::new(
+                            selected.clone()
+                        )))
+                    );
+                } else {
+                    assert_eq!(
+                        end,
+                        Err(StreamStoreError::FencedByTerminal(Box::new(
+                            selected.clone()
+                        )))
+                    );
+                    assert!(cancel.unwrap().replayed);
+                }
+                assert_eq!(
+                    cancellation.is_cancelled(),
+                    origin == StreamTerminalOrigin::Control
+                );
+                cold.unregister_source_cancellation(handle.stream_id, registration);
+                let cancellation = CancellationToken::new();
+                let registration =
+                    cold.register_source_cancellation(handle.stream_id, cancellation.clone());
+                cold.cancel_open(None, handle.stream_id, author, terminal)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    cancellation.is_cancelled(),
+                    origin == StreamTerminalOrigin::Control
+                );
+                cold.unregister_source_cancellation(handle.stream_id, registration);
+                assert_eq!(cold.terminal_event(&handle).await.unwrap(), Some(selected));
+                assert_eq!(oplog.committed_length(), 2);
+            }
+        }
+    }
+}
+
+#[test]
+async fn session_finish_retains_exact_terminal_fences_and_item_retries() {
+    for origin in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control] {
+        for author in [
+            StreamTerminalAuthor::Guest,
+            StreamTerminalAuthor::Host,
+            StreamTerminalAuthor::Protocol,
+        ] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let live = producer(oplog.clone(), &identity, None).await;
+            let handle = live
+                .register(None, root_registration(&identity))
+                .await
+                .unwrap()
+                .value;
+            let payload = StreamItemsPayload::Values(vec![vec![1]]);
+            let written = live
+                .write_items(None, handle.stream_id, 0, payload.clone())
+                .await
+                .unwrap();
+            let terminal = StreamTerminal::Failed(StreamError::Interrupted("winner".into()));
+            if origin == StreamTerminalOrigin::Source {
+                live.end(None, handle.stream_id, 1, author, terminal.clone())
+                    .await
+                    .unwrap();
+            } else {
+                live.cancel(handle.stream_id, 1, author, terminal.clone())
+                    .await
+                    .unwrap();
+            }
+            let selected = live.terminal_event(&handle).await.unwrap().unwrap();
+            assert_eq!(selected.terminal_author, Some(author));
+            assert_eq!(selected.terminal_origin, Some(origin));
+            assert_eq!(selected.producer_sequence, 1);
+            live.finish_session(
+                None,
+                identity.invocation.clone(),
+                None,
+                Err(b"failed".to_vec()),
+                StreamTerminalAuthor::Host,
+                StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
+            )
+            .await
+            .unwrap();
+            let committed_length = oplog.committed_length();
+            drop(live);
+            let cold = producer(oplog.clone(), &identity, None).await;
+            assert_eq!(
+                cold.ensure_session_accepts_new_events(&identity.invocation)
+                    .await,
+                Err(StreamStoreError::SessionFinished(
+                    identity.invocation.clone()
+                ))
+            );
+            for sequence in [1, 2, 64] {
+                assert_eq!(
+                    cold.write_items(None, handle.stream_id, sequence, payload.clone())
+                        .await,
+                    Err(StreamStoreError::FencedByTerminal(Box::new(
+                        selected.clone()
+                    )))
+                );
+            }
+            let retried = cold
+                .write_items(None, handle.stream_id, 0, payload)
+                .await
+                .unwrap();
+            assert!(retried.replayed);
+            assert_eq!(retried.value, written.value);
+            let retried_terminal = if origin == StreamTerminalOrigin::Source {
+                cold.end(None, handle.stream_id, 1, author, terminal).await
+            } else {
+                cold.cancel(handle.stream_id, 1, author, terminal).await
+            }
+            .unwrap();
+            assert!(retried_terminal.replayed);
+            assert_eq!(retried_terminal.value, selected.offset);
+            assert_eq!(cold.terminal_event(&handle).await.unwrap(), Some(selected));
+            assert_eq!(oplog.committed_length(), committed_length);
+        }
+    }
+}
+
+#[test]
+async fn external_close_retry_does_not_match_a_control_finished_terminal() {
+    for origin in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::ExternalInlineInput,
+                ),
+            )
+            .await
+            .unwrap()
+            .value;
+        if origin == StreamTerminalOrigin::Source {
+            live.append_external_input(
+                None,
+                &identity.invocation,
+                handle.stream_id,
+                None,
+                Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
+                None,
+            )
+            .await
+            .unwrap();
+        } else {
+            live.end_open(
+                None,
+                handle.stream_id,
+                StreamTerminalAuthor::Protocol,
+                origin,
+                StreamTerminal::Finished,
+            )
+            .await
+            .unwrap();
+        }
+        let cancellation = CancellationToken::new();
+        let registration =
+            live.register_source_cancellation(handle.stream_id, cancellation.clone());
+        let selected = live.terminal_event(&handle).await.unwrap().unwrap();
+        assert_eq!(selected.terminal_origin, Some(origin));
+        assert_eq!(
+            live.cancel(
+                handle.stream_id,
+                0,
+                StreamTerminalAuthor::Protocol,
+                StreamTerminal::Failed(StreamError::Cancelled)
+            )
+            .await,
+            Err(StreamStoreError::FencedByTerminal(Box::new(
+                selected.clone()
+            )))
+        );
+        assert_eq!(
+            cancellation.is_cancelled(),
+            origin == StreamTerminalOrigin::Control
+        );
+        live.unregister_source_cancellation(handle.stream_id, registration);
+        let retry = live
+            .append_external_input(
+                None,
+                &identity.invocation,
+                handle.stream_id,
+                None,
+                Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
+                None,
+            )
+            .await
+            .unwrap();
+        if origin == StreamTerminalOrigin::Source {
+            assert!(matches!(retry, ExternalAppendOutcome::Duplicate { .. }));
+        } else {
+            assert_eq!(retry, ExternalAppendOutcome::Closed);
+        }
+        assert_eq!(
+            live.terminal_event(&handle).await.unwrap(),
+            Some(selected.clone())
+        );
+        let mut reader = live.catch_up(handle, None).await.unwrap();
+        assert_eq!(reader.next().await.unwrap(), Some(selected));
+        assert!(reader.next().await.unwrap().is_none());
+        assert_eq!(
+            oplog
+                .entries()
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::StreamTerminal { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+async fn persisted_duplicate_terminal_is_rejected_during_rebuild() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let local_id = live
+        .index
+        .lock()
+        .await
+        .local_stream_id(handle.stream_id)
+        .unwrap();
+    live.end(
+        None,
+        handle.stream_id,
+        0,
+        StreamTerminalAuthor::Guest,
+        StreamTerminal::Finished,
+    )
+    .await
+    .unwrap();
+    oplog
+        .add_durable_stream_batch(Box::new(move |index| {
+            vec![DurableStreamOplogRecord::Terminal(
+                None,
+                golem_common::model::durable_stream::StreamTerminalRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    stream_id: local_id,
+                    sequence: 0,
+                    offset: StreamOffset::new(index, 0),
+                    authored_by: StreamTerminalAuthor::Guest,
+                    origin: StreamTerminalOrigin::Source,
+                    terminal: StreamTerminal::Finished,
+                },
+            )]
+        }))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert!(
+        matches!(DurableStreamStore::load(oplog, identity.environment_id, identity.agent_id, identity.fingerprint, None).await, Err(StreamStoreError::AlreadyTerminal(id)) if id == handle.stream_id)
+    );
+}
+
+#[test]
+async fn cancellation_operations_reject_finished_without_appending() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    assert!(matches!(
+        live.cancel(
+            handle.stream_id,
+            0,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Finished
+        )
+        .await,
+        Err(StreamStoreError::EventConflict)
+    ));
+    assert!(matches!(
+        live.cancel_open(
+            None,
+            handle.stream_id,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Finished
+        )
+        .await,
+        Err(StreamStoreError::EventConflict)
+    ));
+    assert!(matches!(
+        live.commit_cancel_open(
+            None,
+            handle.stream_id,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Finished
+        )
+        .await,
+        Err(StreamStoreError::EventConflict)
+    ));
+    assert_eq!(oplog.committed_length(), 1);
+}
+
+#[test]
+async fn successful_session_finishes_agent_writers_but_abandons_tool_writers() {
+    for role in [
+        SessionStreamRole::Output,
+        SessionStreamRole::ToolStdout,
+        SessionStreamRole::ToolStderr,
+    ] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let mut request = root_registration(&identity);
+        request.session_mapping = Some(StreamSessionMapping {
+            session_key: identity.invocation.clone(),
+            attachment_id: AttachmentId::primary(
+                identity.environment_id,
+                &identity.agent_id,
+                &identity.invocation.idempotency_key,
+            )
+            .unwrap(),
+            role,
+        });
+        let handle = live.register(None, request).await.unwrap().value;
+        live.finish_session(
+            None,
+            identity.invocation.clone(),
+            None,
+            Ok(()),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Interrupted("session finished".into())),
+        )
+        .await
+        .unwrap();
+        drop(live);
+        let restarted = producer(oplog, &identity, None).await;
+        let mut reader = restarted.catch_up(handle, None).await.unwrap();
+        let event = reader.next().await.unwrap().unwrap();
+        assert_eq!(event.terminal_author, Some(StreamTerminalAuthor::Host));
+        assert_eq!(event.terminal_origin, Some(StreamTerminalOrigin::Control));
+        assert_eq!(
+            event.payload,
+            CommittedProducerStreamEventPayload::Terminal(if role == SessionStreamRole::Output {
+                StreamTerminal::Finished
+            } else {
+                StreamTerminal::Failed(StreamError::Abandoned)
+            })
+        );
+        assert!(reader.next().await.unwrap().is_none());
+    }
 }

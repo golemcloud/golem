@@ -71,6 +71,21 @@ impl DurableStreamStore {
             .map(|registration| registration.issue(self.generation())))
     }
 
+    pub(crate) async fn terminal_event(
+        &self,
+        handle: &DurableStreamHandle,
+    ) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
+        let index = self.index_for_terminal([], handle.stream_id).await?;
+        if index
+            .registrations
+            .get(&handle.stream_id)
+            .is_none_or(|registration| !registration.accepts(handle, self.generation()))
+        {
+            return Err(StreamStoreError::InvalidHandle);
+        }
+        Ok(index.streams[&handle.stream_id].terminal_event.clone())
+    }
+
     /// Returns the latest committed offset and terminal state for a validated handle.
     pub async fn stream_head(
         &self,
@@ -88,7 +103,12 @@ impl DurableStreamStore {
         let cancelled = stream.terminal_event.as_ref().is_some_and(|event| {
             matches!(
                 event.payload,
-                CommittedProducerStreamEventPayload::Cancel { .. }
+                CommittedProducerStreamEventPayload::Terminal(
+                    StreamTerminal::ConsumerCancelled { .. }
+                        | StreamTerminal::Failed(
+                            StreamError::Cancelled | StreamError::Interrupted(_)
+                        )
+                )
             )
         });
         Ok(StreamHead {
@@ -367,6 +387,7 @@ impl DurableStreamStore {
                     offset: *offset,
                     packed_u8_batch_end,
                     terminal_author: None,
+                    terminal_origin: None,
                     nested_handles: nested_handles.clone(),
                     nested_references: record.nested_stream_ids.clone(),
                     payload,
@@ -871,9 +892,6 @@ impl DurableStreamStore {
             return Err(StreamStoreError::EventConflict);
         }
         index.ensure_producer_write_allowed()?;
-        if session_finished {
-            return Err(StreamStoreError::SessionFinished(session_key));
-        }
         if stream.terminal {
             let terminal = stream
                 .terminal_event
@@ -885,6 +903,9 @@ impl DurableStreamStore {
             self.publish_repair(Some(context), stream_id, vec![terminal])
                 .await?;
             return Err(error);
+        }
+        if session_finished {
+            return Err(StreamStoreError::SessionFinished(session_key));
         }
         if first_sequence != stream.next_sequence {
             return Err(StreamStoreError::SequenceGap {
@@ -1221,7 +1242,7 @@ impl DurableStreamStore {
                             .collect::<Result<Vec<_>, _>>()?,
                     );
                 }
-                OplogEntry::StreamEnd {
+                OplogEntry::StreamTerminal {
                     entity_parent_start_index,
                     record,
                     ..
@@ -1231,7 +1252,7 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    events.push(index.apply_end(
+                    events.push(index.apply_terminal(
                         oplog_index,
                         entity_parent_start_index,
                         record,

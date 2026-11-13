@@ -489,6 +489,7 @@ fn wire_agent_id_to_schema(value: schema::wit::wire::AgentId) -> AgentId {
 fn schema_promise_id_to_wire(value: &PromiseId) -> schema::wit::wire::PromiseId {
     schema::wit::wire::PromiseId {
         agent_id: schema_agent_id_to_wire(value.agent_id.clone()),
+        fingerprint: schema_uuid_to_wire(value.fingerprint),
         oplog_idx: value.oplog_idx,
     }
 }
@@ -496,6 +497,7 @@ fn schema_promise_id_to_wire(value: &PromiseId) -> schema::wit::wire::PromiseId 
 fn wire_promise_id_to_schema(value: schema::wit::wire::PromiseId) -> PromiseId {
     PromiseId {
         agent_id: wire_agent_id_to_schema(value.agent_id),
+        fingerprint: wire_uuid_to_schema(value.fingerprint),
         oplog_idx: value.oplog_idx,
     }
 }

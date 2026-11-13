@@ -647,33 +647,13 @@ impl ReplayState {
     ///
     /// Both directions run under the cursor transaction lock, so replay cannot advance while the
     /// map and the target are being updated.
-    ///
-    /// `skip` is a region of the newly visible range that the cursor skips, applied only when the
-    /// target grows. It is added to the skipped regions before the scan. A cursor at the old
-    /// target whose skip region starts right after it passes the region in the same transaction.
     pub async fn set_replay_target(
         &self,
         new_target: OplogIndex,
-        skip: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         let cursor = &*self.cursor;
         self.with_tx(async |tx| {
             let old_target = cursor.replay_target();
-            let skip = skip.filter(|_| new_target > old_target);
-            let passes_skip_at_old_target = skip.as_ref().is_some_and(|region| {
-                cursor.last_replayed_index() == old_target && region.start == old_target.next()
-            });
-            if let Some(region) = &skip {
-                tx.st.skipped_regions.add(region.clone());
-                // Adjacent regions merge, so the region that holds the next skipped entry can
-                // start before the cursor; a cached or start-keyed lookup would miss its new part.
-                let next = if passes_skip_at_old_target {
-                    region.end.next()
-                } else {
-                    cursor.last_replayed_index().next()
-                };
-                tx.st.next_skipped_region = tx.st.skipped_regions.find_next_deleted_region(next);
-            }
             if new_target != old_target
                 && let Some(wallet) = &cursor.wallet
             {
@@ -774,10 +754,6 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
-            if let Some(region) = skip.filter(|_| passes_skip_at_old_target) {
-                tx.record_card_events_in_region(&region).await?;
-                tx.move_replay_idx(region.end).await?;
-            }
             if cursor.at_replay_tail()
                 && let Some(wallet) = &cursor.wallet
             {

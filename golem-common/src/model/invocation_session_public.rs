@@ -312,26 +312,6 @@ pub struct PublicStreamMapping {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PublicClientCancelReason {
-    Cancelled,
-    ConsumerDrop,
-    SourceUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PublicServerCancelReason {
-    Cancelled,
-    ConsumerDrop,
-    TransportDetached,
-    SourceUnavailable,
-    ProducerDeleted,
-    InvocationFailed,
-    ProtocolError,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PublicAttachmentRevokedReason {
     Replaced,
@@ -396,16 +376,12 @@ pub enum PublicClientMessage {
         value: Value,
         version: u8,
     },
-    #[serde(rename = "inputStreamEnd")]
-    InputStreamEnd {
+    #[serde(rename = "stream-end")]
+    StreamEnd {
         channel: u32,
+        direction: PublicStreamDirection,
         sequence: DecimalU64,
-        version: u8,
-    },
-    #[serde(rename = "streamCancel")]
-    StreamCancel {
-        channel: u32,
-        reason: PublicClientCancelReason,
+        outcome: PublicStreamOutcome,
         version: u8,
     },
 }
@@ -428,17 +404,259 @@ pub enum PublicInvocationResult {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum PublicOutputStreamOutcome {
-    Ok,
-    Error {
-        code: PublicErrorCode,
-        message: String,
-    },
-    Cancelled {
-        reason: PublicServerCancelReason,
-    },
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PublicStreamOutcome {
+    Finished,
+    Failed { error: PublicStreamError },
+    ConsumerCancelled { details: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PublicStreamError {
+    Failed { value: PublicTypedValue },
+    Trapped { message: String },
+    Cancelled,
+    Abandoned,
+    Interrupted { message: String },
+    ResourceExhausted { message: String },
+}
+
+impl TryFrom<PublicTypedValue> for crate::schema::TypedSchemaValue {
+    type Error = String;
+
+    fn try_from(value: PublicTypedValue) -> Result<Self, Self::Error> {
+        use crate::schema::public_json::{PublicStreamReferencePolicy, decode_public_schema_value};
+        crate::schema::validation::validate_graph(&value.graph)
+            .map_err(|errors| format!("invalid typed stream failure schema: {errors:?}"))?;
+        let decoded = decode_public_schema_value(
+            &value.graph,
+            &value.graph.root,
+            &value.value,
+            PublicStreamReferencePolicy::None,
+            |_, _| {
+                Err(crate::schema::public_json::PublicSchemaValueError::new(
+                    PublicErrorCode::UnsupportedValue,
+                    "stream failures cannot contain stream references",
+                ))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Self::new(value.graph, decoded))
+    }
+}
+
+impl TryFrom<crate::schema::TypedSchemaValue> for PublicTypedValue {
+    type Error = String;
+
+    fn try_from(value: crate::schema::TypedSchemaValue) -> Result<Self, Self::Error> {
+        use crate::schema::public_json::{PublicSchemaValueError, encode_public_schema_value};
+        crate::schema::validation::validate_graph(value.graph())
+            .map_err(|errors| format!("invalid typed stream failure schema: {errors:?}"))?;
+        let json =
+            encode_public_schema_value(value.graph(), value.root_type(), value.value(), |_, _| {
+                Err(PublicSchemaValueError::new(
+                    PublicErrorCode::UnsupportedValue,
+                    "stream failures cannot contain stream references",
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            graph: value.graph().clone(),
+            value: json,
+        })
+    }
+}
+
+impl TryFrom<PublicStreamOutcome> for crate::model::durable_stream::StreamTerminal {
+    type Error = String;
+
+    fn try_from(value: PublicStreamOutcome) -> Result<Self, Self::Error> {
+        use crate::model::durable_stream::StreamError;
+        Ok(match value {
+            PublicStreamOutcome::Finished => Self::Finished,
+            PublicStreamOutcome::ConsumerCancelled { details } => {
+                Self::ConsumerCancelled { details }
+            }
+            PublicStreamOutcome::Failed { error } => Self::Failed(match error {
+                PublicStreamError::Failed { value } => {
+                    StreamError::Failed(Box::new(value.try_into()?))
+                }
+                PublicStreamError::Trapped { message } => StreamError::Trapped(message),
+                PublicStreamError::Cancelled => StreamError::Cancelled,
+                PublicStreamError::Abandoned => StreamError::Abandoned,
+                PublicStreamError::Interrupted { message } => StreamError::Interrupted(message),
+                PublicStreamError::ResourceExhausted { message } => {
+                    StreamError::ResourceExhausted(message)
+                }
+            }),
+        })
+    }
+}
+
+impl TryFrom<crate::model::durable_stream::StreamTerminal> for PublicStreamOutcome {
+    type Error = String;
+
+    fn try_from(value: crate::model::durable_stream::StreamTerminal) -> Result<Self, Self::Error> {
+        use crate::model::durable_stream::{StreamError, StreamTerminal};
+        Ok(match value {
+            StreamTerminal::Finished => Self::Finished,
+            StreamTerminal::ConsumerCancelled { details } => Self::ConsumerCancelled { details },
+            StreamTerminal::Failed(error) => Self::Failed {
+                error: match error {
+                    StreamError::Failed(value) => PublicStreamError::Failed {
+                        value: (*value).try_into()?,
+                    },
+                    StreamError::Trapped(message) => PublicStreamError::Trapped { message },
+                    StreamError::Cancelled => PublicStreamError::Cancelled,
+                    StreamError::Abandoned => PublicStreamError::Abandoned,
+                    StreamError::Interrupted(message) => PublicStreamError::Interrupted { message },
+                    StreamError::ResourceExhausted(message) => {
+                        PublicStreamError::ResourceExhausted { message }
+                    }
+                },
+            },
+        })
+    }
+}
+
+fn validate_public_terminal(outcome: &PublicStreamOutcome) -> Result<(), PublicProtocolError> {
+    crate::model::durable_stream::StreamTerminal::try_from(outcome.clone())
+        .map(|_| ())
+        .map_err(|error| PublicProtocolError::new(PublicErrorCode::ValidationError, error))
+}
+
+#[cfg(feature = "full")]
+mod terminal_protobuf {
+    use crate::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+    use golem_api_grpc::proto::golem::worker as proto;
+
+    impl TryFrom<proto::StreamTerminal> for StreamTerminal {
+        type Error = String;
+
+        fn try_from(value: proto::StreamTerminal) -> Result<Self, Self::Error> {
+            use proto::stream_terminal::Terminal;
+            Ok(
+                match value.terminal.ok_or("stream terminal has no outcome")? {
+                    Terminal::Finished(_) => Self::Finished,
+                    Terminal::ConsumerCancelled(value) => Self::ConsumerCancelled {
+                        details: value.details,
+                    },
+                    Terminal::Failed(value) => {
+                        Self::Failed(match value.error.ok_or("stream failure has no error")? {
+                            proto::stream_error::Error::Failed(value) => {
+                                let value: crate::schema::TypedSchemaValue = value.try_into()?;
+                                crate::schema::validation::validate_graph(value.graph()).map_err(
+                                    |errors| {
+                                        format!("invalid typed stream failure schema: {errors:?}")
+                                    },
+                                )?;
+                                crate::schema::validation::validate_value(
+                                    value.graph(),
+                                    value.root_type(),
+                                    value.value(),
+                                )
+                                .map_err(|errors| {
+                                    format!("invalid typed stream failure value: {errors:?}")
+                                })?;
+                                StreamError::Failed(Box::new(value))
+                            }
+                            proto::stream_error::Error::Trapped(message) => {
+                                StreamError::Trapped(message)
+                            }
+                            proto::stream_error::Error::Cancelled(_) => StreamError::Cancelled,
+                            proto::stream_error::Error::Abandoned(_) => StreamError::Abandoned,
+                            proto::stream_error::Error::Interrupted(message) => {
+                                StreamError::Interrupted(message)
+                            }
+                            proto::stream_error::Error::ResourceExhausted(message) => {
+                                StreamError::ResourceExhausted(message)
+                            }
+                        })
+                    }
+                },
+            )
+        }
+    }
+
+    impl TryFrom<StreamTerminal> for proto::StreamTerminal {
+        type Error = String;
+
+        fn try_from(value: StreamTerminal) -> Result<Self, Self::Error> {
+            use proto::stream_terminal::Terminal;
+            Ok(Self {
+                terminal: Some(match value {
+                    StreamTerminal::Finished => Terminal::Finished(Default::default()),
+                    StreamTerminal::ConsumerCancelled { details } => {
+                        Terminal::ConsumerCancelled(proto::StreamConsumerCancelled { details })
+                    }
+                    StreamTerminal::Failed(error) => Terminal::Failed(proto::StreamError {
+                        error: Some(match error {
+                            StreamError::Failed(value) => {
+                                crate::schema::validation::validate_graph(value.graph()).map_err(
+                                    |errors| {
+                                        format!("invalid typed stream failure schema: {errors:?}")
+                                    },
+                                )?;
+                                crate::schema::validation::validate_value(
+                                    value.graph(),
+                                    value.root_type(),
+                                    value.value(),
+                                )
+                                .map_err(|errors| {
+                                    format!("invalid typed stream failure value: {errors:?}")
+                                })?;
+                                proto::stream_error::Error::Failed((*value).try_into()?)
+                            }
+                            StreamError::Trapped(message) => {
+                                proto::stream_error::Error::Trapped(message)
+                            }
+                            StreamError::Cancelled => {
+                                proto::stream_error::Error::Cancelled(Default::default())
+                            }
+                            StreamError::Abandoned => {
+                                proto::stream_error::Error::Abandoned(Default::default())
+                            }
+                            StreamError::Interrupted(message) => {
+                                proto::stream_error::Error::Interrupted(message)
+                            }
+                            StreamError::ResourceExhausted(message) => {
+                                proto::stream_error::Error::ResourceExhausted(message)
+                            }
+                        }),
+                    }),
+                }),
+            })
+        }
+    }
+
+    impl From<StreamTerminalAuthor> for proto::StreamTerminalAuthor {
+        fn from(value: StreamTerminalAuthor) -> Self {
+            match value {
+                StreamTerminalAuthor::Guest => Self::Guest,
+                StreamTerminalAuthor::Host => Self::Host,
+                StreamTerminalAuthor::Protocol => Self::Protocol,
+            }
+        }
+    }
+
+    impl TryFrom<proto::StreamTerminalAuthor> for StreamTerminalAuthor {
+        type Error = String;
+
+        fn try_from(value: proto::StreamTerminalAuthor) -> Result<Self, Self::Error> {
+            match value {
+                proto::StreamTerminalAuthor::Guest => Ok(Self::Guest),
+                proto::StreamTerminalAuthor::Host => Ok(Self::Host),
+                proto::StreamTerminalAuthor::Protocol => Ok(Self::Protocol),
+                proto::StreamTerminalAuthor::Unspecified => {
+                    Err("stream terminal author is unspecified".into())
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,6 +670,7 @@ pub enum PublicInvocationOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum PublicServerMessage {
     #[serde(rename = "invocationAccepted")]
@@ -490,16 +709,17 @@ pub enum PublicServerMessage {
         value: Value,
         version: u8,
     },
-    #[serde(rename = "outputStreamEnd")]
-    OutputStreamEnd {
+    #[serde(rename = "stream-end")]
+    StreamEnd {
         channel: u32,
+        direction: PublicStreamDirection,
         #[serde(
             default,
             rename = "cursorToken",
             skip_serializing_if = "Option::is_none"
         )]
         cursor_token: Option<String>,
-        outcome: PublicOutputStreamOutcome,
+        outcome: PublicStreamOutcome,
         sequence: DecimalU64,
         version: u8,
     },
@@ -510,12 +730,6 @@ pub enum PublicServerMessage {
         highest_contiguous_sequence: DecimalU64,
         mappings: Vec<PublicStreamMapping>,
         terminal: bool,
-        version: u8,
-    },
-    #[serde(rename = "streamCancel")]
-    StreamCancel {
-        channel: u32,
-        reason: PublicServerCancelReason,
         version: u8,
     },
     #[serde(rename = "attachmentRevoked")]
@@ -940,9 +1154,23 @@ fn validate_client_message(message: &PublicClientMessage) -> Result<(), PublicPr
                 }
             }
         }
-        PublicClientMessage::InputStreamItem { channel, .. }
-        | PublicClientMessage::InputStreamEnd { channel, .. }
-        | PublicClientMessage::StreamCancel { channel, .. } => validate_channel(*channel)?,
+        PublicClientMessage::InputStreamItem { channel, .. } => validate_channel(*channel)?,
+        PublicClientMessage::StreamEnd {
+            channel,
+            direction,
+            outcome,
+            ..
+        } => {
+            validate_channel(*channel)?;
+            let consumer = matches!(outcome, PublicStreamOutcome::ConsumerCancelled { .. });
+            if consumer != (*direction == PublicStreamDirection::Output) {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::ProtocolError,
+                    "client input stream ends must be producer terminals; output stream ends must be consumer cancellations",
+                ));
+            }
+            validate_public_terminal(outcome)?;
+        }
     }
     Ok(())
 }
@@ -995,17 +1223,18 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
             validate_token_text(cursor_token)?;
             validate_mappings(mappings)?;
         }
-        PublicServerMessage::OutputStreamEnd {
+        PublicServerMessage::StreamEnd {
             channel,
             cursor_token,
+            outcome,
             ..
         } => {
             validate_channel(*channel)?;
+            validate_public_terminal(outcome)?;
             if let Some(cursor) = cursor_token {
                 validate_token_text(cursor)?;
             }
         }
-        PublicServerMessage::StreamCancel { channel, .. } => validate_channel(*channel)?,
         PublicServerMessage::AttachmentRevoked { .. }
         | PublicServerMessage::InvocationFinished { .. } => {}
     }
@@ -1397,13 +1626,13 @@ mod tests {
 
     #[test]
     fn strict_json_rejects_duplicate_and_unknown_fields() {
-        let duplicate = br#"{"channel":1,"sequence":"0","type":"inputStreamEnd","type":"streamCancel","version":1}"#;
+        let duplicate = br#"{"channel":1,"direction":"input","outcome":{"kind":"finished"},"sequence":"0","type":"stream-end","type":"stream-end","version":1}"#;
         assert_eq!(
             decode_client_text(duplicate).unwrap_err().code,
             PublicErrorCode::MalformedMessage
         );
         let unknown =
-            br#"{"channel":1,"extra":true,"sequence":"0","type":"inputStreamEnd","version":1}"#;
+            br#"{"channel":1,"direction":"input","extra":true,"outcome":{"kind":"finished"},"sequence":"0","type":"stream-end","version":1}"#;
         assert_eq!(
             decode_client_text(unknown).unwrap_err().code,
             PublicErrorCode::MalformedMessage
@@ -1418,7 +1647,7 @@ mod tests {
 
     #[test]
     fn unsupported_version_is_distinct() {
-        let bytes = br#"{"channel":1,"sequence":"0","type":"inputStreamEnd","version":2}"#;
+        let bytes = br#"{"channel":1,"direction":"input","outcome":{"kind":"finished"},"sequence":"0","type":"stream-end","version":2}"#;
         assert_eq!(
             decode_client_text(bytes).unwrap_err().code,
             PublicErrorCode::UnsupportedVersion
@@ -1467,10 +1696,11 @@ mod tests {
 
     #[test]
     fn public_message_enums_are_directional() {
-        let client = br#"{"channel":1,"sequence":"0","type":"inputStreamEnd","version":1}"#;
+        let client =
+            br#"{"channel":1,"value":17,"sequence":"0","type":"inputStreamItem","version":1}"#;
         assert!(matches!(
             decode_client_text(client).unwrap(),
-            PublicClientMessage::InputStreamEnd { .. }
+            PublicClientMessage::InputStreamItem { .. }
         ));
         assert!(decode_server_text(client).is_err());
 
@@ -1480,6 +1710,128 @@ mod tests {
             PublicServerMessage::InvocationFinished { .. }
         ));
         assert!(decode_client_text(server).is_err());
+    }
+
+    #[test]
+    fn stream_end_json_enforces_direction_and_outcome_without_an_author() {
+        for direction in ["input", "output"] {
+            for (outcome, consumer) in [
+                (serde_json::json!({"kind":"finished"}), false),
+                (
+                    serde_json::json!({"kind":"failed", "error":{"kind":"interrupted", "message":"source unavailable"}}),
+                    false,
+                ),
+                (
+                    serde_json::json!({"kind":"consumer-cancelled", "details":null}),
+                    true,
+                ),
+            ] {
+                let value = serde_json::json!({
+                    "channel":1, "direction":direction, "sequence":"0", "outcome":outcome,
+                    "type":"stream-end", "version":1,
+                });
+                let text = serde_json::to_vec(&value).unwrap();
+                assert_eq!(
+                    decode_client_text(&text).is_ok(),
+                    consumer == (direction == "output")
+                );
+                assert!(decode_server_text(&text).is_ok());
+            }
+        }
+        for outcome in [
+            serde_json::json!({"kind":"unknown"}),
+            serde_json::json!({"kind":"failed", "error":{"kind":"unknown"}}),
+        ] {
+            let value = serde_json::json!({
+                "channel":1, "direction":"input", "sequence":"0", "outcome":outcome,
+                "type":"stream-end", "version":1,
+            });
+            assert!(decode_client_text(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+    }
+
+    fn terminal_values() -> Vec<crate::model::durable_stream::StreamTerminal> {
+        use crate::model::durable_stream::{StreamError, StreamTerminal};
+        use crate::schema::IntoTypedSchemaValue;
+        vec![
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Failed(Box::new(
+                42u64.into_typed_schema_value().unwrap(),
+            ))),
+            StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("quota".into())),
+            StreamTerminal::ConsumerCancelled { details: None },
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader dropped".into()),
+            },
+        ]
+    }
+
+    #[test]
+    fn typed_stream_terminal_public_round_trips_use_canonical_schema_values() {
+        use super::{
+            DecimalU64, INVOCATION_SESSION_VERSION, PublicStreamDirection, PublicStreamOutcome,
+        };
+        use crate::model::durable_stream::StreamTerminal;
+        for terminal in terminal_values() {
+            let public = PublicStreamOutcome::try_from(terminal.clone()).unwrap();
+            let json = serde_json::to_vec(&public).unwrap();
+            let decoded: PublicStreamOutcome = serde_json::from_slice(&json).unwrap();
+            assert_eq!(StreamTerminal::try_from(decoded).unwrap(), terminal);
+            for direction in [PublicStreamDirection::Input, PublicStreamDirection::Output] {
+                let message = PublicServerMessage::StreamEnd {
+                    channel: 7,
+                    direction,
+                    cursor_token: None,
+                    outcome: public.clone(),
+                    sequence: DecimalU64(13),
+                    version: INVOCATION_SESSION_VERSION,
+                };
+                let json = encode_text(&message).unwrap();
+                assert_eq!(decode_server_text(json.as_bytes()).unwrap(), message);
+            }
+        }
+        use crate::schema::IntoTypedSchemaValue;
+        let mut typed =
+            PublicTypedValue::try_from(42u64.into_typed_schema_value().unwrap()).unwrap();
+        typed.value = serde_json::Value::Null;
+        let value = serde_json::json!({
+            "channel":1, "direction":"input", "sequence":"0",
+            "outcome":{"kind":"failed", "error":{"kind":"failed", "value":typed}},
+            "type":"stream-end", "version":1,
+        });
+        assert_eq!(
+            decode_client_text(&serde_json::to_vec(&value).unwrap())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ValidationError
+        );
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn typed_stream_terminal_proto_round_trips_and_authors() {
+        use crate::model::durable_stream::{StreamTerminal, StreamTerminalAuthor};
+        use golem_api_grpc::proto::golem::worker as proto;
+        for terminal in terminal_values() {
+            let wire = proto::StreamTerminal::try_from(terminal.clone()).unwrap();
+            assert_eq!(StreamTerminal::try_from(wire).unwrap(), terminal);
+        }
+        assert!(StreamTerminal::try_from(proto::StreamTerminal::default()).is_err());
+        for author in [
+            StreamTerminalAuthor::Guest,
+            StreamTerminalAuthor::Host,
+            StreamTerminalAuthor::Protocol,
+        ] {
+            assert_eq!(
+                StreamTerminalAuthor::try_from(proto::StreamTerminalAuthor::from(author)).unwrap(),
+                author
+            );
+        }
+        assert!(StreamTerminalAuthor::try_from(proto::StreamTerminalAuthor::Unspecified).is_err());
     }
 
     #[test]

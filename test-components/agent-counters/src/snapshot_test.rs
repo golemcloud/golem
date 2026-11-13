@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
@@ -72,6 +72,10 @@ trait SnapshotCounter {
     fn initializer_seed_hash(&self) -> u64;
     /// The number of environment variables that the core initializer read.
     fn initializer_environment_size(&self) -> u32;
+    /// Whether the core initializer derived `expected` from its random seed. It reads the clock
+    /// only when it did not, so a replay whose initializer got another seed asks for a durable
+    /// call that the recorded invocation did not make.
+    fn check_initializer_seed(&self, expected: u64) -> bool;
 }
 
 struct SnapshotCounterImpl {
@@ -104,6 +108,15 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn initializer_environment_size(&self) -> u32 {
         initializer_environment_size()
+    }
+
+    fn check_initializer_seed(&self, expected: u64) -> bool {
+        if initializer_seed_hash() == expected {
+            true
+        } else {
+            std::hint::black_box(std::time::Instant::now());
+            false
+        }
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -257,6 +270,8 @@ trait JsonSnapshotCounter {
     fn get(&self) -> u32;
     /// The state the core initializer derived from its random seed.
     fn initializer_seed_hash(&self) -> u64;
+    #[read_only(cache = "no_cache")]
+    fn peek(&self) -> u32;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -283,5 +298,9 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
 
     fn initializer_seed_hash(&self) -> u64 {
         initializer_seed_hash()
+    }
+
+    fn peek(&self) -> u32 {
+        self.count
     }
 }

@@ -48,7 +48,7 @@ use golem_common::model::agent::ScheduleId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -846,9 +846,21 @@ impl WorkerGrpcApi {
             .complete_parameters
             .ok_or_else(|| bad_request_error("Missing complete parameters"))?;
 
+        let fingerprint = AgentFingerprint(
+            parameters
+                .fingerprint
+                .ok_or_else(|| bad_request_error("Missing fingerprint"))?
+                .into(),
+        );
+        let promise_id = PromiseId {
+            agent_id,
+            fingerprint,
+            oplog_idx: OplogIndex::from_u64(parameters.oplog_idx),
+        };
+
         let result = self
             .worker_service
-            .complete_promise(&agent_id, parameters.oplog_idx, parameters.data, auth)
+            .complete_promise(promise_id, parameters.data, auth)
             .await?;
 
         Ok(result)
@@ -1366,10 +1378,10 @@ mod protocol_tests {
     use golem_api_grpc::proto::golem::worker::{
         AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InvocationAccepted,
         InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-        InvocationSessionResult, InvocationStart, OutputStreamEnd, OutputStreamItem, ResumeAttach,
-        ResumeOperation, StreamCursor, StreamInvocationIdentity, StreamMappingRole,
-        invocation_request, invocation_response, invocation_session_completion,
-        invocation_session_result,
+        InvocationSessionResult, InvocationStart, OutputStreamItem, ResumeAttach, ResumeOperation,
+        StreamCursor, StreamDirection, StreamEnd, StreamInvocationIdentity, StreamMappingRole,
+        StreamTerminalAuthor, invocation_request, invocation_response,
+        invocation_session_completion, invocation_session_result,
     };
     use golem_schema::proto::golem::common::{Empty, Uuid};
     use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
@@ -1603,13 +1615,20 @@ mod protocol_tests {
                     },
                 )));
                 if complete_children {
-                    frames.push(response(invocation_response::Response::OutputEnd(
-                        OutputStreamEnd {
+                    frames.push(response(invocation_response::Response::StreamEnd(
+                        StreamEnd {
                             transport_stream_id: id,
                             durable_stream_id: Some(uuid(id)),
                             durable_offset: offset(3),
                             epoch: 2,
                             producer_sequence: 2,
+                            direction: StreamDirection::Output as i32,
+                            authored_by: StreamTerminalAuthor::Guest as i32,
+                            outcome: Some(
+                                golem_common::model::durable_stream::StreamTerminal::Finished
+                                    .try_into()
+                                    .unwrap(),
+                            ),
                         },
                     )));
                 }

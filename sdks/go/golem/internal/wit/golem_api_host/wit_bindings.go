@@ -673,16 +673,16 @@ func CreatePromise() golem_core_types.PromiseId {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 2*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (40 + 2*4), 8))
 	wasm_import_create_promise(returnArea)
 	value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 1*4))))
-	result := golem_core_types.PromiseId{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}}, AgentId: value}, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4))))}
+	result := golem_core_types.PromiseId{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))}}, AgentId: value}, Fingerprint: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 2*4))))}, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4))))}
 	return result
 
 }
 
 //go:wasmimport golem:api/host@1.5.0 get-promise
-func wasm_import_get_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64) int32
+func wasm_import_get_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 int64) int32
 
 func GetPromise(promiseId golem_core_types.PromiseId) *GetPromiseResult {
 	pinner := &runtime.Pinner{}
@@ -690,13 +690,13 @@ func GetPromise(promiseId golem_core_types.PromiseId) *GetPromiseResult {
 
 	utf8 := unsafe.Pointer(unsafe.StringData(((promiseId).AgentId).AgentId))
 	pinner.Pin(utf8)
-	result := wasm_import_get_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64((promiseId).OplogIdx))
+	result := wasm_import_get_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx))
 	return GetPromiseResultFromOwnHandle(int32(uintptr(result)))
 
 }
 
 //go:wasmimport golem:api/host@1.5.0 complete-promise
-func wasm_import_complete_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 uintptr, arg6 uint32) int32
+func wasm_import_complete_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 int64, arg7 uintptr, arg8 uint32) int32
 
 func CompletePromise(promiseId golem_core_types.PromiseId, data []uint8) bool {
 	pinner := &runtime.Pinner{}
@@ -706,7 +706,7 @@ func CompletePromise(promiseId golem_core_types.PromiseId, data []uint8) bool {
 	pinner.Pin(utf8)
 	data0 := unsafe.Pointer(unsafe.SliceData(data))
 	pinner.Pin(data0)
-	result := wasm_import_complete_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64((promiseId).OplogIdx), uintptr(data0), uint32(len(data)))
+	result := wasm_import_complete_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx), uintptr(data0), uint32(len(data)))
 	return (result != 0)
 
 }

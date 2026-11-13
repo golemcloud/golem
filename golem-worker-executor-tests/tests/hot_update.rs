@@ -8374,6 +8374,22 @@ fn successful_update_with_bootstrap(
         .expect("the update succeeded")
 }
 
+/// The bootstrap range that the `Snapshot` entry at `record` of `oplog` names.
+fn record_bootstrap(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    record: OplogIndex,
+) -> Option<golem_common::model::regions::OplogRegion> {
+    oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) if entry.oplog_index == record => {
+                Some(params.bootstrap.clone())
+            }
+            _ => None,
+        })
+        .expect("the record is a Snapshot entry")
+}
+
 /// The index of the periodic record that the recovery reported by `events` loaded.
 async fn recovered_record(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<
@@ -8399,15 +8415,16 @@ async fn recovered_record(
     .await?)
 }
 
-/// A snapshot-assisted update to a target whose core initializer makes durable calls, the
-/// environment read among them. The target's initializer appends its calls after the strategy
-/// entry of the update, and the bootstrap range of the `SuccessfulUpdate` entry names them. A
-/// restart from the promoted baseline of the update replays them, and so does a restart from a
-/// later periodic record, so both reproduce the state that the initializer derived.
+/// A snapshot-assisted update to a target whose core initializer makes the durable calls of the
+/// source's, the environment read among them. The source tail after the selected record was
+/// recorded with the inputs of the record's bootstrap block, so the target's initializer replays
+/// that block: it gets the source's seed and appends no call, and the bootstrap range of the
+/// `SuccessfulUpdate` entry is the record's. A restart from the promoted baseline of the update
+/// replays that block, and so does a restart from a later periodic record.
 #[test]
 #[timeout("180s")]
 #[tracing::instrument]
-async fn a_snapshot_assisted_update_runs_a_target_initializer_that_makes_durable_calls(
+async fn a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -8417,9 +8434,9 @@ async fn a_snapshot_assisted_update_runs_a_target_initializer_that_makes_durable
     let executor = start_with_snapshot_policy(deps, &context, ASSISTED_POLICY).await?;
     let (component, agent_id, worker_id, record) =
         assisted_update_source(&executor, &context, agent_counters, "assisted-initializer").await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
-        .await?;
+    // The source tail after the record.
+    let source_seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
 
     let target = executor
         .update_component(&component.id, "it_agent_counters_v2_release")
@@ -8469,17 +8486,20 @@ async fn a_snapshot_assisted_update_runs_a_target_initializer_that_makes_durable
     let strategy = assisted_strategy_entry(&oplog);
     let (successful_update, bootstrap) = successful_update_with_bootstrap(&oplog);
     let bootstrap = bootstrap.expect("the target initializer made durable calls");
-    assert!(
-        record < strategy && strategy < bootstrap.start && bootstrap.end < successful_update,
-        "the bootstrap range {bootstrap} lies between the strategy entry {strategy} and the outcome {successful_update}"
+    assert_eq!(
+        Some(bootstrap.clone()),
+        record_bootstrap(&oplog, record),
+        "the update names the bootstrap range of its selected record"
     );
+    assert!(bootstrap.end < record && record < strategy);
     assert_eq!(
         starts_in(&oplog, bootstrap.start..=bootstrap.end),
         INITIALIZER_CALLS
     );
     assert_eq!(
         starts_in(&oplog, strategy.next()..=successful_update.previous()),
-        INITIALIZER_CALLS
+        Vec::<String>::new(),
+        "the target initializer replayed the block of the record instead of recording one"
     );
     assert_eq!(
         starts_in(
@@ -8493,7 +8513,8 @@ async fn a_snapshot_assisted_update_runs_a_target_initializer_that_makes_durable
     assert_eq!(metadata.component_revision, target.revision);
     assert_eq!(version, 2);
     assert!(environment_size > 0);
-    assert_eq!(count, 2);
+    assert_eq!(count, 1);
+    assert_eq!(seed_hash, source_seed_hash);
     assert_eq!(seed_hash_from_promoted_baseline, seed_hash);
     assert_eq!(recovery, Ok(later_record));
     assert_eq!(seed_hash_from_later_record, seed_hash);
@@ -8544,6 +8565,7 @@ async fn a_snapshot_assisted_update_requested_right_after_its_record_recovers_th
 
     let strategy = assisted_strategy_entry(&oplog);
     let (successful_update, bootstrap) = successful_update_with_bootstrap(&oplog);
+    assert_eq!(bootstrap, record_bootstrap(&oplog, record));
     let bootstrap = bootstrap.expect("the target initializer made durable calls");
     assert!(
         !oplog.iter().any(|entry| {
@@ -8560,7 +8582,10 @@ async fn a_snapshot_assisted_update_requested_right_after_its_record_recovers_th
         starts_in(&oplog, bootstrap.start..=bootstrap.end),
         INITIALIZER_CALLS
     );
-    assert!(strategy < bootstrap.start && bootstrap.end < successful_update);
+    assert_eq!(
+        starts_in(&oplog, strategy.next()..=successful_update.previous()),
+        Vec::<String>::new()
+    );
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     assert_eq!(version, 2);
     assert_eq!(count, 1);
@@ -8570,8 +8595,8 @@ async fn a_snapshot_assisted_update_requested_right_after_its_record_recovers_th
 }
 
 /// A snapshot-assisted update whose record the target cannot load fails after the target's core
-/// initializer appended its durable calls. The source replays its history without those calls,
-/// before and after a restart, and keeps the state that its own initializer derived.
+/// initializer replayed the block of the record. The attempt appends no durable call, and the
+/// source keeps the state that its own initializer derived, before and after a restart.
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
@@ -8634,8 +8659,8 @@ async fn a_failed_snapshot_assisted_update_keeps_the_source_and_its_initializer_
     );
     assert_eq!(
         starts_in(&oplog, strategy.next()..=failed_update.previous()),
-        INITIALIZER_CALLS,
-        "the attempt recorded the durable calls of the target initializer"
+        Vec::<String>::new(),
+        "the attempt appended no durable call"
     );
     assert_eq!(version, 1);
     assert_eq!(seed_hash_after_failure, seed_hash);
@@ -8648,14 +8673,14 @@ async fn a_failed_snapshot_assisted_update_keeps_the_source_and_its_initializer_
     Ok(())
 }
 
-/// An executor restart interrupts a snapshot-assisted update after the target's core initializer
-/// committed its durable calls and before the update succeeded. The next attempt replays those
-/// calls instead of recording new ones, and the bootstrap range of its `SuccessfulUpdate` entry
-/// names the calls of the interrupted attempt.
+/// A snapshot-assisted update to the same component bytes, whose source tail after the selected
+/// record holds an invocation that makes a durable call only when the initializer seed differs.
+/// The target replays that invocation with the seed of the record's bootstrap block, so it takes
+/// the same branch and the update succeeds.
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer_calls_on_the_next_attempt(
+async fn a_snapshot_assisted_update_replays_a_source_tail_that_depends_on_the_initializer_seed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -8663,47 +8688,38 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_snapshot_policy(deps, &context, ASSISTED_POLICY).await?;
-    let (component, agent_id, worker_id, _) =
-        assisted_update_source(&executor, &context, agent_counters, "assisted-interrupted").await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
         .await?;
+    let agent_id = agent_id!("SnapshotCounter", "assisted-seed-tail");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    // The agent initialization and this read end with the record that the update selects.
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    let read = last_start_of(&executor, &worker_id, "initializer_seed_hash").await?;
+    let record = wait_for_snapshot_after(&executor, &worker_id, read).await?;
+    let matched = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "check_initializer_seed",
+            data_value!(seed_hash),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    let check = last_start_of(&executor, &worker_id, "check_initializer_seed").await?;
 
     let target = executor
-        .update_component(&component.id, "it_agent_counters_v2_release")
+        .update_component(&component.id, "it_agent_counters_release")
         .await?;
-    // Holds the first attempt at the End of the last durable call of the target initializer,
-    // after the gate committed the prefix and that End, and before the snapshot load.
-    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
     executor
         .auto_update_worker(&worker_id, target.revision, false)
         .await?;
-    let last_call_start = loop {
-        tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-        let start = gate.start_index();
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        if oplog.iter().any(|entry| {
-            entry.oplog_index == start
-                && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == LAST_INITIALIZER_CALL)
-        }) {
-            break start;
-        }
-        let next = executor.gate_next_call_end(&worker_id, true).await;
-        drop(gate);
-        gate = next;
-    };
-    let first_attempt = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    gate.abort();
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(gate);
-    drop(executor);
-
-    let executor = start_with_snapshot_policy(deps, &context, ASSISTED_POLICY).await?;
-    executor
-        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
-        .await?;
-    let seed_hash =
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let seed_hash_after_update =
         snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -8712,76 +8728,108 @@ async fn an_interrupted_snapshot_assisted_update_attempt_replays_its_initializer
     let executor = start_with_snapshot_policy(deps, &context, ASSISTED_POLICY).await?;
     let seed_hash_after_restart =
         snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
-    let version =
-        snapshot_counter_u32(&executor, &component, &agent_id, "component_version").await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let strategy = assisted_strategy_entry(&oplog);
+    let selected = oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::SuccessfulUpdate(params) => params
+            .snapshot_assisted_details
+            .as_ref()
+            .map(|details| details.snapshot_index),
+        _ => None,
+    });
+    assert!(matched);
+    assert_eq!(selected, Some(record), "the update selected the record");
+    assert!(
+        record < check && check < strategy,
+        "the source tail between the record {record} and the strategy entry {strategy} holds the check at {check}"
+    );
+    assert_eq!(metadata.component_revision, target.revision);
+    assert_eq!(seed_hash_after_update, seed_hash);
+    assert_eq!(seed_hash_after_restart, seed_hash);
+
+    Ok(())
+}
+
+/// A snapshot-based update whose target's core initializer makes a durable call that is not a
+/// read fails: every later start from the update would replay the target's bootstrap block on a
+/// strict cursor, which admits only direct reads. The source keeps running with the state that
+/// its own initializer derived.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_manual_update_whose_target_initializer_makes_a_write_fails_and_keeps_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .with_env(
+            "SnapshotCounter",
+            vec![(
+                "INITIALIZER_GENERATES_IDEMPOTENCY_KEY".to_string(),
+                "1".to_string(),
+            )],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotCounter", "manual-initializer-write");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let seed_hash =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+
+    let target = executor
+        .update_component(&component.id, "it_agent_counters_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
     let count = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash_after_failure =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let count_after_restart = snapshot_counter_u32(&executor, &component, &agent_id, "get").await?;
+    let seed_hash_after_restart =
+        snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    let strategy = assisted_strategy_entry(&first_attempt);
-    let first_attempt_tip = first_attempt
-        .last()
-        .expect("the oplog is not empty")
-        .oplog_index;
-    let last_call_end = first_index_of(&first_attempt, |entry| match entry {
-        PublicOplogEntry::End(params) => params.start_index == last_call_start,
-        _ => false,
-    });
-    let first_attempt_first_call_start = first_attempt
+    let details = failed
+        .updates
         .iter()
-        .find(|entry| {
-            entry.oplog_index > strategy
-                && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == INITIALIZER_CALLS[0])
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
         })
-        .expect("the first attempt made the first initializer call")
-        .oplog_index;
-    assert_eq!(
-        starts_in(&first_attempt, strategy.next()..=first_attempt_tip),
-        INITIALIZER_CALLS,
-        "the first attempt committed the durable calls of the target initializer"
-    );
+        .unwrap_or_default();
     assert!(
-        !first_attempt.iter().any(|entry| matches!(
-            entry.entry,
-            PublicOplogEntry::SuccessfulUpdate(_) | PublicOplogEntry::FailedUpdate(_)
-        )),
-        "the first attempt was interrupted before its outcome"
+        details.starts_with("Manual update failed: ")
+            && details.contains("may make only direct reads")
+            && details.contains("golem::api::generate_idempotency-key"),
+        "the write of the target initializer failed the manual update: {details}"
     );
-    assert_eq!(last_call_end, first_attempt_tip);
-
-    let (successful_update, bootstrap) = successful_update_with_bootstrap(&oplog);
-    let bootstrap = bootstrap.expect("the target initializer made durable calls");
-    assert!(
-        !oplog
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_))),
-        "no attempt of the update failed"
-    );
-    assert_eq!(
-        assisted_strategy_entry(&oplog),
-        strategy,
-        "the next attempt kept the strategy of the interrupted attempt"
-    );
-    assert_eq!(
-        bootstrap.start, first_attempt_first_call_start,
-        "the bootstrap range starts at the first durable call of the interrupted attempt"
-    );
-    assert!(
-        last_call_end <= bootstrap.end && bootstrap.end < successful_update,
-        "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {last_call_end}"
-    );
-    assert_eq!(
-        starts_in(&oplog, strategy.next()..=successful_update.previous()),
-        INITIALIZER_CALLS,
-        "the next attempt replayed the calls of the interrupted attempt instead of recording new ones"
-    );
-    assert_eq!(version, 2);
-    assert_eq!(count, 2);
-    assert_eq!(metadata.component_revision, target.revision);
-    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_eq!(failed.component_revision, component.revision);
+    assert_eq!(count, 1);
+    assert_eq!(seed_hash_after_failure, seed_hash);
+    assert_eq!(count_after_restart, 1);
     assert_eq!(seed_hash_after_restart, seed_hash);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
 
     Ok(())
 }

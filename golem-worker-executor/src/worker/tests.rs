@@ -603,6 +603,22 @@ fn merging_unloaded_states_preserves_startup_failure() {
 }
 
 #[test]
+fn inactivity_outranks_unloaded_states_in_both_orders() {
+    let inactive = || FinalWorkerState::Inactive(WorkerExecutorError::runtime("inactive"));
+    for unloaded in [None, Some(WorkerExecutorError::runtime("startup failed"))] {
+        let unloaded = || FinalWorkerState::Unloaded {
+            startup_failure: unloaded.clone(),
+        };
+        for (current, requested) in [(inactive(), unloaded()), (unloaded(), inactive())] {
+            assert!(matches!(
+                merge_final_worker_state(current, requested),
+                FinalWorkerState::Inactive(error) if error.to_string().contains("inactive")
+            ));
+        }
+    }
+}
+
+#[test]
 fn concurrent_startup_callers_share_one_attempt() {
     let tracker = Arc::new(StartupAttemptTracker::default());
     let barrier = Arc::new(std::sync::Barrier::new(16));
@@ -909,9 +925,7 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
 
 #[test]
 fn reconstructed_ephemeral_agent_is_terminal() {
-    let instance = WorkerInstance::Unloaded {
-        startup_failure: Some(inactive_ephemeral_agent_error()),
-    };
+    let instance = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
 
     assert!(matches!(
         instance.startup_failure(),

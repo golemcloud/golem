@@ -36,7 +36,7 @@ use tokio_tungstenite::tungstenite;
 /// as the server cannot be reached, and a call that has not reached it has not run.
 const OPEN_WAIT: Duration = Duration::from_secs(10);
 
-/// An input that never has data and never ends: the stdin stays open until it is cancelled.
+/// An input that never has data and never ends: the stdin stays open until it is stopped.
 struct OpenInput;
 
 impl tokio::io::AsyncRead for OpenInput {
@@ -49,7 +49,7 @@ impl tokio::io::AsyncRead for OpenInput {
     }
 }
 
-/// Runs one `run` call through the live session with an open, empty stdin. `stop` cancels the
+/// Runs one `run` call through the live session with an open, empty stdin. `stop` fails the
 /// stdin, which asks the tool to stop the script; `give_up` leaves the call running and
 /// returns the transport's `Interrupted` error.
 #[allow(clippy::too_many_arguments)]

@@ -36,7 +36,7 @@ use crate::model::invocation_context::TraceId;
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::raw_types::{
     CreateParameters, CreateRequest, CreateRequestKind, DurableStreamEventSummary,
-    DurableStreamOutcome,
+    DurableStreamOutcome, DurableStreamTerminalOutcome,
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
@@ -49,16 +49,36 @@ impl From<DurableStreamEventSummary>
 {
     fn from(value: DurableStreamEventSummary) -> Self {
         use golem_api_grpc::proto::golem::worker::raw_durable_stream_event_summary::{
-            Kind, Outcome,
+            Kind, Outcome, TerminalOrigin,
         };
 
+        let terminal_origin = match &value {
+            DurableStreamEventSummary::Terminal { origin, .. } => Some(match origin {
+                crate::model::durable_stream::StreamTerminalOrigin::Source => {
+                    TerminalOrigin::Source as i32
+                }
+                crate::model::durable_stream::StreamTerminalOrigin::Control => {
+                    TerminalOrigin::Control as i32
+                }
+            }),
+            _ => None,
+        };
         let (kind, item_count, outcome) = match value {
             DurableStreamEventSummary::Registered => (Kind::Registered, None, None),
             DurableStreamEventSummary::Items { item_count } => {
                 (Kind::Items, Some(item_count), None)
             }
-            DurableStreamEventSummary::End { outcome } => (Kind::End, None, Some(outcome)),
-            DurableStreamEventSummary::Cancelled => (Kind::Cancelled, None, None),
+            DurableStreamEventSummary::Terminal { outcome, .. } => (
+                match outcome {
+                    DurableStreamTerminalOutcome::Finished => Kind::TerminalFinished,
+                    DurableStreamTerminalOutcome::Failed => Kind::TerminalFailed,
+                    DurableStreamTerminalOutcome::ConsumerCancelled => {
+                        Kind::TerminalConsumerCancelled
+                    }
+                },
+                None,
+                None,
+            ),
             DurableStreamEventSummary::SessionResult => (Kind::SessionResult, None, None),
             DurableStreamEventSummary::SessionFinished { outcome } => {
                 (Kind::SessionFinished, None, Some(outcome))
@@ -71,6 +91,7 @@ impl From<DurableStreamEventSummary>
         Self {
             kind: kind as i32,
             item_count,
+            terminal_origin,
             outcome: outcome.map(|outcome| match outcome {
                 DurableStreamOutcome::Success => Outcome::Success as i32,
                 DurableStreamOutcome::Error => Outcome::Error as i32,
@@ -88,10 +109,25 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
         value: golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary,
     ) -> Result<Self, Self::Error> {
         use golem_api_grpc::proto::golem::worker::raw_durable_stream_event_summary::{
-            Kind, Outcome,
+            Kind, Outcome, TerminalOrigin,
         };
 
         let kind = Kind::try_from(value.kind).map_err(|error| error.to_string())?;
+        let terminal_origin = value
+            .terminal_origin
+            .map(|origin| {
+                Ok::<_, String>(
+                    match TerminalOrigin::try_from(origin).map_err(|error| error.to_string())? {
+                        TerminalOrigin::Source => {
+                            crate::model::durable_stream::StreamTerminalOrigin::Source
+                        }
+                        TerminalOrigin::Control => {
+                            crate::model::durable_stream::StreamTerminalOrigin::Control
+                        }
+                    },
+                )
+            })
+            .transpose()?;
         let outcome = value
             .outcome
             .map(
@@ -101,15 +137,27 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary>
                 },
             )
             .transpose()?;
-        match (kind, value.item_count, outcome) {
-            (Kind::Registered, None, None) => Ok(Self::Registered),
-            (Kind::Items, Some(item_count), None) => Ok(Self::Items { item_count }),
-            (Kind::End, None, Some(outcome)) => Ok(Self::End { outcome }),
-            (Kind::Cancelled, None, None) => Ok(Self::Cancelled),
-            (Kind::SessionResult, None, None) => Ok(Self::SessionResult),
-            (Kind::SessionFinished, None, Some(outcome)) => Ok(Self::SessionFinished { outcome }),
-            (Kind::SessionCancellation, None, None) => Ok(Self::SessionCancellation),
-            (Kind::SessionExpired, None, None) => Ok(Self::SessionExpired),
+        match (kind, value.item_count, outcome, terminal_origin) {
+            (Kind::Registered, None, None, None) => Ok(Self::Registered),
+            (Kind::Items, Some(item_count), None, None) => Ok(Self::Items { item_count }),
+            (Kind::TerminalFinished, None, None, Some(origin)) => Ok(Self::Terminal {
+                outcome: DurableStreamTerminalOutcome::Finished,
+                origin,
+            }),
+            (Kind::TerminalFailed, None, None, Some(origin)) => Ok(Self::Terminal {
+                outcome: DurableStreamTerminalOutcome::Failed,
+                origin,
+            }),
+            (Kind::TerminalConsumerCancelled, None, None, Some(origin)) => Ok(Self::Terminal {
+                outcome: DurableStreamTerminalOutcome::ConsumerCancelled,
+                origin,
+            }),
+            (Kind::SessionResult, None, None, None) => Ok(Self::SessionResult),
+            (Kind::SessionFinished, None, Some(outcome), None) => {
+                Ok(Self::SessionFinished { outcome })
+            }
+            (Kind::SessionCancellation, None, None, None) => Ok(Self::SessionCancellation),
+            (Kind::SessionExpired, None, None, None) => Ok(Self::SessionExpired),
             _ => Err("Invalid durable stream event summary fields".to_string()),
         }
     }
@@ -972,15 +1020,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 record: Some(oplog_payload_to_proto(record)?),
                 summary: summary.map(Into::into),
             }),
-            OplogEntry::StreamEnd {
+            OplogEntry::StreamTerminal {
                 record, summary, ..
-            } => Entry::StreamEnd(RawDurableStreamRecordParameters {
-                record: Some(oplog_payload_to_proto(record)?),
-                summary: summary.map(Into::into),
-            }),
-            OplogEntry::StreamCancel {
-                record, summary, ..
-            } => Entry::StreamCancel(RawDurableStreamRecordParameters {
+            } => Entry::StreamTerminal(RawDurableStreamRecordParameters {
                 record: Some(oplog_payload_to_proto(record)?),
                 summary: summary.map(Into::into),
             }),
@@ -1634,13 +1676,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
-            Entry::StreamEnd(p) => Ok(OplogEntry::StreamEnd {
-                timestamp,
-                entity_parent_start_index,
-                summary: p.summary.map(TryInto::try_into).transpose()?,
-                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
-            }),
-            Entry::StreamCancel(p) => Ok(OplogEntry::StreamCancel {
+            Entry::StreamTerminal(p) => Ok(OplogEntry::StreamTerminal {
                 timestamp,
                 entity_parent_start_index,
                 summary: p.summary.map(TryInto::try_into).transpose()?,

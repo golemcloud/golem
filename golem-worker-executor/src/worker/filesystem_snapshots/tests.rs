@@ -393,7 +393,10 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
         ),
         (
             SelectedBaseline::AssistedPending {
-                snapshot: record(10, Some(&name)),
+                snapshot: UsableAutomaticSnapshot {
+                    bootstrap: range(4, 6),
+                    ..record(10, Some(&name))
+                },
                 head: assisted_head(Some(&name)),
             },
             None,
@@ -403,7 +406,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(Some(&name))),
-                BootstrapSource::Attempt { anchor: index(12) },
+                BootstrapSource::Recorded(range(4, 6)),
             )),
         ),
         (
@@ -427,7 +430,7 @@ async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record()
                 Some((index(10), assisted)),
                 Some(index(10)),
                 BaselineRole::AssistedPending(assisted_head(None)),
-                BootstrapSource::Attempt { anchor: index(12) },
+                BootstrapSource::Recorded(None),
             )),
         ),
         (
@@ -648,10 +651,10 @@ async fn a_fallback_to_the_previous_periodic_record_replays_the_bootstrap_range_
     );
 }
 
-/// A periodic or promoted record replays the core initializer strictly over the range it names;
-/// a pending snapshot-based or snapshot-assisted update replays what its earlier attempts recorded
-/// after its anchor (the `PendingUpdate` entry, or the strategy entry) and continues live, and its
-/// main cursor skips that history.
+/// A periodic or promoted record, and a pending snapshot-assisted update with the range of its
+/// selected record, replay the core initializer strictly over the range; a pending snapshot-based
+/// update replays what its earlier attempts recorded after its `PendingUpdate` entry and continues
+/// live, and its main cursor skips that history.
 #[test]
 async fn a_start_replays_the_core_initializer_over_the_durable_calls_of_its_baseline() {
     use golem_common::model::{AssistedSelection, PendingUpdateKind};
@@ -743,25 +746,17 @@ async fn a_start_replays_the_core_initializer_over_the_durable_calls_of_its_base
         (
             replay(
                 BaselineRole::AssistedPending(assisted_head.clone()),
-                BootstrapSource::Attempt { anchor: index(9) },
+                BootstrapSource::Recorded(range(3, 5)),
             ),
-            InitializerReplay::Bootstrap {
-                skip_through: index(9),
-                target: horizon,
-                tail: BootstrapTail::Live,
-            },
-            range(10, 11),
+            strict(2, 5),
+            None,
         ),
         (
             replay(
                 BaselineRole::AssistedPending(assisted_head.clone()),
-                BootstrapSource::Attempt { anchor: index(11) },
+                BootstrapSource::Recorded(None),
             ),
-            InitializerReplay::Bootstrap {
-                skip_through: index(11),
-                target: horizon,
-                tail: BootstrapTail::Live,
-            },
+            strict(1, 1),
             None,
         ),
         (
@@ -801,7 +796,7 @@ async fn a_start_replays_the_core_initializer_over_the_durable_calls_of_its_base
 }
 
 /// The live bootstrap cursor of a pending snapshot-based update skips the failed attempt of the
-/// snapshot-assisted update that was before it in the queue, so the target initializer of the
+/// snapshot-based update that was before it in the queue, so the target initializer of the
 /// pending update does not replay the durable calls of the other target. A strict cursor over a
 /// recorded range skips only the deleted regions, because the status skips the range itself.
 #[test]
@@ -823,8 +818,9 @@ async fn a_live_bootstrap_cursor_skips_the_history_of_the_updates_before_the_pen
             .map(|region| (region.start.as_u64(), region.end.as_u64()))
             .collect::<Vec<_>>()
     };
-    // A revert deleted 3..=4. The failed attempt of the snapshot-assisted update after the
-    // `PendingUpdate` entry at 7 recorded 9..=12, and its `FailedUpdate` is at 13.
+    // A revert deleted 3..=4. The failed attempt of the snapshot-based update before the pending
+    // one in the queue recorded 9..=12 after the `PendingUpdate` entry at 7 of the pending one,
+    // and its `FailedUpdate` is at 13.
     let deleted = regions(&[(3, 4)]);
     let skipped = regions(&[(3, 4), (9, 12)]);
     let manual_head = Arc::new(head(

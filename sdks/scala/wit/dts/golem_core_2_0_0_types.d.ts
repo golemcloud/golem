@@ -110,6 +110,12 @@ declare module 'golem:core/types@2.0.0' {
    */
   export type PromiseId = {
     agentId: AgentId;
+    /**
+     * Fingerprint of the agent incarnation that created the promise. A deleted and
+     * re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+     * of the deleted incarnation do not reach the new one.
+     */
+    fingerprint: Uuid;
     oplogIdx: OplogIndex;
   };
   /**
@@ -846,6 +852,35 @@ declare module 'golem:core/types@2.0.0' {
     graph: SchemaGraph;
     value: SchemaValueTree;
   };
+  /**
+   * The producer's failure, independent of a reader dropping its stream.
+   */
+  export type StreamError =
+  {
+    tag: 'failed'
+    val: TypedSchemaValue
+  } |
+  {
+    tag: 'trapped'
+    val: string
+  } |
+  /** An invocation cancellation request was recorded and honoured. */
+  {
+    tag: 'cancelled'
+  } |
+  /** The producing invocation completed with its writer still open. */
+  {
+    tag: 'abandoned'
+  } |
+  {
+    tag: 'interrupted'
+    val: string
+  } |
+  {
+    tag: 'resource-exhausted'
+    val: string
+  };
+  export type StreamOutcome = Result<void, StreamError>;
   /**
    * A declared tool failure shared by invocation and oplog interfaces.
    */

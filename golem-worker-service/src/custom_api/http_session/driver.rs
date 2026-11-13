@@ -17,11 +17,12 @@ use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, InvocationRejectionReason, InvocationRequest,
-    InvocationStart, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
-    StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item, invocation_request,
-    invocation_response,
+    InvocationStart, ResumeAttach, ResumeOperation, StreamCursor, StreamDirection, StreamEnd,
+    StreamMappingRole, StreamTerminalAuthor, input_stream_item, invocation_request,
+    invocation_response, stream_error, stream_terminal,
 };
 use golem_common::model::AgentId;
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -337,12 +338,7 @@ pub(super) async fn run_session(
             if output.terminals.contains(&durable_id) {
                 continue;
             }
-            let request = output_cancel_request(
-                stream_id,
-                durable_id,
-                epoch,
-                StreamCancelReason::ConsumerDrop,
-            );
+            let request = output_cancel_request(stream_id, durable_id, epoch);
             if let Err(error) = protocol.validate_trusted_request(&request) {
                 send_error(&events, HttpSessionError::Protocol(error)).await;
                 return;
@@ -357,8 +353,7 @@ pub(super) async fn run_session(
                 let request = cancel_request(
                     INPUT_STREAM_ID,
                     input.next_sequence,
-                    StreamCancelRole::InputProducer,
-                    StreamCancelReason::ConsumerDrop,
+                    StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
                     &mapping,
                     epoch,
                 );
@@ -367,6 +362,10 @@ pub(super) async fn run_session(
                     return;
                 }
                 input.terminal = true;
+                if let Err(error) = input.retain(request.clone(), None, &limits) {
+                    send_error(&events, error).await;
+                    return;
+                }
                 if request_tx.send(request).await.is_err() {
                     continue 'attempts;
                 }
@@ -418,20 +417,38 @@ pub(super) async fn run_session(
                             }
                             permit.send(HttpSessionEvent::OutputItem(item));
                         }
-                        invocation_response::Response::OutputEnd(end) => {
-                            let id = uuid_pair(end.durable_stream_id.as_ref().unwrap());
-                            output.terminal(end.transport_stream_id, id, end.durable_offset.clone());
-                            permit.send(HttpSessionEvent::OutputEnd(end));
-                        }
-                        invocation_response::Response::OutputError(error) => {
-                            let id = uuid_pair(error.durable_stream_id.as_ref().unwrap());
-                            output.terminal(error.transport_stream_id, id, error.durable_offset.clone());
-                            tracing::warn!(
-                                transport_stream_id = error.transport_stream_id,
-                                error = %error.details,
-                                "HTTP response stream producer failed"
-                            );
-                            permit.send(HttpSessionEvent::OutputError(error));
+                        invocation_response::Response::StreamEnd(end) => {
+                            match end.direction() {
+                                StreamDirection::Input => {
+                                    input.terminal = true;
+                                    input.clear();
+                                }
+                                StreamDirection::Output => {
+                                    let id = uuid_pair(end.durable_stream_id.as_ref().unwrap());
+                                    output.terminal(end.transport_stream_id, id, end.durable_offset.clone());
+                                    if let Some(stream_terminal::Terminal::Failed(error)) = end.outcome.as_ref().and_then(|outcome| outcome.terminal.as_ref()) {
+                                        let diagnostic = match error.error.as_ref() {
+                                            Some(stream_error::Error::Trapped(message)
+                                                | stream_error::Error::Interrupted(message)
+                                                | stream_error::Error::ResourceExhausted(message)) => message.as_str(),
+                                            Some(stream_error::Error::Failed(_)) => "declared stream failure",
+                                            Some(stream_error::Error::Cancelled(_)) => "invocation cancelled",
+                                            Some(stream_error::Error::Abandoned(_)) => "producer abandoned",
+                                            None => unreachable!("response validation rejects missing stream errors"),
+                                        };
+                                        tracing::warn!(
+                                            transport_stream_id = end.transport_stream_id,
+                                            error = diagnostic,
+                                            "HTTP response stream producer failed"
+                                        );
+                                    }
+                                }
+                                _ => {
+                                    send_error(&events, HttpSessionError::Protocol("unknown terminal direction".into())).await;
+                                    return;
+                                }
+                            }
+                            permit.send(HttpSessionEvent::StreamEnd(end));
                         }
                         invocation_response::Response::Result(result) => {
                             output.discover_result_streams(&result.new_stream_mappings);
@@ -444,17 +461,6 @@ pub(super) async fn run_session(
                             }
                             output.result_value = Some(result.result.clone());
                             permit.send(HttpSessionEvent::Result(Box::new(result)));
-                        }
-                        invocation_response::Response::StreamCancel(cancel) => {
-                            if cancel.role() == StreamCancelRole::InputConsumer {
-                                input.terminal = true;
-                                input.clear();
-                            }
-                            if cancel.role() == StreamCancelRole::OutputProducer {
-                                let id = uuid_pair(cancel.durable_stream_id.as_ref().unwrap());
-                                output.terminal(cancel.transport_stream_id, id, cancel.durable_offset.clone());
-                            }
-                            permit.send(HttpSessionEvent::StreamCancel(cancel));
                         }
                         invocation_response::Response::Finished(finished) => {
                             completed.store(true, Ordering::Release);
@@ -536,8 +542,7 @@ async fn cancel_and_drain(
         cancellations.push(cancel_request(
             INPUT_STREAM_ID,
             input.next_sequence,
-            StreamCancelRole::InputProducer,
-            StreamCancelReason::Cancelled,
+            StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
             mapping,
             epoch,
         ));
@@ -546,12 +551,7 @@ async fn cancel_and_drain(
     for (&stream_id, &durable_id) in &output.controls {
         if !output.terminals.contains(&durable_id) && !output.pending_disposals.contains(&stream_id)
         {
-            cancellations.push(output_cancel_request(
-                stream_id,
-                durable_id,
-                epoch,
-                StreamCancelReason::Cancelled,
-            ));
+            cancellations.push(output_cancel_request(stream_id, durable_id, epoch));
         }
     }
     for request in cancellations {
@@ -569,8 +569,8 @@ async fn cancel_and_drain(
             Some(invocation_response::Response::InputAck(ack)) => {
                 input.acknowledge(ack.highest_contiguous_sequence);
             }
-            Some(invocation_response::Response::StreamCancel(cancel))
-                if cancel.role() == StreamCancelRole::InputConsumer =>
+            Some(invocation_response::Response::StreamEnd(end))
+                if end.direction() == StreamDirection::Input =>
             {
                 input_cancel_sent = true;
                 input.clear();
@@ -580,12 +580,7 @@ async fn cancel_and_drain(
                 for (stream_id, durable_id) in
                     output.discover_result_streams(&result.new_stream_mappings)
                 {
-                    let request = output_cancel_request(
-                        stream_id,
-                        durable_id,
-                        epoch,
-                        StreamCancelReason::Cancelled,
-                    );
+                    let request = output_cancel_request(stream_id, durable_id, epoch);
                     if protocol.validate_trusted_request(&request).is_err()
                         || requests.send(request).await.is_err()
                     {
@@ -605,8 +600,7 @@ async fn cancel_and_drain(
             let request = cancel_request(
                 INPUT_STREAM_ID,
                 input.next_sequence,
-                StreamCancelRole::InputProducer,
-                StreamCancelReason::Cancelled,
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
                 mapping,
                 epoch,
             );
@@ -705,7 +699,9 @@ fn with_attachment(
             item.durable_stream_id = durable_stream_id;
             item.epoch = epoch;
         }
-        Some(invocation_request::Request::InputEnd(end)) => {
+        Some(invocation_request::Request::StreamEnd(end))
+            if end.direction() == StreamDirection::Input =>
+        {
             end.durable_stream_id = durable_stream_id;
             end.epoch = epoch;
         }
@@ -717,18 +713,21 @@ fn with_attachment(
 fn cancel_request(
     stream_id: u64,
     sequence: u64,
-    role: StreamCancelRole,
-    reason: StreamCancelReason,
+    terminal: StreamTerminal,
     mapping: &DurableStreamMapping,
     epoch: u64,
 ) -> InvocationRequest {
     InvocationRequest {
-        request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: stream_id,
             producer_sequence: sequence,
-            role: role as i32,
-            reason: reason as i32,
-            details: None,
+            direction: StreamDirection::Input as i32,
+            outcome: Some(
+                terminal
+                    .try_into()
+                    .expect("input cancellation has no capabilities"),
+            ),
+            authored_by: StreamTerminalAuthor::Guest as i32,
             durable_stream_id: mapping.handle.as_ref().and_then(|handle| handle.stream_id),
             epoch,
             durable_offset: Vec::new(),
@@ -740,15 +739,18 @@ pub(super) fn output_cancel_request(
     stream_id: u64,
     durable_id: (u64, u64),
     epoch: u64,
-    reason: StreamCancelReason,
 ) -> InvocationRequest {
     InvocationRequest {
-        request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
             transport_stream_id: stream_id,
             producer_sequence: 0,
-            role: StreamCancelRole::OutputConsumer as i32,
-            reason: reason as i32,
-            details: None,
+            direction: StreamDirection::Output as i32,
+            outcome: Some(
+                StreamTerminal::ConsumerCancelled { details: None }
+                    .try_into()
+                    .expect("consumer cancellation has no capabilities"),
+            ),
+            authored_by: StreamTerminalAuthor::Guest as i32,
             durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                 high_bits: durable_id.0,
                 low_bits: durable_id.1,
@@ -769,8 +771,7 @@ pub(super) fn request_end_sequence(request: &InvocationRequest) -> u64 {
                 }
                 - 1
         }
-        Some(invocation_request::Request::InputEnd(end)) => end.sequence,
-        Some(invocation_request::Request::StreamCancel(cancel)) => cancel.producer_sequence,
+        Some(invocation_request::Request::StreamEnd(end)) => end.producer_sequence,
         _ => 0,
     }
 }

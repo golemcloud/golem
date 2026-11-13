@@ -41,13 +41,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(this.retirement_error());
         }
         match instance_guard.transition() {
+            LifecycleTransition::Inactive(error) => {
+                crate::metrics::ephemeral::record_inactive_invocation_failure();
+                Err(error.clone())
+            }
             LifecycleTransition::Unloaded(unloaded) => {
-                if this.agent_mode() == AgentMode::Ephemeral
-                    && let Some(error) = unloaded.lifecycle().startup_failure()
-                {
-                    crate::metrics::ephemeral::record_inactive_invocation_failure();
-                    return Err(error.clone());
-                }
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
@@ -56,7 +54,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
                     Err(error) => {
-                        unloaded.startup_failed(error.clone());
+                        unloaded
+                            .startup_failed(StartupFailure::new(this.agent_mode(), error.clone()));
                         this.fail_pending_invocations(error.clone()).await;
                         drop(instance_guard);
                         if let Some(start_attempt) = start_attempt {
@@ -239,7 +238,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 Err(error) => {
                     this.complete_startup(start_attempt, Err(error.clone()));
-                    waiting.startup_failed(error);
+                    waiting.startup_failed(StartupFailure::new(this.agent_mode(), error));
                 }
             }
         } else {

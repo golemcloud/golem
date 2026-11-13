@@ -453,7 +453,7 @@ paths:
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker, and it has no predefined meaning.
       operationId: complete_promise
       parameters:
@@ -16326,6 +16326,10 @@ components:
         oplogIdx:
           type: integer
           format: uint64
+        fingerprint:
+          description: Fingerprint of the agent incarnation that created the promise.
+          type: string
+          format: uuid
         data:
           type: array
           items:
@@ -16333,6 +16337,7 @@ components:
             format: uint8
       required:
       - oplogIdx
+      - fingerprint
       - data
     Constraint:
       type: object
@@ -18751,8 +18756,7 @@ components:
           ToolAttachmentControl: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
           StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
           StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-          StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-          StreamCancel: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+          StreamTerminal: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -18810,8 +18814,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -19442,30 +19445,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StreamCancelParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: StreamCancel
-            type: string
-            enum:
-            - StreamCancel
-        required:
-        - type
-      - $ref: '#/components/schemas/r#StreamCancelParams'
-    PublicOplogEntry_r#StreamEndParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: StreamEnd
-            type: string
-            enum:
-            - StreamEnd
-        required:
-        - type
-      - $ref: '#/components/schemas/r#StreamEndParams'
     PublicOplogEntry_r#StreamItemsParams:
       allOf:
       - type: object
@@ -19502,6 +19481,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StreamSessionParams'
+    PublicOplogEntry_r#StreamTerminalParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamTerminal
+            type: string
+            enum:
+            - StreamTerminal
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamTerminalParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -23193,30 +23184,6 @@ components:
       - timestamp
       - functionName
       - durableFunctionType
-    r#StreamCancelParams:
-      title: r#StreamCancelParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
-      required:
-      - timestamp
-      - record
-    r#StreamEndParams:
-      title: r#StreamEndParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
-      required:
-      - timestamp
-      - record
     r#StreamItemsParams:
       title: r#StreamItemsParams
       type: object
@@ -23243,6 +23210,18 @@ components:
       - record
     r#StreamSessionParams:
       title: r#StreamSessionParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
+    r#StreamTerminalParams:
+      title: r#StreamTerminalParams
       type: object
       properties:
         timestamp:

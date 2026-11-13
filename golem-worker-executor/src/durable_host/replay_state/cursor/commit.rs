@@ -540,7 +540,7 @@ impl CursorTx<'_> {
         Ok(())
     }
 
-    pub(in crate::durable_host::replay_state) async fn record_card_events_in_region(
+    async fn record_card_events_in_region(
         &mut self,
         region: &OplogRegion,
     ) -> Result<(), UnreadableOplog> {

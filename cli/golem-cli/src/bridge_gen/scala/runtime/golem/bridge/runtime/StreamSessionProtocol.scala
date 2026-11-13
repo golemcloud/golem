@@ -51,6 +51,71 @@ private[runtime] object StreamSessionProtocol {
   def message(kind: String, fields: Vector[(String, Json)] = Vector.empty): String =
     Json.obj((fields :+ ("type" -> Json.string(kind)) :+ ("version" -> Json.fromInt(1))).sortBy(_._1)).render
 
+  private def string(json: Json, name: String): String =
+    Json.requireField(json, name).flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+
+  def streamEnd(channel: Long, direction: String, sequence: BigInt, outcome: Json): String =
+    message("stream-end", Vector("channel" -> Json.fromLong(channel), "direction" -> Json.string(direction),
+      "sequence" -> Json.string(unsigned(sequence)), "outcome" -> outcome))
+
+  def streamOutcome(outcome: Json): StreamOutcome = string(outcome, "kind") match {
+    case "finished" =>
+      validateObject(outcome, Set("kind"), "stream outcome")
+      StreamOutcome.Finished
+    case "consumer-cancelled" =>
+      validateObject(outcome, Set("kind"), "stream outcome", Set("details"))
+      StreamOutcome.ConsumerCancelled(Json.field(outcome, "details").map(v => Json.asString(v).fold(e => throw BridgeException(e), identity)))
+    case "failed" =>
+      validateObject(outcome, Set("kind", "error"), "stream outcome")
+      val error = Json.requireField(outcome, "error").fold(e => throw BridgeException(e), identity)
+      val kind = string(error, "kind")
+      val parsed = kind match {
+        case "failed" =>
+          validateObject(error, Set("kind", "value"), "stream error")
+          val typed = Json.requireField(error, "value").fold(e => throw BridgeException(e), identity)
+          validateObject(typed, Set("graph", "value"), "typed stream error")
+          val graph = Json.requireField(typed, "graph").fold(e => throw BridgeException(e), identity)
+          val codec = PublicValueCodec.fromSchemaGraphJson(graph.render)
+          val raw = Json.requireField(typed, "value").fold(e => throw BridgeException(e), identity)
+          def rejectStreams(value: Json): Unit = {
+            if (Json.field(value, "kind").flatMap(Json.asString(_).toOption).contains("stream"))
+              throw BridgeException("typed stream failures must not contain stream references")
+            Json.asObject(value).foreach(_.foreach { case (_, child) => rejectStreams(child) })
+            Json.asArray(value).foreach(_.foreach(rejectStreams))
+          }
+          rejectStreams(raw)
+          val value = codec.decode(raw)
+          StreamError.Failed(graph, value)
+        case "trapped" | "interrupted" | "resource-exhausted" =>
+          validateObject(error, Set("kind", "message"), "stream error")
+          val message = string(error, "message")
+          kind match {
+            case "trapped" => StreamError.Trapped(message)
+            case "interrupted" => StreamError.Interrupted(message)
+            case _ => StreamError.ResourceExhausted(message)
+          }
+        case "cancelled" | "abandoned" =>
+          validateObject(error, Set("kind"), "stream error")
+          if (kind == "cancelled") StreamError.Cancelled else StreamError.Abandoned
+        case _ => throw BridgeException("invalid stream error kind")
+      }
+      StreamOutcome.Failed(parsed)
+    case _ => throw BridgeException("invalid stream outcome kind")
+  }
+
+  def serverStreamEnd(json: Json): (String, StreamOutcome, Option[String]) = {
+    validate(json, "stream-end", Set("channel", "direction", "sequence", "outcome"), Set("cursorToken"))
+    channel(json)
+    u64(json, "sequence")
+    val direction = string(json, "direction")
+    val outcome = streamOutcome(Json.requireField(json, "outcome").fold(e => throw BridgeException(e), identity))
+    if (direction != "output" && direction != "input")
+      throw BridgeException("invalid server stream terminal direction")
+    val cursor = Json.field(json, "cursorToken").map(v => Json.asString(v).fold(e => throw BridgeException(e), identity))
+    cursor.foreach(validateOpaqueToken(_, "cursor token"))
+    (direction, outcome, cursor)
+  }
+
   val MaxU64: BigInt = (BigInt(1) << 64) - 1
   private val Mime = "^[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+$".r
 

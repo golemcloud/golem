@@ -1040,10 +1040,9 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -1059,10 +1058,9 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: after_forward.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, after_forward.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -2067,10 +2065,9 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     loser_completion.restrict_to_start(cancelled_start);
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: cancel_ready.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, cancel_ready.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3253,10 +3250,9 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: before_leaf.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, before_leaf.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3286,10 +3282,9 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: after_leaf.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, after_leaf.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3687,10 +3682,7 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
     let admitted = next_promise_checkpoint(&mut promises, "cascade-child-admitted").await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: admitted.oplog_idx,
-            },
+            &executor.promise_id(&worker_id, admitted.oplog_idx).await?,
             vec![],
         )
         .await?;
@@ -4168,10 +4160,7 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
     );
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: child.oplog_idx,
-            },
+            &executor.promise_id(&worker_id, child.oplog_idx).await?,
             vec![],
         )
         .await?;
@@ -4314,10 +4303,9 @@ async fn approval_pending_blocks_dispatch_survives_restart_and_approves_once(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&worker_id, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4473,10 +4461,9 @@ async fn approval_decisions_are_authenticated_owner_bound_and_denial_never_dispa
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&worker_id, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4594,10 +4581,9 @@ async fn approval_detach_cancel_and_owner_termination_have_distinct_terminals(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: detached_worker,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&detached_worker, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4643,10 +4629,12 @@ async fn approval_detach_cancel_and_owner_termination_have_distinct_terminals(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: cancelled_worker,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(
+                    &cancelled_worker,
+                    OplogIndex::from_u64(completion.oplog_idx),
+                )
+                .await?,
             completion.data,
         )
         .await?;

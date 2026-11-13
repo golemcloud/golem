@@ -98,5 +98,6 @@ export const EnvironmentId = Schema.Struct({
  */
 export const PromiseId = Schema.Struct({
   agentId: AgentId,
+  fingerprint: Uuid,
   oplogIdx: Uint64,
 })

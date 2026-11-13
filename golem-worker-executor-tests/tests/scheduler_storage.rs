@@ -44,16 +44,18 @@ fn scheduled_action_fingerprints_roundtrip() {
         agent_id: "Counter(\"scheduled\")".to_string(),
     };
     let fingerprint = AgentFingerprint(Uuid::from_u128(4));
+    let promise_id = PromiseId {
+        agent_id: agent_id.clone(),
+        fingerprint,
+        oplog_idx: OplogIndex::from_u64(42),
+    };
     let actions = [
         (
             "scheduled_action_complete_promise.bin",
             ScheduledAction::CompletePromise {
                 account_id,
                 environment_id,
-                promise_id: PromiseId {
-                    agent_id: agent_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(42),
-                },
+                promise_id: promise_id.clone(),
                 target_worker_fingerprint: fingerprint,
             },
         ),
@@ -67,6 +69,12 @@ fn scheduled_action_fingerprints_roundtrip() {
         ),
     ];
     let mut mint = goldenfile::Mint::new("tests/goldenfiles");
+    let encoded = serialize(&promise_id).unwrap();
+    assert_eq!(deserialize::<PromiseId>(&encoded).unwrap(), promise_id);
+    mint.new_goldenfile("promise_id.bin")
+        .unwrap()
+        .write_all(&encoded)
+        .unwrap();
     for (name, action) in actions {
         let encoded = serialize(&action).unwrap();
         assert_eq!(deserialize::<ScheduledAction>(&encoded).unwrap(), action);

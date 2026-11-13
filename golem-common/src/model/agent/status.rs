@@ -144,17 +144,7 @@ impl AgentFilter {
                 result
             }
             AgentFilter::Or(AgentOrFilter { filters }) => {
-                let mut result = true;
-                if !filters.is_empty() {
-                    result = false;
-                    for filter in filters {
-                        if filter.matches(metadata) {
-                            result = true;
-                            break;
-                        }
-                    }
-                }
-                result
+                filters.iter().any(|filter| filter.matches(metadata))
             }
         }
     }
@@ -589,8 +579,10 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
-    pub pending_durable_stream_cancellations:
-        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    pub pending_durable_stream_cancellations: HashMap<
+        (crate::model::durable_stream::StreamRecordReference, u64),
+        Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    >,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
@@ -658,7 +650,7 @@ impl Default for AgentStatusRecord {
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
-            pending_durable_stream_cancellations: HashSet::new(),
+            pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
@@ -1334,7 +1326,9 @@ pub struct AuthoritativeSnapshot {
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
     /// The bootstrap range that the successful update names: the entries of the durable calls
-    /// that the target revision's core initializer made while the update instantiated it.
+    /// that the target revision's core initializer claimed while the update instantiated it, its
+    /// own block for a snapshot-based update and the selected record's block for a
+    /// snapshot-assisted one.
     pub bootstrap: Option<OplogRegion>,
 }
 
