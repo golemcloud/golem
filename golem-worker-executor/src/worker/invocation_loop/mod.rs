@@ -49,7 +49,8 @@ use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
     PendingLiveInvocationDisposition, PendingWorkerInterrupt, PreparedAgent,
     QueuedWorkerInvocation, RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker,
-    UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook, WorkerTrace,
+    StartupFailure, UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook,
+    WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
