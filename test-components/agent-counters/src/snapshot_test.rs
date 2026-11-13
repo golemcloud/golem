@@ -3,15 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
 
-// The `_initialize` of the reactor runs the constructors during core instantiation. The
-// constructor runs once, also when the first export runs the constructors again.
-golem_rust::ctor::__support::ctor_parse!(
-    #[ctor]
-    fn initialize_snapshot_clock() {
-        // The reactor initializer runs during core instantiation, before snapshot loading.
-        std::hint::black_box(std::time::Instant::now());
-    }
-);
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_snapshot_clock() {
+    // The reactor initializer runs during core instantiation, before snapshot loading.
+    std::hint::black_box(std::time::Instant::now());
+}
 
 #[agent_definition(snapshotting = "enabled")]
 trait SnapshotCounter {

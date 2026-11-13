@@ -35,14 +35,19 @@ note: method defined here
 error[E0599]: no method named `trigger_call` found for struct `ReceiverClientWithScopeCard<'a>` in the current scope
   --> tests/ui/fail/scope_card_type_safety.rs:36:10
    |
- 4 | #[agent_definition]
-   | ------------------- method `trigger_call` not found for this struct
+ 4 |   #[agent_definition]
+   |   ------------------- method `trigger_call` not found for this struct
 ...
-34 |     ReceiverClient::get("target".to_string())
-   |     ----------------------------------------- method `trigger_call` is available on `&ReceiverClient`
-35 |         .with_scope_card(card)
-36 |         .trigger_call();
-   |          ^^^^^^^^^^^^ method not found in `ReceiverClientWithScopeCard<'_>`
+34 |       ReceiverClient::get("target".to_string())
+   |       -----------------------------------------
+   |       |
+   |  _____method `trigger_call` is available on `&ReceiverClient`
+   | |
+35 | |         .with_scope_card(card)
+36 | |         .trigger_call();
+   | |         -^^^^^^^^^^^^ method not found in `ReceiverClientWithScopeCard<'_>`
+   | |_________|
+   |
    |
 help: one of the expressions' fields has a method of the same name
    |

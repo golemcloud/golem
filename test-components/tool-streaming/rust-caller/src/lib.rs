@@ -129,17 +129,13 @@ mod definition_owned_matrix_proxy {
 #[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
 mod bounded_stream;
 
-// The `_initialize` of the reactor runs the constructors during core instantiation. The
-// constructor runs once, also when the first export runs the constructors again.
-golem_rust::ctor::__support::ctor_parse!(
-    #[ctor]
-    fn initialize_component_baseline_clock() {
-        if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
-            // Observe the reactor initializer independently of any agent constructor.
-            std::hint::black_box(std::time::Instant::now());
-        }
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_component_baseline_clock() {
+    if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
+        // Observe the reactor initializer independently of any agent constructor.
+        std::hint::black_box(std::time::Instant::now());
     }
-);
+}
 
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamEvidence {
