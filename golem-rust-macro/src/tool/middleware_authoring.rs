@@ -449,8 +449,8 @@ fn expand_tool_middleware(
         #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_ident() {
                 #golem_rust::tool::install_middleware_exports();
-                #golem_rust::tool::register_tool_middleware(
-                    #descriptor_ident(),
+                #golem_rust::tool::register_tool_middleware_descriptor(
+                    #descriptor_ident,
                     #invoker_ident,
                 );
             }
@@ -641,8 +641,8 @@ fn expand_universal_tool_middleware(
         #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_ident() {
                 #golem_rust::tool::install_middleware_exports();
-                #golem_rust::tool::register_tool_middleware(
-                    #descriptor_ident(),
+                #golem_rust::tool::register_tool_middleware_descriptor(
+                    #descriptor_ident,
                     #invoker_ident,
                 );
             }
@@ -1096,7 +1096,7 @@ mod tests {
                 .expect("expansion should contain an invoker adapter");
             assert_eq!(invoker.sig.inputs.len(), 10);
             let text = expansion.to_string();
-            assert!(text.contains("sdk_alias :: tool :: register_tool_middleware"));
+            assert!(text.contains("sdk_alias :: tool :: register_tool_middleware_descriptor"));
         }
     }
 

@@ -21,7 +21,10 @@ use crate::{
 };
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use std::{
     pin::Pin,
@@ -38,7 +41,7 @@ pub struct State {
 
 #[derive(Default)]
 pub struct AgentTypes {
-    pub agent_types: HashMap<AgentTypeName, Box<dyn Fn() -> AgentType>>,
+    pub agent_types: BTreeMap<AgentTypeName, Box<dyn Fn() -> AgentType>>,
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -107,7 +110,7 @@ pub struct AgentInstance {
 
 #[derive(Default)]
 pub struct AgentInitiators {
-    pub agent_initiators: HashMap<AgentTypeName, Arc<dyn AgentInitiator>>,
+    pub agent_initiators: BTreeMap<AgentTypeName, Arc<dyn AgentInitiator>>,
 }
 
 pub fn get_all_agent_types() -> Vec<AgentType> {
@@ -170,11 +173,14 @@ fn register_agent_type_descriptor(
     agent_type_name: AgentTypeName,
     descriptor: Box<dyn Fn() -> AgentType>,
 ) {
-    let incoming_is_router = matches!(descriptor().kind, AgentTypeKind::HttpRouter);
     let state = get_state();
     let mut agent_types = state.agent_types.borrow_mut();
+    // Registration runs in a constructor, which the reactor runs during core instantiation.
+    // The descriptors are built only on a name collision, because building one creates
+    // `RandomState` hash maps, and the first `RandomState` reads `wasi:random/insecure-seed`.
     if let Some(existing) = agent_types.agent_types.get(&agent_type_name)
-        && (incoming_is_router || matches!(existing().kind, AgentTypeKind::HttpRouter))
+        && (matches!(descriptor().kind, AgentTypeKind::HttpRouter)
+            || matches!(existing().kind, AgentTypeKind::HttpRouter))
     {
         panic!(
             "duplicate HTTP router registration for agent type `{}`",
@@ -346,7 +352,7 @@ where
     f(agent_initiator).await
 }
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AgentTypeName(pub String);
 
 impl std::borrow::Borrow<str> for AgentTypeName {

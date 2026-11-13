@@ -38,6 +38,7 @@ pub type ToolMiddlewareInvoker = fn(
 
 #[derive(Default)]
 struct ToolMiddlewares {
+    pending: Vec<(fn() -> ToolMiddleware, ToolMiddlewareInvoker)>,
     descriptors: BTreeMap<String, ToolMiddleware>,
     invokers: BTreeMap<String, ToolMiddlewareInvoker>,
 }
@@ -56,6 +57,30 @@ fn get_state() -> &'static State {
             STATE = Some(State::default());
         }
         STATE.as_ref().unwrap()
+    }
+}
+
+/// Registers a middleware whose descriptor is built and validated at the first lookup.
+///
+/// The middleware macros call this from a constructor, which the reactor runs during core
+/// instantiation. Building and validating a descriptor creates `RandomState` hash maps, and the
+/// first `RandomState` reads `wasi:random/insecure-seed`, so that work waits for an export call.
+#[doc(hidden)]
+pub fn register_tool_middleware_descriptor(
+    descriptor: fn() -> ToolMiddleware,
+    invoker: ToolMiddlewareInvoker,
+) {
+    get_state()
+        .middlewares
+        .borrow_mut()
+        .pending
+        .push((descriptor, invoker));
+}
+
+fn register_pending_tool_middlewares() {
+    let pending = std::mem::take(&mut get_state().middlewares.borrow_mut().pending);
+    for (descriptor, invoker) in pending {
+        register_tool_middleware(descriptor(), invoker);
     }
 }
 
@@ -87,6 +112,7 @@ fn validate_descriptor(middleware: &ToolMiddleware) {
 
 #[doc(hidden)]
 pub fn get_all_tool_middlewares() -> Vec<ToolMiddleware> {
+    register_pending_tool_middlewares();
     get_state()
         .middlewares
         .borrow()
@@ -98,6 +124,7 @@ pub fn get_all_tool_middlewares() -> Vec<ToolMiddleware> {
 
 #[doc(hidden)]
 pub fn get_tool_middleware_by_name(name: &str) -> Option<ToolMiddleware> {
+    register_pending_tool_middlewares();
     get_state()
         .middlewares
         .borrow()
@@ -108,6 +135,7 @@ pub fn get_tool_middleware_by_name(name: &str) -> Option<ToolMiddleware> {
 
 #[doc(hidden)]
 pub fn get_tool_middleware_invoker_by_name(name: &str) -> Option<ToolMiddlewareInvoker> {
+    register_pending_tool_middlewares();
     get_state().middlewares.borrow().invokers.get(name).copied()
 }
 
@@ -115,6 +143,7 @@ pub fn get_tool_middleware_invoker_by_name(name: &str) -> Option<ToolMiddlewareI
 #[allow(dead_code)]
 pub(crate) fn clear_tool_middlewares_for_tests() {
     let mut middlewares = get_state().middlewares.borrow_mut();
+    middlewares.pending.clear();
     middlewares.descriptors.clear();
     middlewares.invokers.clear();
 }

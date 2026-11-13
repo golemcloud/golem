@@ -59,6 +59,7 @@ pub use tool_middleware::{ToolMiddlewareInvokeFuture, ToolMiddlewareInvokeFuture
 pub use tool_middleware_registry::{
     ToolMiddlewareInvoker, get_all_tool_middlewares, get_tool_middleware_by_name,
     get_tool_middleware_invoker_by_name, register_tool_middleware,
+    register_tool_middleware_descriptor,
 };
 
 #[cfg(any(test, feature = "export_golem_agentic"))]
