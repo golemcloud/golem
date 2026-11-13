@@ -2406,115 +2406,42 @@ fn snapshot_assisted_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogI
     ])
 }
 
+/// The target of a snapshot-assisted update replays the bootstrap block of the selected record,
+/// which lies inside the record prefix that the update commits.
 #[test]
-fn a_successful_snapshot_assisted_update_commits_the_bootstrap_range_of_its_target() {
+fn a_successful_snapshot_assisted_update_commits_its_record_prefix() {
     let regions = super::skipped_regions(&snapshot_assisted_update_with_outcome(
-        successful_snapshot_based_update(Some(OplogRegion::from_range(7..=8))),
-    ));
-
-    assert_eq!(skipped_indices(&regions), vec![2, 3, 7, 8]);
-}
-
-#[test]
-fn a_successful_snapshot_assisted_update_without_a_bootstrap_range_commits_its_record_prefix() {
-    let regions = super::skipped_regions(&snapshot_assisted_update_with_outcome(
-        successful_snapshot_based_update(None),
+        successful_snapshot_based_update(Some(OplogRegion::from_range(2..=2))),
     ));
 
     assert_eq!(skipped_indices(&regions), vec![2, 3]);
 }
 
+/// The attempts of a snapshot-assisted update append no entry of the target, so a failed one
+/// leaves the history after its strategy entry to the source.
 #[test]
-fn a_failed_snapshot_assisted_update_commits_the_history_of_its_attempt_after_its_strategy_entry() {
+fn a_failed_snapshot_assisted_update_commits_no_history() {
     let regions = super::skipped_regions(&snapshot_assisted_update_with_outcome(
         failed_update_to_revision_two(),
     ));
 
-    assert_eq!(skipped_indices(&regions), vec![6, 7, 8]);
-}
-
-/// An automatic update to revision 3 admitted at 2 is at the head of the queue when the
-/// snapshot-assisted update is admitted at 4, and succeeds at 5, before the start that serves the
-/// snapshot-assisted update writes its strategy entry at 6. The attempt region of the failed
-/// snapshot-assisted update begins after its strategy entry and keeps the outcome before it.
-#[test]
-fn a_failed_snapshot_assisted_update_keeps_the_outcome_of_the_update_before_it() {
-    let entries = BTreeMap::from([
-        (
-            OplogIndex::from_u64(2),
-            OplogEntry::pending_update(automatic_update(3), None),
-        ),
-        (
-            OplogIndex::from_u64(4),
-            OplogEntry::pending_update(automatic_update(4), None),
-        ),
-        (
-            OplogIndex::from_u64(5),
-            OplogEntry::successful_update(
-                ComponentRevision::new(3).unwrap(),
-                100,
-                None,
-                Default::default(),
-                None,
-                None,
-            ),
-        ),
-        (
-            OplogIndex::from_u64(6),
-            OplogEntry::pending_update(assisted_update(4, 3, 5, 1), Some(OplogIndex::from_u64(4))),
-        ),
-        (
-            OplogIndex::from_u64(9),
-            OplogEntry::failed_update(
-                ComponentRevision::new(4).unwrap(),
-                Some("details".to_string()),
-                None,
-                Some(OplogIndex::from_u64(4)),
-                None,
-            ),
-        ),
-    ]);
-
-    assert_eq!(
-        skipped_indices(&super::skipped_regions(&entries)),
-        vec![7, 8]
-    );
-
-    let status = update_status_with_new_entries(
-        AgentMode::Durable,
-        AgentStatusRecord::default(),
-        entries,
-        &RetryConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(skipped_indices(&status.skipped_regions), vec![7, 8]);
-    assert_eq!(
-        status.component_revision,
-        ComponentRevision::new(3).unwrap()
-    );
-    assert!(status.pending_updates.is_empty());
+    assert!(skipped_indices(&regions).is_empty());
 }
 
 #[test]
-fn revert_validation_leaves_out_the_regions_of_a_snapshot_assisted_update_whose_outcome_it_drops() {
+fn revert_validation_leaves_out_the_record_prefix_of_a_snapshot_assisted_update_whose_outcome_it_drops()
+ {
     let successful = snapshot_assisted_update_with_outcome(successful_snapshot_based_update(Some(
-        OplogRegion::from_range(7..=8),
+        OplogRegion::from_range(2..=2),
     )));
-    let failed = snapshot_assisted_update_with_outcome(failed_update_to_revision_two());
 
     let dropping_success =
         super::revert_validation_regions(&successful, &OplogRegion::from_range(9..=9));
     let keeping_success =
         super::revert_validation_regions(&successful, &OplogRegion::from_range(10..=10));
-    let dropping_failure =
-        super::revert_validation_regions(&failed, &OplogRegion::from_range(9..=9));
-    let keeping_failure =
-        super::revert_validation_regions(&failed, &OplogRegion::from_range(10..=10));
 
     assert!(dropping_success.is_empty());
-    assert_eq!(skipped_indices(&keeping_success), vec![2, 3, 7, 8]);
-    assert!(dropping_failure.is_empty());
-    assert_eq!(skipped_indices(&keeping_failure), vec![6, 7, 8]);
+    assert_eq!(skipped_indices(&keeping_success), vec![2, 3]);
 }
 
 #[test]

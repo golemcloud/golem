@@ -71,6 +71,10 @@ trait SnapshotCounter {
     fn initializer_seed_hash(&self) -> u64;
     /// The number of environment variables that the core initializer read.
     fn initializer_environment_size(&self) -> u32;
+    /// Whether the core initializer derived `expected` from its random seed. It reads the clock
+    /// only when it did not, so a replay whose initializer got another seed asks for a durable
+    /// call that the recorded invocation did not make.
+    fn check_initializer_seed(&self, expected: u64) -> bool;
 }
 
 struct SnapshotCounterImpl {
@@ -103,6 +107,15 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn initializer_environment_size(&self) -> u32 {
         initializer_environment_size()
+    }
+
+    fn check_initializer_seed(&self, expected: u64) -> bool {
+        if initializer_seed_hash() == expected {
+            true
+        } else {
+            std::hint::black_box(std::time::Instant::now());
+            false
+        }
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

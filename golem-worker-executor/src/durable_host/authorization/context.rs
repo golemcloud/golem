@@ -225,9 +225,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         capture: &mut impl FnMut(&mut Self) -> T,
     ) -> Result<Option<T>, WorkerExecutorError> {
-        if self.bootstrap_uses_reconstructed_authority() {
-            return Ok(self.state.is_live().then(|| capture(self)));
-        }
         self.process_pending_replay_events().await?;
         if !self.state.is_live() {
             return Ok(None);
@@ -484,9 +481,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         requires_agent_authority: bool,
         wait_for_authority: bool,
     ) -> Result<Option<Arc<CardEventBoundary>>, WorkerExecutorError> {
-        if self.bootstrap_uses_reconstructed_authority() {
-            return Ok(Some(Arc::new(CardEventBoundary::Historical)));
-        }
         loop {
             self.process_pending_replay_events().await?;
             if !self.state.is_live() {

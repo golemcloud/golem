@@ -1334,7 +1334,9 @@ pub struct AuthoritativeSnapshot {
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
     /// The bootstrap range that the successful update names: the entries of the durable calls
-    /// that the target revision's core initializer made while the update instantiated it.
+    /// that the target revision's core initializer claimed while the update instantiated it, its
+    /// own block for a snapshot-based update and the selected record's block for a
+    /// snapshot-assisted one.
     pub bootstrap: Option<OplogRegion>,
 }
 

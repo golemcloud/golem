@@ -81,7 +81,8 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         } else {
             None
         };
-        // A snapshot-assisted update names the bootstrap block of its target in its outcome.
+        // A snapshot-assisted update names in its outcome the bootstrap block that its target
+        // replayed: the block of its selected record.
         let bootstrap = pending_update
             .as_ref()
             .filter(|update| {

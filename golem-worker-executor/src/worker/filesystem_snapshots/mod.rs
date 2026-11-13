@@ -836,8 +836,8 @@ pub(crate) enum BootstrapSource {
     /// From the bootstrap range that the record names, which must hold exactly the durable calls
     /// of the initializer. `None` when the initializer made no durable call.
     Recorded(Option<OplogRegion>),
-    /// From the history after the `anchor` entry of a pending update: what an earlier attempt of
-    /// the update recorded, after which the initializer continues live.
+    /// From the history after the `anchor` entry of a pending snapshot-based update: what an
+    /// earlier attempt of the update recorded, after which the initializer continues live.
     Attempt { anchor: OplogIndex },
 }
 
@@ -858,9 +858,10 @@ pub(crate) enum InitializerReplay {
 impl ReplayBaseline {
     /// How the core initializer of the start replays its durable calls, with `horizon` the last
     /// entry of the history when the start installs its cursor. A periodic or promoted record
-    /// replays the bootstrap range that it names on a strict cursor; a pending snapshot-based or
-    /// snapshot-assisted update replays what its earlier attempts recorded after its anchor and
-    /// then continues live.
+    /// replays the bootstrap range that it names on a strict cursor, and so does a pending
+    /// snapshot-assisted update with the range of its selected record: the source tail after that
+    /// record was recorded with the inputs of that block. A pending snapshot-based update replays
+    /// what its earlier attempts recorded after its anchor and then continues live.
     pub(crate) fn initializer_replay(&self, horizon: OplogIndex) -> InitializerReplay {
         match &self.bootstrap {
             BootstrapSource::Recorded(range) => {
@@ -883,11 +884,9 @@ impl ReplayBaseline {
         }
     }
 
-    /// The history after the anchor of a pending snapshot-based or snapshot-assisted update up to
+    /// The history after the `PendingUpdate` entry of a pending snapshot-based update up to
     /// `horizon`: what earlier attempts of the update recorded. It belongs to the target revision,
-    /// so the main cursor of the start skips it and the bootstrap cursor replays it. The anchor
-    /// of a snapshot-assisted update is its strategy entry, which a start writes only while the
-    /// update is at the head of the queue, after the outcome of every update before it.
+    /// so the main cursor of the start skips it and the bootstrap cursor replays it.
     pub(crate) fn attempt_region(&self, horizon: OplogIndex) -> Option<OplogRegion> {
         match &self.bootstrap {
             BootstrapSource::Attempt { anchor } if *anchor < horizon => {
@@ -900,8 +899,9 @@ impl ReplayBaseline {
     /// The history that the bootstrap cursor of the start skips besides its `skip_through`
     /// prefix. A recorded range lies inside the history that the status skips for the snapshot
     /// or update that names it, so a strict cursor skips only the deleted regions. The live cursor
-    /// of a pending update also skips what the status skips after the anchor: the history of the
-    /// updates before it in the queue, such as a failed attempt of an earlier update.
+    /// of a pending snapshot-based update also skips what the status skips after the anchor: the
+    /// history of the updates before it in the queue, such as the failed attempt of an earlier
+    /// snapshot-based update.
     pub(crate) fn bootstrap_skipped_regions(
         &self,
         status_skipped: &DeletedRegions,
@@ -991,15 +991,13 @@ pub(crate) fn plan_start(
                 bootstrap: BootstrapSource::Recorded(snapshot.bootstrap.clone()),
             },
         },
-        SelectedBaseline::AssistedPending { snapshot, head } => StartPlan {
+        SelectedBaseline::AssistedPending { snapshot, .. } => StartPlan {
             source: named(snapshot.filesystem_snapshot.as_ref())?,
             replay: ReplayBaseline {
                 snapshot: Some((snapshot.index, SnapshotSource::SnapshotAssistedAutomatic)),
                 skip_through: Some(snapshot.index),
                 role,
-                bootstrap: BootstrapSource::Attempt {
-                    anchor: head.oplog_index,
-                },
+                bootstrap: BootstrapSource::Recorded(snapshot.bootstrap.clone()),
             },
         },
         SelectedBaseline::AssistedPromoted {

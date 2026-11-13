@@ -341,7 +341,8 @@ oplog_entry! {
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
             snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
             /// The bootstrap range of the target revision: the entries of the durable calls that
-            /// its core initializer made while the update instantiated it.
+            /// its core initializer claimed while the update instantiated it, its own block for a
+            /// snapshot-based update and the selected record's block for a snapshot-assisted one.
             bootstrap: Option<OplogRegion>,
         }
         public {
