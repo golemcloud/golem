@@ -72,7 +72,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 span.record("agent_id", agent_id.as_str());
             }
             if let Some(key) = request_idempotency_key(&first) {
-                span.record("idempotency_key", key.value.as_str());
+                span.record(
+                    "idempotency_key",
+                    uuid::Uuid::from(key).to_string().as_str(),
+                );
             }
         }
         let first = first.request.expect("validated request has a payload");
@@ -275,7 +278,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 response: Some(invocation_response::Response::Accepted(
                     InvocationAccepted {
                         agent_id: start.agent_id.clone(),
-                        idempotency_key: Some(accepted.idempotency_key.clone().into()),
+                        idempotency_key: Some(accepted.idempotency_key.into()),
                         component_revision: accepted
                             .component_revision
                             .map(|revision| revision.get()),
@@ -369,7 +372,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         result: Some(invocation_session_result::Result::MethodResult(result.value)),
                         component_revision: accepted.component_revision.map(|revision| revision.get()),
                         agent_id: start.agent_id.clone(),
-                        idempotency_key: Some(accepted.idempotency_key.clone().into()),
+                        idempotency_key: Some(accepted.idempotency_key.into()),
                         agent_fingerprint: start.expected_callee_fingerprint,
                         new_stream_mappings,
                         ..Default::default()
@@ -589,7 +592,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .component_revision
                                 .map(|revision| revision.get()),
                             agent_id: start.agent_id.clone(),
-                            idempotency_key: Some(accepted.idempotency_key.clone().into()),
+                            idempotency_key: Some(accepted.idempotency_key.into()),
                             fuel_consumed: None,
                             status: None,
                             oplog_index: None,

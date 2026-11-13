@@ -11,9 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use super::*;
 use crate::services::oplog::{DurableStreamOplogRecord, OplogFence};
 use golem_common::base_model::component_metadata::KnownExports;
+use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{
@@ -245,7 +247,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         _environment_id: EnvironmentId,
         _target_agent_id: &AgentId,
         caller_account_id: AccountId,
-        _idempotency_key: &IdempotencyKey,
+        _idempotency_key: &InvocationId,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.lookups
             .lock()

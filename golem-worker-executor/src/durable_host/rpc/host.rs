@@ -64,7 +64,6 @@ use futures::future::Either;
 use golem_common::base_model::agent::AgentMode;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -468,7 +467,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
+            let live_streaming_origin = current_streaming_origin(self, parent_key);
             let call_target = RpcCallTarget::new(
                 begun.idempotency_key_position(self),
                 &prepared.logical_remote_agent_id,
@@ -606,7 +605,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self,
                 &remote_agent_id,
                 target_fingerprint,
-                IdempotencyKey::from_uuid(invocation_id.uuid()),
+                invocation_id.id(),
                 logical_streaming_origin,
                 stream_auth_ctx,
             )
@@ -1162,7 +1161,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
+            let live_streaming_origin = current_streaming_origin(self, parent_key);
             let call_target = RpcCallTarget::new(
                 begun.idempotency_key_position(self),
                 &logical_remote_agent_id,
@@ -1323,7 +1322,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self,
                 &remote_agent_id,
                 target_fingerprint,
-                IdempotencyKey::from_uuid(invocation_id.uuid()),
+                invocation_id.id(),
                 logical_streaming_origin,
                 stream_auth_ctx,
             )

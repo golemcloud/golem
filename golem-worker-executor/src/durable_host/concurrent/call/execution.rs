@@ -470,7 +470,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         TaskRetryContext {
             retry_point,
             entity_parent_start_index: self.execution_scope.entity_parent_start_index,
-            invocation_id: self.execution_scope.agent_invocation.clone(),
+            invocation_id: self.execution_scope.agent_invocation,
             environment_state_service,
             environment_id,
             default_retry_policy,

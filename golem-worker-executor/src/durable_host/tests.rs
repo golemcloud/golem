@@ -1135,7 +1135,7 @@ fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
     }
 }
 
-fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
+fn permission_id_test_inputs() -> (OwnedAgentId, golem_common::model::InvocationId) {
     (
         OwnedAgentId {
             environment_id: EnvironmentId(
@@ -1148,7 +1148,7 @@ fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
                 agent_id: "cart/primary".to_string(),
             },
         },
-        IdempotencyKey::new("checkout-invocation".to_string()),
+        Uuid::from_u128(801).into(),
     )
 }
 
@@ -1324,19 +1324,19 @@ fn permission_id_derivation_has_golden_vectors() {
 
     assert_eq!(
         card_id,
-        Uuid::parse_str("00000000-002a-7cdd-b83d-c9e9f32d880c").unwrap()
+        Uuid::parse_str("00000000-002a-7517-811a-f8ff9897ce5b").unwrap()
     );
     assert_eq!(
         transfer_id,
-        Uuid::parse_str("00000000-002a-7646-b8aa-b84e348196f6").unwrap()
+        Uuid::parse_str("00000000-002a-7125-abba-aa83c50adf19").unwrap()
     );
     assert_eq!(
         installed_child_id,
-        Uuid::parse_str("00000000-002a-7607-aaa4-0b04c840169d").unwrap()
+        Uuid::parse_str("00000000-002a-70fd-8321-769fffab2675").unwrap()
     );
     assert_eq!(
         scope_card_id,
-        Uuid::parse_str("00000000-002a-7680-bbdb-7f78bd28fc43").unwrap()
+        Uuid::parse_str("00000000-002a-769f-bab5-c87f60c1800a").unwrap()
     );
     assert_eq!(card_id.as_bytes()[6] >> 4, 7);
     assert_eq!(card_id.as_bytes()[8] >> 6, 2);
@@ -2290,7 +2290,7 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(IdempotencyKey::fresh()),
+        current_idempotency_key: Some(Uuid::new_v4().into()),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
@@ -2299,7 +2299,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
         timestamp: Timestamp::now_utc(),
         not_before: None,
         oplog_index: OplogIndex::INITIAL,
-        idempotency_key: Some(IdempotencyKey::fresh()),
+        idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::Oplog;
@@ -317,13 +319,13 @@ impl ComponentService for IndexTestComponentService {
 fn invocation_pair(
     entries: &mut BTreeMap<OplogIndex, OplogEntry>,
     started_at: u64,
-    key: &IdempotencyKey,
+    key: &InvocationId,
 ) {
     entries.insert(
         OplogIndex::from_u64(started_at),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: *key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             })),
@@ -344,7 +346,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at + 1),
         OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
-            invocation_id: key.clone(),
+            invocation_id: *key,
             result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
             method_name: None,
             consumed_fuel: 0,
@@ -353,7 +355,7 @@ fn invocation_pair(
     );
 }
 
-fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntry> {
+fn invocation_entries(keys: &[InvocationId]) -> BTreeMap<OplogIndex, OplogEntry> {
     let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::recovery_succeeded())]);
     for (offset, key) in keys.iter().enumerate() {
         invocation_pair(&mut entries, 2 + offset as u64 * 2, key);
@@ -371,13 +373,13 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
 fn invocation_status(
     oplog_idx: u64,
     capacity: usize,
-    results: &[(&IdempotencyKey, u64)],
+    results: &[(&InvocationId, u64)],
     revert_generation: u64,
     deleted_regions: DeletedRegions,
 ) -> AgentStatusRecord {
     let mut invocation_results = InvocationResultMembership::new(capacity, 128, 3);
     for (key, index) in results {
-        invocation_results.insert((*key).clone(), result_at(*index));
+        invocation_results.insert(*(*key), result_at(*index));
     }
     invocation_results.set_revert_generation(revert_generation);
     AgentStatusRecord {
@@ -453,7 +455,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
     let agent_id = AgentId {
         component_id,
         agent_id: golem_common::model::agent::OwnerKind::external_tool_instance_name(
-            &IdempotencyKey::new("external-tool-storage-recovery".to_string()),
+            &golem_common::model::IdempotencyKey::new("external-tool-storage-recovery".to_string()),
         ),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
@@ -843,8 +845,8 @@ async fn invocation_index_metadata(
     value.unwrap().unwrap()
 }
 
-fn idempotency_key(value: &str) -> IdempotencyKey {
-    IdempotencyKey::new(value.to_string())
+fn idempotency_key(value: &str) -> InvocationId {
+    test_invocation_id(value.to_string())
 }
 
 fn invocation_index_fingerprint() -> AgentFingerprint {
@@ -1195,8 +1197,7 @@ fn cold_reconcile_deletes_stale_transfer_fields() {
 async fn invocation_result_index_resumes_across_calls_and_chunks() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(2, 2, &[], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1257,8 +1258,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
 async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(3, 2, &[(&first, 3)], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1367,13 +1367,8 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
     let fourth = idempotency_key("fourth");
     let fifth = idempotency_key("fifth");
     let missing = idempotency_key("missing");
-    let (service, _oplog, owned_agent_id) = index_test_service(invocation_entries(&[
-        first.clone(),
-        second.clone(),
-        third.clone(),
-        fourth.clone(),
-        fifth.clone(),
-    ]));
+    let (service, _oplog, owned_agent_id) =
+        index_test_service(invocation_entries(&[first, second, third, fourth, fifth]));
     let indexed = invocation_status(
         9,
         2,
@@ -1426,7 +1421,7 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
 async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result() {
     let repeated = idempotency_key("repeated");
     let (service, _oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[repeated.clone(), repeated.clone()]));
+        index_test_service(invocation_entries(&[repeated, repeated]));
     let partial = invocation_status(3, 0, &[(&repeated, 3)], 0, DeletedRegions::new());
     service
         .catch_up_invocation_result_index(
@@ -2087,10 +2082,10 @@ fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
                         agent_id: "remote".into(),
                     },
                     callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::new("caller-side".into()),
+                    idempotency_key: test_invocation_id("caller-side".into()),
                 },
             ),
-            consumer_invocation: IdempotencyKey::new("consumer".into()),
+            consumer_invocation: test_invocation_id("consumer".into()),
             source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
             epoch: 1,
             role: StreamCancelRole::OutputConsumer,
@@ -2988,4 +2983,8 @@ async fn recovery_scan_reports_an_unreadable_index() {
         result.is_err(),
         "expected the index read failure to surface"
     );
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

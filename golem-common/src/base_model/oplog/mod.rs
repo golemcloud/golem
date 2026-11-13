@@ -26,7 +26,7 @@ use crate::base_model::durable_stream::{
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
+use crate::base_model::{AgentId, InvocationId, OplogIndex, Timestamp, TransactionId};
 use crate::model::account::AccountId;
 #[cfg(feature = "full")]
 use crate::model::card::{CardHolder, InvocationWalletPin, StoredCard};
@@ -191,7 +191,7 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-started-parameters"
         wit_public_type: "agent-invocation-started-parameters"
         raw {
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -209,14 +209,14 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-finished-parameters"
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
             result: payload::OplogPayload<AgentInvocationResult>,
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
             result: PublicAgentInvocationResult,
             method_name: Option<String>,
             consumed_fuel: i64,
@@ -240,7 +240,7 @@ oplog_entry! {
             entity_parent_start_index: Option<OplogIndex>,
             kind: OplogErrorKind,
             /// The invocation whose work failed; `None` for a `Recovery` error, and for an `Invocation` error recorded while no invocation runs.
-            invocation_id: Option<IdempotencyKey>,
+            invocation_id: Option<InvocationId>,
             error: AgentError,
             /// Points to the oplog index where the retry should start from.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
@@ -251,7 +251,7 @@ oplog_entry! {
         }
         public {
             kind: OplogErrorKind,
-            invocation_id: Option<IdempotencyKey>,
+            invocation_id: Option<InvocationId>,
             error: String,
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
@@ -305,7 +305,7 @@ oplog_entry! {
         wit_public_type: "pending-agent-invocation-parameters"
         raw {
             not_before: Option<Timestamp>,
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -493,10 +493,10 @@ oplog_entry! {
         wit_raw_type: "cancel-pending-invocation-parameters"
         wit_public_type: "cancel-pending-invocation-parameters"
         raw {
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
         }
         public {
-            invocation_id: IdempotencyKey,
+            invocation_id: InvocationId,
         }
     },
     /// Marks the beginning of a remote transaction

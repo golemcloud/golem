@@ -22,6 +22,7 @@ use crate::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
     public_external_tool_result, public_tool_error, public_tool_rpc_error,
 };
+use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -85,8 +86,7 @@ struct ValidatedOutputFrame {
 #[derive(Debug)]
 pub struct InvocationSessionState {
     phase: SessionPhase,
-    request_idempotency_key: Option<String>,
-    idempotency_key: Option<String>,
+    idempotency_key: Option<Uuid>,
     accepted_agent_id: Option<AgentId>,
     accepted_revision: Option<u64>,
     accepted_epoch: Option<u64>,
@@ -110,7 +110,6 @@ impl Default for InvocationSessionState {
     fn default() -> Self {
         Self {
             phase: SessionPhase::Initial,
-            request_idempotency_key: None,
             idempotency_key: None,
             accepted_agent_id: None,
             accepted_revision: None,
@@ -143,7 +142,7 @@ enum RequestMessage<'a> {
         mode: crate::proto::golem::worker::AgentInvocationMode,
     },
     ResumeAttach {
-        idempotency_key: &'a Option<IdempotencyKey>,
+        idempotency_key: &'a Option<Uuid>,
         resume: &'a ResumeAttach,
     },
     InputItem(&'a InputStreamItem),
@@ -248,16 +247,9 @@ impl InvocationSessionState {
                     return Err("invocation rejection reason is unspecified".to_string());
                 }
                 if self.resume {
-                    self.validate_idempotency_key(&rejected.idempotency_key)?;
-                } else if rejected
-                    .idempotency_key
-                    .as_ref()
-                    .map(|_| required_idempotency_key(&rejected.idempotency_key))
-                    .transpose()?
-                    != self.request_idempotency_key.as_deref()
-                {
-                    return Err("invocation rejection key differs from its start".to_string());
+                    self.validate_invocation_id(&rejected.idempotency_key)?;
                 }
+                // A fresh start carries request provenance, not the final invocation ID.
                 self.phase = SessionPhase::Complete;
                 Ok(())
             }
@@ -550,7 +542,7 @@ impl InvocationSessionState {
         resume: bool,
         out_of_band_inputs: bool,
     ) -> Result<(), String> {
-        let key = idempotency_key
+        idempotency_key
             .as_ref()
             .map(|_| required_idempotency_key(idempotency_key))
             .transpose()?;
@@ -570,17 +562,16 @@ impl InvocationSessionState {
                 )
             })
             .collect();
-        self.request_idempotency_key = key.map(str::to_string);
         self.phase = SessionPhase::AwaitDecision { resume };
         Ok(())
     }
 
     fn start_resume(
         &mut self,
-        idempotency_key: &Option<IdempotencyKey>,
+        idempotency_key: &Option<Uuid>,
         resume: &ResumeAttach,
     ) -> Result<(), String> {
-        let key = required_idempotency_key(idempotency_key)?;
+        let key = required_invocation_id(idempotency_key)?;
         let agent_id = resume
             .agent_id
             .as_ref()
@@ -629,7 +620,7 @@ impl InvocationSessionState {
                 .transpose()?;
             cursors.insert(stream_id, offset);
         }
-        self.idempotency_key = Some(key.to_string());
+        self.idempotency_key = Some(*key);
         self.resume = true;
         self.resume_cursors = cursors;
         self.resume_agent_id = resume.agent_id.clone();
@@ -648,9 +639,9 @@ impl InvocationSessionState {
     }
 
     fn accept(&mut self, accepted: &InvocationAccepted) -> Result<(), String> {
-        let invocation_key = required_idempotency_key(&accepted.idempotency_key)?;
+        let invocation_key = required_invocation_id(&accepted.idempotency_key)?;
         if self.resume {
-            self.validate_idempotency_key(&accepted.idempotency_key)?;
+            self.validate_invocation_id(&accepted.idempotency_key)?;
         }
         let agent_id = accepted
             .agent_id
@@ -980,7 +971,7 @@ impl InvocationSessionState {
                 }
             }
         }
-        self.idempotency_key = Some(invocation_key.to_string());
+        self.idempotency_key = Some(*invocation_key);
         self.accepted_agent_id = Some(agent_id.clone());
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
@@ -1610,15 +1601,15 @@ impl InvocationSessionState {
         Ok(())
     }
 
-    fn validate_idempotency_key(&self, key: &Option<IdempotencyKey>) -> Result<(), String> {
-        let actual = required_idempotency_key(key)?;
+    fn validate_invocation_id(&self, key: &Option<Uuid>) -> Result<(), String> {
+        let actual = required_invocation_id(key)?;
         let expected = self
             .idempotency_key
-            .as_deref()
-            .ok_or_else(|| "invocation has no idempotency key".to_string())?;
+            .as_ref()
+            .ok_or_else(|| "invocation has no accepted invocation ID".to_string())?;
         if actual != expected {
             return Err(format!(
-                "invocation idempotency key mismatch: expected {expected}, got {actual}"
+                "invocation ID mismatch: expected {expected:?}, got {actual:?}"
             ));
         }
         Ok(())
@@ -1627,9 +1618,9 @@ impl InvocationSessionState {
     fn validate_identity(
         &self,
         agent_id: &Option<AgentId>,
-        idempotency_key: &Option<IdempotencyKey>,
+        idempotency_key: &Option<Uuid>,
     ) -> Result<(), String> {
-        self.validate_idempotency_key(idempotency_key)?;
+        self.validate_invocation_id(idempotency_key)?;
         let actual = agent_id
             .as_ref()
             .ok_or_else(|| "invocation result has no agent identity".to_string())?;
@@ -1876,6 +1867,11 @@ impl InvocationSessionState {
     }
 }
 
+fn required_invocation_id(key: &Option<Uuid>) -> Result<&Uuid, String> {
+    key.as_ref()
+        .ok_or_else(|| "invocation has no invocation ID".to_string())
+}
+
 fn required_idempotency_key(key: &Option<IdempotencyKey>) -> Result<&str, String> {
     let value = key
         .as_ref()
@@ -2020,7 +2016,7 @@ fn validate_accepted_handle(handle: &DurableStreamHandle) -> Result<(), String> 
         &source.callee_fingerprint,
         "durable stream source callee fingerprint",
     )?;
-    required_idempotency_key(&source.idempotency_key)?;
+    required_invocation_id(&source.idempotency_key)?;
     handle
         .component_revision
         .ok_or_else(|| "durable stream handle has no pinned component revision".to_string())?;
@@ -2250,6 +2246,10 @@ mod tests {
         })
     }
 
+    fn invocation_key() -> Option<Uuid> {
+        Some(uuid(6))
+    }
+
     fn scalar(value: u32) -> SchemaValue {
         SchemaValue {
             value: Some(schema_value::Value::U8Value(value)),
@@ -2328,7 +2328,7 @@ mod tests {
         response(invocation_response::Response::Accepted(
             InvocationAccepted {
                 agent_id: Some(agent_id()),
-                idempotency_key: key(),
+                idempotency_key: invocation_key(),
                 component_revision: Some(12),
                 attachment_id: Some(uuid(1)),
                 attempt_id: Some(uuid(2)),
@@ -2433,7 +2433,7 @@ mod tests {
     fn resume_attach(cursors: Vec<StreamCursor>) -> PublicInvocationRequest {
         public_request(public_invocation_request::Request::ResumeAttach(
             ResumeAttach {
-                idempotency_key: key(),
+                idempotency_key: invocation_key(),
                 agent_id: Some(agent_id()),
                 environment_id: Some(EnvironmentId {
                     value: Some(uuid(3)),
@@ -2495,7 +2495,7 @@ mod tests {
                     }),
                     callee: Some(agent_id()),
                     callee_fingerprint: Some(uuid(4)),
-                    idempotency_key: key(),
+                    idempotency_key: invocation_key(),
                 }),
                 component_revision: Some(12),
                 element_schema_fingerprint: vec![5; 32],
@@ -2517,7 +2517,7 @@ mod tests {
                 result: Some(invocation_session_result::Result::MethodResult(value)),
                 component_revision: Some(12),
                 agent_id: Some(agent_id()),
-                idempotency_key: key(),
+                idempotency_key: invocation_key(),
                 new_stream_mappings,
                 ..Default::default()
             },
@@ -3128,9 +3128,7 @@ mod tests {
         handle.producer.as_mut().unwrap().name = "original-producer".to_string();
         let source = handle.source_invocation.as_mut().unwrap();
         source.callee.as_mut().unwrap().name = "original-producer".to_string();
-        source.idempotency_key = Some(IdempotencyKey {
-            value: "original-invocation".to_string(),
-        });
+        source.idempotency_key = Some(uuid(7));
 
         let mut acceptance = accepted();
         match acceptance.response.as_mut().unwrap() {
@@ -3176,10 +3174,8 @@ mod tests {
             else {
                 unreachable!()
             };
-            let invocation_key = Some(IdempotencyKey {
-                value: "f055e100-ad10-56a8-8ac2-cb545f157aa0".to_string(),
-            });
-            accepted.idempotency_key = invocation_key.clone();
+            let invocation_key = Some(uuid(7));
+            accepted.idempotency_key = invocation_key;
             state.validate_response(&acceptance).unwrap();
 
             let mut invocation_result = result(scalar(1));
@@ -3211,27 +3207,121 @@ mod tests {
             .unwrap();
         accepted_state.validate_response(&success()).unwrap();
 
-        let mut rejected_state = InvocationSessionState::default();
-        rejected_state.validate_trusted_request(&start).unwrap();
-        let mut rejection = InvocationRejected {
-            reason: InvocationRejectionReason::Validation as i32,
-            idempotency_key: key(),
-            ..Default::default()
-        };
-        assert!(
+        for final_id in [None, invocation_key()] {
+            let mut rejected_state = InvocationSessionState::default();
+            rejected_state.validate_trusted_request(&start).unwrap();
             rejected_state
                 .validate_response(&response(invocation_response::Response::Rejected(
-                    rejection.clone()
+                    InvocationRejected {
+                        reason: InvocationRejectionReason::Validation as i32,
+                        idempotency_key: final_id,
+                        ..Default::default()
+                    },
                 )))
-                .is_err()
-        );
-        rejection.idempotency_key = None;
-        rejected_state
+                .unwrap();
+            assert!(rejected_state.is_complete());
+        }
+    }
+
+    #[test]
+    fn keyed_start_can_be_rejected_before_a_final_identity_exists() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(Vec::new())))
+            .unwrap();
+        state
             .validate_response(&response(invocation_response::Response::Rejected(
-                rejection,
+                InvocationRejected {
+                    reason: InvocationRejectionReason::Validation as i32,
+                    idempotency_key: None,
+                    ..Default::default()
+                },
             )))
             .unwrap();
-        assert!(rejected_state.is_complete());
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn request_keys_remain_raw_but_acceptance_requires_a_final_identity() {
+        let mut empty_key_start = trusted_start(record(Vec::new()));
+        let Some(invocation_request::Request::Start(start)) = empty_key_start.request.as_mut()
+        else {
+            unreachable!()
+        };
+        start.idempotency_key.as_mut().unwrap().value.clear();
+        assert!(
+            InvocationSessionState::default()
+                .validate_trusted_request(&empty_key_start)
+                .is_err()
+        );
+
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(Vec::new())))
+            .unwrap();
+        let mut missing_identity = accepted();
+        let Some(invocation_response::Response::Accepted(accepted)) =
+            missing_identity.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.idempotency_key = None;
+        assert!(state.validate_response(&missing_identity).is_err());
+        state.validate_response(&self::accepted()).unwrap();
+    }
+
+    #[test]
+    fn accepted_invocation_identity_requires_both_uuid_halves_and_the_agent() {
+        for mutation in 0..4 {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_start(record(Vec::new())))
+                .unwrap();
+            state.validate_response(&accepted()).unwrap();
+            let mut invalid = result(scalar(1));
+            let Some(invocation_response::Response::Result(result)) = invalid.response.as_mut()
+            else {
+                unreachable!()
+            };
+            match mutation {
+                0 => result.idempotency_key = None,
+                1 => result.idempotency_key.as_mut().unwrap().high_bits += 1,
+                2 => result.idempotency_key.as_mut().unwrap().low_bits += 1,
+                3 => result.agent_id.as_mut().unwrap().name = "other-agent".to_string(),
+                _ => unreachable!(),
+            }
+            assert!(state.validate_response(&invalid).is_err());
+            state.validate_response(&self::result(scalar(1))).unwrap();
+        }
+    }
+
+    #[test]
+    fn resume_rejection_requires_the_requested_final_invocation_identity() {
+        for final_id in [
+            None,
+            Some(uuid(7)),
+            Some(Uuid {
+                high_bits: 1,
+                low_bits: 6,
+            }),
+            invocation_key(),
+        ] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&resume_attach(Vec::new()))
+                .unwrap();
+            let rejection = response(invocation_response::Response::Rejected(
+                InvocationRejected {
+                    reason: InvocationRejectionReason::Validation as i32,
+                    idempotency_key: final_id,
+                    ..Default::default()
+                },
+            ));
+            assert_eq!(
+                state.validate_response(&rejection).is_ok(),
+                final_id == invocation_key()
+            );
+        }
     }
 
     #[test]
@@ -3389,11 +3479,7 @@ mod tests {
                 3 => accepted.attempt_id = Some(uuid(32)),
                 4 => accepted.callee_fingerprint = Some(uuid(33)),
                 5 => accepted.epoch = 3,
-                6 => {
-                    accepted.idempotency_key = Some(IdempotencyKey {
-                        value: "other-invocation".to_string(),
-                    })
-                }
+                6 => accepted.idempotency_key = Some(uuid(7)),
                 _ => unreachable!(),
             }
             let mut state = InvocationSessionState::default();
@@ -3499,7 +3585,7 @@ mod tests {
             .validate_response(&response(invocation_response::Response::Rejected(
                 InvocationRejected {
                     reason: InvocationRejectionReason::Validation as i32,
-                    idempotency_key: key(),
+                    idempotency_key: invocation_key(),
                     ..Default::default()
                 },
             )))
@@ -4111,7 +4197,7 @@ mod tests {
         round_trip(trusted_start(record(Vec::new())));
         round_trip(public_request(
             public_invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: key(),
+                idempotency_key: invocation_key(),
                 ..Default::default()
             }),
         ));
@@ -4155,7 +4241,7 @@ mod tests {
         round_trip(response(invocation_response::Response::Rejected(
             InvocationRejected {
                 reason: InvocationRejectionReason::Validation as i32,
-                idempotency_key: key(),
+                idempotency_key: invocation_key(),
                 ..Default::default()
             },
         )));
@@ -4271,7 +4357,7 @@ mod tests {
                     result: Some(invocation_session_result::Result::ToolResult(tool_result)),
                     component_revision: Some(12),
                     agent_id: Some(agent_id()),
-                    idempotency_key: key(),
+                    idempotency_key: invocation_key(),
                     ..Default::default()
                 },
             )))
@@ -4315,7 +4401,7 @@ mod tests {
                     )),
                     component_revision: Some(12),
                     agent_id: Some(agent_id()),
-                    idempotency_key: key(),
+                    idempotency_key: invocation_key(),
                     ..Default::default()
                 },
             ));
@@ -4362,7 +4448,7 @@ mod tests {
                         },
                     )),
                     agent_id: Some(agent_id()),
-                    idempotency_key: key(),
+                    idempotency_key: invocation_key(),
                     ..Default::default()
                 },
             )))

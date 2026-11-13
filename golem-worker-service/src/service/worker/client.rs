@@ -666,7 +666,7 @@ pub trait WorkerClient: Send + Sync {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         scheduled: Option<ScheduledInvocationCancellation>,
@@ -806,7 +806,7 @@ pub trait WorkerClient: Send + Sync {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: std::collections::HashMap<String, String>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -2039,19 +2039,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         scheduled: Option<ScheduledInvocationCancellation>,
     ) -> WorkerResult<bool> {
         let agent_id = agent_id.clone();
-        let idempotency_key = idempotency_key.clone();
+        let idempotency_key = *idempotency_key;
         let canceled = self.call_worker_executor(
             agent_id.clone(),
             "cancel_invocation",
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
-                let idempotency_key = idempotency_key.clone();
                 Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
                     agent_id: Some(agent_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
@@ -2705,7 +2704,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: std::collections::HashMap<String, String>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -2725,7 +2724,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             agent_id: Some(target_agent_id.into()),
                             environment_id: Some(environment_id.into()),
                             component_revision: component_revision.into(),
-                            idempotency_key: Some(idempotency_key.clone().into()),
+                            idempotency_key: Some(idempotency_key.into()),
                             account_id: Some(account_id.into()),
                             config: config.clone(),
                             metadata: Some(metadata.clone()),
@@ -2967,7 +2966,7 @@ mod freshness_tests {
 mod one_shot_session_tests {
     use super::{
         OneShotInvocationSessionResult, collect_one_shot_invocation_session,
-        decode_invocation_failure, protocol_executor_error,
+        decode_invocation_failure, decode_invocation_result, protocol_executor_error,
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
@@ -2985,10 +2984,20 @@ mod one_shot_session_tests {
     use test_r::test;
     use tonic::Status;
 
-    fn key() -> Option<IdempotencyKey> {
-        Some(IdempotencyKey {
-            value: "session-key".to_string(),
+    fn key() -> Option<golem_schema::proto::golem::common::Uuid> {
+        Some(uuid::Uuid::nil().into())
+    }
+
+    #[test]
+    fn session_output_preserves_final_invocation_id() {
+        let id = golem_common::model::InvocationId(uuid::Uuid::from_u128((1 << 64) + 2));
+        let result = decode_invocation_result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::NoResult(Empty {})),
+            idempotency_key: Some(id.into()),
+            ..Default::default()
         })
+        .unwrap();
+        assert_eq!(result.idempotency_key, Some(id));
     }
 
     fn agent_id() -> Option<AgentId> {
@@ -3010,7 +3019,9 @@ mod one_shot_session_tests {
                     input: Some(SchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: key(),
+                    idempotency_key: Some(IdempotencyKey {
+                        value: "raw-request-key".to_string(),
+                    }),
                     ..Default::default()
                 })),
             })
@@ -3191,7 +3202,10 @@ mod one_shot_session_tests {
             panic!("expected a successful invocation session");
         };
         assert_eq!(output.agent_id.unwrap().agent_id, "agent");
-        assert_eq!(output.idempotency_key.unwrap().value, "session-key");
+        assert_eq!(
+            output.idempotency_key.unwrap(),
+            golem_common::model::InvocationId(uuid::Uuid::nil())
+        );
         assert_eq!(output.component_revision.unwrap().get(), 3);
         assert_eq!(output.consumed_fuel, Some(17));
         assert_eq!(
@@ -3761,13 +3775,10 @@ mod rejection_mapping_tests {
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
             let mut requests = request.into_inner();
             let start = requests.message().await?.expect("missing invocation start");
-            let (idempotency_key, agent_id, freshness_disposition, request_key) = match start
-                .request
-            {
+            let (agent_id, freshness_disposition, request_key) = match start.request {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
                     start,
                 )) => (
-                    start.idempotency_key,
                     start.agent_id,
                     start.freshness_disposition,
                     start.request_key,
@@ -3789,7 +3800,7 @@ mod rejection_mapping_tests {
             let response = if !routing_miss && self.accept {
                 invocation_response::Response::Accepted(InvocationAccepted {
                     agent_id,
-                    idempotency_key,
+                    idempotency_key: Some(uuid::Uuid::from_u128(37).into()),
                     ..Default::default()
                 })
             } else {
@@ -3813,7 +3824,7 @@ mod rejection_mapping_tests {
                 invocation_response::Response::Rejected(InvocationRejected {
                     reason: reason as i32,
                     error,
-                    idempotency_key,
+                    idempotency_key: None,
                     agent_id,
                     component_revision: None,
                     worker_error,

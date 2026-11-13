@@ -34,6 +34,7 @@ use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::AgentInvocation;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -47,7 +48,6 @@ use golem_common::model::oplog::HostResponseGolemRpcUnit;
 use golem_common::model::oplog::host_functions::GolemRpcCancellationTokenCancel;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcScheduleInvocation;
 use golem_common::model::oplog::types::SerializableScheduleId;
-use golem_common::model::{IdempotencyKey, InvocationRequestKey};
 use golem_common::serialization::deserialize;
 use golem_common::serialization::serialize;
 use golem_schema::schema::wit::PermissionCardHandleRep;
@@ -90,8 +90,9 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&this)?;
         validate_cancellation_token_owner(entry, &current_agent)?;
         let recipient = entry.recipient.clone();
-        let invocation_key =
-            golem_common::model::IdempotencyKey::from_uuid(entry.metadata.invocation_id.id.into());
+        let invocation_key = golem_common::model::InvocationId::from(uuid::Uuid::from(
+            entry.metadata.invocation_id.id,
+        ));
         let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
             .map_err(|err| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
@@ -396,7 +397,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let invocation_id =
             request_key.finalize(remote_agent_id.agent_id(), target_fingerprint, &method_name);
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: IdempotencyKey::from_uuid(invocation_id.uuid()),
+            idempotency_key: invocation_id.id(),
             method_name,
             input: input_value,
             invocation_context: stack,

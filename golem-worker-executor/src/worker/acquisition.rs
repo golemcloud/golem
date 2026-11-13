@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -1044,7 +1049,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocation_entry(
                     &worker.oplog,
                     AgentInvocation::AgentInitialization {
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
                         principal,
@@ -1605,8 +1610,8 @@ pub fn merge_agent_env_with_default_env(
 /// runs.
 pub fn never_started_ephemeral_admission(
     status: &AgentStatusRecord,
-    initialization_key: Option<&IdempotencyKey>,
-) -> Option<Option<IdempotencyKey>> {
+    initialization_key: Option<&InvocationId>,
+) -> Option<Option<InvocationId>> {
     let is_initialization = |pending: &golem_common::model::agent::PendingInvocationRef| {
         initialization_key.is_some_and(|key| pending.has_idempotency_key(key))
     };

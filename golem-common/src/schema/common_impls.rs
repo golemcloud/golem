@@ -78,6 +78,11 @@ impl_schema_for_uuid_newtype!(
     "agent-fingerprint"
 );
 impl_schema_for_uuid_newtype!(
+    crate::base_model::InvocationId,
+    "golem_common.base_model.InvocationId",
+    "invocation-id"
+);
+impl_schema_for_uuid_newtype!(
     crate::base_model::component::ComponentId,
     "golem_common.base_model.component.ComponentId",
     "component-id"

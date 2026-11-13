@@ -9,7 +9,6 @@ import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
-import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
@@ -248,7 +247,7 @@ message AgentInvocationFinishedParameters {
   int64 consumed_fuel = 3;
   uint64 component_revision = 4;
   optional string method_name = 5;
-  golem.worker.IdempotencyKey invocation_id = 6;
+  golem.common.UUID invocation_id = 6;
 }
 
 message PublicAgentInvocation {
@@ -264,7 +263,7 @@ message PublicAgentInvocation {
 }
 
 message PublicExternalToolInvocation {
-  golem.worker.IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
   string tool_name = 2;
   repeated string command_path = 3;
   golem.schema.TypedSchemaValue input = 4;
@@ -274,7 +273,7 @@ message PublicExternalToolInvocation {
 }
 
 message PublicAgentInitializationInvocation {
-  golem.worker.IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
   golem.schema.TypedSchemaValue constructor_parameters = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -282,7 +281,7 @@ message PublicAgentInitializationInvocation {
 }
 
 message PublicAgentMethodInvocation {
-  golem.worker.IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
   string method_name = 2;
   golem.schema.TypedSchemaValue function_input = 3;
   string trace_id = 4;
@@ -295,7 +294,7 @@ message LoadSnapshotInvocationParameters {
 }
 
 message ProcessOplogEntriesInvocationParameters {
-  golem.worker.IdempotencyKey invocation_id = 1;
+  golem.common.UUID invocation_id = 1;
 }
 
 message ManualUpdateInvocationParameters {
@@ -423,7 +422,7 @@ message ErrorParameters {
   uint64 retry_from = 3;
   optional RetryPolicyState retry_policy_state = 5;
   OplogErrorKind kind = 6;
-  optional golem.worker.IdempotencyKey invocation_id = 7;
+  optional golem.common.UUID invocation_id = 7;
 }
 
 message JumpParameters {
@@ -693,7 +692,7 @@ message RevertParameters {
 
 message CancelInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
-  IdempotencyKey invocation_id = 2;
+  golem.common.UUID invocation_id = 2;
 }
 
 enum OplogLogLevel {

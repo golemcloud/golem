@@ -26,7 +26,7 @@ use golem_common::base_model::durable_stream::{
     StreamConsumerTerminal, StreamConsumerTerminalRecord, StreamOffset,
     StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSourceUnavailableRecord,
 };
-use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
 use test_r::test;
 use uuid::Uuid;
@@ -217,9 +217,7 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
             None,
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    key.session_key.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
                 mapping: StreamBindingRecord {
                     transport_stream_id: 0,
                     source: StreamRecordReference::Foreign(handle),
@@ -239,9 +237,7 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
             format_version:
                 golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
             observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
-            session_key: StreamRegistrationInvocation::Local(
-                key.session_key.idempotency_key.clone(),
-            ),
+            session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
             reader_id,
             source_offset: StreamOffset::new(OplogIndex::from_u64(50), ordinal as u32),
             consumer_read_ordinal: ordinal,
@@ -525,7 +521,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         .await
         .unwrap();
     let mut later_session = identity.invocation.clone();
-    later_session.idempotency_key = IdempotencyKey::new("later".into());
+    later_session.idempotency_key = uuid::Uuid::from_u128(201).into();
     producer
         .append_session_record(
             None,
@@ -661,7 +657,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
                     Box::new(StreamSessionRecord::ResumeAttempt(
                         StreamSessionResumeAttemptRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: session.idempotency_key.clone(),
+                            session_key: session.idempotency_key,
                             attempt: ResumeAttemptDescriptor {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                                 operation: StreamResumeOperation::Resume,
@@ -814,7 +810,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
                 None,
                 Box::new(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: session.idempotency_key.clone(),
+                    session_key: session.idempotency_key,
                     attachment_id: AttachmentId::primary(
                         target.environment_id,
                         &target.agent_id,
@@ -864,7 +860,7 @@ async fn revert_epoch_fences_a_deleted_session_prepared_again_under_the_same_key
     let attached = |epoch| {
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: identity.invocation.idempotency_key.clone(),
+            session_key: identity.invocation.idempotency_key,
             attachment_id: AttachmentId::primary(
                 owner.environment_id,
                 &owner.agent_id,
@@ -984,7 +980,7 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
         .collect();
     let pending = OplogEntry::pending_agent_invocation(
         None,
-        identity.invocation.idempotency_key.clone(),
+        identity.invocation.idempotency_key,
         OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         TraceId::generate(),
         vec![],
@@ -1229,9 +1225,7 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
                 root_kind: StreamRootKind::MethodResult,
                 recursive_value_path: Vec::new(),
             },
-            source_invocation: StreamRegistrationInvocation::Local(
-                source_session.idempotency_key.clone(),
-            ),
+            source_invocation: StreamRegistrationInvocation::Local(source_session.idempotency_key),
             entity_parent_start_index: None,
             component_revision: golem_common::base_model::component::ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
@@ -1280,9 +1274,7 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
                 parent_producer_sequence: 3,
                 recursive_value_path: Vec::new(),
             },
-            source_invocation: StreamRegistrationInvocation::Local(
-                source_session.idempotency_key.clone(),
-            ),
+            source_invocation: StreamRegistrationInvocation::Local(source_session.idempotency_key),
             entity_parent_start_index: None,
             component_revision: root.component_revision,
             element_schema_fingerprint: root.element_schema_fingerprint,
@@ -1345,9 +1337,7 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
         .apply_finished(
             &StreamSessionFinishedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    source_session.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(source_session.idempotency_key),
                 result: Ok(()),
             },
             identity.environment_id,
@@ -1429,7 +1419,7 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     let source_session = identity.invocation.clone();
     let target_session = continuation_session(&source_session, "fork-output-only");
     let mut output_only_source = source_session.clone();
-    output_only_source.idempotency_key = IdempotencyKey::new("output-only".to_string());
+    output_only_source.idempotency_key = uuid::Uuid::from_u128(202).into();
     let mut output_only_target = output_only_source.clone();
     output_only_target.callee = target_session.callee.clone();
     output_only_target.callee_fingerprint = target_session.callee_fingerprint;
@@ -1535,7 +1525,7 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
     for (binding_slot, session) in [&local, &remote].into_iter().enumerate() {
         let attribution = (session == &local).then_some(OplogIndex::from_u64(1));
         let session_reference = if session == &local {
-            StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+            StreamRegistrationInvocation::Local(session.idempotency_key)
         } else {
             StreamRegistrationInvocation::Remote(session.clone())
         };
@@ -1593,7 +1583,7 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
                     golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
                 observation:
                     golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
-                session_key: StreamRegistrationInvocation::Local(local.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(local.idempotency_key),
                 reader_id: LocalStreamReaderId {
                     introducing_oplog_index: OplogIndex::from_u64(1),
                     binding_slot: 0,
@@ -1787,7 +1777,7 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
                 &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: if session == &local {
-                        StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+                        StreamRegistrationInvocation::Local(session.idempotency_key)
                     } else {
                         StreamRegistrationInvocation::Remote(session.clone())
                     },
@@ -1807,7 +1797,7 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
                 &StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: if session == &local {
-                        StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+                        StreamRegistrationInvocation::Local(session.idempotency_key)
                     } else {
                         StreamRegistrationInvocation::Remote(session.clone())
                     },
@@ -2009,7 +1999,7 @@ fn super_registration(session: &StreamSessionKey, path: u32) -> ProducerRegistra
                 golem_common::base_model::durable_stream::StreamValuePathStep::TupleElement(path),
             ],
         },
-        source_invocation: StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+        source_invocation: StreamRegistrationInvocation::Local(session.idempotency_key),
         entity_parent_start_index: None,
         component_revision: golem_common::base_model::component::ComponentRevision::INITIAL,
         element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),

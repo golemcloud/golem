@@ -245,7 +245,7 @@ impl DurableStreamsHandler {
                             0,
                             0,
                             StreamSlotReadAdmission::Continuation,
-                            created.invocation_key.clone(),
+                            created.invocation_key,
                         )
                         .await?
                     else {
@@ -294,7 +294,7 @@ impl DurableStreamsHandler {
                     0,
                     0,
                     StreamSlotReadAdmission::Continuation,
-                    created.invocation_key.clone(),
+                    created.invocation_key,
                 )
                 .await?
             {
@@ -402,7 +402,7 @@ impl DurableStreamsHandler {
                     0,
                     0,
                     StreamSlotReadAdmission::Continuation,
-                    read.invocation_key.clone(),
+                    read.invocation_key,
                 )
                 .await?
             else {

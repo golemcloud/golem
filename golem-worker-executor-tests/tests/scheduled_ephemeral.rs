@@ -155,7 +155,7 @@ impl SchedulerStorage for DuplicateWakes {
 }
 
 /// The target and invocation key of one schedule call.
-pub(crate) type Schedule = (AgentId, Option<IdempotencyKey>);
+pub(crate) type Schedule = (AgentId, Option<golem_common::model::InvocationId>);
 
 /// Records the freshness of every `inc` target creation and the target and key of every schedule.
 /// The first schedule never returns: the call stays pending until the executor is dropped. With
@@ -174,7 +174,7 @@ impl Rpc for HoldFirstSchedule {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -416,13 +416,11 @@ async fn ephemeral_target(
     Ok(targets.into_iter().next().unwrap())
 }
 
-fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<IdempotencyKey> {
+fn scheduled_key(oplog: &[PublicOplogEntryWithIndex]) -> Option<golem_common::model::InvocationId> {
     oplog.iter().find_map(|entry| match &entry.entry {
         PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
             match &pending.invocation {
-                PublicAgentInvocation::AgentMethodInvocation(method) => {
-                    Some(method.invocation_id.clone())
-                }
+                PublicAgentInvocation::AgentMethodInvocation(method) => Some(method.invocation_id),
                 _ => None,
             }
         }

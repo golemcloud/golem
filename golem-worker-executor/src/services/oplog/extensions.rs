@@ -339,7 +339,7 @@ pub trait OplogOps: Oplog {
 
     async fn add_agent_invocation_started_from_pending(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
         ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
@@ -355,7 +355,7 @@ pub trait OplogOps: Oplog {
 
     fn agent_invocation_started_entry_from_payload(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
         ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
@@ -374,7 +374,7 @@ pub trait OplogOps: Oplog {
 
     async fn add_agent_invocation_finished(
         &self,
-        invocation_id: IdempotencyKey,
+        invocation_id: golem_common::model::InvocationId,
         result: &AgentInvocationResult,
         method_name: Option<String>,
         consumed_fuel: u64,

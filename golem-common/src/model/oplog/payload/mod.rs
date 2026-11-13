@@ -57,7 +57,7 @@ use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, InvocationId,
-    InvocationRequestKey, OplogIndex, PromiseId, ScanCursor,
+    InvocationRequestKey, OplogIndex, OwnedInvocationId, PromiseId, ScanCursor,
 };
 use crate::oplog_payload;
 use crate::schema::schema_value::SecretValuePayload;
@@ -414,7 +414,7 @@ oplog_payload! {
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
-            stream_session_idempotency_key: IdempotencyKey,
+            stream_session_idempotency_key: InvocationId,
         },
         GolemToolInvocationRejected {
             attempt_ordinal: u64,
@@ -565,7 +565,7 @@ oplog_payload! {
         },
         GolemRpcScheduledInvocation {
             schedule_id: SerializableScheduleId,
-            invocation_id: InvocationId,
+            invocation_id: OwnedInvocationId,
         },
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
@@ -828,7 +828,7 @@ oplog_payload! {
     golem_schema_derive::FromSchema,
 )]
 pub struct HostResponseGolemRpcScheduledInvocationCompat {
-    pub result: Result<(SerializableScheduleId, InvocationId), SerializableRpcError>,
+    pub result: Result<(SerializableScheduleId, OwnedInvocationId), SerializableRpcError>,
 }
 
 impl From<HostResponseGolemRpcScheduledInvocationCompat> for HostResponse {

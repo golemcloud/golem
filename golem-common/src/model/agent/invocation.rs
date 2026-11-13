@@ -25,8 +25,9 @@ use crate::model::oplog::payload::types::{
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{OplogEntry, OplogIndex, RawSnapshotData};
 use crate::model::tool::{ToolActivationSnapshot, ToolName};
-use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, Timestamp};
+use crate::model::{AgentFingerprint, AgentId, InvocationId, Timestamp};
 use crate::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentInvocationKind {
@@ -46,13 +47,13 @@ pub enum AgentInvocation {
         target_revision: ComponentRevision,
     },
     AgentInitialization {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
     },
     AgentMethod {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         method_name: String,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
@@ -60,7 +61,7 @@ pub enum AgentInvocation {
         scope_card: Option<ScopeCard>,
     },
     ExternalTool {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         tool_name: ToolName,
         command_path: Vec<String>,
         input: Box<TypedSchemaValue>,
@@ -73,15 +74,15 @@ pub enum AgentInvocation {
         scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         snapshot: RawSnapshotData, // TODO
     },
     SaveSnapshot {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         // TODO
     },
     ProcessOplogEntries {
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: AgentMetadataForGuests,
@@ -208,7 +209,7 @@ pub struct AgentInvocationOutput {
     /// Final idempotency key for this invocation. `None` when produced by a
     /// legacy executor or within the worker runtime before transport metadata
     /// is attached.
-    pub idempotency_key: Option<IdempotencyKey>,
+    pub idempotency_key: Option<InvocationId>,
     /// Oplog index of the agent right after this invocation completed. `None`
     /// for synthetic outputs (e.g. lookup-only status responses) or for legacy
     /// executors that did not report it.
@@ -390,7 +391,7 @@ impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
 
 impl AgentInvocation {
     pub fn from_parts(
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         payload: AgentInvocationPayload,
         invocation_context: InvocationContextStack,
     ) -> Self {
@@ -464,16 +465,10 @@ impl AgentInvocation {
         }
     }
 
-    pub fn into_parts(
-        self,
-    ) -> (
-        IdempotencyKey,
-        AgentInvocationPayload,
-        InvocationContextStack,
-    ) {
+    pub fn into_parts(self) -> (InvocationId, AgentInvocationPayload, InvocationContextStack) {
         match self {
             Self::ManualUpdate { target_revision } => (
-                IdempotencyKey::fresh(),
+                InvocationId(Uuid::new_v4()),
                 AgentInvocationPayload::ManualUpdate { target_revision },
                 InvocationContextStack::fresh(),
             ),
@@ -566,11 +561,11 @@ impl AgentInvocation {
         }
     }
 
-    pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+    pub fn has_idempotency_key(&self, key: &InvocationId) -> bool {
         self.idempotency_key() == Some(key)
     }
 
-    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+    pub fn idempotency_key(&self) -> Option<&InvocationId> {
         match self {
             Self::AgentMethod {
                 idempotency_key, ..
@@ -677,7 +672,7 @@ pub struct PendingInvocationRef {
     /// Index of the `PendingAgentInvocation` oplog entry holding the full payload.
     pub oplog_index: OplogIndex,
     /// Semantic idempotency key of the invocation. `None` for manual updates.
-    pub idempotency_key: Option<IdempotencyKey>,
+    pub idempotency_key: Option<InvocationId>,
     /// Target revision of the manual update. `Some` only for manual update invocations.
     pub manual_update_target_revision: Option<ComponentRevision>,
 }
@@ -687,11 +682,11 @@ impl PendingInvocationRef {
         self.not_before.is_none_or(|deadline| deadline <= now)
     }
 
-    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+    pub fn idempotency_key(&self) -> Option<&InvocationId> {
         self.idempotency_key.as_ref()
     }
 
-    pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+    pub fn has_idempotency_key(&self, key: &InvocationId) -> bool {
         self.idempotency_key.as_ref() == Some(key)
     }
 

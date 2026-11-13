@@ -87,7 +87,7 @@ mod completed_history {
             .await?;
         let original_raw = executor.stored_oplog(&id).await;
         let started = |entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
-                       key: &IdempotencyKey| {
+                       key: &golem_common::model::InvocationId| {
             entries
                 .iter()
                 .filter_map(|(index, entry)| match entry {
@@ -611,7 +611,7 @@ mod post_export {
 
     async fn pending_tail(
         worker: &Worker<Context>,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<(OplogIndex, OplogIndex)> {
         tokio::time::timeout(Duration::from_secs(10), async {
         loop {

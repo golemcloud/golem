@@ -94,15 +94,13 @@ use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome,
-    ShardEpoch, ShardId, ShardLeaseRevision, Timestamp,
+    AgentStatus, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
+    ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::clients::shard_manager::ExecutorEndpoint;
 use golem_service_base::error::worker_executor::*;
-use golem_service_base::grpc::{
-    proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
-};
+use golem_service_base::grpc::{proto_agent_id_string, proto_promise_id_string};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;

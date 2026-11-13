@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::worker::{
     StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item, invocation_request,
     invocation_response,
 };
-use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey};
+use golem_common::model::{AgentId, InvocationId, InvocationRequestKey};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,7 +48,7 @@ pub(super) async fn run_session(
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
     completed: Arc<AtomicBool>,
-    cleanup_identity: Arc<OnceLock<(AgentId, IdempotencyKey)>>,
+    cleanup_identity: Arc<OnceLock<(AgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
     let mut input = InputProgress::default();
@@ -262,7 +262,7 @@ pub(super) async fn run_session(
             match accepted_identity(current.clone()) {
                 Ok(identity) => {
                     let agent = current.agent_id.clone().unwrap().try_into().unwrap();
-                    let key = current.idempotency_key.clone().unwrap().into();
+                    let key = current.idempotency_key.unwrap().into();
                     let _ = cleanup_identity.set((agent, key));
                     accepted = Some(identity);
                 }
@@ -695,7 +695,7 @@ fn make_resume(
         .collect::<Vec<_>>();
     cursors.sort_by_key(|cursor| uuid_pair(cursor.stream_id.as_ref().unwrap()));
     ResumeAttach {
-        idempotency_key: identity.accepted.idempotency_key.clone(),
+        idempotency_key: identity.accepted.idempotency_key,
         agent_id: identity.accepted.agent_id.clone(),
         environment_id: identity.accepted.environment_id,
         attachment_id: identity.accepted.attachment_id,

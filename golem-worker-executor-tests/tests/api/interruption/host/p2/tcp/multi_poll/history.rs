@@ -10,7 +10,7 @@ const POLL: &str = "io::poll::poll";
 
 fn invocation_entries<'a>(
     entries: &'a [PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<&'a [PublicOplogEntryWithIndex]> {
     let starts: Vec<_> = entries
         .iter()
@@ -40,7 +40,7 @@ fn invocation_entries<'a>(
 
 pub(super) fn assert_invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     finished: usize,
 ) -> anyhow::Result<()> {
     let method = invocation_entries(entries, key)?;
@@ -95,7 +95,7 @@ pub(super) fn poll_result(
 
 pub(super) fn input_poll(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     count: usize,
     result: Option<&[u32]>,
 ) -> anyhow::Result<OplogIndex> {

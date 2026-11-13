@@ -535,7 +535,7 @@ pub(super) async fn hydrate_initial_pending_evidence(
         if !status.validate_initial_attachment_reference(*attached_idx, attached) {
             baseline
                 .durable_stream_sessions
-                .insert(attached.session_key.clone(), status);
+                .insert(attached.session_key, status);
             continue;
         }
         let persisted_referent;
@@ -558,7 +558,7 @@ pub(super) async fn hydrate_initial_pending_evidence(
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.clone(), status);
+                    .insert(attached.session_key, status);
             }
             _ => {
                 status.lifecycle_error = Some(
@@ -567,7 +567,7 @@ pub(super) async fn hydrate_initial_pending_evidence(
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.clone(), status);
+                    .insert(attached.session_key, status);
             }
         }
     }

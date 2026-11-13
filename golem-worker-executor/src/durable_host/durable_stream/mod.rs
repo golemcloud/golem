@@ -161,7 +161,7 @@ impl RegisteredStream {
                 callee_environment_id: environment_id,
                 callee: producer.clone(),
                 callee_fingerprint: producer_fingerprint,
-                idempotency_key: idempotency_key.clone(),
+                idempotency_key: *idempotency_key,
             },
             StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
         };
@@ -209,7 +209,7 @@ impl RegisteredStream {
                         callee_environment_id: environment_id,
                         callee: producer.clone(),
                         callee_fingerprint: producer_fingerprint,
-                        idempotency_key: key.clone(),
+                        idempotency_key: *key,
                     },
                     StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
                 };

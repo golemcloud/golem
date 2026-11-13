@@ -314,7 +314,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     kind: OplogErrorKind;
     /** The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs. */
-    invocationId?: string;
+    invocationId?: Uuid;
     error: string;
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
@@ -449,14 +449,14 @@ declare module 'golem:api/oplog@1.5.0' {
     record: TypedSchemaValue;
   };
   export type AgentInitializationParameters = {
-    invocationId: string;
+    invocationId: Uuid;
     constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
   };
   export type AgentMethodInvocationParameters = {
-    invocationId: string;
+    invocationId: Uuid;
     methodName: string;
     functionInput: TypedSchemaValue;
     traceId: string;
@@ -464,13 +464,13 @@ declare module 'golem:api/oplog@1.5.0' {
     invocationContext: SpanData[][];
   };
   export type ProcessOplogEntriesParameters = {
-    invocationId: string;
+    invocationId: Uuid;
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
   };
   export type ExternalToolInvocationParameters = {
-    invocationId: string;
+    invocationId: Uuid;
     toolName: string;
     commandPath: string[];
     input: TypedSchemaValue;
@@ -585,7 +585,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;
-    invocationId: string;
+    invocationId: Uuid;
   };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -668,7 +668,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type AgentInvocationFinishedParameters = {
     timestamp: Datetime;
-    invocationId: string;
+    invocationId: Uuid;
     result: AgentInvocationResult;
     methodName?: string;
     consumedFuel: bigint;
@@ -938,7 +938,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
-    invocationId: string;
+    invocationId: Uuid;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];
@@ -947,7 +947,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
-    invocationId: string;
+    invocationId: Uuid;
     result: OplogPayload;
     methodName?: string;
     consumedFuel: bigint;
@@ -957,7 +957,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     kind: OplogErrorKind;
     /** The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs. */
-    invocationId?: string;
+    invocationId?: Uuid;
     error: WorkerError;
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
@@ -966,7 +966,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
     notBefore?: Datetime;
-    invocationId: string;
+    invocationId: Uuid;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];

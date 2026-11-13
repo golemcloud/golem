@@ -709,10 +709,17 @@ impl TestWorkerExecutor {
         let worker =
             Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
                 .await?;
+        let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
+            .finalize(
+                agent_id.clone(),
+                expected_fingerprint,
+                &format!("tool:{tool_name}/{}", command_path.join("/")),
+            )
+            .id();
         worker
             .invoke_external_tool(
                 expected_fingerprint,
-                idempotency_key,
+                invocation_id,
                 tool_name,
                 command_path,
                 input,
@@ -951,13 +958,13 @@ impl TestWorkerExecutor {
     }
 
     /// The invocation ID this executor's DSL caller gets for `key` on `operation` of the current
-    /// incarnation of `agent_id`, as the idempotency key stored in the agent's oplog.
+    /// incarnation of `agent_id`, as the UUID stored in the agent's oplog.
     pub async fn external_invocation_key(
         &self,
         agent_id: &AgentId,
         key: &IdempotencyKey,
         operation: &str,
-    ) -> anyhow::Result<IdempotencyKey> {
+    ) -> anyhow::Result<golem_common::model::InvocationId> {
         let request_key = golem_common::model::InvocationRequestKey::external(
             self.auth_ctx().idempotency_scope(),
             Some(key),
@@ -967,22 +974,19 @@ impl TestWorkerExecutor {
     }
 
     /// The invocation ID that `request_key` finalizes to on `operation` of the current
-    /// incarnation of `agent_id`, as the idempotency key stored in the agent's oplog.
+    /// incarnation of `agent_id`, as the UUID stored in the agent's oplog.
     pub async fn finalized_invocation_key(
         &self,
         agent_id: &AgentId,
         request_key: &golem_common::model::InvocationRequestKey,
         operation: &str,
-    ) -> anyhow::Result<IdempotencyKey> {
+    ) -> anyhow::Result<golem_common::model::InvocationId> {
         let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(self, agent_id)
             .await?
             .fingerprint;
-        Ok(IdempotencyKey::new(
-            request_key
-                .finalize(agent_id.clone(), fingerprint, operation)
-                .uuid()
-                .to_string(),
-        ))
+        Ok(request_key
+            .finalize(agent_id.clone(), fingerprint, operation)
+            .id())
     }
 
     /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
@@ -3600,11 +3604,11 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationManagement for TestWorkerCtx {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
@@ -7453,8 +7457,18 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            matches!(entry, OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. }
-                if idempotency_key.value.starts_with("init-"))
+            let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+                return false;
+            };
+            let payload = match payload {
+                OplogPayload::Inline(payload) => Some(payload.as_ref()),
+                OplogPayload::SerializedInline { cached, .. }
+                | OplogPayload::External { cached, .. } => cached.as_deref(),
+            };
+            matches!(
+                payload,
+                Some(golem_common::model::AgentInvocationPayload::AgentInitialization { .. })
+            )
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)
             .await
@@ -9430,7 +9444,7 @@ impl Rpc for RecordingRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -9573,7 +9587,7 @@ impl Rpc for FailingRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,

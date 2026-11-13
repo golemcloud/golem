@@ -49,7 +49,7 @@ use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    AgentFingerprint, AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OwnedAgentId,
 };
 use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
@@ -78,7 +78,7 @@ fn prepare_request_key(
 fn service_failure_stream(
     reason: InvocationRejectionReason,
     error: String,
-    idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    idempotency_key: Option<golem_schema::proto::golem::common::Uuid>,
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) -> InvocationResponseStream {
     Box::pin(stream::once(async move {
@@ -100,15 +100,13 @@ fn service_failure_stream(
 fn request_identity(
     request: &InvocationRequest,
 ) -> (
-    Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    Option<golem_schema::proto::golem::common::Uuid>,
     Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => {
-            (start.idempotency_key.clone(), start.agent_id.clone())
-        }
+        Some(invocation_request::Request::Start(start)) => (None, start.agent_id.clone()),
         Some(invocation_request::Request::ResumeAttach(resume)) => {
-            (resume.idempotency_key.clone(), resume.agent_id.clone())
+            (resume.idempotency_key, resume.agent_id.clone())
         }
         _ => (None, None),
     }
@@ -587,7 +585,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
                         return Ok(Response::new(service_failure_stream(
                             InvocationRejectionReason::Validation,
                             error,
-                            start.idempotency_key,
+                            None,
                             start.agent_id,
                         )));
                     }
@@ -1150,7 +1148,7 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("invalid component_revision: {e}")))?;
 
-        let idempotency_key: IdempotencyKey = request
+        let idempotency_key: InvocationId = request
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
             .into();
@@ -1239,7 +1237,7 @@ impl WorkerGrpcApi {
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
-        let idempotency_key: IdempotencyKey = request
+        let idempotency_key: InvocationId = request
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
             .into();
@@ -1274,7 +1272,11 @@ impl WorkerGrpcApi {
 
         let canceled = self
             .worker_service
-            .cancel_invocation(&agent_id, &idempotency_key, auth)
+            .cancel_invocation(
+                &agent_id,
+                &IdempotencyKey::new(idempotency_key.to_string()),
+                auth,
+            )
             .await?;
 
         Ok(canceled)
@@ -1513,9 +1515,10 @@ mod protocol_tests {
     use test_r::test;
     use tonic::Status;
 
-    fn key() -> Option<IdempotencyKey> {
-        Some(IdempotencyKey {
-            value: "session-key".to_string(),
+    fn key() -> Option<Uuid> {
+        Some(Uuid {
+            high_bits: 0,
+            low_bits: 6,
         })
     }
 
@@ -1538,7 +1541,9 @@ mod protocol_tests {
                 input: Some(SchemaValue {
                     value: Some(schema_value::Value::U8Value(1)),
                 }),
-                idempotency_key: key(),
+                idempotency_key: Some(IdempotencyKey {
+                    value: "session-key".to_string(),
+                }),
                 ..Default::default()
             })),
         }

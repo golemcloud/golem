@@ -149,7 +149,7 @@ async fn schedule_at(
 
 /// The scheduled invocations committed in the target oplog, and the starts of each of them.
 struct Scheduled {
-    keys: Vec<IdempotencyKey>,
+    keys: Vec<golem_common::model::InvocationId>,
     not_before: Option<golem_common::model::Timestamp>,
     starts: Vec<golem_common::model::Timestamp>,
 }
@@ -162,7 +162,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
             && pending.not_before.is_some()
             && let PublicAgentInvocation::AgentMethodInvocation(method) = &pending.invocation
         {
-            keys.push(method.invocation_id.clone());
+            keys.push(method.invocation_id);
             not_before = pending.not_before;
         }
     }

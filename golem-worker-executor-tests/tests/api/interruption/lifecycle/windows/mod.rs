@@ -656,7 +656,7 @@ mod activation {
                 OplogEntry::PendingAgentInvocation {
                     invocation_id: idempotency_key,
                     ..
-                } => Some(idempotency_key.clone()),
+                } => Some(*idempotency_key),
                 _ => None,
             })
             .context("reserved constructor invocation")?;

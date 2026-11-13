@@ -204,12 +204,12 @@ message InvokeAgentSuccess {
   optional golem.worker.AgentId agent_id = 7;
   // Final invocation key. Together with agent_id this identifies the logical
   // invocation across retries and asynchronous result lookup.
-  optional golem.worker.IdempotencyKey idempotency_key = 8;
+  optional golem.common.UUID idempotency_key = 8;
 }
 
 message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
-  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.UUID idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
 }
@@ -259,7 +259,7 @@ message ProcessOplogEntriesRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 component_revision = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.UUID idempotency_key = 4;
   golem.common.AccountId account_id = 5;
   map<string, string> config = 6;
   golem.worker.AgentMetadata metadata = 7;

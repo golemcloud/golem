@@ -40,9 +40,9 @@ use async_trait::async_trait;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::InvocationId;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::SpanId;
@@ -162,7 +162,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     mut handle: FutureInvokeCallHandle,
     request: &HostRequestGolemRpcInvoke,
-    invocation_id: &InvocationId,
+    invocation_id: &OwnedInvocationId,
     span_id: &SpanId,
     this_rep: u32,
 ) -> anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>> {
@@ -171,11 +171,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
             if let Err(err) = worker_proxy
-                .cancel_invocation(
-                    &request.remote_agent_id,
-                    IdempotencyKey::from_uuid(invocation_id.uuid()),
-                    &auth_ctx,
-                )
+                .cancel_invocation(&request.remote_agent_id, invocation_id.id(), &auth_ctx)
                 .await
             {
                 tracing::info!(err=%err, "Best-effort cancel_invocation failed");
@@ -252,7 +248,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 task: Option<FutureInvokeTaskHandle>,
                 streaming: Option<DurableStreamingTaskParams>,
                 request: HostRequestGolemRpcInvoke,
-                invocation_id: InvocationId,
+                invocation_id: OwnedInvocationId,
                 remote_agent_id: OwnedAgentId,
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
@@ -785,7 +781,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             Cancel {
                 handle: FutureInvokeCallHandle,
                 remote_agent_id: AgentId,
-                idempotency_key: IdempotencyKey,
+                idempotency_key: golem_common::model::InvocationId,
                 span_id: SpanId,
             },
             /// Nothing to cancel: a baked failure, or already cancelled / consumed.
@@ -810,7 +806,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 } => match handle.take() {
                     Some(handle) => {
                         let remote_agent_id = request.remote_agent_id.clone();
-                        let idempotency_key = IdempotencyKey::from_uuid(invocation_id.uuid());
+                        let idempotency_key = invocation_id.id();
                         let span_id = span_id.clone();
                         *state = FutureInvokeResultState::Cancelled;
                         CancelPlan::Cancel {

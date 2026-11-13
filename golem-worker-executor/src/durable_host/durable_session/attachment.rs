@@ -171,7 +171,7 @@ impl StreamSession {
             context,
             StreamSessionRecord::Detached(StreamSessionDetachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: self.session_key.idempotency_key.clone(),
+                session_key: self.session_key.idempotency_key,
                 attachment_id: golem_common::model::durable_stream::AttachmentId::primary(
                     self.session_key.callee_environment_id,
                     &self.session_key.callee,

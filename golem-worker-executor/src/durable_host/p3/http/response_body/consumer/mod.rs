@@ -673,7 +673,7 @@ where
                         let retry_ctx = resume_retry_ctx
                             .as_mut()
                             .expect("resume retry context was just created");
-                        retry_ctx.invocation_id = consuming_invocation.clone();
+                        retry_ctx.invocation_id = consuming_invocation;
                         retry_ctx.retry_properties = properties.clone();
                         match resume_retry_state
                             .decide_retry_with_properties(retry_ctx, "http-zone2-read", &properties)

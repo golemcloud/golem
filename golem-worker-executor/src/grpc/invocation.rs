@@ -20,10 +20,10 @@ use super::{
 use crate::worker::CreateIntent;
 use golem_common::base_model::agent::Principal;
 use golem_common::base_model::{AgentId, IdempotencyKey};
+use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentFingerprint, InvocationRequestKey};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
 
@@ -39,10 +39,8 @@ pub trait CanStartWorker {
     fn principal(&self) -> Principal {
         Principal::anonymous()
     }
-    /// The key that identifies a create this request makes as a side effect, which
-    /// `CreateIntent::Invocation` records when an ephemeral target's phantom ID derives from it.
-    fn create_idempotency_key(&self) -> Option<IdempotencyKey> {
-        None
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
     }
 }
 
@@ -58,12 +56,8 @@ trait ProtobufInvocationDetails {
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
         &[]
     }
-    /// The owner key of the request, from which clients derive an ephemeral target's phantom ID.
-    /// `None` when the request names no parseable request key or no method. It uses the method
-    /// name as the operation, so it does not fit an external-tool start, which never creates
-    /// through this trait.
-    fn create_idempotency_key(&self) -> Option<IdempotencyKey> {
-        None
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
     }
 }
 
@@ -126,8 +120,8 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .unwrap_or_else(Principal::anonymous)
     }
 
-    fn create_idempotency_key(&self) -> Option<IdempotencyKey> {
-        ProtobufInvocationDetails::create_idempotency_key(self)
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        self.proto_idempotency_key()
     }
 }
 
@@ -220,9 +214,18 @@ impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::Invocat
         &self.config
     }
 
-    fn create_idempotency_key(&self) -> Option<IdempotencyKey> {
-        let request_key: InvocationRequestKey = self.request_key.clone()?.try_into().ok()?;
-        Some(request_key.owner_key(self.method_name.as_deref()?))
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        let request_key: golem_common::model::InvocationRequestKey = self
+            .request_key
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("request_key is required"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let method_name = self
+            .method_name
+            .as_deref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name is required"))?;
+        Ok(Some(request_key.owner_key(method_name)))
     }
 }
 
@@ -480,9 +483,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.principal(),
             InvocationFreshnessDisposition::MayExist,
-            CreateIntent::Invocation {
-                idempotency_key: request.create_idempotency_key(),
-            },
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
         .map(Some)
@@ -570,7 +571,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.principal(),
             freshness_disposition,
             CreateIntent::Invocation {
-                idempotency_key: request.create_idempotency_key(),
+                idempotency_key: request.idempotency_key()?,
             },
         )
         .await
@@ -644,7 +645,8 @@ mod tests {
             };
             assert_eq!(
                 request
-                    .create_idempotency_key()
+                    .idempotency_key()
+                    .unwrap()
                     .map(|key| ephemeral_invocation_phantom_id(&key)),
                 Some(phantom),
                 "create key for {request_key:?} does not identify the derived phantom"

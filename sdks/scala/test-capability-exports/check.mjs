@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { register } from "node:module";
 import { pathToFileURL } from "node:url";
 
-// These fixtures do not use streams or ambient host APIs. Resolve the static
-// imports, but fail if a fixture unexpectedly calls one.
+// Guest dispatch reads the invocation caller. Other streams and ambient host
+// APIs must still fail if a fixture unexpectedly calls one.
 const hostModules = [
   "golem:core/types@2.0.0",
   "golem:agent/host@2.0.0",
@@ -18,7 +18,6 @@ const hostModules = [
         export const getSelfMetadata = unavailable;
       `,
 ]);
-// Guests read the caller from the invocation context. These checks always call as anonymous.
 hostModules.push([
   "golem:agent/invocation-context@2.0.0",
   `

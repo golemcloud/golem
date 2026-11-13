@@ -396,7 +396,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -407,7 +407,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &golem_common::model::OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -420,7 +420,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
@@ -434,7 +434,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,

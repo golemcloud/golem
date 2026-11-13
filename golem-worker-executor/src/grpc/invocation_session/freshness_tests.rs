@@ -381,12 +381,12 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
         component_id,
         agent_id: "test-agent()".to_string(),
     };
-    let idempotency_key = IdempotencyKey::new("test-key".to_string());
+    let idempotency_key = golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901));
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
     let request = InvocationStart {
         agent_id: Some(callee.into()),
         method_name: Some("run".to_string()),
-        idempotency_key: Some(idempotency_key.clone().into()),
+        idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
         environment_id: Some(environment_id.into()),
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(fingerprint.0.into()),
@@ -425,7 +425,13 @@ fn foreign_mapping(
     let environment_id: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
     let callee: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
     let callee_fingerprint = AgentFingerprint(request.expected_callee_fingerprint.unwrap().into());
-    let idempotency_key = request.idempotency_key.clone().unwrap().into();
+    let idempotency_key = request
+        .idempotency_key
+        .as_ref()
+        .unwrap()
+        .value
+        .parse()
+        .unwrap();
     StreamSessionMappingRecord {
         transport_stream_id,
         handle: DurableStreamHandle {
@@ -527,7 +533,7 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
         callee_environment_id: request.environment_id,
         callee: request.agent_id.clone(),
         callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
-        idempotency_key: Some(IdempotencyKey::new("authoring-invocation".into()).into()),
+        idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
     };
     request.origin_invocation = Some(origin.clone());
     let build = |request: &InvocationStart| {
@@ -554,7 +560,7 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
     );
     let mut other = request.clone();
     other.origin_invocation.as_mut().unwrap().idempotency_key =
-        Some(IdempotencyKey::new("different-invocation".into()).into());
+        Some(uuid::Uuid::from_u128(903).into());
     assert_ne!(build(&other).unwrap().attempt.invocation, persisted);
     for mutation in 0..9 {
         let mut invalid = request.clone();
@@ -660,7 +666,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             callee_environment_id: request.environment_id,
             callee: request.agent_id.clone(),
             callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
-            idempotency_key: Some(IdempotencyKey::new("authoring-invocation".into()).into()),
+            idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
         },
     );
     request.durable_input_mappings = [
@@ -759,7 +765,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             0 => changed.origin_invocation = None,
             1 => {
                 changed.origin_invocation.as_mut().unwrap().idempotency_key =
-                    Some(IdempotencyKey::new("other".into()).into())
+                    Some(uuid::Uuid::from_u128(904).into())
             }
             2 => {
                 changed
@@ -850,14 +856,14 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
     .unwrap();
     assert_eq!(
         built.attempt.session_key.idempotency_key,
-        IdempotencyKey::from("test-key")
+        golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901))
     );
     assert_eq!(
         built.attempt.attachment_id,
         AttachmentId::primary(
             request.environment_id.unwrap().try_into().unwrap(),
             &request.agent_id.clone().unwrap().try_into().unwrap(),
-            &IdempotencyKey::from("test-key"),
+            &uuid::Uuid::from_u128(901).into(),
         )
         .unwrap()
     );

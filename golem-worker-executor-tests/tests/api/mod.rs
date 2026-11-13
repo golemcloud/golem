@@ -34,7 +34,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
-    IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
+    IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig, ScanCursor,
+    StringFilterComparator,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::{ResultValuePayload, VariantValuePayload};
@@ -946,7 +947,7 @@ async fn assert_management_finds_no_agent(
     );
 
     let cancel = executor
-        .cancel_invocation(agent, &IdempotencyKey::fresh())
+        .cancel_invocation(agent, &InvocationId(uuid::Uuid::new_v4()))
         .await
         .unwrap_err();
     assert!(
@@ -1694,7 +1695,7 @@ impl WorkerProxy for RecordingWorkerProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -1705,7 +1706,7 @@ impl WorkerProxy for RecordingWorkerProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -1718,7 +1719,7 @@ impl WorkerProxy for RecordingWorkerProxy {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
@@ -1732,7 +1733,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -4379,7 +4380,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_common::model::oplog::PublicAgentInvocation;
-    use golem_common::model::{IdempotencyScope, InvocationId};
+    use golem_common::model::{IdempotencyScope, OwnedInvocationId};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -4395,16 +4396,14 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let idempotency_key = IdempotencyKey::fresh();
     let scope = executor.auth_ctx().idempotency_scope().unwrap();
     assert!(matches!(scope, IdempotencyScope::User(_)));
-    let final_key = IdempotencyKey::from_uuid(
-        InvocationId::external(
-            worker_id.clone(),
-            executor.get_worker_metadata(&worker_id).await?.fingerprint,
-            "add",
-            Some(scope),
-            Some(&idempotency_key),
-        )
-        .uuid(),
-    );
+    let final_key = OwnedInvocationId::external(
+        worker_id.clone(),
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        "add",
+        Some(scope),
+        Some(&idempotency_key),
+    )
+    .id();
     executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -4538,7 +4537,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_common::model::oplog::PublicAgentInvocation;
-    use golem_common::model::{IdempotencyScope, InvocationId};
+    use golem_common::model::{IdempotencyScope, OwnedInvocationId};
 
     let context = TestContext::new(last_unique_id);
     let overrides = TestExecutorOverrides {
@@ -4591,16 +4590,14 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     let oldest_key = oldest_key.unwrap();
     let scope = executor.auth_ctx().idempotency_scope().unwrap();
     assert!(matches!(scope, IdempotencyScope::User(_)));
-    let final_key = IdempotencyKey::from_uuid(
-        InvocationId::external(
-            worker_id.clone(),
-            executor.get_worker_metadata(&worker_id).await?.fingerprint,
-            "increment",
-            Some(scope),
-            Some(&oldest_key),
-        )
-        .uuid(),
-    );
+    let final_key = OwnedInvocationId::external(
+        worker_id.clone(),
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        "increment",
+        Some(scope),
+        Some(&oldest_key),
+    )
+    .id();
     let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
     let duplicate_result = executor
         .invoke_and_await_agent_with_key(
@@ -4647,15 +4644,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(parameters) => {
                 started_invocation_id = match &parameters.invocation {
-                    PublicAgentInvocation::AgentInitialization(init) => {
-                        Some(init.invocation_id.clone())
-                    }
+                    PublicAgentInvocation::AgentInitialization(init) => Some(init.invocation_id),
                     PublicAgentInvocation::AgentMethodInvocation(method) => {
-                        Some(method.invocation_id.clone())
+                        Some(method.invocation_id)
                     }
-                    PublicAgentInvocation::ExternalTool(tool) => Some(tool.invocation_id.clone()),
+                    PublicAgentInvocation::ExternalTool(tool) => Some(tool.invocation_id),
                     PublicAgentInvocation::ProcessOplogEntries(process) => {
-                        Some(process.invocation_id.clone())
+                        Some(process.invocation_id)
                     }
                     PublicAgentInvocation::SaveSnapshot(_)
                     | PublicAgentInvocation::LoadSnapshot(_)
@@ -5299,7 +5294,7 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
             async move {
                 old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                     None,
-                    IdempotencyKey::fresh(),
+                    golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                     OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
                     TraceId::generate(),
                     Vec::new(),
@@ -6143,7 +6138,7 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
                 "wake-invocation" => ScheduledAction::WakeInvocation {
                     owned_agent_id: owned.clone(),
                     target_worker_fingerprint: original.fingerprint,
-                    idempotency_key: IdempotencyKey::fresh(),
+                    idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                 },
                 "resume" => ScheduledAction::Resume {
                     agent_created_by: component.account_id,
@@ -8341,7 +8336,10 @@ async fn cancelling_pending_invocations(
         .await?;
     let cancel1 = executor.cancel_invocation(&worker_id, &stored_ik1).await;
     let cancel2 = executor.cancel_invocation(&worker_id, &stored_ik2).await;
-    let cancel4 = executor.cancel_invocation(&worker_id, &ik4).await;
+    let stored_ik4 = executor
+        .external_invocation_key(&worker_id, &ik4, "inc_by")
+        .await?;
+    let cancel4 = executor.cancel_invocation(&worker_id, &stored_ik4).await;
 
     // Extract oplog_idx from promise value to complete it
     let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
@@ -8584,18 +8582,19 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
     let owned = OwnedAgentId::new(component.environment_id, &target);
     drop(executor);
 
-    let pending_key = IdempotencyKey::fresh();
-    let complete_key = IdempotencyKey::fresh();
-    let raced_key = IdempotencyKey::fresh();
+    let pending_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let complete_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let raced_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let deadline = Utc::now() + chrono::Duration::hours(1);
-    let request = |key: &IdempotencyKey, value, scope_card| AgentInvocation::AgentMethod {
-        idempotency_key: key.clone(),
-        method_name: "inc_global_by".to_string(),
-        input: data_value!(value).into_parts().1,
-        invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
-        scope_card,
-    };
+    let request =
+        |key: &golem_common::model::InvocationId, value, scope_card| AgentInvocation::AgentMethod {
+            idempotency_key: *key,
+            method_name: "inc_global_by".to_string(),
+            input: data_value!(value).into_parts().1,
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+            scope_card,
+        };
     let changed_card = ScopeCard {
         scope_card_id: CardId::new(),
         root_card_ids: vec![],
@@ -8725,7 +8724,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         InvocationRequest, InvocationStart, invocation_request, invocation_response,
     };
     use golem_common::model::oplog::PublicAgentInvocation;
-    use golem_common::model::{IdempotencyScope, InvocationId, InvocationRequestKey};
+    use golem_common::model::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
 
     let context = TestContext::new(last_unique_id);
     let mut executor = start(deps, &context).await?;
@@ -8750,17 +8749,15 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     let scope = executor.auth_ctx().idempotency_scope().unwrap();
     assert!(matches!(scope, IdempotencyScope::User(_)));
     let request_key = InvocationRequestKey::external(Some(scope), Some(&raw_key));
-    let key = IdempotencyKey::from_uuid(
-        InvocationId::external(
-            target.clone(),
-            fingerprint,
-            "inc_global_by",
-            Some(scope),
-            Some(&raw_key),
-        )
-        .uuid(),
-    );
-    assert_ne!(key, raw_key);
+    let key = OwnedInvocationId::external(
+        target.clone(),
+        fingerprint,
+        "inc_global_by",
+        Some(scope),
+        Some(&raw_key),
+    )
+    .id();
+    assert_ne!(key.to_string(), raw_key.value);
     let future = Utc::now() + chrono::Duration::hours(1);
 
     for round in 0..2 {
@@ -8808,7 +8805,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             while let Some(response) = responses.message().await? {
                 match response.response {
                     Some(invocation_response::Response::Accepted(acceptance)) => {
-                        assert_eq!(acceptance.idempotency_key, Some(key.clone().into()));
+                        assert_eq!(acceptance.idempotency_key, Some(key.into()));
                         assert_eq!(acceptance.callee_fingerprint, None);
                         accepted = true;
                     }
@@ -8846,7 +8843,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         assert!(!entries.iter().any(|entry| matches!(&entry.entry,
             PublicOplogEntry::PendingAgentInvocation(parameters)
                 if matches!(&parameters.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.invocation_id == raw_key)
+                    if method.invocation_id.to_string() == raw_key.value)
         )), "the raw external seed must not become a persisted invocation or alias");
         let pending = entries
         .iter()
@@ -9211,6 +9208,9 @@ async fn local_schedule_rejects_recreated_cached_target(
     let owned = OwnedAgentId::new(component.environment_id, &target);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let key = IdempotencyKey::new("stale-incarnation-schedule".to_string());
+    let accepted_id = golem_common::model::InvocationRequestKey::Internal(key.clone())
+        .finalize(target.clone(), original, "inc_global_by")
+        .id();
     let result = worker
         .all()
         .rpc()
@@ -9219,7 +9219,7 @@ async fn local_schedule_rejects_recreated_cached_target(
             original,
             golem_common::model::InvocationRequestKey::Internal(key.clone()),
             AgentInvocation::AgentMethod {
-                idempotency_key: key.clone(),
+                idempotency_key: accepted_id,
                 method_name: "inc_global_by".to_string(),
                 input: data_value!(91u64).into_parts().1,
                 invocation_context: InvocationContextStack::fresh(),
@@ -9235,7 +9235,7 @@ async fn local_schedule_rejects_recreated_cached_target(
         .await?
         .pending_invocations
         .iter()
-        .any(|pending| pending.has_idempotency_key(&key));
+        .any(|pending| pending.has_idempotency_key(&accepted_id));
     assert!(
         result.is_err() && !successor_pending,
         "an exact-existing schedule for {original:?} must reject its cached successor {successor:?} without pending work; result={result:?}, successor_pending={successor_pending}"
@@ -9272,18 +9272,15 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
         .await?;
     let owned = OwnedAgentId::new(component.environment_id, &target);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let cancelled_key = IdempotencyKey::new("cancel-before-start".to_string());
-    let started_key = IdempotencyKey::new("start-before-cancel".to_string());
+    let cancelled_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let started_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
 
-    for (key, value, cancel_wins) in [
-        (cancelled_key.clone(), 71u64, true),
-        (started_key.clone(), 29u64, false),
-    ] {
+    for (key, value, cancel_wins) in [(cancelled_key, 71u64, true), (started_key, 29u64, false)] {
         let due = Utc::now() + chrono::Duration::seconds(5);
         let receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
-                    idempotency_key: key.clone(),
+                    idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(value).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),
@@ -9332,7 +9329,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             assert!(
                 tokio::time::timeout(
                     Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(key.clone(), receipt, &owner),
+                    worker.cancel_scheduled_invocation(key, receipt, &owner),
                 )
                 .await
                 .context("cancelling the selected invocation before Started timed out")??
@@ -9393,13 +9390,13 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
 
         let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
         let mut current_key = None;
-        let mut pairs = HashMap::<IdempotencyKey, (usize, usize)>::new();
+        let mut pairs = HashMap::<golem_common::model::InvocationId, (usize, usize)>::new();
         for entry in entries {
             match entry.entry {
                 PublicOplogEntry::AgentInvocationStarted(parameters) => {
                     current_key = match parameters.invocation {
                         PublicAgentInvocation::AgentMethodInvocation(method) => {
-                            pairs.entry(method.invocation_id.clone()).or_default().0 += 1;
+                            pairs.entry(method.invocation_id).or_default().0 += 1;
                             Some(method.invocation_id)
                         }
                         _ => None,
@@ -9458,18 +9455,19 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
             agent_id!("ScheduledInvocationClient", "cancelled-schedule-owner"),
         )
         .await?;
-    let invocation = |key: &IdempotencyKey, value: u64| AgentInvocation::AgentMethod {
-        idempotency_key: key.clone(),
-        method_name: "inc_global_by".to_string(),
-        input: data_value!(value).into_parts().1,
-        invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.clone(),
-        }),
-        scope_card: None,
-    };
+    let invocation =
+        |key: &golem_common::model::InvocationId, value: u64| AgentInvocation::AgentMethod {
+            idempotency_key: *key,
+            method_name: "inc_global_by".to_string(),
+            input: data_value!(value).into_parts().1,
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.clone(),
+            }),
+            scope_card: None,
+        };
     let owned = OwnedAgentId::new(component.environment_id, &target);
-    let key = IdempotencyKey::fresh();
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let due = Utc::now() + chrono::Duration::seconds(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let receipt = worker
@@ -9477,7 +9475,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(key.clone(), receipt, &owner)
+            .cancel_scheduled_invocation(key, receipt, &owner)
             .await?
     );
     assert_eq!(
@@ -9512,7 +9510,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
             "Invocation was cancelled before execution"
         )))
     );
-    let fresh_key = IdempotencyKey::fresh();
+    let fresh_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     worker
         .schedule_invocation(invocation(&fresh_key, 29), due)
         .await?;
@@ -9535,7 +9533,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         receipt
     );
     // A redundant cancellation must not replace a completed invocation's result.
-    worker.cancel_invocation(fresh_key.clone()).await?;
+    worker.cancel_invocation(fresh_key).await?;
     assert_eq!(
         worker.lookup_invocation_result(&fresh_key).await,
         LookupResult::Complete(Ok(result))
@@ -9619,7 +9617,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         .filter(|pending| pending.not_before.is_some())
         .collect::<Vec<_>>();
     assert_eq!(scheduled.len(), 1);
-    let key = scheduled[0].idempotency_key().unwrap().clone();
+    let key = *scheduled[0].idempotency_key().unwrap();
     assert_eq!(
         scheduled[0].not_before.unwrap().to_millis(),
         due.timestamp() as u64 * 1000
@@ -9652,7 +9650,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
                     .enqueue_exact_existing(
                         &owned,
                         fingerprint,
-                        ExactExistingDelivery::WakeInvocation(key.clone()),
+                        ExactExistingDelivery::WakeInvocation(key),
                     )
                     .await?
             );
@@ -9686,7 +9684,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         let successor_receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
-                    idempotency_key: key.clone(),
+                    idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(91u64).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),
@@ -11900,7 +11898,8 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
 
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
-// deletion is running gets the deletion's refusal rather than a lookup of the deleting generation.
+// deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
+// answer from the deleting generation.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -11976,11 +11975,35 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
         )
         .await?,
     );
+    // A call, not only a lookup, is refused before it is resolved against the deleting generation.
+    let mut call = lookup(fingerprint);
+    call.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    call.request_key = Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+    if let Some(tool) = call.external_tool.as_mut() {
+        tool.input = Some(
+            golem_common::schema::TypedSchemaValue::new(
+                golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::record(vec![]),
+                ),
+                SchemaValue::Record { fields: vec![] },
+            )
+            .try_into()
+            .map_err(anyhow::Error::msg)?,
+        );
+    }
+    let call_during_deletion = answer(
+        tokio::time::timeout(Duration::from_secs(10), executor.invoke_agent_session(call)).await?,
+    );
     hook.release();
     let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
     assert!(
         during_deletion.contains("VALIDATION") && during_deletion.contains("being deleted"),
         "{during_deletion}"
+    );
+    assert!(
+        call_during_deletion.contains("VALIDATION")
+            && call_during_deletion.contains("being deleted"),
+        "{call_during_deletion}"
     );
     drop(executor);
     Ok(())

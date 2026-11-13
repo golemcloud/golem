@@ -2714,6 +2714,7 @@ components:
       properties:
         invocationId:
           type: string
+          format: uuid
         constructorParameters:
           $ref: '#/components/schemas/TypedSchemaValue'
         traceId:
@@ -2796,6 +2797,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         idempotencyKey:
           type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/ExternalTypedSchemaValue'
         componentRevision:
@@ -2921,6 +2923,7 @@ components:
       properties:
         invocationId:
           type: string
+          format: uuid
         methodName:
           type: string
         functionInput:
@@ -3914,6 +3917,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         invocationKey:
           type: string
+          format: uuid
         oplogIndex:
           type: integer
           format: uint64
@@ -5022,6 +5026,7 @@ components:
       properties:
         invocationId:
           type: string
+          format: uuid
         toolName:
           type: string
         commandPath:
@@ -5542,6 +5547,7 @@ components:
           $ref: '#/components/schemas/AgentId'
         idempotencyKey:
           type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/NativeToolResult'
         status:
@@ -6012,6 +6018,7 @@ components:
       properties:
         invocationId:
           type: string
+          format: uuid
     ProcessOplogEntriesResultParameters:
       type: object
       title: ProcessOplogEntriesResultParameters
@@ -10159,6 +10166,7 @@ components:
           format: date-time
         invocationId:
           type: string
+          format: uuid
         result:
           $ref: '#/components/schemas/PublicAgentInvocationResult'
         methodName:
@@ -10208,6 +10216,7 @@ components:
           format: date-time
         invocationId:
           type: string
+          format: uuid
     r#CancelledParams:
       type: object
       title: r#CancelledParams
@@ -10629,6 +10638,7 @@ components:
           $ref: '#/components/schemas/OplogErrorKind'
         invocationId:
           type: string
+          format: uuid
         error:
           type: string
         retryFrom:

@@ -831,7 +831,7 @@ impl DurableStreamStore {
                 };
                 let attached = StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: prepared.session_key.clone(),
+                    session_key: prepared.session_key,
                     attachment_id: prepared.attempt.attachment_id,
                     attempt_id: prepared.attempt.attempt_id,
                     epoch,
@@ -1092,7 +1092,7 @@ impl DurableStreamStore {
         }
 
         let session_reference_for_batch =
-            StreamRegistrationInvocation::Local(session_key.idempotency_key.clone());
+            StreamRegistrationInvocation::Local(session_key.idempotency_key);
         context.begin_durable_effect();
         let entries = self
             .oplog

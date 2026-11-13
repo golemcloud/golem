@@ -31,7 +31,7 @@ use golem_common::model::oplog::{
     CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex, OwnedAgentId, Timestamp,
 };
 use golem_common::schema::SchemaGraph;
 use golem_common::serialization::serialize;
@@ -372,17 +372,15 @@ async fn execute<Ctx: WorkerCtx>(
         let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
         let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
             scope: candidate.export.route_scope.clone(),
-            key: candidate.target_session_key.clone(),
+            key: IdempotencyKey::from_uuid(candidate.target_session_key.0),
         };
-        candidate.target_session_key = IdempotencyKey::from_uuid(
-            prepared
-                .finalize(
-                    target_id.clone(),
-                    target_fingerprint,
-                    &candidate.export.expected_method,
-                )
-                .uuid(),
-        );
+        candidate.target_session_key = prepared
+            .finalize(
+                target_id.clone(),
+                target_fingerprint,
+                &candidate.export.expected_method,
+            )
+            .id();
         let expiry_deadline_millis = admitted_publication_deadline(&candidate);
         append_target_initialization(oplog.as_ref(), &candidate, hash, expiry_deadline_millis)
             .await?;
@@ -663,7 +661,7 @@ async fn append_target_initialization(
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             public_session_id: candidate.export.session.clone(),
             route_scope: candidate.export.route_scope.clone(),
-            session_key: candidate.target_session_key.clone(),
+            session_key: candidate.target_session_key,
             source_invocation: candidate.source_invocation.clone(),
             request_hash: request_hash.to_vec(),
             expiry_policy: candidate.expiry_policy,
@@ -706,7 +704,7 @@ async fn schedule_expiry<Ctx: WorkerCtx>(
                 owned_agent_id: target.clone(),
                 target_agent_fingerprint: fingerprint,
                 public_session_id: candidate.export.session.clone(),
-                session_key: candidate.target_session_key.clone(),
+                session_key: candidate.target_session_key,
                 expected_deadline_millis: deadline_millis,
             },
         )
@@ -858,7 +856,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         cut: cut.oplog_index,
         selected: handle.stream_id,
         source_invocation: handle.source_invocation,
-        target_session_key: IdempotencyKey::new(Uuid::new_v4().to_string()),
+        target_session_key: InvocationId(Uuid::new_v4()),
         expiry_policy,
         expiry_deadline_millis,
         retained_through: cut.last_item_offset,
@@ -891,7 +889,7 @@ pub(crate) fn response(
     export: &StreamExportFork,
     cut: OplogIndex,
     replayed: bool,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &InvocationId,
 ) -> ForkStreamSlotSuccess {
     ForkStreamSlotSuccess {
         replayed,
@@ -902,7 +900,7 @@ pub(crate) fn response(
             .unwrap_or_default(),
         sub_offset: export.sub_offset,
         oplog_index: cut.as_u64(),
-        invocation_key: Some(invocation_key.clone().into()),
+        invocation_key: Some((*invocation_key).into()),
     }
 }
 
@@ -1115,7 +1113,9 @@ mod tests {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         StreamSessionExpiryPolicy as ProtoExpiryPolicy, stream_session_expiry_policy,
     };
+    use golem_common::model::InvocationId;
     use test_r::test;
+    use uuid::Uuid;
 
     /// A creation receipt of no export, which is `live` or not.
     fn receipt(live: bool) -> CreationReceipt {
@@ -1143,14 +1143,14 @@ mod tests {
                     "1",
                     "route",
                 ),
-                session_key: IdempotencyKey::fresh(),
+                session_key: InvocationId(Uuid::new_v4()),
                 source_invocation: golem_common::model::durable_stream::StreamInvocationId {
                     callee_environment_id: golem_common::model::environment::EnvironmentId(
                         Uuid::new_v4(),
                     ),
                     callee: agent,
                     callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::fresh(),
+                    idempotency_key: InvocationId(Uuid::new_v4()),
                 },
                 request_hash: Vec::new(),
                 expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 },

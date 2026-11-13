@@ -2191,9 +2191,9 @@ without re-executing.
 
 ## Invocation identity
 
-An invocation's identity is its invocation ID: the owner agent and a UUID
-(`golem-common/src/base_model/invocation_id.rs::InvocationId`). The server prints it as
-`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only the UUID, in
+An invocation's owner-qualified identity is `OwnedInvocationId`: the owner agent and an
+`InvocationId`, the UUID-backed unique part. The server prints the owner-qualified identity as
+`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only `InvocationId`, in
 the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
 `AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
 dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
