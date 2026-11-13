@@ -1292,7 +1292,8 @@ pub(crate) fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
         (std::collections::BTreeMap::<String, usize>::new(), None),
         |(mut finished, current), entry| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => {
                 let key = idempotency_key.to_string();
                 finished.entry(key.clone()).or_insert(0);
@@ -6092,6 +6093,9 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 store.fail_next_restores(1);
                 agent.stop(executor, context).await?;
                 let key = golem_common::model::IdempotencyKey::fresh();
+                let invocation_id = executor
+                    .external_invocation_key(&agent.worker_id, &key, "apply")
+                    .await?;
                 let rename = || executor.invoke_and_await_agent_with_key(
                     &agent.component, &agent.agent, &key, "apply",
                     data_value!("rename".to_string(), "before.txt".to_string(), "after.txt".to_string()),
@@ -6115,7 +6119,7 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 let oplog = executor.get_oplog(&agent.worker_id, OplogIndex::INITIAL).await?;
                 assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
                     PublicOplogEntry::AgentInvocationStarted(start) if matches!(&start.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(invoked) if invoked.idempotency_key == key)
+                        PublicAgentInvocation::AgentMethodInvocation(invoked) if invoked.invocation_id == invocation_id)
                 )).count(), 1);
                 agent.apply_all(executor, &[Operation::Rename { from: "after.txt", to: "continued.txt" }]).await?;
                 let tree = agent.describe(executor).await?;

@@ -30,7 +30,6 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	perm "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_permissions_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -997,7 +996,7 @@ func TestRefusedInvocationsAndUnitResultsReleaseTheirCards(t *testing.T) {
 	input := types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{
 		types.MakeSchemaValueNodePermissionCardHandle(refused), types.MakeSchemaValueNodeRecordValue([]int32{0}),
 	}, Root: 1}
-	if res := guestExports.Exports.Invoke("m", input, common.MakePrincipalAnonymous()); res.IsOk() {
+	if res := guestExports.Exports.Invoke("m", input); res.IsOk() {
 		t.Fatal("an uninitialized agent ran a method")
 	}
 

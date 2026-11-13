@@ -41,10 +41,32 @@ import (
 // is never started twice.
 
 // SessionError is a call the server rejected or an invocation that failed,
-// with the protocol's stable error code.
+// with the protocol's stable error code. Stderr is what the agent wrote to
+// stderr when its failure caused the error, and empty otherwise.
 type SessionError struct {
 	Code    string
 	Message string
+	Stderr  string
+}
+
+// sessionFailure reads the code, message and optional stderr of a rejection
+// or a failed invocation outcome.
+func sessionFailure(m message) (*SessionError, error) {
+	code, err := m.str("code")
+	if err != nil {
+		return nil, err
+	}
+	text, err := m.str("message")
+	if err != nil {
+		return nil, err
+	}
+	failure := &SessionError{Code: code, Message: text}
+	if m.has("stderr") {
+		if failure.Stderr, err = m.str("stderr"); err != nil {
+			return nil, err
+		}
+	}
+	return failure, nil
 }
 
 func (e *SessionError) Error() string {
@@ -96,11 +118,13 @@ type session struct {
 	tokenChannels map[string]uint32
 	cursors       map[string]string
 
-	attempt      string
-	descriptor   []byte
-	accepted     bool
-	everAccepted bool
-	sessionToken string
+	attempt       string
+	descriptor    []byte
+	accepted      bool
+	everAccepted  bool
+	sessionToken  string
+	acceptedOwner AgentID
+	acceptedKey   string
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
@@ -783,12 +807,12 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	}
 	switch kind {
 	case "invocationAccepted":
-		if err := m.members(kind, []string{"attemptId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
+		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
 			return err
 		}
 		return s.accept(c, m)
 	case "invocationRejected":
-		if err := m.members(kind, []string{"code", "message", "retryable"}, "attemptId"); err != nil {
+		if err := m.members(kind, []string{"code", "message", "retryable"}, "attemptId", "stderr"); err != nil {
 			return err
 		}
 		return s.rejected(c, m)
@@ -846,6 +870,25 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if err != nil {
 		return err
 	}
+	owner, err := m.object("agentId")
+	if err != nil {
+		return err
+	}
+	if err := owner.membersOnly("agentId", []string{"componentId", "agentId"}); err != nil {
+		return err
+	}
+	componentID, err := owner.str("componentId")
+	if err != nil {
+		return err
+	}
+	agentID, err := owner.str("agentId")
+	if err != nil {
+		return err
+	}
+	if componentID == "" || agentID == "" {
+		return protocolErrorf("invalid accepted agent identity")
+	}
+	acceptedOwner := AgentID{ComponentID: componentID, AgentID: agentID}
 	key, err := m.str("idempotencyKey")
 	if err != nil {
 		return err
@@ -866,13 +909,18 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.accepted {
 		return protocolErrorf("duplicate invocation acceptance")
 	}
-	if attempt != s.attempt || key != s.idem {
+	if attempt != s.attempt {
 		return protocolErrorf("the acceptance does not match the pending operation")
+	}
+	if s.everAccepted && (s.acceptedOwner != acceptedOwner || s.acceptedKey != key) {
+		return protocolErrorf("accepted invocation identity changed")
 	}
 	if err := s.install(mappings, true); err != nil {
 		return err
 	}
 	s.sessionToken = token
+	s.acceptedOwner = acceptedOwner
+	s.acceptedKey = key
 	s.accepted = true
 	c.acceptedAt = time.Now()
 	s.everAccepted = true
@@ -880,11 +928,7 @@ func (s *session) accept(c *sessionConn, m message) error {
 }
 
 func (s *session) rejected(c *sessionConn, m message) error {
-	code, err := m.str("code")
-	if err != nil {
-		return err
-	}
-	text, err := m.str("message")
+	rejection, err := sessionFailure(m)
 	if err != nil {
 		return err
 	}
@@ -910,13 +954,13 @@ func (s *session) rejected(c *sessionConn, m message) error {
 	// A resume the server refuses because the old attachment is still live
 	// is retried once as a takeover, which fences the old attachment; a
 	// refused takeover ends the session.
-	if code == "invalid-attachment-state" {
+	if rejection.Code == "invalid-attachment-state" {
 		if !s.everAccepted || s.accepted || s.resumeOp != "resume" {
 			s.mu.Unlock()
-			return &SessionError{Code: code, Message: text}
+			return rejection
 		}
 		s.resumeOp = "takeover"
-		s.lastCause = &SessionError{Code: code, Message: text}
+		s.lastCause = rejection
 		if err := s.detach(c); err != nil {
 			s.mu.Unlock()
 			return err
@@ -933,11 +977,11 @@ func (s *session) rejected(c *sessionConn, m message) error {
 	}
 	if !retryable {
 		s.mu.Unlock()
-		return &SessionError{Code: code, Message: text}
+		return rejection
 	}
 	// A retryable rejection means a new attempt may reach the agent: a resume
 	// once the call was accepted, otherwise a fresh start.
-	s.lastCause = &SessionError{Code: code, Message: text}
+	s.lastCause = rejection
 	if err := s.detach(c); err != nil {
 		s.mu.Unlock()
 		return err
@@ -1473,18 +1517,14 @@ func (s *session) receiveFinished(m message) error {
 		s.finish()
 		return nil
 	case "failure":
-		if err := outcome.membersOnly("invocation outcome", []string{"code", "kind", "message"}); err != nil {
+		if err := outcome.membersOnly("invocation outcome", []string{"code", "kind", "message"}, "stderr"); err != nil {
 			return err
 		}
-		code, err := outcome.str("code")
+		failure, err := sessionFailure(outcome)
 		if err != nil {
 			return err
 		}
-		text, err := outcome.str("message")
-		if err != nil {
-			return err
-		}
-		s.fail(&SessionError{Code: code, Message: text})
+		s.fail(failure)
 		return nil
 	}
 	return protocolErrorf("invalid invocation outcome %q", kind)

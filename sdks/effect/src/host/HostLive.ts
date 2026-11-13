@@ -19,6 +19,7 @@ import { DurabilityModeClient, DurabilityModeLive } from "./DurabilityModeClient
 import { DurableStreamsClient, DurableStreamsLive } from "./DurableStreamsClient.js"
 import { EnvironmentClient, EnvironmentLive } from "./EnvironmentClient.js"
 import { IgniteHostClient, IgniteHostLive } from "./IgniteHostClient.js"
+import { InvocationContextClient, InvocationContextLive } from "./InvocationContextClient.js"
 import { KeyValueClient, KeyValueLive } from "./KeyValueClient.js"
 import { LoggingHost, LoggingHostLive } from "./LoggingHost.js"
 import { MysqlHostClient, MysqlHostLive } from "./MysqlHostClient.js"
@@ -45,6 +46,7 @@ export {
   DurableStreamsClient,
   EnvironmentClient,
   IgniteHostClient,
+  InvocationContextClient,
   KeyValueClient,
   LoggingHost,
   MysqlHostClient,
@@ -74,6 +76,7 @@ export type HostServices =
   | EnvironmentClient
   | ConfigClient
   | AgentHostClient
+  | InvocationContextClient
   | PromiseClient
   | DurabilityClient
   | DurabilityModeClient
@@ -100,6 +103,7 @@ export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   EnvironmentLive,
   ConfigLive,
   AgentHostLive,
+  InvocationContextLive,
   PromiseLive,
   DurabilityLive,
   DurabilityModeLive,

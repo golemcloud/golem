@@ -19,11 +19,16 @@
 /// its reconnect window: `endpoint` is the WebSocket URL, `window_ms` the
 /// window, and `last_cause` the last failure, such as the HTTP status of a
 /// refused upgrade, a retryable rejection, or a connection error.
+/// `InvocationFailed` is a streaming call that the server reports as a failure
+/// of the agent, in a rejection or in the outcome of the finished invocation:
+/// `code` is `invocation-failed` or `previous-invocation-failed`, `message` the
+/// agent's error text, and `stderr` what the agent wrote to stderr, if anything.
 /// `StreamFailed` retains the producer's typed failure. `ConsumerCancelled`
 /// carries the optional diagnostic from a consumer terminal.
 pub(all) suberror BridgeError {
   BridgeError(String)
   Unreachable(endpoint~ : String, window_ms~ : Int32, last_cause~ : String)
+  InvocationFailed(code~ : String, message~ : String, stderr~ : String?)
   StreamFailed(StreamFailure)
   ConsumerCancelled(String?)
 } derive(Debug, Eq)
@@ -48,6 +53,8 @@ pub impl Show for BridgeError with fn output(self, logger) {
       logger.write_string(
         "Unreachable \{endpoint} after \{window_ms} ms: \{last_cause}",
       )
+    InvocationFailed(code~, message~, ..) =>
+      logger.write_string("\{code}: \{message}")
     StreamFailed(failure) =>
       logger.write_string("Stream failed: \{@debug.to_string(failure)}")
     ConsumerCancelled(details) => {

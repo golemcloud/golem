@@ -1464,13 +1464,18 @@ export type StreamError =
   | { kind: 'cancelled' | 'abandoned' };
 
 export class StreamingProtocolError extends Error {
+  /** The agent's stderr output, present when an agent failure caused the error. */
+  readonly stderr?: string;
+
   constructor(
     readonly code: string,
     message: string,
+    stderr?: string,
     readonly outcome?: StreamOutcome,
   ) {
     super(message);
     this.name = 'StreamingProtocolError';
+    if (stderr !== undefined) this.stderr = stderr;
   }
 }
 
@@ -3592,6 +3597,7 @@ class StreamingSession {
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
   private sessionToken?: string;
+  private acceptedInvocation?: { agentId: AgentId; idempotencyKey: string };
   private attemptId = crypto.randomUUID();
   private idempotencyKey = '';
   private pendingOperation = '';
@@ -4003,16 +4009,42 @@ class StreamingSession {
           'version',
           'type',
           'attemptId',
+          'agentId',
           'idempotencyKey',
           'mappings',
           'sessionToken',
         ]);
         if (message.attemptId !== this.attemptId)
           throw new StreamingProtocolError('protocol-error', 'unexpected attempt acceptance');
-        if (message.idempotencyKey !== this.idempotencyKey)
-          throw new StreamingProtocolError('protocol-error', 'unexpected invocation identity');
+        if (!isRecord(message.agentId))
+          throw new StreamingProtocolError('malformed-message', 'invalid accepted agent identity');
+        object(message.agentId, ['componentId', 'agentId']);
+        if (
+          typeof message.agentId.componentId !== 'string' ||
+          !HYPHENATED_UUID.test(message.agentId.componentId) ||
+          typeof message.agentId.agentId !== 'string' ||
+          message.agentId.agentId.length === 0 ||
+          typeof message.idempotencyKey !== 'string' ||
+          message.idempotencyKey.length === 0
+        )
+          throw new StreamingProtocolError(
+            'malformed-message',
+            'invalid accepted invocation identity',
+          );
+        const agentId = message.agentId as unknown as AgentId;
+        if (
+          this.acceptedInvocation &&
+          (this.acceptedInvocation.agentId.componentId !== agentId.componentId ||
+            this.acceptedInvocation.agentId.agentId !== agentId.agentId ||
+            this.acceptedInvocation.idempotencyKey !== message.idempotencyKey)
+        )
+          throw new StreamingProtocolError(
+            'protocol-error',
+            'accepted invocation identity changed',
+          );
         validateOpaqueToken(message.sessionToken, 'session token');
         this.install(message.mappings, true);
+        this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
         this.everAccepted = true;
@@ -4021,7 +4053,11 @@ class StreamingSession {
         break;
       }
       case 'invocationRejected': {
-        object(message, ['version', 'type', 'code', 'message', 'retryable'], ['attemptId']);
+        object(
+          message,
+          ['version', 'type', 'code', 'message', 'retryable'],
+          ['attemptId', 'stderr'],
+        );
         if (
           (message.attemptId !== undefined && message.attemptId !== this.attemptId) ||
           (this.everAccepted && message.attemptId === undefined)
@@ -4030,10 +4066,11 @@ class StreamingSession {
         if (
           typeof message.code !== 'string' ||
           typeof message.message !== 'string' ||
-          typeof message.retryable !== 'boolean'
+          typeof message.retryable !== 'boolean' ||
+          (message.stderr !== undefined && typeof message.stderr !== 'string')
         )
           throw new StreamingProtocolError('malformed-message', 'invalid invocation rejection');
-        const rejection = new StreamingProtocolError(message.code, message.message);
+        const rejection = new StreamingProtocolError(message.code, message.message, message.stderr);
         if (message.code === 'invalid-attachment-state') {
           if (
             this.everAccepted &&
@@ -4126,6 +4163,7 @@ class StreamingSession {
           failure = new StreamingProtocolError(
             'consumer-cancelled',
             outcome.details ?? 'output consumer cancelled',
+            undefined,
             outcome,
           );
         else if (outcome.kind === 'failed')
@@ -4134,6 +4172,7 @@ class StreamingSession {
             'message' in outcome.error
               ? outcome.error.message
               : `output stream ${outcome.error.kind}`,
+            undefined,
             outcome,
           );
         const cursor =
@@ -4161,10 +4200,11 @@ class StreamingSession {
         if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')
           throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
         if (message.outcome.kind === 'failure') {
-          object(message.outcome, ['kind', 'code', 'message']);
+          object(message.outcome, ['kind', 'code', 'message'], ['stderr']);
           if (
             typeof message.outcome.code !== 'string' ||
-            typeof message.outcome.message !== 'string'
+            typeof message.outcome.message !== 'string' ||
+            (message.outcome.stderr !== undefined && typeof message.outcome.stderr !== 'string')
           )
             throw new StreamingProtocolError('malformed-message', 'invalid invocation failure');
           if ([...this.outputs.values()].some((output) => !output.isTerminal()))
@@ -4172,7 +4212,13 @@ class StreamingSession {
               'protocol-error',
               'invocation failure preceded output terminal',
             );
-          this.finish(new StreamingProtocolError(message.outcome.code, message.outcome.message));
+          this.finish(
+            new StreamingProtocolError(
+              message.outcome.code,
+              message.outcome.message,
+              message.outcome.stderr,
+            ),
+          );
         } else if (message.outcome.kind !== 'success')
           throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
         else {

@@ -67,8 +67,10 @@ class StreamRuntimeTest extends munit.FunSuite {
       try {
         val startPeer = connect()
         val start = startPeer.receive()
-        val key = field(start, "idempotencyKey")
+        val key = Json.string("00000000-0000-0000-0000-000000000123")
+        assertNotEquals(key.render, field(start, "idempotencyKey").render)
         def accepted(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
           "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> key,
           "sessionToken" -> Json.string("stable-session"), "mappings" -> mappings))
         accepted(startPeer, start)
@@ -124,6 +126,8 @@ class StreamRuntimeTest extends munit.FunSuite {
       "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
     try {
       val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, Some(PublicValueCodec.fromSchemaGraphJson(graph)), Nil), 15.seconds)
+      assertEquals(result.agentId, AgentId("component", "accepted-agent"))
+      assertEquals(result.idempotencyKey, "00000000-0000-0000-0000-000000000123")
       val stream = StreamSession.output(result.result.get, SchemaValueCodec.asString, "json",
         PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"string","value":{}}}"""))
       val consumer = Await.result(stream.consume(), 5.seconds)
@@ -142,6 +146,73 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally server.close()
   }
 
+  // Answers the start with `answer` and returns what the caller receives.
+  private def answered(answer: (Peer, Json) => Unit): Throwable = {
+    val server = new ServerSocket(0)
+    val failed = Promise[Unit]()
+    val peer = Future {
+      val p = new Peer(server.accept())
+      try {
+        answer(p, p.receive())
+        Await.result(failed.future, 10.seconds)
+      } finally { p.close(); server.close() }
+    }
+    val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
+      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+    try {
+      val error = intercept[Throwable] {
+        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil), 15.seconds)
+      }
+      failed.success(())
+      Await.result(peer, 10.seconds)
+      error
+    } finally server.close()
+  }
+  private def accept(p: Peer, start: Json): Unit = p.send(message("invocationAccepted",
+    "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+    "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
+    "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
+
+  test("an agent failure rejection surfaces the agent's stderr") {
+    val error = answered((p, start) => p.send(message("invocationRejected", "attemptId" -> field(start, "attemptId"),
+      "code" -> Json.string("previous-invocation-failed"), "message" -> Json.string("agent panicked"),
+      "retryable" -> Json.bool(false), "stderr" -> Json.string("panic output\n"))))
+    error match {
+      case rejected: BridgeInvocationRejectedException =>
+        assertEquals(rejected.code, "previous-invocation-failed")
+        assertEquals(rejected.serverMessage, "agent panicked")
+        assertEquals(rejected.stderr, Some("panic output\n"))
+        assertEquals(rejected.getMessage, "previous-invocation-failed: agent panicked")
+      case other => fail(s"unexpected error: $other")
+    }
+  }
+
+  test("a failed invocation surfaces the agent's stderr") {
+    val error = answered { (p, start) =>
+      accept(p, start)
+      p.send(message("invocationFinished", "outcome" -> Json.obj("kind" -> Json.string("failure"),
+        "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"), "stderr" -> Json.string("panic output\n"))))
+    }
+    assertEquals(error, AgentStreamError("invocation-failed", "agent panicked", Some("panic output\n")))
+  }
+
+  test("an unknown member beside stderr is still rejected") {
+    val rejection = answered((p, start) => p.send(message("invocationRejected", "attemptId" -> field(start, "attemptId"),
+      "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"),
+      "retryable" -> Json.bool(false), "stderr" -> Json.string("panic output\n"), "extra" -> Json.string("x"))))
+    assert(!rejection.isInstanceOf[BridgeInvocationRejectedException], rejection.toString)
+    assert(rejection.getMessage.contains("malformed invocationRejected message fields"), rejection.toString)
+    val failure = answered { (p, start) =>
+      accept(p, start)
+      p.send(message("invocationFinished", "outcome" -> Json.obj("kind" -> Json.string("failure"),
+        "code" -> Json.string("invocation-failed"), "message" -> Json.string("agent panicked"),
+        "stderr" -> Json.string("panic output\n"), "extra" -> Json.string("x"))))
+    }
+    assert(!failure.isInstanceOf[AgentStreamError], failure.toString)
+    assert(failure.getMessage.contains("malformed invocation outcome fields"), failure.toString)
+  }
+
   for (failSource <- List(false, true)) test(s"input terminal is sequenced and replayed after transport loss ($failSource)") {
     val server = new ServerSocket(0)
     val peer = Future {
@@ -158,7 +229,8 @@ class StreamRuntimeTest extends munit.FunSuite {
           "streamToken" -> Json.string("input-token"), "provisionalRef" -> field(provisional, "provisionalRef"),
           "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))))
         def accept(p: Peer, descriptor: Json, streams: Json): Unit = p.send(message("invocationAccepted",
-          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("input-session"), "mappings" -> streams))
         accept(first, start, initialMappings)
         assertEquals(text(first.receive(), "type"), "inputStreamItem")
@@ -216,7 +288,9 @@ class StreamRuntimeTest extends munit.FunSuite {
           val mapping = Json.obj(Vector("channel" -> Json.fromLong(channel), "direction" -> Json.string("input"),
             "streamToken" -> Json.string("input-token"), "inputHighWater" -> Json.obj("sequence" -> Json.string(sequence), "terminal" -> Json.bool(false))) ++
             (if (initial) Vector("provisionalRef" -> field(provisional, "provisionalRef")) else Vector.empty))
-          p.send(message("invocationAccepted", "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+          p.send(message("invocationAccepted",
+            "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+            "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
             "sessionToken" -> Json.string("input-session"), "mappings" -> Json.arr(Vector(mapping))))
         }
         accept(first, start, 1, "0", true)
@@ -277,7 +351,9 @@ class StreamRuntimeTest extends munit.FunSuite {
       try {
         val start = p.receive()
         val mappings = Json.arr(Vector(Json.obj("channel" -> Json.fromLong(7), "direction" -> Json.string("output"), "streamToken" -> Json.string("output-token"))))
-        p.send(message("invocationAccepted", "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> mappings))
         p.send(message("invocationResult", "result" -> Json.obj("kind" -> Json.string("value"), "graph" -> Json.parse(graph).toOption.get,
           "value" -> Json.obj("kind" -> Json.string("stream"), "value" -> Json.obj("streamToken" -> Json.string("output-token")))), "mappings" -> mappings))
@@ -323,7 +399,9 @@ class StreamRuntimeTest extends munit.FunSuite {
           "direction" -> Json.string("input"), "streamToken" -> Json.string(s"input-$index"),
           "provisionalRef" -> field(field(entry, "value"), "provisionalRef"),
           "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false))) }
-        p.send(message("invocationAccepted", "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(mappings)))
         if (mode != "immediate") {
           failures.indices.foreach { _ => assertEquals(p.receiveBinary()._2, Vector[Byte](7)) }
@@ -399,7 +477,9 @@ class StreamRuntimeTest extends munit.FunSuite {
         val provisional = field(field(start, "methodParameters"), "value")
         val mapping = Json.obj("channel" -> Json.fromInt(1), "direction" -> Json.string("input"), "streamToken" -> Json.string("input-token"),
           "provisionalRef" -> field(provisional, "provisionalRef"), "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))
-        p.send(message("invocationAccepted", "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector(mapping))))
         Await.result(finished.future, 10.seconds)
       } finally { p.close(); server.close() }
@@ -435,7 +515,9 @@ class StreamRuntimeTest extends munit.FunSuite {
         val start = p.receive()
         val mappings = Json.arr((1 to count).map(ch => Json.obj("channel" -> Json.fromInt(ch), "direction" -> Json.string("output"), "streamToken" -> Json.string(s"output-$ch"))).toVector)
         val pongs = Future { scala.concurrent.blocking { try p.receive() catch { case _: java.io.IOException => () } } }
-        p.send(message("invocationAccepted", "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> mappings))
         val element = Json.obj("kind" -> Json.string("string"), "value" -> Json.string("x" * chunkSize))
         val outcome = Json.obj("kind" -> Json.string("failed"), "error" -> Json.obj("kind" -> Json.string("failed"),
@@ -511,7 +593,8 @@ class StreamRuntimeTest extends munit.FunSuite {
         val first = connect()
         val start = first.receive()
         def accept(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
-          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
         def reject(p: Peer, descriptor: Json, rejectionCode: String, canRetry: Boolean): Unit =
           p.send(message("invocationRejected", "attemptId" -> field(descriptor, "attemptId"),

@@ -3236,11 +3236,19 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
     let vector = expect_object(vector)
     let canonical = expect_string(get_field(vector, "canonical"))
     assert_eq(parse_strict_json(canonical).stringify(), canonical)
-    if expect_string(get_field(vector, "type")) == "stream-end" &&
-      expect_string(get_field(vector, "direction")) == "server" {
-      ignore(
-        validate_server_stream_end(expect_object(parse_strict_json(canonical))),
-      )
+    if expect_string(get_field(vector, "direction")) == "server" {
+      let message = expect_object(parse_strict_json(canonical))
+      let kind = expect_string(get_field(vector, "type"))
+      validate_message_fields(message, kind)
+      if kind == "stream-end" {
+        ignore(validate_server_stream_end(message))
+      }
+      if kind == "invocationFinished" {
+        let outcome = expect_object(get_field(message, "outcome"))
+        if expect_string(get_field(outcome, "kind")) == "failure" {
+          ignore(failure_outcome(outcome))
+        }
+      }
     }
   }
   let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
@@ -3252,6 +3260,51 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
       }))
     }
   }
+}
+
+///|
+fn fixture_message(name : String) -> Map[String, Json] raise {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let vector = expect_object(vector)
+    if expect_string(get_field(vector, "name")) == name {
+      return expect_object(parse_strict_json(expect_string(get_field(vector, "canonical"))))
+    }
+  }
+  fail("missing vector \{name}")
+}
+
+///|
+test "agent failures surface stderr and still reject unknown members" {
+  let rejection = fixture_message("invocation-rejected-previous-invocation-failed")
+  validate_message_fields(rejection, "invocationRejected")
+  assert_eq(
+    reported_failure(rejection),
+    InvocationFailed(
+      code="previous-invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let finished = fixture_message("invocation-finished-failure-with-stderr")
+  validate_message_fields(finished, "invocationFinished")
+  let outcome = expect_object(get_field(finished, "outcome"))
+  assert_eq(
+    failure_outcome(outcome),
+    InvocationFailed(
+      code="invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let without_stderr = expect_object(get_field(fixture_message("invocation-finished-failure"), "outcome"))
+  assert_true(failure_outcome(without_stderr) is InvocationFailed(stderr=None, ..))
+  rejection["extra"] = Json::string("x")
+  assert_true(raises(() => validate_message_fields(rejection, "invocationRejected")))
+  outcome["extra"] = Json::string("x")
+  assert_true(raises(() => ignore(failure_outcome(outcome))))
+  finished["stderr"] = Json::string("misplaced")
+  assert_true(raises(() => validate_message_fields(finished, "invocationFinished")))
 }
 "#,
     )

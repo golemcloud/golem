@@ -69,12 +69,12 @@ use arc_swap::ArcSwap;
 use chrono::Utc;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentFingerprint, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    ScheduledAction, Timestamp,
+    AgentFingerprint, AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
@@ -230,7 +230,7 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
@@ -854,7 +854,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
@@ -1546,7 +1546,7 @@ fn is_authority_state_entry(entry: &OplogEntry) -> bool {
 
 fn can_append_invocation(
     status: &AgentStatusRecord,
-    idempotency_key: &IdempotencyKey,
+    idempotency_key: &InvocationId,
     expected_result_generation: u64,
     expected_revert_generation: u64,
 ) -> bool {
@@ -1573,12 +1573,13 @@ mod tests {
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentId, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef, Timestamp,
+        AgentId, AgentStatusRecord, InvocationId, OwnedAgentId, PendingInvocationRef, Timestamp,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use test_r::{test, timeout};
     use tokio::sync::{Notify, mpsc, oneshot};
+    use uuid::Uuid;
 
     #[test]
     #[timeout("30s")]
@@ -1766,7 +1767,7 @@ mod tests {
         );
     }
 
-    fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
+    fn pending_invocation(key: InvocationId) -> PendingInvocationRef {
         PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
@@ -2037,10 +2038,10 @@ mod tests {
 
     #[test]
     fn invocation_admission_ignores_unrelated_oplog_and_pending_changes() {
-        let key = IdempotencyKey::fresh();
+        let key = InvocationId(Uuid::new_v4());
         let mut status = AgentStatusRecord {
             oplog_idx: OplogIndex::from_u64(100),
-            pending_invocations: vec![pending_invocation(IdempotencyKey::fresh())],
+            pending_invocations: vec![pending_invocation(InvocationId(Uuid::new_v4()))],
             ..AgentStatusRecord::default()
         };
         let result_generation = status.invocation_results.change_generation();
@@ -2056,7 +2057,7 @@ mod tests {
         status.oplog_idx = OplogIndex::from_u64(1_000);
         status
             .pending_invocations
-            .push(pending_invocation(IdempotencyKey::fresh()));
+            .push(pending_invocation(InvocationId(Uuid::new_v4())));
         assert!(can_append_invocation(
             &status,
             &key,
@@ -2065,14 +2066,21 @@ mod tests {
         ));
     }
 
+    fn result_at(terminal: OplogIndex) -> golem_common::model::InvocationResultPosition {
+        golem_common::model::InvocationResultPosition {
+            terminal,
+            request: None,
+        }
+    }
+
     #[test]
     fn invocation_admission_rejects_same_key_or_result_branch_changes() {
-        let key = IdempotencyKey::fresh();
+        let key = InvocationId(Uuid::new_v4());
         let mut status = AgentStatusRecord::default();
         let result_generation = status.invocation_results.change_generation();
         let revert_generation = status.invocation_results.revert_generation();
 
-        status.pending_invocations = vec![pending_invocation(key.clone())];
+        status.pending_invocations = vec![pending_invocation(key)];
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2081,7 +2089,7 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key.clone());
+        status.current_idempotency_key = Some(key);
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2092,7 +2100,7 @@ mod tests {
         status.current_idempotency_key = None;
         status
             .invocation_results
-            .insert(IdempotencyKey::fresh(), OplogIndex::INITIAL);
+            .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2102,7 +2110,7 @@ mod tests {
 
         status
             .invocation_results
-            .insert(key.clone(), OplogIndex::from_u64(2));
+            .insert(key, result_at(OplogIndex::from_u64(2)));
         let key_result_generation = status.invocation_results.change_generation();
         assert!(!can_append_invocation(
             &status,

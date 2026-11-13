@@ -59,7 +59,7 @@ use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess,
     ToolName, ToolProvisionConfig, ToolSource,
 };
-use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, InvocationId, OwnedAgentId};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::{SchemaGraph, SecretValuePayload};
@@ -695,7 +695,7 @@ async fn cross_store_wallet_change(
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
                 agent_id: worker_id.clone(),
-                invocation_key: IdempotencyKey::fresh(),
+                invocation_key: InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
         )
@@ -1179,11 +1179,8 @@ async fn initialize_entity(
     principal: Principal,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
-    let init_key = IdempotencyKey::fresh();
-    store
-        .data_mut()
-        .set_current_idempotency_key(init_key.clone())
-        .await;
+    let init_key = InvocationId(uuid::Uuid::new_v4());
+    store.data_mut().set_current_idempotency_key(init_key).await;
     store
         .data_mut()
         .set_current_invocation_context(InvocationContextStack::fresh())
@@ -1218,10 +1215,10 @@ async fn invoke_sleep_p3(
     seconds: u64,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
-    let method_key = IdempotencyKey::fresh();
+    let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1251,10 +1248,10 @@ async fn invoke_entity_method(
 ) -> Result<AgentInvocationResult, golem_service_base::error::worker_executor::WorkerExecutorError>
 {
     let metadata = store.data().component_metadata().metadata.clone();
-    let method_key = IdempotencyKey::fresh();
+    let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1565,7 +1562,7 @@ async fn stage_entity_boundary(
                 HostRequest::EntityInvocation(HostRequestEntityInvocation {
                     metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
                     input: empty,
-                    stream_session_idempotency_key: scope.stream_session_idempotency_key().clone(),
+                    stream_session_idempotency_key: *scope.stream_session_idempotency_key(),
                 }),
             ))),
             durable_function_type: DurableFunctionType::WriteLocal,
@@ -1733,9 +1730,9 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(1)),
         false,
-        IdempotencyKey::new("instance-layer-live-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(2)),
     )
     .unwrap()
 }
@@ -1761,9 +1758,9 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
-        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(3)),
         false,
-        IdempotencyKey::new("instance-layer-replay-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(4)),
     )
     .unwrap()
 }
@@ -2379,9 +2376,9 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         activation.clone(),
         principal.clone(),
         InvocationExecutionMode::ReplayingIncomplete,
-        IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(5)),
         false,
-        IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(6)),
     )
     .unwrap();
     let replay_parent_id = parent_id.clone();
@@ -2648,9 +2645,9 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             activation,
             principal,
             InvocationExecutionMode::ReplayingIncomplete,
-            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal".to_string()),
+            InvocationId(uuid::Uuid::from_u128(7)),
             false,
-            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal-streams".to_string()),
+            InvocationId(uuid::Uuid::from_u128(8)),
         )
         .unwrap(),
         owner_metadata,
@@ -2933,9 +2930,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("owner-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(9)),
         false,
-        IdempotencyKey::new("owner-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(10)),
     )
     .unwrap();
 
@@ -3029,9 +3026,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("second-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(11)),
         false,
-        IdempotencyKey::new("second-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(12)),
     )
     .unwrap();
     let expected_error = second_hosted
@@ -3070,9 +3067,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(13)),
         false,
-        IdempotencyKey::new("cancelled-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(14)),
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -3154,9 +3151,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(15)),
         false,
-        IdempotencyKey::new("panicking-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(16)),
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();
@@ -4876,9 +4873,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             agent_id: owner_id.agent_id.clone(),
         }),
         InvocationExecutionMode::ReplayingIncomplete,
-        IdempotencyKey::new("instance-layer-secret-reveal-repair".to_string()),
+        InvocationId(uuid::Uuid::from_u128(17)),
         false,
-        IdempotencyKey::new("instance-layer-secret-reveal-repair-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(18)),
     )
     .unwrap();
     let replay_parent_id = parent_id.clone();

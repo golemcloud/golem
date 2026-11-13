@@ -143,7 +143,7 @@ use golem_common::model::oplog::{
     HostResponsePermissionWallet, HostResponsePermissionWalletVersion, OplogEntry, OplogIndex,
     QueuedCardEvent,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PendingCardEventRef, Timestamp};
+use golem_common::model::{AgentId, OwnedAgentId, PendingCardEventRef, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::schema_value::PermissionCardValuePayload;
 use golem_schema::schema::wit::wire::{HostPermissionCard, HostPermissionCardWithStore};
@@ -164,7 +164,7 @@ enum PermissionCardEntry {
         /// The invocation that minted the card, or `None` once its scope ended. A retired entry
         /// stays in the table until the guest drops its handle, so the handle never names another
         /// entry, but it can no longer be attached or used as a parent.
-        invocation_key: Option<IdempotencyKey>,
+        invocation_key: Option<golem_common::model::InvocationId>,
     },
 }
 

@@ -25,8 +25,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedAgentId,
-    Timestamp,
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
@@ -126,7 +125,7 @@ impl ReplayEvent {
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
     pub oplog_index: OplogIndex,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: golem_common::model::InvocationId,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
     pub wallet_pin: InvocationWalletPin,
@@ -398,7 +397,7 @@ struct ToolAttachmentReconstruction {
     logical_observations: HashMap<
         (
             golem_common::model::oplog::attachment::ToolAttachmentId,
-            IdempotencyKey,
+            golem_common::model::InvocationId,
             u64,
         ),
         (OplogIndex, Option<OplogIndex>),
@@ -498,14 +497,9 @@ impl ToolAttachmentReconstruction {
             if self.history.source_was_removed(read) {
                 continue;
             }
-            let key = (
-                read.attachment,
-                read.logical_invocation.clone(),
-                read.ordinal,
-            );
+            let key = (read.attachment, read.logical_invocation, read.ordinal);
             if read.reobserves.is_none() {
-                self.logical_observations
-                    .insert(key.clone(), (*index, None));
+                self.logical_observations.insert(key, (*index, None));
                 if let ToolAttachmentReadOutcome::TypedChunk(end)
                 | ToolAttachmentReadOutcome::RawBytes { end, .. } = read.outcome
                 {

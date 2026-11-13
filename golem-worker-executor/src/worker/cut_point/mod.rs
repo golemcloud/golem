@@ -315,13 +315,15 @@ pub(crate) async fn streaming_acceptance_spans_cut(
         (
             OplogEntry::StreamSession { record, .. },
             OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             },
         ) => Ok(matches!(oplog.download_payload(record).await?,
                 StreamSessionRecord::Prepared(prepared) if prepared.attempt.session_key.idempotency_key == idempotency_key)),
         (
             OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             },
             OplogEntry::StreamSession { record, .. },
         ) => Ok(matches!(oplog.download_payload(record).await?,

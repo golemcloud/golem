@@ -15,7 +15,7 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
     RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
@@ -50,7 +50,7 @@ use fields::calculate_source_card_transfers;
 use fields::calculate_total_linear_memory_size;
 use fields::calculate_update_fields;
 use fields::collect_resources;
-pub(crate) use fields::fold_invocation_result_entries;
+pub(crate) use fields::{InvocationRequests, fold_invocation_result_entries};
 pub use reconstruction::calculate_last_known_status;
 pub use reconstruction::calculate_last_known_status_for_existing_worker;
 pub use reconstruction::calculate_last_known_status_with_checkpoint;
@@ -257,6 +257,7 @@ fn update_status_with_precomputed_regions(
     let deleted_regions = &deleted;
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
+    let requests = InvocationRequests::of_status(&last_known);
     let (status, last_error_kind, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
             last_known.status,
@@ -373,14 +374,12 @@ fn update_status_with_precomputed_regions(
         &new_entries,
     )?;
 
-    let (invocation_results, current_idempotency_key, cancelled_idempotency_key) =
-        calculate_invocation_results(
-            last_known.invocation_results,
-            last_known.current_idempotency_key,
-            last_known.cancelled_idempotency_key,
-            deleted_regions,
-            &new_entries,
-        );
+    let (invocation_results, requests) = calculate_invocation_results(
+        last_known.invocation_results,
+        requests,
+        deleted_regions,
+        &new_entries,
+    );
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
@@ -427,8 +426,8 @@ fn update_status_with_precomputed_regions(
         has_durable_stream_history,
         ephemeral_execution_begun,
         pending_durable_stream_cancellations,
-        current_idempotency_key,
-        cancelled_idempotency_key,
+        current_idempotency_key: requests.current,
+        current_invocation_started_at: requests.current_started_at,
         component_revision,
         component_size,
         owned_resources,

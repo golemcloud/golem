@@ -39,7 +39,9 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::SpanId;
@@ -54,6 +56,15 @@ use wasmtime::component::Accessor;
 use wasmtime::component::HasSelf;
 use wasmtime::component::Resource;
 use wasmtime::component::ResourceTableError;
+
+fn internal_rpc_child_key(request_key: &InvocationRequestKey) -> anyhow::Result<IdempotencyKey> {
+    match request_key {
+        InvocationRequestKey::Internal(key) => Ok(key.clone()),
+        _ => Err(anyhow::anyhow!(
+            "RPC Start must carry an internal request key"
+        )),
+    }
+}
 
 #[async_trait::async_trait]
 impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
@@ -150,6 +161,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     mut handle: FutureInvokeCallHandle,
     request: &HostRequestGolemRpcInvoke,
+    invocation_id: &OwnedInvocationId,
     streaming: Option<&DurableStreamingTaskParams>,
     span_id: &SpanId,
     this_rep: u32,
@@ -166,11 +178,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
             if let Err(err) = worker_proxy
-                .cancel_invocation(
-                    &request.remote_agent_id,
-                    request.idempotency_key.clone(),
-                    &auth_ctx,
-                )
+                .cancel_invocation(&request.remote_agent_id, invocation_id.id(), &auth_ctx)
                 .await
             {
                 tracing::info!(err=%err, "Best-effort cancel_invocation failed");
@@ -247,6 +255,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 task: Option<FutureInvokeTaskHandle>,
                 streaming: Option<DurableStreamingTaskParams>,
                 request: HostRequestGolemRpcInvoke,
+                invocation_id: OwnedInvocationId,
                 remote_agent_id: OwnedAgentId,
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
@@ -298,6 +307,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     task,
                     streaming,
                     request,
+                    invocation_id,
                     remote_agent_id,
                     env,
                     config,
@@ -313,6 +323,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         task: task.take(),
                         streaming: streaming.clone(),
                         request: request.clone(),
+                        invocation_id: invocation_id.clone(),
                         remote_agent_id: remote_agent_id.clone(),
                         env: env.clone(),
                         config: config.clone(),
@@ -331,6 +342,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 task,
                 streaming,
                 request,
+                invocation_id,
                 remote_agent_id,
                 env,
                 config,
@@ -399,6 +411,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                 accessor,
                                 handle,
                                 &request,
+                                &invocation_id,
                                 streaming.as_ref(),
                                 &span_id,
                                 this_rep,
@@ -448,11 +461,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             let auth_ctx = live.take_agent_auth_ctx();
                             let mut task = accessor.with(|mut access| {
                                 let ctx = access.get();
-                                match streaming.clone() {
+                                Ok::<_, anyhow::Error>(match streaming.clone() {
                                     Some(params) => spawn_streaming_invoke_and_await_task(
                                         ctx,
                                         remote_agent_id.clone(),
-                                        request.idempotency_key.clone(),
+                                        internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         params,
                                         env.clone(),
@@ -465,7 +478,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     None => spawn_invoke_and_await_task(
                                         ctx,
                                         &remote_agent_id,
-                                        request.idempotency_key.clone(),
+                                        internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         request.input.clone(),
                                         env.clone(),
@@ -477,8 +490,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         request.scope_card.clone(),
                                         auth_ctx,
                                     ),
-                                }
-                            });
+                                })
+                            })?;
                             let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
                                 let ctx = access.get();
                                 let wait = accessor.runtime_activity().and_then(|activity| {
@@ -523,6 +536,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         accessor,
                                         live,
                                         &request,
+                                        &invocation_id,
                                         streaming.as_ref(),
                                         &span_id,
                                         this_rep,
@@ -772,7 +786,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 handle: FutureInvokeCallHandle,
                 streaming: Option<DurableStreamingTaskParams>,
                 remote_agent_id: AgentId,
-                idempotency_key: IdempotencyKey,
+                idempotency_key: golem_common::model::InvocationId,
                 span_id: SpanId,
             },
             /// Nothing to cancel: a baked failure, or already cancelled / consumed.
@@ -791,13 +805,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     handle,
                     streaming,
                     request,
+                    invocation_id,
                     span_id,
                     cancel_token,
                     ..
                 } => match handle.take() {
                     Some(handle) => {
                         let remote_agent_id = request.remote_agent_id.clone();
-                        let idempotency_key = request.idempotency_key.clone();
+                        let idempotency_key = invocation_id.id();
                         let span_id = span_id.clone();
                         let streaming = streaming.clone();
                         *state = FutureInvokeResultState::Cancelled;

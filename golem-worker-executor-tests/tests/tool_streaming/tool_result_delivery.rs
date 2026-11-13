@@ -237,18 +237,26 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let metadata = executor.get_worker_metadata(&worker).await?;
         let checkpoint = executor.oplog_max_index(&worker).await?;
         let (_, input) = data_value!(mode.to_string(), gate.clone()).into_parts();
+        let key = IdempotencyKey::fresh();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(worker.clone().into()),
                 method_name: Some("produce_terminal".to_string()),
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 environment_id: Some(component.environment_id.into()),
                 component_owner_account_id: Some(component.account_id.into()),
                 mode: AgentInvocationMode::Await as i32,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
                 expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                request_key: Some(
+                    golem_common::model::InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .into(),
+                ),
                 ..Default::default()
             })),
         };

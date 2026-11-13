@@ -32,7 +32,7 @@ impl StreamSession {
         key.consumer_invocation =
             self.producer
                 .qualify_session(&StreamRegistrationInvocation::Local(
-                    intent.consumer_invocation.clone(),
+                    intent.consumer_invocation,
                 ));
         Ok(key)
     }
@@ -120,7 +120,7 @@ impl StreamSession {
                     StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         session_key: self.session_reference.clone(),
-                        consumer_invocation: self.consumer_invocation.idempotency_key.clone(),
+                        consumer_invocation: self.consumer_invocation.idempotency_key,
                         source: binding.source,
                         epoch,
                         cancellation: StreamCancellationRequest {
@@ -265,7 +265,7 @@ impl StreamSession {
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: self.session_reference.clone(),
-            consumer_invocation: self.consumer_invocation.idempotency_key.clone(),
+            consumer_invocation: self.consumer_invocation.idempotency_key,
             source: binding.source.clone(),
             epoch,
             cancellation,

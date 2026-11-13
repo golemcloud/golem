@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::{AgentStatusRecord, AssistedSelection, UsableAutomaticSnapshot};
@@ -53,7 +57,7 @@ fn manual_invocation(target: u64) -> OplogEntry {
     OplogEntry::PendingAgentInvocation {
         timestamp: Timestamp::from(1_000),
         not_before: None,
-        idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+        invocation_id: InvocationId(Uuid::new_v4()),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
             target_revision: revision(target),
         })),
@@ -327,7 +331,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 timestamp: Timestamp::from(1_000),
                 not_before: None,
                 oplog_index: idx(6),
-                idempotency_key: Some(golem_common::model::IdempotencyKey::fresh()),
+                idempotency_key: Some(InvocationId(Uuid::new_v4())),
                 manual_update_target_revision: None,
             },
             PendingInvocationRef {

@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut first_error = None;
         for (key, metadata) in sessions {
             let session_reference = if metadata.prepared_position().is_some() {
-                StreamRegistrationInvocation::Local(key.idempotency_key.clone())
+                StreamRegistrationInvocation::Local(key.idempotency_key)
             } else {
                 StreamRegistrationInvocation::Remote(key.clone())
             };
@@ -235,7 +235,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || attached.epoch == 0
                     || attached.attachment_id != prepared.attempt.attachment_id
                     || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                        OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == key.idempotency_key)
+                        OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
                 {
                     return Err(WorkerExecutorError::runtime(
                         "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
@@ -399,7 +399,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         session_key: StreamRegistrationInvocation::Remote(key.session_key.clone()),
-                        consumer_invocation: key.consumer_invocation.idempotency_key.clone(),
+                        consumer_invocation: key.consumer_invocation.idempotency_key,
                         source: StreamRecordReference::Foreign(mapping.handle.clone()),
                         epoch: key.epoch,
                         cancellation: cancellation.clone(),

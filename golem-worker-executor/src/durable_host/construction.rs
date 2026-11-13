@@ -363,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )?),
             primary_invocation_start_index: None,
             invocation_principal: None,
+            invocation_id: None,
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),

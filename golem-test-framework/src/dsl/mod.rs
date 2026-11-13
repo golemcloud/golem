@@ -815,7 +815,7 @@ pub trait TestDsl {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool>;
 
     async fn get_file_system_node(

@@ -370,7 +370,7 @@ impl SessionControlMetadata {
                     StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         session_key: session_reference.clone(),
-                        consumer_invocation: session_reference.idempotency_key().clone(),
+                        consumer_invocation: *session_reference.idempotency_key(),
                         source: binding.source.clone(),
                         epoch,
                         cancellation: StreamCancellationRequest {
@@ -549,7 +549,7 @@ impl SessionControlMetadata {
             return Err(error.clone());
         }
         let consumer_matches = key.consumer_invocation
-            == StreamRegistrationInvocation::Local(intent.consumer_invocation.clone()).qualify(
+            == StreamRegistrationInvocation::Local(intent.consumer_invocation).qualify(
                 key.consumer_environment_id,
                 &key.consumer,
                 key.expected_consumer_fingerprint,
@@ -1182,7 +1182,7 @@ mod tests {
         let mut second = first.clone();
         second.transport_stream_id += 1;
         let third = binding(&mapping_for(&key, 18));
-        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
+        let reference = StreamRegistrationInvocation::Local(key.idempotency_key);
         let mut state = SessionControlMetadata::default();
         let records = [
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
@@ -1243,7 +1243,7 @@ mod tests {
     fn forwarding_intent_is_exact_reader_history_not_terminal_or_attachment_authority() {
         let owner = identity();
         let key = owner.invocation.clone();
-        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
+        let reference = StreamRegistrationInvocation::Local(key.idempotency_key);
         let source = binding(&mapping());
         let mut destination = source.clone();
         destination.transport_stream_id += 1;
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn forwarding_control_routing_deduplicates_local_remote_session_aliases() {
         let owner = identity();
-        let source = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+        let source = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key);
         let destination = StreamRegistrationInvocation::Remote(owner.invocation.clone());
         let binding = binding(&mapping());
         let reader = LocalStreamReaderId {
@@ -1434,9 +1434,7 @@ mod tests {
             session_key: reference.clone(),
             reader_id: reader,
             destination: StreamReaderForwardDestination::SessionBinding {
-                session_key: StreamRegistrationInvocation::Local(
-                    golem_common::model::IdempotencyKey::new("destination".into()),
-                ),
+                session_key: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(301).into()),
                 binding: sibling,
                 publication: StreamReaderForwardPublication::InvocationResult { handle_index: 0 },
             },
@@ -1553,7 +1551,7 @@ mod tests {
         let key = real_owner.invocation.clone();
         let local = StreamSessionRecord::CallerAttempt(StreamCallerAttemptRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
             attempt_id: AttemptId::fresh(),
         });
         let mut matching = SessionControlMetadata::default();
@@ -1642,8 +1640,8 @@ mod tests {
             .insert("$result".into(), SessionStreamRole::Output);
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(source.idempotency_key.clone()),
-            consumer_invocation: source.idempotency_key.clone(),
+            session_key: StreamRegistrationInvocation::Local(source.idempotency_key),
+            consumer_invocation: source.idempotency_key,
             source: binding(&first).source,
             epoch: 3,
             cancellation: StreamCancellationRequest {
@@ -1695,12 +1693,11 @@ mod tests {
         )
         .unwrap();
         attachment.epoch = 3;
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("consumer-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(302).into();
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: StreamRegistrationInvocation::Remote(source.clone()),
-            consumer_invocation: attachment.consumer_invocation.idempotency_key.clone(),
+            consumer_invocation: attachment.consumer_invocation.idempotency_key,
             source: binding(&mapping).source,
             epoch: 3,
             cancellation: StreamCancellationRequest {
@@ -1741,7 +1738,7 @@ mod tests {
         attachment.consumer.agent_id = "forked-consumer".into();
         attachment.expected_consumer_fingerprint = AgentFingerprint::new();
         attachment.consumer_invocation =
-            StreamRegistrationInvocation::Local(intent.consumer_invocation.clone()).qualify(
+            StreamRegistrationInvocation::Local(intent.consumer_invocation).qualify(
                 attachment.consumer_environment_id,
                 &attachment.consumer,
                 attachment.expected_consumer_fingerprint,
@@ -1751,8 +1748,7 @@ mod tests {
                 .has_committed_cancellation(&attachment, &mapping, &intent)
                 .unwrap()
         );
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("other-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(303).into();
         assert!(
             !forked
                 .has_committed_cancellation(&attachment, &mapping, &intent)
@@ -1833,8 +1829,8 @@ mod tests {
         let key = identity().invocation;
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
-            consumer_invocation: key.idempotency_key.clone(),
+            session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
+            consumer_invocation: key.idempotency_key,
             source: StreamRecordReference::Foreign(mapping.handle.clone()),
             epoch: 3,
             cancellation: StreamCancellationRequest {
@@ -1861,7 +1857,7 @@ mod tests {
             &key,
             &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
                 mapping: binding(&mapping),
             }),
             owner.environment_id,
@@ -1964,10 +1960,8 @@ mod tests {
             };
             let intent = StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(
-                    owner.invocation.idempotency_key.clone(),
-                ),
-                consumer_invocation: owner.invocation.idempotency_key.clone(),
+                session_key: StreamRegistrationInvocation::Local(owner.invocation.idempotency_key),
+                consumer_invocation: owner.invocation.idempotency_key,
                 source: binding(&mapping).source,
                 epoch: 3,
                 cancellation: StreamCancellationRequest {
@@ -2032,7 +2026,7 @@ mod tests {
                 &key,
                 &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+                    session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
                     mapping: binding(&mapping),
                 }),
                 owner.environment_id,

@@ -1,8 +1,15 @@
 use super::http_test_context::{HttpTestContext, make_test_context};
+use golem_api_grpc::proto::golem::registry::v1::{
+    GetActiveRoutesForDomainRequest, get_active_routes_for_domain_response,
+    registry_service_client::RegistryServiceClient,
+};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::{AgentId, AgentStatus};
 use golem_common::phantom_agent_id;
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_service_base::custom_api::{CompiledRoutes, RouteBehaviour};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDsl;
 use reqwest::{Response, StatusCode};
 use serde_json::{Value, json};
 use test_r::{inherit_test_dep, test, timeout};
@@ -316,8 +323,48 @@ async fn selected_stream_roots_forks_receipts_and_links(
     )
     .await?;
 
+    let registry = deps.registry_service();
+    let mut client = RegistryServiceClient::connect(format!(
+        "http://{}:{}",
+        registry.grpc_host(),
+        registry.grpc_port()
+    ))
+    .await?;
+    let response = client
+        .get_active_routes_for_domain(GetActiveRoutesForDomainRequest {
+            domain: agent.host_header.to_str()?.to_owned(),
+        })
+        .await?
+        .into_inner();
+    let Some(get_active_routes_for_domain_response::Result::Success(response)) = response.result
+    else {
+        anyhow::bail!("failed to resolve deployed routes: {response:?}");
+    };
+    let routes: CompiledRoutes = response
+        .compiled_routes
+        .ok_or_else(|| anyhow::anyhow!("missing deployed routes"))?
+        .try_into()
+        .map_err(anyhow::Error::msg)?;
+    let family = routes
+        .routes
+        .iter()
+        .find_map(|route| match &route.behavior {
+            RouteBehaviour::CallAgent(call)
+                if call.agent_type.0 == "SelectedQueryAgent" && call.method_name == "echo" =>
+            {
+                call.durable_streams.as_ref().map(|policy| policy.family_id)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("missing selected-query echo route family"))?;
+    let scope = golem_common::model::durable_stream::durable_stream_route_scope(
+        &routes.environment_id.to_string(),
+        &routes.deployment_revision.to_string(),
+        &family.to_string(),
+    );
     let root = phantom_agent_id!("SelectedQueryAgent", p, id.clone()).to_string();
-    let hash = blake3::hash(format!("{root}\0branch").as_bytes());
+    let identity = serde_json::to_vec(&(&root, &scope, "branch"))?;
+    let hash = blake3::hash(&identity);
     let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into()?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -365,6 +412,25 @@ async fn selected_stream_roots_forks_receipts_and_links(
     read(&agent, &selected(&source, Some(q)), json!(["Q"])).await?;
     read(&agent, &p_fork, json!(["P", "fork-P", "P-fork-only"])).await?;
 
+    let selected_worker = AgentId {
+        component_id: agent.component_id,
+        agent_id: root,
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            if agent
+                .user
+                .get_worker_metadata(&selected_worker)
+                .await?
+                .status
+                == AgentStatus::Failed
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
     let failed = agent
         .client
         .put(agent.base_url.join(&selected(&base, Some(p)))?)

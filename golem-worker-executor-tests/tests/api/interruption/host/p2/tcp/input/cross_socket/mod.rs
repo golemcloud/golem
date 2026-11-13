@@ -168,7 +168,7 @@ async fn cross_socket_pending(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();

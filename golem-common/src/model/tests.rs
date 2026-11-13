@@ -27,9 +27,10 @@ use crate::model::{
     AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
-    ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationResultBloom,
-    InvocationResultMembership, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationId, InvocationResultBloom,
+    InvocationResultMembership, InvocationResultPosition, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
+    Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,11 @@ use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
 
-fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
+fn invocation_id(value: u128) -> InvocationId {
+    InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210 + value))
+}
+
+fn durable_stream_test_session_key(key: u128) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -47,7 +52,35 @@ fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
             agent_id: "agent".to_string(),
         },
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: IdempotencyKey::new(key.to_string()),
+        idempotency_key: invocation_id(key),
+    }
+}
+
+fn test_route_scope() -> String {
+    crate::model::durable_stream::durable_stream_route_scope("environment", "1", "route")
+}
+
+#[test]
+fn durable_stream_route_scope_is_canonical_and_preserves_tuple_boundaries() {
+    use crate::model::durable_stream::{
+        durable_stream_route_scope, validate_durable_stream_route_scope,
+    };
+    let first = durable_stream_route_scope("a:b", "c", "雪\"route");
+    let second = durable_stream_route_scope("a", "b:c", "雪\"route");
+    assert_ne!(first, second);
+    assert!(validate_durable_stream_route_scope(&first).is_ok());
+    assert!(validate_durable_stream_route_scope(&second).is_ok());
+    for invalid in [
+        "",
+        "route",
+        "[\"a\",\"b\"]",
+        "[\"a\", \"b\",\"c\"]",
+        "[\"a\",\"b\",\"\"]",
+    ] {
+        assert!(
+            validate_durable_stream_route_scope(invalid).is_err(),
+            "{invalid}"
+        );
     }
 }
 
@@ -60,14 +93,15 @@ fn fold_public_binding(
 
 #[test]
 fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
-    let first = durable_stream_test_session_key("first");
-    let second = durable_stream_test_session_key("second");
+    let first = durable_stream_test_session_key(1);
+    let second = durable_stream_test_session_key(2);
     let public = "report-42";
     let initialize = |invocation: &StreamInvocationId, deadline| {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             source_invocation: invocation.clone(),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
@@ -77,8 +111,9 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let refresh = |invocation: &StreamInvocationId, expected, deadline| {
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             expected_deadline_millis: expected,
             refreshed_at_millis: deadline - 10_000,
             deadline_millis: deadline,
@@ -87,8 +122,9 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
     let expire = |invocation: &StreamInvocationId, expected| {
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             expected_deadline_millis: expected,
             expired_at_millis: expected,
         })
@@ -161,14 +197,15 @@ fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
 
 #[test]
 fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() {
-    let invocation = durable_stream_test_session_key("absolute");
+    let invocation = durable_stream_test_session_key(3);
     let public = "report-absolute";
     let mut index = DurableStreamSessionIndex::default();
     let initialized =
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public.to_string(),
-            session_key: invocation.idempotency_key.clone(),
+            session_key: invocation.idempotency_key,
             source_invocation: invocation.clone(),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Absolute {
@@ -178,7 +215,8 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
         });
     let refreshed = StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
         format_version: 1,
-        session_key: invocation.idempotency_key.clone(),
+        route_scope: test_route_scope(),
+        session_key: invocation.idempotency_key,
         public_session_id: public.to_string(),
         expected_deadline_millis: 10_000,
         refreshed_at_millis: 9_000,
@@ -212,7 +250,7 @@ fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() 
 #[test]
 fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
     use crate::model::durable_stream::StreamForkCutRecord;
-    let source = durable_stream_test_session_key("fork");
+    let source = durable_stream_test_session_key(4);
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![0; 32],
@@ -227,7 +265,7 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
     let prepared_attempt = AttemptId::fresh();
     let attachment_attempt = AttemptId::fresh();
     let original = DurableStreamSessionStatus {
-        session_key: Some(source.idempotency_key.clone()),
+        session_key: Some(source.idempotency_key),
         first_prepared: Some(OplogIndex::from_u64(2)),
         prepared: Some(OplogIndex::from_u64(2)),
         prepared_attempt_id: Some(prepared_attempt),
@@ -245,10 +283,10 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
         ..Default::default()
     };
     let mut index = DurableStreamSessionIndex::default();
-    index.insert(source.idempotency_key.clone(), original.clone());
-    let sibling_key = IdempotencyKey::new("sibling".to_string());
+    index.insert(source.idempotency_key, original.clone());
+    let sibling_key = invocation_id(5);
     let sibling = DurableStreamSessionStatus {
-        session_key: Some(sibling_key.clone()),
+        session_key: Some(sibling_key),
         attachment_epoch: Some(9),
         attachment_attempt_id: Some(AttemptId::fresh()),
         attachment_attached: Some(true),
@@ -256,7 +294,7 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
         tombstoned_slots: ["output".to_string()].into_iter().collect(),
         ..Default::default()
     };
-    index.insert(sibling_key.clone(), sibling.clone());
+    index.insert(sibling_key, sibling.clone());
     index.apply_record(OplogIndex::from_u64(21), &cut);
     let expected = DurableStreamSessionStatus {
         attachment_epoch: Some(1),
@@ -279,15 +317,16 @@ fn durable_stream_self_revert_preserves_retained_session() {
     use crate::model::durable_stream::StreamForkCutRecord;
     use crate::model::regions::OplogRegion;
 
-    let source = durable_stream_test_session_key("self-revert");
+    let source = durable_stream_test_session_key(6);
     let public_session_id = "retained-public";
     let mut index = DurableStreamSessionIndex::default();
     index.apply_record(
         OplogIndex::from_u64(2),
         &StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
+            route_scope: test_route_scope(),
             public_session_id: public_session_id.into(),
-            session_key: source.idempotency_key.clone(),
+            session_key: source.idempotency_key,
             source_invocation: source.clone(),
             request_hash: vec![0; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
@@ -321,11 +360,11 @@ fn durable_stream_self_revert_preserves_retained_session() {
 
 #[test]
 fn durable_stream_control_records_binary_roundtrip_and_validate() {
-    let session_key = durable_stream_test_session_key("control-roundtrip");
+    let session_key = durable_stream_test_session_key(7);
     let records = [
         StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+            session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key),
             slot: "input".to_string(),
             role: SessionStreamRole::Input,
         }),
@@ -345,7 +384,7 @@ fn durable_stream_control_records_binary_roundtrip_and_validate() {
     let invalid = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
         format_version: 1,
         session_key: StreamRegistrationInvocation::Local(
-            durable_stream_test_session_key("empty-slot").idempotency_key,
+            durable_stream_test_session_key(8).idempotency_key,
         ),
         slot: String::new(),
         role: SessionStreamRole::Input,
@@ -363,8 +402,8 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     };
     use golem_schema::schema::SchemaFingerprintV1;
 
-    let invocation = durable_stream_test_session_key("forward-target");
-    let source = StreamRegistrationInvocation::Local(IdempotencyKey::new("source".into()));
+    let invocation = durable_stream_test_session_key(9);
+    let source = StreamRegistrationInvocation::Local(invocation_id(10));
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 29,
         role: SessionStreamRole::Input,
@@ -503,20 +542,20 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
 
 #[test]
 fn durable_stream_control_status_folds_after_finished_idempotently() {
-    let session_key = durable_stream_test_session_key("control-fold");
-    let key = session_key.idempotency_key.clone();
+    let session_key = durable_stream_test_session_key(11);
+    let key = session_key.idempotency_key;
     let mut index = DurableStreamSessionIndex::default();
     index.insert(
-        key.clone(),
+        key,
         DurableStreamSessionStatus {
-            session_key: Some(session_key.idempotency_key.clone()),
+            session_key: Some(session_key.idempotency_key),
             finished: Some(OplogIndex::from_u64(10)),
             ..Default::default()
         },
     );
     let tombstone = StreamSessionRecord::Tombstoned(StreamSlotTombstonedRecord {
         format_version: 1,
-        session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+        session_key: StreamRegistrationInvocation::Local(session_key.idempotency_key),
         slot: "output".to_string(),
         role: SessionStreamRole::Output,
     });
@@ -543,12 +582,12 @@ fn durable_stream_control_status_folds_after_finished_idempotently() {
 
 #[test]
 fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
-    let session = durable_stream_test_session_key("same-owner");
+    let session = durable_stream_test_session_key(12);
     let mut index = DurableStreamSessionIndex::default();
     index.insert(
-        session.idempotency_key.clone(),
+        session.idempotency_key,
         DurableStreamSessionStatus {
-            session_key: Some(session.idempotency_key.clone()),
+            session_key: Some(session.idempotency_key),
             prepared: Some(OplogIndex::from_u64(2)),
             ..Default::default()
         },
@@ -571,9 +610,7 @@ fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
     );
     index.apply_record(
         OplogIndex::from_u64(4),
-        &cancel(StreamRegistrationInvocation::Local(
-            session.idempotency_key.clone(),
-        )),
+        &cancel(StreamRegistrationInvocation::Local(session.idempotency_key)),
     );
     assert!(
         index
@@ -586,9 +623,9 @@ fn durable_stream_remote_control_cannot_cancel_same_owner_local_session() {
 #[test]
 fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished() {
     let mut index = DurableStreamSessionIndex::default();
-    let unfinished = IdempotencyKey::new("unfinished".to_string());
+    let unfinished = invocation_id(13);
     index.insert(
-        unfinished.clone(),
+        unfinished,
         DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(1)),
             ..Default::default()
@@ -596,7 +633,7 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
     );
     for n in 0..140 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n}")),
+            invocation_id(100 + u128::from(n)),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(n + 2)),
                 finished: Some(OplogIndex::from_u64(n + 1000)),
@@ -613,16 +650,8 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
             .count(),
         128
     );
-    assert!(
-        index
-            .get(&IdempotencyKey::new("done-0".to_string()))
-            .is_none()
-    );
-    assert!(
-        index
-            .get(&IdempotencyKey::new("done-139".to_string()))
-            .is_some()
-    );
+    assert!(index.get(&invocation_id(100)).is_none());
+    assert!(index.get(&invocation_id(239)).is_some());
 }
 
 #[test]
@@ -630,7 +659,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
     let mut index = DurableStreamSessionIndex::default();
     for n in 0..128 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n:04}")),
+            invocation_id(100 + n),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(1)),
                 finished: Some(OplogIndex::from_u64(2)),
@@ -642,7 +671,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
 
     for n in 128..1_128 {
         index.insert(
-            IdempotencyKey::new(format!("done-{n:04}")),
+            invocation_id(100 + n),
             DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(1)),
                 finished: Some(OplogIndex::from_u64(2)),
@@ -659,7 +688,7 @@ fn durable_stream_session_index_serialization_stays_bounded() {
 
 #[test]
 fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
-    let key = IdempotencyKey::new("invocation".to_string());
+    let key = invocation_id(14);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -667,7 +696,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
             agent_id: "agent".to_string(),
         },
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
     };
     let attempt = AttemptId::fresh();
     let attachment_id = AttachmentId::primary(
@@ -680,7 +709,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let mut status = DurableStreamSessionStatus {
         first_prepared: Some(OplogIndex::from_u64(10)),
         prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key.clone()),
+        session_key: Some(session_key.idempotency_key),
         prepared_attempt_id: Some(attempt),
         ..Default::default()
     };
@@ -689,7 +718,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -702,7 +731,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
 
 #[test]
 fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
-    let key = IdempotencyKey::new("invocation".to_string());
+    let key = invocation_id(15);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
         callee: AgentId {
@@ -722,7 +751,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     let mut status = DurableStreamSessionStatus {
         first_prepared: Some(OplogIndex::from_u64(10)),
         prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key.clone()),
+        session_key: Some(session_key.idempotency_key),
         prepared_attempt_id: Some(attempt),
         ..Default::default()
     };
@@ -730,7 +759,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -749,14 +778,14 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut invalid = DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(10)),
             prepared: Some(OplogIndex::from_u64(10)),
-            session_key: status.session_key.clone(),
+            session_key: status.session_key,
             prepared_attempt_id: Some(attempt),
             ..Default::default()
         };
         invalid.apply_pending_invocation(pending, &invalid.session_key.as_ref().unwrap().clone());
         let mut attached = match StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: invalid.session_key.clone().unwrap(),
+            session_key: invalid.session_key.unwrap(),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -784,7 +813,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut unsupported = DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(10)),
             prepared: Some(OplogIndex::from_u64(10)),
-            session_key: Some(attached.session_key.clone()),
+            session_key: Some(attached.session_key),
             prepared_attempt_id: Some(attempt),
             ..Default::default()
         };
@@ -795,22 +824,29 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     }
 }
 
+fn result_at(terminal: u64) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+    }
+}
+
 #[test]
 fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
     assert!(membership.is_exact_complete());
 
-    membership.insert(third.clone(), OplogIndex::from_u64(30));
-    membership.insert(fourth.clone(), OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
 
     assert_eq!(membership.len(), 2);
     assert!(!membership.is_exact_complete());
@@ -824,6 +860,7 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
     assert_eq!(membership.get(&third), None);
     assert_eq!(membership.get(&fourth), Some(&OplogIndex::from_u64(40)));
     assert_eq!(membership.get(&fifth), Some(&OplogIndex::from_u64(50)));
+    assert_eq!(membership.position(&fourth), Some(&result_at(40)));
     assert!(membership.might_contain(&first));
     assert!(membership.might_contain(&second));
     assert!(membership.might_contain(&third));
@@ -834,22 +871,23 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
 #[test]
 fn invocation_result_membership_updates_recency_for_repeated_keys() {
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
-    let sixth = IdempotencyKey::new("sixth".to_string());
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
+    let sixth = invocation_id(6);
 
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second.clone(), OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
-    membership.insert(first.clone(), OplogIndex::from_u64(60));
-    membership.insert(sixth.clone(), OplogIndex::from_u64(70));
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
+    membership.insert(first, result_at(60));
+    membership.insert(sixth, result_at(70));
 
     assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(60)));
+    assert_eq!(membership.position(&first), Some(&result_at(60)));
     assert_eq!(membership.get(&second), None);
     assert_eq!(membership.get(&fifth), None);
     assert_eq!(membership.get(&sixth), Some(&OplogIndex::from_u64(70)));
@@ -860,16 +898,16 @@ fn invocation_result_membership_binary_round_trip_preserves_membership() {
     use crate::serialization::{deserialize, serialize};
 
     let mut membership = InvocationResultMembership::new(2, 64, 3);
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
-    let third = IdempotencyKey::new("third".to_string());
-    let fourth = IdempotencyKey::new("fourth".to_string());
-    let fifth = IdempotencyKey::new("fifth".to_string());
-    membership.insert(first.clone(), OplogIndex::from_u64(10));
-    membership.insert(second, OplogIndex::from_u64(20));
-    membership.insert(third, OplogIndex::from_u64(30));
-    membership.insert(fourth, OplogIndex::from_u64(40));
-    membership.insert(fifth, OplogIndex::from_u64(50));
+    let first = invocation_id(1);
+    let second = invocation_id(2);
+    let third = invocation_id(3);
+    let fourth = invocation_id(4);
+    let fifth = invocation_id(5);
+    membership.insert(first, result_at(10));
+    membership.insert(second, result_at(20));
+    membership.insert(third, result_at(30));
+    membership.insert(fourth, result_at(40));
+    membership.insert(fifth, result_at(50));
     membership.set_revert_generation(4);
 
     let bytes = serialize(&membership).unwrap();
@@ -885,10 +923,7 @@ fn small_invocation_result_membership_serializes_without_a_bloom_filter() {
     use crate::serialization::{deserialize, serialize};
 
     let mut membership = InvocationResultMembership::default();
-    membership.insert(
-        IdempotencyKey::new("first".to_string()),
-        OplogIndex::from_u64(10),
-    );
+    membership.insert(invocation_id(1), result_at(10));
 
     assert!(membership.is_exact_complete());
     let bytes = serialize(&membership).unwrap();
@@ -905,12 +940,12 @@ fn default_invocation_result_bloom_keeps_new_invocations_local_at_100x_capacity(
         DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
     );
     for index in 0..history_size {
-        bloom.insert(&IdempotencyKey::new(format!("existing-{index}")));
+        bloom.insert(&invocation_id(index as u128));
     }
 
     let sample_size = 100_000;
     let false_positives = (0..sample_size)
-        .filter(|index| bloom.might_contain(&IdempotencyKey::new(format!("new-{index}"))))
+        .filter(|index| bloom.might_contain(&invocation_id((history_size + index) as u128)))
         .count();
 
     assert!(
@@ -1667,7 +1702,7 @@ fn scheduled_invocations_become_pending_work_only_when_due() {
             timestamp: Timestamp::from(1000),
             not_before: Some(deadline),
             oplog_index: OplogIndex::INITIAL,
-            idempotency_key: Some(IdempotencyKey::fresh()),
+            idempotency_key: Some(InvocationId::new()),
             manual_update_target_revision: None,
         }],
         ..Default::default()
@@ -1888,7 +1923,7 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         expires_at: None,
     };
     let invocation = AgentInvocation::AgentMethod {
-        idempotency_key: IdempotencyKey::fresh(),
+        idempotency_key: InvocationId::new(),
         method_name: "run".to_string(),
         input: SchemaValue::Tuple {
             elements: Vec::new(),

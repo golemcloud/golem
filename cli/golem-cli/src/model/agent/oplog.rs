@@ -348,6 +348,10 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!(
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
@@ -394,6 +398,12 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!("{pad}kind:              {:?}", params.kind));
+                if let Some(invocation_id) = &params.invocation_id {
+                    logln(format!(
+                        "{pad}invocation id:     {}",
+                        format_id(invocation_id)
+                    ));
+                }
                 logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
@@ -658,8 +668,8 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}idempotency key:   {}",
-                    format_id(&params.idempotency_key),
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id),
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
@@ -1147,8 +1157,8 @@ fn render_agent_invocation(
     match invocation {
         PublicAgentInvocation::AgentInitialization(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(
@@ -1158,8 +1168,8 @@ fn render_agent_invocation(
         }
         PublicAgentInvocation::AgentMethodInvocation(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
@@ -1171,8 +1181,8 @@ fn render_agent_invocation(
                 params.command_path.join("/")
             ));
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.input));
@@ -1183,8 +1193,8 @@ fn render_agent_invocation(
         }
         PublicAgentInvocation::ProcessOplogEntries(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
         }
         PublicAgentInvocation::ManualUpdate(params) => {
@@ -1371,7 +1381,7 @@ mod tests {
         ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
         PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
-    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::model::{Empty, InvocationId};
     use golem_common::schema::{
         IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
@@ -1490,7 +1500,7 @@ mod tests {
 
     fn agent_initialization() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            idempotency_key: IdempotencyKey::new("init-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(1)),
             constructor_parameters: typed_string_value("constructor"),
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
@@ -1500,7 +1510,7 @@ mod tests {
 
     fn agent_method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -1524,7 +1534,7 @@ mod tests {
 
     fn process_oplog_entries() -> PublicAgentInvocation {
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-            idempotency_key: IdempotencyKey::new("process-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(3)),
         })
     }
 
@@ -1638,7 +1648,7 @@ mod tests {
     #[test]
     fn oplog_typed_values_show_safe_secret_metadata() {
         let secret_id = uuid::Uuid::from_u128(1);
-        let permission_card_id = uuid::Uuid::from_u128(2);
+        let permission_card_id = uuid::Uuid::from_u128(0xca4d);
         let schema = SchemaType::record(vec![
             NamedFieldType {
                 name: "credential".to_string(),
@@ -1774,7 +1784,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "INVOKE initialize",
-                    "idempotency key:   init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1783,7 +1793,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "INVOKE generated-method",
-                    "idempotency key:   method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1801,7 +1811,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "INVOKE process oplog entries",
-                    "idempotency key:   process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (
@@ -1828,7 +1838,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "ENQUEUED AGENT INITIALIZATION",
-                    "idempotency key:   init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1837,7 +1847,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "ENQUEUED INVOCATION generated-method",
-                    "idempotency key:   method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1855,7 +1865,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "ENQUEUED PROCESS OPLOG ENTRIES",
-                    "idempotency key:   process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (

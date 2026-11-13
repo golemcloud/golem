@@ -373,7 +373,7 @@ async fn cold_session_mapping_loads_its_local_registration() {
         StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: StreamRegistrationInvocation::Local(
-                fixture.identity.invocation.idempotency_key.clone(),
+                fixture.identity.invocation.idempotency_key,
             ),
             mapping: binding.clone(),
         }),
@@ -400,7 +400,7 @@ async fn persisted_metadata_restores_entity_attribution() {
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = producer.register(None, request).await.unwrap().value;
     let reference =
-        StreamRegistrationInvocation::Local(fixture.identity.invocation.idempotency_key.clone());
+        StreamRegistrationInvocation::Local(fixture.identity.invocation.idempotency_key);
     producer
         .append_session_record_attributed(
             None,
@@ -984,8 +984,7 @@ async fn persisted_finished_session_rejects_new_events_after_cold_load_and_evict
 
     for ordinal in 0..130 {
         let mut other = session.clone();
-        other.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("open-session-{ordinal}"));
+        other.idempotency_key = uuid::Uuid::from_u128(1000 + ordinal as u128).into();
         cold.ensure_session_accepts_new_events(&other)
             .await
             .unwrap();
@@ -1526,8 +1525,7 @@ async fn persisted_reconciliation_pages_active_catalogue_without_payloads() {
             &fixture.identity,
             handle.stream_id,
         );
-        key.session_key.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("consumer-{ordinal}"));
+        key.session_key.idempotency_key = uuid::Uuid::from_u128(2000 + ordinal as u128).into();
         key.consumer_invocation = key.session_key.clone();
         key.attachment_id = AttachmentId::primary(
             key.consumer_environment_id,
@@ -2100,7 +2098,7 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
     let raw = StreamSession::new(
         raw_producer.clone(),
         oplog,
-        StreamRegistrationInvocation::Local(target.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(target.invocation.idempotency_key),
         [],
     );
     let raw = raw.current_control_metadata().await.unwrap();
@@ -2197,7 +2195,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                 observation:
                     golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                 reobserves: None,
-                session_key: StreamRegistrationInvocation::Local(source.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(source.idempotency_key),
                 reader_id: reader,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(90), 3),
                 consumer_read_ordinal: 0,
@@ -2211,7 +2209,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
-                            source.idempotency_key.clone(),
+                            source.idempotency_key,
                         ),
                         reader_id: reader,
                         source_offset: terminal,
@@ -2225,7 +2223,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                         format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         session_key: StreamRegistrationInvocation::Local(
-                            source.idempotency_key.clone(),
+                            source.idempotency_key,
                         ),
                         reader_id: reader,
                         source_offset: terminal,
@@ -2362,7 +2360,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
         let raw = crate::durable_host::durable_session::StreamSession::new(
             raw_producer.clone(),
             fixture.oplog.clone(),
-            StreamRegistrationInvocation::Local(target.idempotency_key.clone()),
+            StreamRegistrationInvocation::Local(target.idempotency_key),
             [],
         );
         let raw_control = raw.current_control_metadata().await.unwrap();
@@ -2435,7 +2433,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                                 observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                                 reobserves: None,
                                 session_key: StreamRegistrationInvocation::Local(
-                                    target.idempotency_key.clone(),
+                                    target.idempotency_key,
                                 ),
                                 reader_id: reader,
                                 source_offset: StreamOffset::new(OplogIndex::from_u64(92), 4),
@@ -2495,8 +2493,7 @@ async fn persisted_session_catalogue_includes_mapping_free_foreign_sessions_once
         let producer = fixture.producer().await;
         for ordinal in range {
             let mut session = fixture.identity.invocation.clone();
-            session.idempotency_key =
-                golem_common::model::IdempotencyKey::new(format!("outbound-{ordinal}"));
+            session.idempotency_key = uuid::Uuid::from_u128(3000 + ordinal as u128).into();
             session.callee.agent_id = "foreign()".into();
             let repeated = !expected.insert(session.clone());
             let reader_id = local_reader(1, 0);
@@ -2573,7 +2570,7 @@ async fn persisted_consumer_head_summarizes_long_journal_without_history_reads()
                             observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                             reobserves: None,
                             session_key: StreamRegistrationInvocation::Local(
-                                session_key.idempotency_key.clone(),
+                                session_key.idempotency_key,
                             ),
                             reader_id,
                             source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -2597,7 +2594,7 @@ async fn persisted_consumer_head_summarizes_long_journal_without_history_reads()
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         reader_id,
                         source_offset: terminal_offset,
@@ -2645,7 +2642,7 @@ async fn host_observation_includes_native_append_before_its_mutation() {
     let consumer = fixture.producer().await;
     let session = fixture.identity.invocation.clone();
     let reader = local_reader(2, 0);
-    let reference = StreamRegistrationInvocation::Local(session.idempotency_key.clone());
+    let reference = StreamRegistrationInvocation::Local(session.idempotency_key);
     let item = |ordinal, bytes| {
         consumer_item_record(
             reference.clone(),
@@ -2726,7 +2723,7 @@ async fn cancelled_control_query_drains_detached_index_catch_up() {
                 observation:
                     golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                 reobserves: None,
-                session_key: StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(session.idempotency_key),
                 reader_id: reader,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(17), 0),
                 consumer_read_ordinal: 0,
@@ -2964,7 +2961,7 @@ async fn metadata_task_admission_workloads() {
                 golem_common::model::durable_stream::StreamCallerAttemptRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: StreamRegistrationInvocation::Local(
-                        fixture.identity.invocation.idempotency_key.clone(),
+                        fixture.identity.invocation.idempotency_key,
                     ),
                     attempt_id,
                 },
@@ -3047,7 +3044,7 @@ async fn metadata_task_admission_workloads() {
                                 producer.clone(),
                                 fixture.oplog.clone(),
                                 StreamRegistrationInvocation::Local(
-                                    fixture.identity.invocation.idempotency_key.clone(),
+                                    fixture.identity.invocation.idempotency_key,
                                 ),
                                 [],
                             );

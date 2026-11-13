@@ -262,6 +262,7 @@ object StreamSession {
     @volatile var pendingAttachOperation = "resume"
     @volatile var everAccepted = false
     val idempotencyKey = UUID.randomUUID.toString
+    @volatile var acceptedIdentity: Option[(AgentId, String)] = None
     val reconnecting = new AtomicBoolean(false)
     val reconnectRequested = new AtomicBoolean(false)
     val reconnectAction = new AtomicReference[() => Unit](() => ())
@@ -602,28 +603,15 @@ object StreamSession {
         ws.request(1); null
       }
       private def handle(json: Json): Unit = {
-        val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-        kind match {
-          case "invocationAccepted" => StreamSessionProtocol.validate(json, kind, Set("attemptId", "idempotencyKey", "mappings", "sessionToken"))
-          case "invocationRejected" => StreamSessionProtocol.validate(json, kind, Set("code", "message", "retryable"), Set("attemptId"))
-          case "invocationResult" => StreamSessionProtocol.validate(json, kind, Set("mappings", "result"))
-          case "outputStreamItem" => StreamSessionProtocol.validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
-          case "stream-end" => StreamSessionProtocol.serverStreamEnd(json)
-          case "inputStreamAck" => StreamSessionProtocol.validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
-          case "attachmentRevoked" => StreamSessionProtocol.validate(json, kind, Set("reason"))
-          case "invocationFinished" => StreamSessionProtocol.validate(json, kind, Set("outcome"))
-          case _ => throw BridgeException(s"unsupported stream session message: $kind")
-        }
+        val kind = StreamSessionProtocol.validateServerMessage(json)
         if (!accepted && kind != "invocationAccepted" && kind != "invocationRejected")
           throw BridgeException("message received before invocation acceptance")
         kind match {
           case "invocationAccepted" =>
             if (accepted) throw BridgeException("duplicate invocation acceptance")
-            val attempt = Json.requireField(json, "attemptId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            val key = Json.requireField(json, "idempotencyKey").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            if (attempt != pendingAttempt || key != idempotencyKey) throw BridgeException("acceptance does not match the pending operation")
             val token = Json.requireField(json, "sessionToken").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
             StreamSessionProtocol.validateOpaqueToken(token, "session token")
+            acceptedIdentity = Some(StreamSessionProtocol.acceptanceIdentity(json, pendingAttempt, acceptedIdentity))
             install(json, complete = true)
             sessionToken = token
             accepted = true
@@ -634,10 +622,9 @@ object StreamSession {
             val attempt = Json.field(json, "attemptId").map(value => Json.asString(value).fold(e => throw BridgeException(e), identity))
             if (attempt.exists(_ != pendingAttempt) || (everAccepted && attempt.isEmpty))
               throw BridgeException("rejection does not match the pending operation")
-            val code = Json.requireField(json, "code").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            val message = Json.requireField(json, "message").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+            val error = StreamSessionProtocol.invocationRejection(json)
+            val code = error.code
             val retryable = Json.requireField(json, "retryable").flatMap(Json.asBoolean).fold(e => throw BridgeException(e), identity)
-            val error = BridgeException(s"$code: $message")
             val pendingAttach = everAccepted && pendingResume && !accepted
             val takeover = pendingAttach && pendingAttachOperation == "resume" && code == "invalid-attachment-state"
             val retry = retryable && code != "invalid-attachment-state"
@@ -676,7 +663,8 @@ object StreamSession {
                 Some(decoded)
               case _ => throw BridgeException("invalid invocation result kind")
             }
-            if (!result.trySuccess(AgentInvocationResult(resolved.agentId.getOrElse(AgentId("", "")), idempotencyKey, value, None)))
+            val (owner, key) = acceptedIdentity.getOrElse(throw BridgeException("invocation result has no accepted identity"))
+            if (!result.trySuccess(AgentInvocationResult(owner, key, value, None)))
               throw BridgeException("duplicate invocation result")
           case "outputStreamItem" =>
             install(json); val ch = StreamSessionProtocol.channel(json)
@@ -741,8 +729,7 @@ object StreamSession {
                 session.inputs.values().asScala.foreach(_.stop())
                 closeNormally()
               case "failure" =>
-                StreamSessionProtocol.validateObject(outcome, Set("kind", "code", "message"), "invocation outcome")
-                val error = AgentStreamError(Json.requireField(outcome, "code").flatMap(Json.asString).toOption.get, Json.requireField(outcome, "message").flatMap(Json.asString).toOption.get)
+                val error = StreamSessionProtocol.invocationFailure(outcome)
                 if (session.outputs.values().asScala.exists(output => !output.isTerminal)) throw BridgeException("invocation failure preceded an output terminal")
                 result.tryFailure(error)
                 if (!finished.trySuccess(())) throw BridgeException("duplicate invocation finish")

@@ -216,6 +216,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner,
             invocation_id,
             logical_key_position: None,
+            agent_invocation: ctx.state.get_current_idempotency_key(),
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)

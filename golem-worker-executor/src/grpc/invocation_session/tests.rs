@@ -121,8 +121,9 @@ async fn routed_stream_session(
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                public_session_id: identity.invocation.idempotency_key.value.clone(),
-                session_key: identity.invocation.idempotency_key.clone(),
+                public_session_id: identity.invocation.idempotency_key.to_string(),
+                route_scope: None,
+                session_key: identity.invocation.idempotency_key,
                 expiry_policy: StreamSessionExpiryPolicy::None,
                 expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
@@ -158,7 +159,7 @@ async fn routed_stream_session(
     let pending_invocation_oplog_index = oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            identity.invocation.idempotency_key.clone(),
+            identity.invocation.idempotency_key,
             OplogPayload::Inline(Box::new(
                 golem_common::model::AgentInvocationPayload::SaveSnapshot,
             )),
@@ -173,7 +174,7 @@ async fn routed_stream_session(
             None,
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.idempotency_key.clone(),
+                session_key: identity.invocation.idempotency_key,
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -212,7 +213,9 @@ async fn routed_stream_session(
             request: Some(invocation_request::Request::Start(InvocationStart {
                 method_name: Some("run".into()),
                 input: Some(input),
-                idempotency_key: Some(identity.invocation.idempotency_key.clone().into()),
+                idempotency_key: Some(
+                    golem_common::model::IdempotencyKey::new("routed-stream-session".into()).into(),
+                ),
                 ..Default::default()
             })),
         })

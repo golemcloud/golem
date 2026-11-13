@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
+use golem_common::model::InvocationId;
 use golem_common::model::card::{
     SourceCardTransferConfirmed, SourceCardTransferIndex, SourceCardTransferRecords,
     SourceCardTransferStarted, SourceCardTransferState, StoredCard,
@@ -55,7 +56,7 @@ pub(super) fn calculate_pending_invocations(
                 OplogEntry::PendingAgentInvocation {
                     timestamp,
                     not_before,
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     ..
                 } => {
                     // A manual update is the only invocation variant without a semantic
@@ -67,7 +68,7 @@ pub(super) fn calculate_pending_invocations(
                     let idempotency_key = if manual_update_target_revision.is_some() {
                         None
                     } else {
-                        Some(idempotency_key.clone())
+                        Some(*idempotency_key)
                     };
                     result.push(PendingInvocationRef {
                         timestamp: *timestamp,
@@ -78,10 +79,12 @@ pub(super) fn calculate_pending_invocations(
                     });
                 }
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 }
                 | OplogEntry::CancelPendingInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
                 }
@@ -607,15 +610,10 @@ pub(super) fn calculate_update_fields(
 
 pub(super) fn calculate_invocation_results(
     invocation_results: InvocationResultMembership,
-    current_idempotency_key: Option<IdempotencyKey>,
-    cancelled_idempotency_key: Option<IdempotencyKey>,
+    requests: InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (
-    InvocationResultMembership,
-    Option<IdempotencyKey>,
-    Option<IdempotencyKey>,
-) {
+) -> (InvocationResultMembership, InvocationRequests) {
     let mut invocation_results = invocation_results;
     let revert_count = entries
         .values()
@@ -626,89 +624,147 @@ pub(super) fn calculate_invocation_results(
             .revert_generation()
             .wrapping_add(revert_count),
     );
-    let mut current_idempotency_key = current_idempotency_key;
-    let mut cancelled_idempotency_key = cancelled_idempotency_key;
+    let mut requests = requests;
 
-    fold_invocation_result_entries(
-        &mut current_idempotency_key,
-        &mut cancelled_idempotency_key,
-        deleted_regions,
-        entries,
-        |key, index| invocation_results.insert(key.clone(), index),
-    );
+    fold_invocation_result_entries(&mut requests, deleted_regions, entries, |key, position| {
+        // A permission-denied `Error` names its cancelled request only when the cancellation was
+        // folded with it; otherwise the earlier fold has recorded the request.
+        let request = position.request.or_else(|| {
+            invocation_results
+                .position(key)
+                .and_then(|known| known.request)
+        });
+        invocation_results.insert(
+            *key,
+            InvocationResultPosition {
+                terminal: position.terminal,
+                request,
+            },
+        )
+    });
 
-    (
-        invocation_results,
-        current_idempotency_key,
-        cancelled_idempotency_key,
-    )
+    (invocation_results, requests)
 }
 
+/// The request entries of the invocations whose results a fold has not seen yet: the
+/// `AgentInvocationStarted` entry of the running invocation and the `PendingAgentInvocation`
+/// entries of the pending ones. A result takes the position of its request from here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, desert_rust::BinaryCodec)]
+pub struct InvocationRequests {
+    pub current: Option<InvocationId>,
+    pub current_started_at: Option<OplogIndex>,
+    pub pending: HashMap<InvocationId, OplogIndex>,
+    /// The last invocation cancelled before it started, with its `PendingAgentInvocation` entry.
+    /// A permission-denied `Error` can follow the cancellation and name the same invocation.
+    pub cancelled: Option<(InvocationId, OplogIndex)>,
+}
+
+impl InvocationRequests {
+    /// The requests at `status`, whose pending invocations still hold their request entries.
+    pub fn of_status(status: &AgentStatusRecord) -> Self {
+        Self {
+            current: status.current_idempotency_key,
+            current_started_at: status.current_invocation_started_at,
+            pending: status
+                .pending_invocations
+                .iter()
+                .filter_map(|pending| {
+                    pending
+                        .idempotency_key
+                        .map(|key| (key, pending.oplog_index))
+                })
+                .collect(),
+            cancelled: None,
+        }
+    }
+
+    fn request_of(&self, key: &InvocationId) -> Option<OplogIndex> {
+        if self.current.as_ref() == Some(key) {
+            self.current_started_at
+        } else {
+            self.cancelled
+                .as_ref()
+                .filter(|(cancelled, _)| cancelled == key)
+                .map(|(_, request)| *request)
+        }
+    }
+}
+
+/// Gives every invocation result in `entries` to `observe_result`, with the position of its
+/// request, and keeps `requests` as the running and pending invocations.
+///
+/// `AgentInvocationFinished` entries name their invocation, so they are attributed by that name
+/// and not by their position. An invocation `Error` is attributed to the invocation it names only
+/// while that invocation runs, or when it is the agent's `PermissionDenied` rejection of a
+/// cancelled pending invocation. A retry error of a background task that outlives its invocation, or of an
+/// entity body, therefore never replaces a finished result. `Exited` names no invocation and is
+/// attributed to the running one.
 pub(crate) fn fold_invocation_result_entries(
-    current_idempotency_key: &mut Option<IdempotencyKey>,
-    cancelled_idempotency_key: &mut Option<IdempotencyKey>,
+    requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    mut observe_result: impl FnMut(&IdempotencyKey, OplogIndex),
+    mut observe_result: impl FnMut(&InvocationId, InvocationResultPosition),
 ) {
     for (oplog_idx, entry) in entries {
+        // Pending requests follow `calculate_pending_invocations`, which keeps them in deleted
+        // regions too.
+        let pending_request = match entry {
+            OplogEntry::PendingAgentInvocation { invocation_id, .. } => {
+                requests.pending.insert(*invocation_id, *oplog_idx);
+                None
+            }
+            OplogEntry::AgentInvocationStarted { invocation_id, .. }
+            | OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                requests.pending.remove(invocation_id)
+            }
+            _ => None,
+        };
+
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
-            *cancelled_idempotency_key = None;
             continue;
         }
 
+        let position = |request| InvocationResultPosition {
+            terminal: *oplog_idx,
+            request,
+        };
         match entry {
-            OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
-            } => {
-                *cancelled_idempotency_key = None;
-                *current_idempotency_key = Some(idempotency_key.clone());
+            OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
+                requests.current = Some(*invocation_id);
+                requests.current_started_at = Some(*oplog_idx);
             }
-            OplogEntry::AgentInvocationFinished { .. } => {
-                *cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
+            OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
+                observe_result(invocation_id, position(requests.request_of(invocation_id)));
+                if requests.current.as_ref() == Some(invocation_id) {
+                    requests.current = None;
+                    requests.current_started_at = None;
                 }
-                *current_idempotency_key = None;
             }
-            OplogEntry::CancelPendingInvocation {
-                idempotency_key, ..
-            } => {
-                if current_idempotency_key.as_ref() != Some(idempotency_key) {
-                    observe_result(idempotency_key, *oplog_idx);
-                }
-                *cancelled_idempotency_key = Some(idempotency_key.clone());
-            }
-            OplogEntry::Error {
-                kind: OplogErrorKind::Invocation,
-                error: AgentError::PermissionDenied(_),
-                ..
-            } => {
-                if let Some(idempotency_key) = cancelled_idempotency_key.take() {
-                    observe_result(&idempotency_key, *oplog_idx);
-                } else if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
+            OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                if requests.current.as_ref() != Some(invocation_id) {
+                    observe_result(invocation_id, position(pending_request));
+                    requests.cancelled = pending_request.map(|request| (*invocation_id, request));
                 }
             }
             OplogEntry::Error {
                 kind: OplogErrorKind::Invocation,
+                invocation_id: Some(invocation_id),
+                entity_parent_start_index,
+                error,
                 ..
-            } => {
-                *cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
-                }
+            } if requests.current.as_ref() == Some(invocation_id)
+                || (entity_parent_start_index.is_none()
+                    && matches!(error, AgentError::PermissionDenied(_))) =>
+            {
+                observe_result(invocation_id, position(requests.request_of(invocation_id)));
             }
             OplogEntry::Exited { .. } => {
-                *cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &*current_idempotency_key {
-                    observe_result(idempotency_key, *oplog_idx);
+                if let Some(idempotency_key) = &requests.current {
+                    observe_result(idempotency_key, position(requests.current_started_at));
                 }
             }
-            _ => {
-                *cancelled_idempotency_key = None;
-            }
+            _ => {}
         }
     }
 }
@@ -838,6 +894,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                delivery,
                 ..
             } => {
                 result.insert(
@@ -847,6 +904,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *confirmed_up_to,
                         sending_up_to: *sending_up_to,
                         last_batch_start: *last_batch_start,
+                        delivery: delivery.clone(),
                     },
                 );
             }
@@ -860,6 +918,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *idx,
                         sending_up_to: *idx,
                         last_batch_start: *idx,
+                        delivery: None,
                     });
             }
             OplogEntry::DeactivatePlugin {
@@ -889,6 +948,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                             confirmed_up_to: *idx,
                             sending_up_to: *idx,
                             last_batch_start: *idx,
+                            delivery: None,
                         });
                 }
             }

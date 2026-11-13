@@ -59,7 +59,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -450,10 +450,10 @@ pub trait CallCountManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey);
+    async fn set_current_idempotency_key(&mut self, key: InvocationId);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
+    async fn get_current_idempotency_key(&self) -> Option<InvocationId>;
 
     /// Sets (overwrites) the current invocation context stack
     async fn set_current_invocation_context(

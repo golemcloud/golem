@@ -39,7 +39,7 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
-use crate::worker::status::fold_invocation_result_entries;
+use crate::worker::status::{InvocationRequests, fold_invocation_result_entries};
 use async_trait::async_trait;
 use desert_rust::BinarySerializer;
 use futures::future::BoxFuture;
@@ -50,9 +50,10 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
-    InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    ShardEpoch, ShardId, SourceCardTransferIndex, SourceCardTransferState, SuccessfulUpdateRecord,
+    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, InvocationId,
+    InvocationResultMembership, InvocationResultPosition, OwnedAgentId, ReceivedCardTransferIndex,
+    ReceivedCardTransferState, ShardEpoch, ShardId, SourceCardTransferIndex,
+    SourceCardTransferState, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -81,16 +82,15 @@ fn rejections_to_store(
     (kept != current).then(|| kept.into_iter().collect())
 }
 
-fn invocation_result_index_field(key: &IdempotencyKey) -> String {
-    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{}", key.value)
+fn invocation_result_index_field(key: &InvocationId) -> String {
+    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{key}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct InvocationResultIndexMetadata {
     pub covered_through: OplogIndex,
     pub revert_generation: u64,
-    pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
+    pub requests: InvocationRequests,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
@@ -99,12 +99,12 @@ struct PersistedInvocationResult {
     // revert generation, so a complete same-generation index cannot retain older-generation
     // fields.
     revert_generation: u64,
-    oplog_index: OplogIndex,
+    position: InvocationResultPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationResultIndexLookup {
-    Found(OplogIndex),
+    Found(InvocationResultPosition),
     DefinitiveMiss,
     Incomplete,
 }
@@ -275,7 +275,7 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError>;
 
     async fn lookup_durable_stream_public_binding(
@@ -283,6 +283,7 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError>;
 
@@ -354,7 +355,7 @@ pub trait WorkerService: Send + Sync {
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         _status: &AgentStatusRecord,
-        _idempotency_key: &IdempotencyKey,
+        _idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         Ok(InvocationResultIndexLookup::Incomplete)
     }

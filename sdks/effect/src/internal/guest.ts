@@ -22,15 +22,10 @@ import {
  * package don't have to register the ambient `agent-guest` declaration.
  */
 interface GuestExports {
-  initialize: (
-    agentType: string,
-    input: CoreTypes.SchemaValueTree,
-    principal: AgentCommon.Principal,
-  ) => Promise<void>
+  initialize: (agentType: string, input: CoreTypes.SchemaValueTree) => Promise<void>
   invoke: (
     methodName: string,
     input: CoreTypes.SchemaValueTree,
-    principal: AgentCommon.Principal,
   ) => Promise<CoreTypes.SchemaValueTree | undefined>
   getDefinition: () => AgentCommon.AgentType
   discoverAgentTypes: () => AgentCommon.AgentType[]

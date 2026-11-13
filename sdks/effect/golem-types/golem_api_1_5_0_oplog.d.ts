@@ -313,6 +313,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type ErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
+    /** The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs. */
+    invocationId?: Uuid;
     error: string;
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
@@ -447,14 +449,14 @@ declare module 'golem:api/oplog@1.5.0' {
     record: TypedSchemaValue;
   };
   export type AgentInitializationParameters = {
-    idempotencyKey: string;
+    invocationId: Uuid;
     constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
   };
   export type AgentMethodInvocationParameters = {
-    idempotencyKey: string;
+    invocationId: Uuid;
     methodName: string;
     functionInput: TypedSchemaValue;
     traceId: string;
@@ -462,13 +464,13 @@ declare module 'golem:api/oplog@1.5.0' {
     invocationContext: SpanData[][];
   };
   export type ProcessOplogEntriesParameters = {
-    idempotencyKey: string;
+    invocationId: Uuid;
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
   };
   export type ExternalToolInvocationParameters = {
-    idempotencyKey: string;
+    invocationId: Uuid;
     toolName: string;
     commandPath: string[];
     input: TypedSchemaValue;
@@ -585,7 +587,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;
-    idempotencyKey: string;
+    invocationId: Uuid;
   };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -668,6 +670,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type AgentInvocationFinishedParameters = {
     timestamp: Datetime;
+    invocationId: Uuid;
     result: AgentInvocationResult;
     methodName?: string;
     consumedFuel: bigint;
@@ -705,6 +708,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     plugin: PluginInstallationDescription;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
@@ -942,7 +946,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
-    idempotencyKey: string;
+    invocationId: Uuid;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];
@@ -951,6 +955,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
+    invocationId: Uuid;
     result: OplogPayload;
     methodName?: string;
     consumedFuel: bigint;
@@ -959,6 +964,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
+    /** The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs. */
+    invocationId?: Uuid;
     error: WorkerError;
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
@@ -967,7 +974,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
     notBefore?: Datetime;
-    idempotencyKey: string;
+    invocationId: Uuid;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];
@@ -1063,10 +1070,12 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     pluginGrantId: EnvironmentPluginGrantId;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
     lastBatchStart: OplogIndex;
+    delivery?: Uint8Array;
   };
   export type OplogEntry =
   /** The initial agent oplog entry */

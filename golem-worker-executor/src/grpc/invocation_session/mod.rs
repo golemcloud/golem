@@ -60,8 +60,7 @@ use golem_common::model::durable_stream::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, InvocationStatus,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
@@ -143,6 +142,7 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    idempotency_key: golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,

@@ -180,11 +180,13 @@ if mode == "start-unread":
 
 
 def accept_operation(conn, operation, key, mappings):
+    assert key != "00000000-0000-0000-0000-000000000123"
     send(
         conn,
         type="invocationAccepted",
+        agentId={"componentId": "component", "agentId": "accepted-agent"},
         attemptId=operation["attemptId"],
-        idempotencyKey=key,
+        idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="original-session",
         mappings=mappings,
     )
@@ -298,7 +300,8 @@ if mode in ("input-prefetch-delayed", "input-prefetch-before-attachment"):
         start = receive(conn)
         provisional = start["methodParameters"]["value"]["provisionalRef"]
         send(conn, type="invocationAccepted", attemptId=start["attemptId"],
-             idempotencyKey=start["idempotencyKey"], sessionToken="prefetch-session",
+             agentId={"componentId": "component", "agentId": "accepted-agent"},
+             idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="prefetch-session",
              mappings=[dict(direction="input", channel=1, streamToken="input",
                             provisionalRef=provisional,
                             inputHighWater=dict(sequence="0", terminal=False))])
@@ -337,7 +340,8 @@ if mode in ("input-failure-replay", "input-eof-replay"):
         provisional = start["methodParameters"]["value"]["provisionalRef"]
         send(
             conn, type="invocationAccepted", attemptId=start["attemptId"],
-            idempotencyKey=start["idempotencyKey"], sessionToken="input-session",
+            agentId={"componentId": "component", "agentId": "accepted-agent"},
+            idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="input-session",
             mappings=[dict(direction="input", channel=1, streamToken="input",
                            provisionalRef=provisional,
                            inputHighWater=dict(sequence="0", terminal=False))],
@@ -364,7 +368,8 @@ if mode in ("input-failure-replay", "input-eof-replay"):
             assert resume["operation"] == "resume"
             send(
                 conn, type="invocationAccepted", attemptId=resume["attemptId"],
-                idempotencyKey=start["idempotencyKey"], sessionToken="input-session",
+                agentId={"componentId": "component", "agentId": "accepted-agent"},
+                idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="input-session",
                 mappings=[dict(direction="input", channel=channel, streamToken="input",
                                inputHighWater=dict(sequence="1", terminal=False))],
             )
@@ -424,8 +429,9 @@ with connect() as conn:
     send(
         conn,
         type="invocationAccepted",
+        agentId={"componentId": "component", "agentId": "accepted-agent"},
         attemptId=start["attemptId"],
-        idempotencyKey=start["idempotencyKey"],
+        idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="original-session",
         mappings=[],
     )
@@ -517,7 +523,8 @@ with connect() as conn:
                 assert resume["operation"] == "resume"
                 assert resume["outputCursors"] == ["cursor-1"]
                 send(resumed, type="invocationAccepted", attemptId=resume["attemptId"],
-                     idempotencyKey=start["idempotencyKey"], sessionToken="new-session",
+                     agentId={"componentId": "component", "agentId": "accepted-agent"},
+                     idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="new-session",
                      mappings=[dict(direction="output", channel=3, streamToken="output")])
                 # No output frame advances this attachment before the cancellation.
                 finish_cancelled_output(resumed, 3)
@@ -602,8 +609,9 @@ with connect() as conn:
     send(
         conn,
         type="invocationAccepted",
+        agentId={"componentId": "component", "agentId": "accepted-agent"},
         attemptId=takeover["attemptId"],
-        idempotencyKey=start["idempotencyKey"],
+        idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="new-session",
         mappings=[{"direction": "output", "channel": 3, "streamToken": "output"}],
     )

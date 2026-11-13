@@ -48,6 +48,11 @@ import {
   rawOfScopeCard,
   scopeCardFromRaw,
 } from './permissionCardTestSupport';
+import {
+  hostInvocationMetadata,
+  sdkInvocationMetadata,
+  testInvocationUuid,
+} from './invocationMetadataTestSupport';
 
 function remoteClientTypeChecks(): void {
   const def = defineAgent({
@@ -112,7 +117,7 @@ function remoteClientTypeChecks(): void {
   const fullEphemeralClient = fullEphemeralDefinition.client.newPhantom({ name: 'counter' });
   void fullEphemeralClient.ping().then(({ metadata, value }) => ({
     agentId: metadata.agentId,
-    idempotencyKey: metadata.idempotencyKey,
+    invocationId: metadata.invocationId,
     value,
   }));
 
@@ -676,9 +681,9 @@ describe('RPC client', () => {
     const client = def.client.get({ name: 'scoped' }, undefined, { scopeCard: defaultCard });
     const rpc = latestRpc();
     const scopeOfLastAwait = () => rpc.asyncInvokeAndAwait.mock.calls.at(-1)![2];
-    rpc.invoke.mockReturnValue({ agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' });
+    rpc.invoke.mockReturnValue(hostInvocationMetadata('ScopeCardClientAgent(scoped)'));
     rpc.asyncInvokeAndAwait.mockImplementation(() => ({
-      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      metadata: hostInvocationMetadata('ScopeCardClientAgent(scoped)'),
       future: {
         get: vi
           .fn()
@@ -692,7 +697,7 @@ describe('RPC client', () => {
     await expect(client.echo({ text: 'b' }, { scopeCard: callCard })).resolves.toBe('hi');
     expect(scopeOfLastAwait()).toBe(rawOfScopeCard(callCard));
     rpc.asyncInvokeAndAwait.mockImplementation(() => ({
-      metadata: { agentId: 'ScopeCardClientAgent(scoped)', idempotencyKey: 'k' },
+      metadata: hostInvocationMetadata('ScopeCardClientAgent(scoped)'),
       future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
     }));
     await client.touch({ scopeCard: null });
@@ -957,7 +962,7 @@ describe('RPC client', () => {
     const client = target.client(definition);
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: target.value, idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata(target.value),
       future: {
         get: vi.fn().mockRejectedValue({
           tag: 'remote-agent-error',
@@ -1035,7 +1040,7 @@ describe('RPC client', () => {
     const rpc = latestRpc();
     const token = { cancel: vi.fn() };
     rpc.scheduleCancelableInvocation.mockReturnValue({
-      metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('agent-id'),
       cancellationToken: token,
     });
     const at: Datetime = { seconds: 1n, nanoseconds: 0 };
@@ -1084,7 +1089,7 @@ describe('RPC client', () => {
     const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
     const client = ephemeralDef.client.newPhantom({ name: 'counter' });
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
-    const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
+    const metadata = hostInvocationMetadata('final-agent-id');
     let completeInvocation!: (value: undefined) => void;
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
@@ -1106,16 +1111,19 @@ describe('RPC client', () => {
     metadata.agentId = 'mutated-after-start';
     completeInvocation(undefined);
     await expect(awaited).resolves.toEqual({
-      metadata: { agentId: 'final-agent-id', idempotencyKey: 'key' },
+      metadata: sdkInvocationMetadata('final-agent-id'),
       value: undefined,
     });
     metadata.agentId = 'final-agent-id';
     const triggered = client.ping.trigger();
-    expect(triggered).toEqual(metadata);
-    expect(triggered).not.toBe(metadata);
+    expect(triggered).toEqual(sdkInvocationMetadata('final-agent-id'));
+    expect(triggered.invocationId.toString()).toBe(`final-agent-id.${testInvocationUuid}`);
     expect(Object.isFrozen(triggered)).toBe(true);
     const scheduled = client.ping.schedule({ seconds: 1n, nanoseconds: 0 });
-    expect(scheduled).toEqual(receipt);
+    expect(scheduled).toEqual({
+      metadata: sdkInvocationMetadata('final-agent-id'),
+      cancellationToken: receipt.cancellationToken,
+    });
     expect(scheduled).not.toBe(receipt);
     expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
@@ -1134,7 +1142,7 @@ describe('RPC client', () => {
     const client = def.client.getPhantom({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('agent-id'),
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
         get: vi.fn().mockResolvedValue(undefined),
@@ -1161,7 +1169,7 @@ describe('RPC client', () => {
     const client = def.client.get({});
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: { agentId: 'UnitOutputAgent()', idempotencyKey: 'unit' },
+      metadata: hostInvocationMetadata('UnitOutputAgent()'),
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
         get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
@@ -1181,7 +1189,7 @@ describe('RPC client', () => {
     const client = def.client.get({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('agent-id'),
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
         get: vi.fn().mockResolvedValue(schemaValueToWit(compileSchema(z.number()).toValue(42))),
@@ -1203,7 +1211,7 @@ describe('RPC client', () => {
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('agent-id'),
       future: {
         subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
         get: vi.fn().mockRejectedValue({
@@ -1234,6 +1242,48 @@ describe('RPC client', () => {
         },
       });
     }
+  });
+
+  it('surfaces the future error of a rejected call without invocation metadata', async () => {
+    const def = defineAgent({
+      name: 'RejectedCallAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    vi.mocked(makeAgentId).mockReturnValueOnce('RejectedCallAgent()');
+    const client = def.client.get({});
+    const rpc = latestRpc();
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: undefined,
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockRejectedValue({ tag: 'denied', val: 'scope card rejected' }),
+        cancel: vi.fn(),
+      },
+    });
+
+    const error = await client.ping().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(isRemoteCallError(error)).toBe(true);
+    expect(error).toMatchObject({ cause: { tag: 'denied', details: 'scope card rejected' } });
+
+    // Only a rejected call lacks metadata, so one that completes without it is a protocol error.
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: undefined,
+      future: {
+        subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
+        get: vi.fn().mockResolvedValue({ valueNodes: [] }),
+        cancel: vi.fn(),
+      },
+    });
+    const completed = await client.ping().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(isRemoteCallError(completed)).toBe(true);
+    expect(completed).toMatchObject({ cause: { tag: 'protocol-error' } });
   });
 
   it('narrows RemoteCallError structurally across package entry identities', () => {

@@ -9,7 +9,6 @@ pub(all) struct Handlers {
     @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?,
     @streams.ToolOutputWriter?,
     @streams.ToolOutputWriter?,
-    @common0.Principal,
     @async-core.TaskGroup[Unit],
   ) -> Result[@common.InvocationResult, @types.ToolError]
 }
@@ -43,13 +42,12 @@ pub async fn invoke(
   ]?,
   stdout : @streams.ToolOutputWriter?,
   stderr : @streams.ToolOutputWriter?,
-  principal : @common0.Principal,
   background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
   match handlers.val {
     Some(h) =>
       (h.invoke)(
-        tool_name, command_path, input, stdin, stdout, stderr, principal, background_group,
+        tool_name, command_path, input, stdin, stdout, stderr, background_group,
       )
     None => {
       @model.drop_wit_capabilities(input.value)

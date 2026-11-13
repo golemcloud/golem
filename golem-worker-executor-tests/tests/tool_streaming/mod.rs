@@ -11002,6 +11002,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         scope_card: Some((&scope).try_into().map_err(anyhow::Error::msg)?),
         origin_invocation: None,
         external_tool: None,
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
     };
     let observer = tokio::spawn({
         let executor = executor.clone();
@@ -11872,6 +11873,9 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
             .await?,
         b"drain-me".as_slice()
     );
+    let stored_drain_key = executor
+        .external_invocation_key(&drain_worker_id, &drain_key, "collect_capable")
+        .await?;
     let drain_oplog = executor
         .get_oplog(&drain_worker_id, OplogIndex::INITIAL)
         .await?;
@@ -11897,7 +11901,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
                         &started.invocation,
                         PublicAgentInvocation::AgentMethodInvocation(method)
                             if method.method_name.replace('-', "_") == "collect_capable"
-                                && method.idempotency_key == drain_key
+                                && method.invocation_id == stored_drain_key
                     )
             ))
             .count(),
@@ -15081,6 +15085,13 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 fresh_owner: false,
                 expected_deployment_revision: None,
             }),
+            request_key: Some(
+                golem_common::model::InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&key),
+                )
+                .into(),
+            ),
             ..Default::default()
         })),
     };
@@ -15170,7 +15181,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     resumed_sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: start.idempotency_key,
+                idempotency_key: accepted.idempotency_key,
                 agent_id: start.agent_id,
                 environment_id: start.environment_id,
                 attachment_id: accepted.attachment_id,
@@ -15325,7 +15336,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     completed_sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: accepted.idempotency_key.clone(),
+                idempotency_key: accepted.idempotency_key,
                 agent_id: accepted.agent_id.clone(),
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,
@@ -18987,6 +18998,14 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
     initialize_git_harness(&harness, "main").await?;
     let cwd = string_list(&["/workspace/repo"]);
     let cancelled_key = IdempotencyKey::fresh();
+    let cancelled_id = harness
+        .executor
+        .finalized_invocation_key(
+            &harness.worker_id,
+            &golem_common::model::InvocationRequestKey::Internal(cancelled_key.clone()),
+            "tool:git/config",
+        )
+        .await?;
 
     {
         let mut active_git_gate = harness
@@ -19073,7 +19092,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         assert!(
             harness
                 .executor
-                .cancel_invocation(&harness.worker_id, &cancelled_key)
+                .cancel_invocation(&harness.worker_id, &cancelled_id)
                 .await?,
             "queued Git invocation must be cancellable"
         );
@@ -19090,7 +19109,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
         matches!(
             &entry.entry,
             PublicOplogEntry::CancelPendingInvocation(params)
-                if params.idempotency_key == cancelled_key
+                if params.invocation_id == cancelled_id
         )
     }));
     assert_eq!(
@@ -22964,12 +22983,13 @@ async fn start_external_tool_command(
         invocation_response,
     };
     let metadata = executor.get_worker_metadata(worker_id).await?;
+    let key = IdempotencyKey::fresh();
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(worker_id.clone().into()),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 principal: Some(
                     Principal::GolemUser(GolemUserPrincipal {
@@ -22991,6 +23011,13 @@ async fn start_external_tool_command(
                     fresh_owner: false,
                     expected_deployment_revision: None,
                 }),
+                request_key: Some(
+                    golem_common::model::InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .into(),
+                ),
                 ..Default::default()
             })),
         })

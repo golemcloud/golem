@@ -32,7 +32,7 @@
       "type": "stream-end"
     },
     {
-      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"idempotencyKey\":\"upload-42\",\"mappings\":[{\"channel\":1,\"direction\":\"input\",\"inputHighWater\":{\"sequence\":\"0\",\"terminal\":false},\"provisionalRef\":\"0dff1c71-f12f-4bb1-996c-23d693bdc825\",\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEGZmZmZmZkZmhmZmZmZmZmYiAAAAD2V4dGVybmFsLWNsaWVudCMAAAAQMzMzMzMzQzODMzMzMzMzMyQAAAAIAAAAAAAAAColAAAAIMDBwsPExcbHyMnKy8zNzs_Q0dLT1NXW19jZ2tvc3d7fJgAAAAEBJwAAABB3d3d3d3dHd4d3d3d3d3d3pdh6Ghfk28mH7ytVjumpJUjR_ZI-c1XYwNsiGelsgdA\"}],\"sessionToken\":\"gai1_AQENdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AQAAAABGRlbW8RAAAAB2RlZmF1bHQSAAAADW1lZGlhL2VuY29kZXITAAAACXVwbG9hZC00MhQAAAAQERERERERQRGBERERERERERUAAAAQIiIiIiIiQiKCIiIiIiIiIhYAAAAIAAAAAAAAAAcXAAAAEDMzMzMzM0MzgzMzMzMzMzOOr8IrJpKFa-Z2wL_Wo0ncXPTXp4nF72UxJoQkksjvOA\",\"type\":\"invocationAccepted\",\"version\":1}",
+      "canonical": "{\"agentId\":{\"agentId\":\"media/encoder\",\"componentId\":\"00000000-0000-0000-0000-000000000004\"},\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"idempotencyKey\":\"01234567-89ab-cdef-fedc-ba9876543210\",\"mappings\":[{\"channel\":1,\"direction\":\"input\",\"inputHighWater\":{\"sequence\":\"0\",\"terminal\":false},\"provisionalRef\":\"0dff1c71-f12f-4bb1-996c-23d693bdc825\",\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEGZmZmZmZkZmhmZmZmZmZmYiAAAAD2V4dGVybmFsLWNsaWVudCMAAAAQMzMzMzMzQzODMzMzMzMzMyQAAAAIAAAAAAAAAColAAAAIMDBwsPExcbHyMnKy8zNzs_Q0dLT1NXW19jZ2tvc3d7fJgAAAAEBJwAAABB3d3d3d3dHd4d3d3d3d3d3pdh6Ghfk28mH7ytVjumpJUjR_ZI-c1XYwNsiGelsgdA\"}],\"sessionToken\":\"gai1_AQENdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AQAAAABGRlbW8RAAAAB2RlZmF1bHQSAAAADW1lZGlhL2VuY29kZXITAAAACXVwbG9hZC00MhQAAAAQERERERERQRGBERERERERERUAAAAQIiIiIiIiQiKCIiIiIiIiIhYAAAAIAAAAAAAAAAcXAAAAEDMzMzMzM0MzgzMzMzMzMzOOr8IrJpKFa-Z2wL_Wo0ncXPTXp4nF72UxJoQkksjvOA\",\"type\":\"invocationAccepted\",\"version\":1}",
       "direction": "server",
       "name": "invocation-accepted",
       "type": "invocationAccepted"
@@ -47,6 +47,12 @@
       "canonical": "{\"code\":\"malformed-message\",\"message\":\"invalid first message\",\"retryable\":false,\"type\":\"invocationRejected\",\"version\":1}",
       "direction": "server",
       "name": "invocation-rejected-without-attempt",
+      "type": "invocationRejected"
+    },
+    {
+      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"code\":\"previous-invocation-failed\",\"message\":\"intentional invocation failure\",\"retryable\":false,\"stderr\":\"intentional failure stderr\\n\",\"type\":\"invocationRejected\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-rejected-previous-invocation-failed",
       "type": "invocationRejected"
     },
     {
@@ -191,6 +197,12 @@
       "canonical": "{\"outcome\":{\"code\":\"invocation-failed\",\"kind\":\"failure\",\"message\":\"invocation failed\"},\"type\":\"invocationFinished\",\"version\":1}",
       "direction": "server",
       "name": "invocation-finished-failure",
+      "type": "invocationFinished"
+    },
+    {
+      "canonical": "{\"outcome\":{\"code\":\"invocation-failed\",\"kind\":\"failure\",\"message\":\"intentional invocation failure\",\"stderr\":\"intentional failure stderr\\n\"},\"type\":\"invocationFinished\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-finished-failure-with-stderr",
       "type": "invocationFinished"
     }
   ]

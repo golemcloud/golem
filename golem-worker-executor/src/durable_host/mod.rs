@@ -356,13 +356,16 @@ pub(crate) struct LiveAuthorizationPermit {
 /// before the `Start` is appended, because the request is built without access to the context.
 #[derive(Debug, Clone)]
 pub(crate) struct IdempotencyKeyPosition {
-    parent: IdempotencyKey,
+    parent: golem_common::model::InvocationId,
     logical: Option<OplogIndex>,
 }
 
 impl IdempotencyKeyPosition {
     pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
-        IdempotencyKey::derived(&self.parent, self.index(start_index))
+        IdempotencyKey::derived(
+            &IdempotencyKey::from_uuid(self.parent.0),
+            self.index(start_index),
+        )
     }
 
     /// The oplog index the key derives from: the logical position, or else the `Start` index.
@@ -391,6 +394,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
+    invocation_id: Option<golem_common::model::OwnedInvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
@@ -695,7 +699,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             parent: self
                 .state
                 .get_current_idempotency_key()
-                .unwrap_or(IdempotencyKey::fresh()),
+                .unwrap_or_else(|| Uuid::new_v4().into()),
             logical,
         }
     }
@@ -1137,7 +1141,7 @@ struct PrivateDurableWorkerState {
     created_by: AccountId,
     owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
-    current_idempotency_key: Option<IdempotencyKey>,
+    current_idempotency_key: Option<golem_common::model::InvocationId>,
     /// Store-local child positions under an entity seed.
     entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
@@ -1710,11 +1714,14 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
-    pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.current_idempotency_key.clone()
+    pub fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
+        self.current_idempotency_key
     }
 
-    pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
+    pub fn set_current_idempotency_key(
+        &mut self,
+        invocation_key: golem_common::model::InvocationId,
+    ) {
         self.current_idempotency_key = Some(invocation_key);
     }
 

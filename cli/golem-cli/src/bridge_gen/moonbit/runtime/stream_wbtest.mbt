@@ -17,6 +17,65 @@ fn[T] raises(action : () -> T raise) -> Bool {
 }
 
 ///|
+test "accepted invocation identity is final and stable across resume" {
+  let message = expect_object(
+    @json.parse(
+      (
+        #|{"version":1,"type":"invocationAccepted","attemptId":"attempt","agentId":{"componentId":"component","agentId":"accepted-agent"},"idempotencyKey":"00000000-0000-0000-0000-000000000123","mappings":[],"sessionToken":"session"}
+      ),
+    ),
+  )
+  validate_message_fields(message, "invocationAccepted")
+  let identity = validate_acceptance_identity(message, "attempt", None)
+  assert_eq(identity.0.agent_id, "accepted-agent")
+  assert_eq(identity.1, "00000000-0000-0000-0000-000000000123")
+  message["attemptId"] = Json::string("resume")
+  assert_eq(
+    validate_acceptance_identity(message, "resume", Some(identity)),
+    identity,
+  )
+  assert_true(
+    raises(() => validate_acceptance_identity(message, "wrong", Some(identity))),
+  )
+  for
+    owner in [
+      obj([
+        ("componentId", Json::string("other")),
+        ("agentId", Json::string("accepted-agent")),
+      ]),
+      obj([
+        ("componentId", Json::string("component")),
+        ("agentId", Json::string("other")),
+      ]),
+    ] {
+    message["agentId"] = owner
+    assert_true(
+      raises(() => {
+        validate_acceptance_identity(message, "resume", Some(identity))
+      }),
+    )
+  }
+  message["agentId"] = obj([
+    ("componentId", Json::string("component")),
+    ("agentId", Json::string("accepted-agent")),
+  ])
+  message["idempotencyKey"] = Json::string(
+    "00000000-0000-0000-0000-000000000124",
+  )
+  assert_true(
+    raises(() => validate_acceptance_identity(message, "resume", Some(identity))),
+  )
+  message["idempotencyKey"] = Json::string("not-a-uuid")
+  assert_true(
+    raises(() => validate_acceptance_identity(message, "resume", None)),
+  )
+  message.remove("agentId")
+  assert_true(
+    raises(() => validate_message_fields(message, "invocationAccepted")),
+  )
+}
+
+///|
 test "public codec quantity restrictions and canonical u64" {
   let quantity = public_value_codec(
     "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"m\",\"allowedSuffixes\":[\"cm\"],\"min\":{\"mantissa\":\"1\",\"scale\":0,\"unit\":\"m\"},\"max\":{\"mantissa\":\"200\",\"scale\":0,\"unit\":\"m\"}}}}}",

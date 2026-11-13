@@ -21,12 +21,12 @@ use golem_api_grpc::proto::golem::worker::{
     StreamMappingRole, StreamTerminalAuthor, input_stream_item, invocation_request,
     invocation_response, stream_error, stream_terminal,
 };
-use golem_common::model::AgentId;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+use golem_common::model::{AgentId, InvocationId, InvocationRequestKey};
 use prost::Message;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
@@ -49,6 +49,7 @@ pub(super) async fn run_session(
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
     completed: Arc<AtomicBool>,
+    cleanup_identity: Arc<OnceLock<(AgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
     let mut input = InputProgress::default();
@@ -226,7 +227,12 @@ pub(super) async fn run_session(
                     worker_error = ?rejected.worker_error,
                     "HTTP invocation session was rejected"
                 );
-                send_error(&events, HttpSessionError::Rejected).await;
+                let error = if rejected.reason() == InvocationRejectionReason::IdempotencyConflict {
+                    HttpSessionError::InvocationIdentityConflict(rejected.error)
+                } else {
+                    HttpSessionError::Rejected
+                };
+                send_error(&events, error).await;
                 return;
             }
             _ => unreachable!(),
@@ -255,7 +261,12 @@ pub(super) async fn run_session(
             return;
         } else {
             match accepted_identity(current.clone()) {
-                Ok(identity) => accepted = Some(identity),
+                Ok(identity) => {
+                    let agent = current.agent_id.clone().unwrap().try_into().unwrap();
+                    let key = current.idempotency_key.unwrap().into();
+                    let _ = cleanup_identity.set((agent, key));
+                    accepted = Some(identity);
+                }
                 Err(error) => {
                     send_error(&events, error).await;
                     return;
@@ -621,11 +632,15 @@ pub(super) fn validate_prepared_start(start: &InvocationStart) -> Result<(), Htt
     InvocationSessionState::default()
         .validate_trusted_request(&request)
         .map_err(HttpSessionError::InvalidStart)?;
-    if start.agent_id.is_none() || start.idempotency_key.is_none() {
+    if start.agent_id.is_none() {
         return Err(HttpSessionError::InvalidStart(
-            "prepared start is missing cleanup identity".into(),
+            "prepared start is missing its agent".into(),
         ));
     }
+    let prepared = start.request_key.clone().ok_or_else(|| {
+        HttpSessionError::InvalidStart("prepared start is missing request_key".into())
+    })?;
+    InvocationRequestKey::try_from(prepared).map_err(HttpSessionError::InvalidStart)?;
     Ok(())
 }
 
@@ -674,7 +689,7 @@ fn make_resume(
         .collect::<Vec<_>>();
     cursors.sort_by_key(|cursor| uuid_pair(cursor.stream_id.as_ref().unwrap()));
     ResumeAttach {
-        idempotency_key: identity.accepted.idempotency_key.clone(),
+        idempotency_key: identity.accepted.idempotency_key,
         agent_id: identity.accepted.agent_id.clone(),
         environment_id: identity.accepted.environment_id,
         attachment_id: identity.accepted.attachment_id,

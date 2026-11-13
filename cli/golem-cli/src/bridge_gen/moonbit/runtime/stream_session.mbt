@@ -103,6 +103,7 @@ priv struct LiveStreamSession {
   headers : @http.Headers
   mut session_token : String?
   mut attempt_id : String
+  agent_id : AgentId
   idempotency_key : String
   inputs : Array[InputRegistration]
   input_channels : Map[String, UInt32]
@@ -410,7 +411,7 @@ async fn start_invocation(
             let message = expect_string(get_field(response, "message"))
             if !expect_bool(get_field(response, "retryable")) ||
               code == "invalid-attachment-state" {
-              raise BridgeError(message)
+              raise reported_failure(response)
             }
             clock.failed("\{code}: \{message}")
             attempt_id = fresh_id()
@@ -501,7 +502,7 @@ async fn resume_session(
             // retried as they are.
             if !((!takeover && code == "invalid-attachment-state") ||
               (retryable && code != "invalid-attachment-state")) {
-              raise BridgeError(message)
+              raise reported_failure(response)
             }
             session.clock.failed("\{code}: \{message}")
             takeover = takeover || code == "invalid-attachment-state"
@@ -525,7 +526,13 @@ async fn resume_session(
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
-  validate_acceptance_identity(accepted, attempt_id, session.idempotency_key)
+  ignore(
+    validate_acceptance_identity(
+      accepted,
+      attempt_id,
+      Some((session.agent_id, session.idempotency_key)),
+    ),
+  )
   session.clock.accepted()
   session.socket_write.acquire()
   session.socket = socket
@@ -769,18 +776,30 @@ async fn read_text(socket : @websocket.Conn) -> Json {
 fn validate_acceptance_identity(
   accepted : Map[String, Json],
   attempt_id : String,
-  idempotency_key : String,
-) -> Unit raise {
+  previous : (AgentId, String)?,
+) -> (AgentId, String) raise {
   if expect_string(get_field(accepted, "attemptId")) != attempt_id {
     raise BridgeError("attempt-conflict: acceptance attempt does not match")
   }
-  if expect_string(get_field(accepted, "idempotencyKey")) != idempotency_key {
-    raise BridgeError("idempotency-conflict: acceptance key does not match")
+  let owner = get_field(accepted, "agentId")
+  validate_object_fields(expect_object(owner), ["componentId", "agentId"], [])
+  let agent_id = AgentId::from_json(owner)
+  if agent_id.component_id == "" || agent_id.agent_id == "" {
+    raise BridgeError("malformed-message: invalid accepted agent identity")
+  }
+  let key = expect_string(get_field(accepted, "idempotencyKey"))
+  ignore(Uuid::parse_canonical(key))
+  let identity = (agent_id, key)
+  if previous is Some(expected) && expected != identity {
+    raise BridgeError(
+      "idempotency-conflict: accepted invocation identity changed",
+    )
   }
   let token = expect_string(get_field(accepted, "sessionToken"))
   if token == "" || token.length() > 8192 {
     raise BridgeError("token-invalid: invalid session token")
   }
+  identity
 }
 
 ///|
@@ -791,7 +810,8 @@ fn validate_message_fields(
   let required = match kind {
     "invocationAccepted" =>
       [
-        "version", "type", "attemptId", "idempotencyKey", "mappings", "sessionToken",
+        "version", "type", "attemptId", "agentId", "idempotencyKey", "mappings",
+        "sessionToken",
       ]
     "invocationRejected" => ["version", "type", "code", "message", "retryable"]
     "invocationResult" => ["version", "type", "mappings", "result"]
@@ -815,12 +835,40 @@ fn validate_message_fields(
     }
   }
   message.each((field, _) => {
-    let optional = (kind == "invocationRejected" && field == "attemptId") ||
+    let optional = (
+        kind == "invocationRejected" &&
+        (field == "attemptId" || field == "stderr")
+      ) ||
       (kind == "stream-end" && field == "cursorToken")
     if !required.contains(field) && !optional {
       raise BridgeError("malformed-message: unknown field \{field}")
     }
   })
+}
+
+///|
+/// The error for the server-reported failure `report`, a rejection or the
+/// failure outcome of `invocationFinished`: a failure of the agent carries its
+/// code, message and stderr; any other failure is its message.
+fn reported_failure(report : Map[String, Json]) -> BridgeError raise {
+  let code = expect_string(get_field(report, "code"))
+  let message = expect_string(get_field(report, "message"))
+  let stderr = match field_opt(report, "stderr") {
+    Some(value) => Some(expect_string(value))
+    None => None
+  }
+  match code {
+    "invocation-failed" | "previous-invocation-failed" =>
+      InvocationFailed(code~, message~, stderr~)
+    _ => BridgeError(message)
+  }
+}
+
+///|
+/// Validates the failure outcome of `invocationFinished` and returns its error.
+fn failure_outcome(outcome : Map[String, Json]) -> BridgeError raise {
+  validate_object_fields(outcome, ["kind", "code", "message"], ["stderr"])
+  reported_failure(outcome)
 }
 
 ///|
@@ -1888,7 +1936,6 @@ fn release_unclaimed_outputs(session : LiveStreamSession) -> Unit {
 ///|
 async fn dispatch_server_message(
   session : LiveStreamSession,
-  resolved : ResolvedAgent,
   message : Map[String, Json],
 ) -> Bool {
   match expect_string(get_field(message, "type")) {
@@ -1920,10 +1967,7 @@ async fn dispatch_server_message(
       }
       session.result_seen = true
       session.result_queue.put({
-        agent_id: resolved.agent_id.unwrap_or({
-          component_id: "",
-          agent_id: "",
-        }),
+        agent_id: session.agent_id,
         idempotency_key: session.idempotency_key,
         result: value,
         component_revision: None,
@@ -1981,7 +2025,7 @@ async fn dispatch_server_message(
       let text = expect_string(get_field(message, "message"))
       if !expect_bool(get_field(message, "retryable")) ||
         code == "invalid-attachment-state" {
-        raise BridgeError(text)
+        raise reported_failure(message)
       }
       session.socket.close()
       resume_session(session, rejection="\{code}: \{text}")
@@ -1991,12 +2035,9 @@ async fn dispatch_server_message(
       match expect_string(get_field(outcome, "kind")) {
         "success" => validate_object_fields(outcome, ["kind"], [])
         "failure" => {
-          validate_object_fields(outcome, ["kind", "code", "message"], [])
+          let error = failure_outcome(outcome)
           if !session.result_seen {
-            session.result_queue.close(
-              error=BridgeError(expect_string(get_field(outcome, "message"))),
-              clear=true,
-            )
+            session.result_queue.close(error~, clear=true)
           }
         }
         _ => raise BridgeError("malformed-message: invalid invocation outcome")
@@ -2032,10 +2073,7 @@ async fn dispatch_server_message(
 }
 
 ///|
-async fn receive_actor(
-  session : LiveStreamSession,
-  resolved : ResolvedAgent,
-) -> Unit {
+async fn receive_actor(session : LiveStreamSession) -> Unit {
   for ;; {
     let (kind, bytes) = try {
       let raw = session.socket.recv()
@@ -2078,7 +2116,7 @@ async fn receive_actor(
         }
         let kind = expect_string(get_field(message, "type"))
         validate_message_fields(message, kind)
-        if dispatch_server_message(session, resolved, message) {
+        if dispatch_server_message(session, message) {
           return
         }
       }
@@ -2183,14 +2221,19 @@ pub async fn invoke_streaming_agent(
       ])
     },
   )
-  validate_acceptance_identity(accepted, attempt_id, idempotency_key)
+  let (agent_id, accepted_key) = validate_acceptance_identity(
+    accepted,
+    attempt_id,
+    None,
+  )
   let session = {
     socket,
     url,
     headers,
     session_token: None,
     attempt_id,
-    idempotency_key,
+    agent_id,
+    idempotency_key: accepted_key,
     inputs,
     input_channels: {},
     input_tokens: {},
@@ -2229,7 +2272,7 @@ pub async fn invoke_streaming_agent(
   pump_next_input(session)
   session.actor_owner = Some(
     @io.MemoryReader(async fn(_) {
-      receive_actor(session, resolved) catch {
+      receive_actor(session) catch {
         error => fail_session(session, error)
       }
     }),

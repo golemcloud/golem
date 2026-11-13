@@ -41,6 +41,7 @@ message InvocationStart {
   // Forks retain the authoring invocation even when their local stream producers diverge.
   StreamInvocationIdentity origin_invocation = 19;
   optional ExternalToolInvocation external_tool = 18;
+  golem.worker.InvocationRequestKey request_key = 20;
 }
 
 message ExternalToolInvocation {
@@ -55,7 +56,7 @@ message ExternalToolInvocation {
 }
 
 message ResumeAttach {
-  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.common.UUID idempotency_key = 1;
   golem.worker.AgentId agent_id = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.common.UUID attachment_id = 4;
@@ -83,7 +84,7 @@ message StreamInvocationIdentity {
   golem.common.EnvironmentId callee_environment_id = 1;
   golem.worker.AgentId callee = 2;
   golem.common.UUID callee_fingerprint = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.UUID idempotency_key = 4;
 }
 
 message DurableStreamHandle {
@@ -211,7 +212,7 @@ message InputStreamAck {
 
 message InvocationAccepted {
   golem.worker.AgentId agent_id = 1;
-  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.UUID idempotency_key = 2;
   optional uint64 component_revision = 3;
   golem.common.UUID attachment_id = 4;
   golem.common.UUID attempt_id = 5;
@@ -239,7 +240,7 @@ message InvocationSessionResult {
   }
   optional uint64 component_revision = 3;
   golem.worker.AgentId agent_id = 4;
-  golem.worker.IdempotencyKey idempotency_key = 5;
+  golem.common.UUID idempotency_key = 5;
   optional uint64 fuel_consumed = 6;
   optional golem.worker.InvocationStatus status = 7;
   optional uint64 oplog_index = 8;
@@ -269,7 +270,7 @@ enum InvocationRejectionReason {
 message InvocationRejected {
   InvocationRejectionReason reason = 1;
   string error = 2;
-  golem.worker.IdempotencyKey idempotency_key = 3;
+  golem.common.UUID idempotency_key = 3;
   golem.worker.AgentId agent_id = 4;
   optional uint64 component_revision = 5;
   golem.worker.v1.WorkerExecutionError worker_error = 6;

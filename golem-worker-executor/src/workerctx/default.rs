@@ -75,7 +75,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OwnedAgentId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -650,11 +650,11 @@ impl CallCountManagement for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<InvocationId> {
         self.durable_ctx.get_current_idempotency_key().await
     }
 

@@ -626,6 +626,7 @@ impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy>
         value: proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
+            family_id: value.family_id,
             slots: value
                 .slots
                 .into_iter()
@@ -644,6 +645,7 @@ impl From<DurableStreamRoutePolicy>
 {
     fn from(value: DurableStreamRoutePolicy) -> Self {
         Self {
+            family_id: value.family_id,
             slots: value.slots.into_iter().map(Into::into).collect(),
             allow_external_writes: value.allow_external_writes,
             allow_stream_delete: value.allow_stream_delete,

@@ -231,12 +231,13 @@ async fn exercise_python_session(
             ],
         },
     );
+    let key = IdempotencyKey::fresh();
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
                 agent_id: Some(worker_id.clone().into()),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 principal: Some(
                     Principal::GolemUser(GolemUserPrincipal {
@@ -258,6 +259,13 @@ async fn exercise_python_session(
                     fresh_owner: false,
                     expected_deployment_revision: None,
                 }),
+                request_key: Some(
+                    golem_common::model::InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .into(),
+                ),
                 ..Default::default()
             })),
         })

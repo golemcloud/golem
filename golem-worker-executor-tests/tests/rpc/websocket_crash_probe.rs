@@ -116,6 +116,7 @@ async fn effect_duplex_websocket_crash_continuation(
         .await??;
         let boundary = executor.oplog_max_index(&worker).await?;
         let metadata = executor.get_worker_metadata(&worker).await?;
+        let key = IdempotencyKey::fresh();
         let start = InvocationStart {
             agent_id: Some(worker.clone().into()),
             method_name: Some("echo".to_string()),
@@ -128,7 +129,11 @@ async fn effect_duplex_websocket_crash_continuation(
                     }],
                 })),
             }),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            idempotency_key: Some(key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             environment_id: Some(component.environment_id.into()),
             component_owner_account_id: Some(component.account_id.into()),

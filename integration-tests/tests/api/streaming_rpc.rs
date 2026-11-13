@@ -35,7 +35,7 @@ use golem_common::model::invocation_session_public::{
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
     decode_server_text, encode_text,
 };
-use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_schema::proto::golem::schema::{
@@ -369,6 +369,7 @@ async fn invoke_agent_session(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -465,9 +466,13 @@ impl TrustedInvocationSession {
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
+        let request_key = InvocationRequestKey::external(
+            AuthCtx::System.idempotency_scope(),
+            Some(&idempotency_key),
+        );
         let agent_id = if ephemeral {
             agent_id
-                .with_ephemeral_invocation_phantom(&idempotency_key)
+                .with_ephemeral_invocation_phantom(&request_key.owner_key(method_name))
                 .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?
         } else {
             agent_id.clone()
@@ -502,6 +507,7 @@ impl TrustedInvocationSession {
                 scope_card: None,
                 origin_invocation: None,
                 external_tool: None,
+                request_key: Some(request_key.into()),
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -1086,11 +1092,11 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         PrivateResumeOperation::Resume,
         PrivateResumeOperation::Takeover,
     ] {
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(
                 PrivateResumeAttach {
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     attachment_id: Some(
@@ -1457,7 +1463,7 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
         assert_eq!(caller_history.iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(start)
                 if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.idempotency_key.value == key.value)
+                    if method.method_name == "call_producer_error_after_gate")
         )).count(), 1);
         if let Some(before_loss) = source_loss {
             let after_loss = caller_history
@@ -2395,7 +2401,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     .await?;
     assert_eq!(checkpoint.item_count(), 4);
     let accepted = checkpoint.acceptance.as_ref().unwrap();
-    let key = accepted.idempotency_key.as_ref().unwrap().value.clone();
+    let key = golem_common::model::InvocationId::from(*accepted.idempotency_key.as_ref().unwrap());
     let epoch = accepted.epoch;
     // A finished producer is also a deterministic detach barrier; do not race Resume against
     // the server observing a socket close, and do not use Takeover to hide that distinction.
@@ -2409,7 +2415,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
                     matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
                         if matches!(StreamSessionRecord::from_value(session.record.value()),
                             Ok(StreamSessionRecord::Finished(finished))
-                                if finished.session_key.idempotency_key().value == key
+                                if *finished.session_key.idempotency_key() == key
                                     && finished.result.is_ok()))
                 })
             {
@@ -2459,7 +2465,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.idempotency_key.value == key)
+                if method.invocation_id == key)
     )).count(), 1);
     assert_eq!(
         oplog

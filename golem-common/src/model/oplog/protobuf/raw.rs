@@ -549,7 +549,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 })
             }
             OplogEntry::AgentInvocationStarted {
-                idempotency_key,
+                invocation_id,
                 payload,
                 trace_id,
                 trace_states,
@@ -557,7 +557,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 wallet_pin,
                 ..
             } => Entry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
-                idempotency_key: Some(idempotency_key.into()),
+                invocation_id: Some(invocation_id.into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
                 trace_states,
@@ -568,12 +568,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 wallet_pin: Some(invocation_wallet_pin_to_proto(*wallet_pin)),
             }),
             OplogEntry::AgentInvocationFinished {
+                invocation_id,
                 result,
                 method_name,
                 consumed_fuel,
                 component_revision,
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
+                invocation_id: Some(invocation_id.into()),
                 result: Some(oplog_payload_to_proto(result)?),
                 method_name,
                 consumed_fuel,
@@ -582,6 +584,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
                 kind,
+                invocation_id,
                 error,
                 retry_from,
                 retry_policy_state,
@@ -589,6 +592,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
                 kind: oplog_error_kind_to_proto(kind) as i32,
+                invocation_id: invocation_id.map(Into::into),
                 retry_from: retry_from.into(),
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
@@ -605,7 +609,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
             OplogEntry::PendingAgentInvocation {
                 not_before,
-                idempotency_key,
+                invocation_id,
                 payload,
                 trace_id,
                 trace_states,
@@ -613,7 +617,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::PendingAgentInvocation(RawPendingAgentInvocationParameters {
                 not_before: not_before.map(Into::into),
-                idempotency_key: Some(idempotency_key.into()),
+                invocation_id: Some(invocation_id.into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
                 trace_states,
@@ -733,11 +737,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     end: dropped_region.end.into(),
                 }),
             }),
-            OplogEntry::CancelPendingInvocation {
-                idempotency_key, ..
-            } => Entry::CancelPendingInvocation(RawCancelPendingInvocationParameters {
-                idempotency_key: Some(idempotency_key.into()),
-            }),
+            OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                Entry::CancelPendingInvocation(RawCancelPendingInvocationParameters {
+                    invocation_id: Some(invocation_id.into()),
+                })
+            }
             OplogEntry::BeginRemoteTransaction {
                 transaction_id,
                 original_begin_index,
@@ -803,17 +807,21 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             ),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
+                source_component_revision,
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                delivery,
                 ..
             } => Entry::OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters {
                 plugin_grant_id: Some(plugin_grant_id.into()),
+                source_component_revision: source_component_revision.into(),
                 target_agent_id: Some(target_agent_id.into()),
                 confirmed_up_to: confirmed_up_to.into(),
                 sending_up_to: sending_up_to.into(),
                 last_batch_start: last_batch_start.into(),
+                delivery,
             }),
             OplogEntry::SetRetryPolicy { policy, .. } => {
                 Entry::SetRetryPolicy(RawSetRetryPolicyParameters {
@@ -1188,7 +1196,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
             }),
             Entry::AgentInvocationStarted(p) => {
-                let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
+                let invocation_id = p.invocation_id.ok_or("Missing invocation_id")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
                 let trace_id = TraceId::from_string(p.trace_id)?;
                 let invocation_context = p
@@ -1198,7 +1206,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(OplogEntry::AgentInvocationStarted {
                     timestamp,
-                    idempotency_key,
+                    invocation_id,
                     payload,
                     trace_id,
                     trace_states: p.trace_states,
@@ -1214,6 +1222,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     p.component_revision.try_into().map_err(|e: String| e)?;
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp,
+                    invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
                     result,
                     method_name: p.method_name,
                     consumed_fuel: p.consumed_fuel,
@@ -1229,14 +1238,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .retry_policy_state
                     .map(|bytes| crate::serialization::deserialize(&bytes))
                     .transpose()?;
-                Ok(OplogEntry::Error {
+                let entry = OplogEntry::Error {
                     timestamp,
                     entity_parent_start_index,
                     kind: oplog_error_kind_from_proto(p.kind)?,
+                    invocation_id: p.invocation_id.map(Into::into),
                     error,
                     retry_from,
                     retry_policy_state,
-                })
+                };
+                entry.check_well_formed()?;
+                Ok(entry)
             }
             Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
             Entry::Jump(p) => {
@@ -1253,7 +1265,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::Interrupted(_) => Ok(OplogEntry::Interrupted { timestamp }),
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
             Entry::PendingAgentInvocation(p) => {
-                let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
+                let invocation_id = p.invocation_id.ok_or("Missing invocation_id")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
                 let trace_id = TraceId::from_string(p.trace_id)?;
                 let invocation_context = p
@@ -1264,7 +1276,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::PendingAgentInvocation {
                     timestamp,
                     not_before: p.not_before.map(Into::into),
-                    idempotency_key,
+                    invocation_id,
                     payload,
                     trace_id,
                     trace_states: p.trace_states,
@@ -1421,10 +1433,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 })
             }
             Entry::CancelPendingInvocation(p) => {
-                let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
+                let invocation_id = p.invocation_id.ok_or("Missing invocation_id")?.into();
                 Ok(OplogEntry::CancelPendingInvocation {
                     timestamp,
-                    idempotency_key,
+                    invocation_id,
                 })
             }
             Entry::BeginRemoteTransaction(p) => {
@@ -1499,10 +1511,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp,
                     plugin_grant_id,
+                    source_component_revision: p.source_component_revision.try_into()?,
                     target_agent_id,
                     confirmed_up_to: OplogIndex::from_u64(p.confirmed_up_to),
                     sending_up_to: OplogIndex::from_u64(p.sending_up_to),
                     last_batch_start: OplogIndex::from_u64(p.last_batch_start),
+                    delivery: p.delivery,
                 })
             }
             Entry::SetRetryPolicy(p) => {

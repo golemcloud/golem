@@ -34,6 +34,11 @@ async fn run_recovery() -> Unit {
     "run",
     TupleValue([StringValue("x".repeat(__START_TEXT_BYTES__))]),
   )
+  assert_eq(result.agent_id, {
+    component_id: "component",
+    agent_id: "accepted-agent",
+  })
+  assert_eq(result.idempotency_key, "00000000-0000-0000-0000-000000000123")
   let session = stream_sessions["output"]
   let stream = open_output_stream(
     result.result.unwrap(),
@@ -390,7 +395,7 @@ async fn run_terminal_accounting(
       ]),
     ),
   )
-  assert_false(dispatch_server_message(session, resolved, cancel))
+  assert_false(dispatch_server_message(session, cancel))
   assert_eq(prefix_cancel.failure.diagnostic, "")
   assert_eq(prefix_cancel.failure.bytes, 0)
   assert_true(prefix_cancel.pending is None)
@@ -400,7 +405,7 @@ async fn run_terminal_accounting(
   retain_input_failure(terminal_cancel, BridgeError("界🦄"))
   cancel_failed_input(session, terminal_cancel)
   cancel["channel"] = json_uint(9U)
-  assert_false(dispatch_server_message(session, resolved, cancel))
+  assert_false(dispatch_server_message(session, cancel))
   assert_true(terminal_cancel.pending is None)
   assert_eq(terminal_cancel.failure.diagnostic, "")
   assert_eq(terminal_cancel.failure.bytes, 0)

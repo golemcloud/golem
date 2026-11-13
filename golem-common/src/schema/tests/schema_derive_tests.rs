@@ -230,8 +230,8 @@ fn model_target_types_round_trip() {
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::worker::{RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::{
-        AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, OplogIndex, PromiseId,
-        TransactionId,
+        AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationId, OplogIndex,
+        PromiseId, TransactionId,
     };
     use crate::model::quota::{Reservation, ReserveResult};
     use crate::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
@@ -263,6 +263,10 @@ fn model_target_types_round_trip() {
     // base_model leaves / records
     round_trip(agent_id.clone());
     round_trip(AgentFingerprint::from(uuid::Uuid::from_u64_pair(3, 4)));
+    round_trip(InvocationId::from(uuid::Uuid::from_u64_pair(
+        0x0123456789abcdef,
+        0xfedcba9876543210,
+    )));
     round_trip(IdempotencyKey::new("idem-1".to_string()));
     round_trip(OplogIndex::from_u64(42));
     round_trip(PromiseId {

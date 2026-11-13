@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::identity::parse_agent_id;
-use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Principal};
+use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType};
+use crate::golem_agentic::golem::agent::common::Principal;
 use crate::schema::wit::{direct, wire};
 
 pub struct AgentInvocationResult {

@@ -29,6 +29,7 @@ use crate::service::worker::{
 };
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
@@ -37,6 +38,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::SafeDisplay;
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
@@ -81,6 +83,7 @@ const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 const INPUT_BYTE_BUDGET: usize = SESSION_BYTE_BUDGET - OUTPUT_BYTE_BUDGET;
 const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
+const MAX_FAILURE_STDERR_BYTES: usize = 1024 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
@@ -1163,6 +1166,7 @@ async fn serve_session_messages(
                     code,
                     message,
                     retryable: false,
+                    stderr: None,
                     version: 1,
                 },
             )
@@ -2056,8 +2060,16 @@ async fn translate_private_response(
                 worker_error = ?rejected.worker_error,
                 "Private invocation session response was rejected"
             );
-            Ok(vec![frame(text_message(
-                &PublicServerMessage::InvocationRejected {
+            let message = match agent_failure(rejected.worker_error.as_ref()) {
+                Some(failure) => PublicServerMessage::InvocationRejected {
+                    attempt_id: Some(attempt_id),
+                    code: failure.code,
+                    message: failure.message,
+                    retryable: false,
+                    stderr: failure.stderr,
+                    version: 1,
+                },
+                None => PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
                     code,
                     message: safe_rejection_message(code),
@@ -2065,9 +2077,11 @@ async fn translate_private_response(
                         code,
                         PublicErrorCode::ResourceExhausted | PublicErrorCode::RoutingMiss
                     ),
+                    stderr: None,
                     version: 1,
                 },
-            )?)])
+            };
+            Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Result(result) => {
             translate_result(&mut state, result, keyring)
@@ -2143,9 +2157,17 @@ async fn translate_private_response(
                         worker_error = ?failure.worker_error,
                         "Invocation session finished with failure"
                     );
-                    PublicInvocationOutcome::Failure {
-                        code: PublicErrorCode::InvocationFailed,
-                        message: "invocation failed".to_string(),
+                    match agent_failure(failure.worker_error.as_ref()) {
+                        Some(failure) => PublicInvocationOutcome::Failure {
+                            code: failure.code,
+                            message: failure.message,
+                            stderr: failure.stderr,
+                        },
+                        None => PublicInvocationOutcome::Failure {
+                            code: PublicErrorCode::InvocationFailed,
+                            message: "invocation failed".to_string(),
+                            stderr: None,
+                        },
                     }
                 }
                 None => {
@@ -2156,6 +2178,7 @@ async fn translate_private_response(
                     PublicInvocationOutcome::Failure {
                         code: PublicErrorCode::InvocationFailed,
                         message: "invocation failed".to_string(),
+                        stderr: None,
                     }
                 }
             };
@@ -2201,9 +2224,8 @@ fn translate_accepted(
         .map(|value| required_uuid(Some(value), "callee fingerprint"))
         .transpose()?
         .unwrap_or_else(|| deterministic_uuid(b"non-durable-callee"));
-    let idempotency_key: golem_common::model::IdempotencyKey = accepted
+    let idempotency_key: InvocationId = accepted
         .idempotency_key
-        .clone()
         .ok_or_else(|| AdapterError::protocol("accepted response has no idempotency key"))?
         .into();
     let agent_id: golem_common::model::AgentId = accepted
@@ -2252,8 +2274,7 @@ fn translate_accepted(
             }
         }
     }
-    let logical_invocation_id =
-        invocation_uuid(&agent_id, &idempotency_key.value, callee_incarnation);
+    let logical_invocation_id = invocation_uuid(&agent_id, &idempotency_key, callee_incarnation);
     state.tokens = Some(TokenContext {
         bindings: bindings.clone(),
         key_id: token_key_id.to_string(),
@@ -2269,7 +2290,7 @@ fn translate_accepted(
                 application: state.application.clone().unwrap_or_default(),
                 environment: state.environment.clone().unwrap_or_default(),
                 agent: encoded_identity,
-                idempotency_key: idempotency_key.value.clone(),
+                idempotency_key: idempotency_key.to_string(),
                 logical_invocation_id,
                 attachment_id,
                 expected_attachment_generation: accepted.epoch,
@@ -2306,7 +2327,8 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
-        idempotency_key: idempotency_key.value,
+        agent_id,
+        idempotency_key,
         mappings,
         session_token,
         version: 1,
@@ -2326,10 +2348,20 @@ fn translate_result(
     let mut mappings = Vec::new();
     let result = match result.result {
         Some(invocation_session_result::Result::NoResult(_)) => PublicInvocationResult::None,
+        Some(invocation_session_result::Result::MethodResult(value))
+            if state.output_schema.is_none() =>
+        {
+            let value = decode_public_session_schema_value(value)
+                .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
+            if !matches!(value, SchemaValue::Tuple { elements } if elements.is_empty()) {
+                return Err(AdapterError::protocol(
+                    "private invocation returned a value for a unit method",
+                ));
+            }
+            PublicInvocationResult::None
+        }
         Some(invocation_session_result::Result::MethodResult(value)) => {
-            let schema = state.output_schema.clone().ok_or_else(|| {
-                AdapterError::protocol("private invocation returned a value for a unit method")
-            })?;
+            let schema = state.output_schema.clone().unwrap();
             let value = decode_public_session_schema_value(value)
                 .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
             let graph = state.graph.clone().unwrap();
@@ -2858,6 +2890,46 @@ fn is_routing_miss(rejected: &InvocationRejected) -> bool {
         })
 }
 
+/// A failure of the agent itself, which the caller sees as the agent reported it: its error text
+/// and what the failed invocation wrote to stderr. The unary HTTP API returns the same details.
+/// Other worker errors describe the platform, so the caller sees only the generic text of their
+/// public code.
+struct AgentFailure {
+    code: PublicErrorCode,
+    message: String,
+    stderr: Option<String>,
+}
+
+fn agent_failure(worker_error: Option<&WorkerExecutionError>) -> Option<AgentFailure> {
+    let (code, error, stderr) = match WorkerExecutorError::try_from(worker_error?.clone()).ok()? {
+        WorkerExecutorError::InvocationFailed { error, stderr } => {
+            (PublicErrorCode::InvocationFailed, error, stderr)
+        }
+        WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
+            (PublicErrorCode::PreviousInvocationFailed, error, stderr)
+        }
+        _ => return None,
+    };
+    Some(AgentFailure {
+        code,
+        message: error.message().to_string(),
+        stderr: (!stderr.is_empty()).then(|| stderr_tail(stderr)),
+    })
+}
+
+/// The end of a failed invocation's stderr, at most `MAX_FAILURE_STDERR_BYTES` long, so that the
+/// failure fits in one WebSocket message within the session's output budget.
+fn stderr_tail(stderr: String) -> String {
+    if stderr.len() <= MAX_FAILURE_STDERR_BYTES {
+        return stderr;
+    }
+    let mut start = stderr.len() - MAX_FAILURE_STDERR_BYTES;
+    while !stderr.is_char_boundary(start) {
+        start += 1;
+    }
+    stderr[start..].to_string()
+}
+
 fn safe_rejection_message(code: PublicErrorCode) -> String {
     match code {
         PublicErrorCode::UnsupportedSubprotocol => "required WebSocket subprotocol is unsupported",
@@ -2884,6 +2956,7 @@ fn safe_rejection_message(code: PublicErrorCode) -> String {
         PublicErrorCode::ResourceExhausted => "session resource limit exceeded",
         PublicErrorCode::ProducerError => "stream producer failed",
         PublicErrorCode::InvocationFailed => "invocation failed",
+        PublicErrorCode::PreviousInvocationFailed => "previous invocation failed",
         PublicErrorCode::ProtocolError => "invocation protocol failed",
         PublicErrorCode::RoutingMiss => {
             "the agent's shard is moving between executors; retry the invocation"
@@ -2988,7 +3061,7 @@ fn required_uuid(
 
 fn invocation_uuid(
     agent_id: &golem_common::model::AgentId,
-    idempotency_key: &str,
+    idempotency_key: &InvocationId,
     callee_incarnation: Uuid,
 ) -> Uuid {
     let identity = format!("{}\0{idempotency_key}\0{callee_incarnation}", agent_id);
@@ -3140,6 +3213,7 @@ async fn send_text(sender: &Outbound, message: &PublicServerMessage) -> Result<(
                 code: *code,
                 message: safe_rejection_message(*code),
                 retryable: *retryable,
+                stderr: None,
                 version: *version,
             })
             .map_err(|_| ())?;
@@ -3163,6 +3237,7 @@ async fn send_rejection(
             code,
             message: message.into(),
             retryable: false,
+            stderr: None,
             version: 1,
         },
     )
@@ -3242,7 +3317,11 @@ mod tests {
         }
     }
 
-    fn idempotency_key() -> Option<ProtoIdempotencyKey> {
+    fn idempotency_key() -> Option<ProtoUuid> {
+        Some(proto_uuid(5))
+    }
+
+    fn request_idempotency_key() -> Option<ProtoIdempotencyKey> {
         Some(ProtoIdempotencyKey {
             value: "session-key".to_string(),
         })
@@ -3344,7 +3423,7 @@ mod tests {
                 InvocationStart {
                     method_name: Some("run".to_string()),
                     input: Some(input),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -3619,6 +3698,47 @@ mod tests {
             PublicErrorCode::InternalError
         );
         assert_eq!(PublicErrorCode::RoutingMiss.as_str(), "routing-miss");
+    }
+
+    /// A failure of the agent reaches the caller with the agent's error text and stderr, which
+    /// survive the private wire; a platform error keeps the generic text of its public code.
+    #[test]
+    fn agent_failures_carry_the_agent_error_and_stderr() {
+        let failure = |error: WorkerExecutorError| agent_failure(Some(&error.into()));
+        let guest_error = || golem_common::model::oplog::AgentError::Unknown("boom".to_string());
+
+        let failed = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: "trace\n".to_string(),
+        })
+        .unwrap();
+        assert_eq!(failed.code, PublicErrorCode::InvocationFailed);
+        assert_eq!(failed.message, "boom");
+        assert_eq!(failed.stderr.as_deref(), Some("trace\n"));
+
+        let previous = failure(WorkerExecutorError::PreviousInvocationFailed {
+            error: guest_error(),
+            stderr: String::new(),
+        })
+        .unwrap();
+        assert_eq!(previous.code, PublicErrorCode::PreviousInvocationFailed);
+        assert_eq!(previous.message, "boom");
+        assert_eq!(previous.stderr, None);
+
+        assert!(failure(WorkerExecutorError::unknown("internal detail")).is_none());
+        assert!(agent_failure(None).is_none());
+
+        // The kept tail starts at a character boundary: the cut falls inside the 'é'.
+        let stderr = format!("é{}", "x".repeat(MAX_FAILURE_STDERR_BYTES - 1));
+        let long = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: format!("dropped{stderr}"),
+        })
+        .unwrap();
+        assert_eq!(
+            long.stderr.unwrap(),
+            "x".repeat(MAX_FAILURE_STDERR_BYTES - 1)
+        );
     }
 
     #[test]
@@ -4073,6 +4193,8 @@ mod tests {
             )
             .unwrap();
             let PublicServerMessage::InvocationAccepted {
+                idempotency_key,
+                agent_id: accepted_agent_id,
                 mappings,
                 session_token,
                 ..
@@ -4091,6 +4213,17 @@ mod tests {
             let InvocationSessionTokenPayload::Session(session) = verified.payload else {
                 panic!("expected session token")
             };
+            assert_eq!(idempotency_key, InvocationId(Uuid::from_u128(5)));
+            assert_eq!(session.idempotency_key, idempotency_key.to_string());
+            let agent_id: golem_common::model::AgentId = proto_agent_id().try_into().unwrap();
+            assert_eq!(accepted_agent_id, agent_id);
+            assert_eq!(
+                session.logical_invocation_id,
+                Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("{agent_id}\0{idempotency_key}\0{}", Uuid::from_u128(4)).as_bytes(),
+                )
+            );
             assert_eq!(
                 decode_session_agent_identity(&session.agent)
                     .unwrap()
@@ -4525,7 +4658,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4639,6 +4772,72 @@ mod tests {
     }
 
     #[test]
+    fn method_results_distinguish_unit_from_an_explicit_empty_tuple() {
+        for output_schema in [None, Some(SchemaType::tuple(Vec::new()))] {
+            let mut state = AdapterState::new();
+            state.graph = Some(SchemaGraph::anonymous(SchemaType::tuple(Vec::new())));
+            state.output_schema = output_schema.clone();
+            let value: ProtoSchemaValue = SchemaValue::Tuple {
+                elements: Vec::new(),
+            }
+            .try_into()
+            .unwrap();
+            let frames = translate_result(
+                &mut state,
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(value)),
+                    ..Default::default()
+                },
+                &keyring(),
+            )
+            .unwrap();
+            let Message::Text(text) = &frames[0].message else {
+                panic!("method result was not text")
+            };
+            let PublicServerMessage::InvocationResult {
+                result, mappings, ..
+            } = golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap()
+            else {
+                panic!("method result translated to the wrong public message")
+            };
+            assert!(mappings.is_empty());
+            match (output_schema, *result) {
+                (None, PublicInvocationResult::None) => {}
+                (Some(schema), PublicInvocationResult::Value { graph, value }) => {
+                    assert_eq!(graph.root, schema);
+                    assert_eq!(
+                        value,
+                        serde_json::json!({ "kind": "tuple", "value": { "elements": [] } })
+                    );
+                }
+                other => panic!("method result did not match its output schema: {other:?}"),
+            }
+        }
+
+        for value in [
+            SchemaValue::U8(7),
+            SchemaValue::Tuple {
+                elements: vec![SchemaValue::U8(7)],
+            },
+        ] {
+            let Err(error) = translate_result(
+                &mut AdapterState::new(),
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(
+                        value.try_into().unwrap(),
+                    )),
+                    ..Default::default()
+                },
+                &keyring(),
+            ) else {
+                panic!("unit method accepted a non-unit value")
+            };
+            assert_eq!(error.code, PublicErrorCode::ProtocolError);
+        }
+    }
+
+    #[test]
     async fn dynamically_discovered_output_uses_binary_frames_and_opaque_tokens() {
         let graph = SchemaGraph {
             defs: Vec::new(),
@@ -4669,7 +4868,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4965,7 +5164,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,
@@ -5046,7 +5245,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,

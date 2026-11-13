@@ -606,7 +606,10 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
         .await?;
     fetch_entered.await?;
     let ping_key = golem_common::model::IdempotencyKey::fresh();
-    let mut result_wait = crate::invocation_waits::result_wait(&worker, &ping_key);
+    let stored_ping_key = executor
+        .external_invocation_key(&worker, &ping_key, "ping")
+        .await?;
+    let mut result_wait = crate::invocation_waits::result_wait(&worker, &stored_ping_key);
     let ping = {
         let executor = executor.clone();
         let component = component.clone();
@@ -652,7 +655,7 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
             PublicOplogEntry::PendingAgentInvocation(params)
                 if matches!(&params.invocation,
                     PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.idempotency_key == ping_key) =>
+                        if method.invocation_id == stored_ping_key) =>
             {
                 Some(entry.oplog_index)
             }
@@ -1245,7 +1248,6 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::IdempotencyKey;
     use golem_common::model::card::{
         Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
         parse_permission_fields, parse_polymorphic_permission,
@@ -1308,7 +1310,7 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 CardManagedByRuntimeDerived {
                     environment_id: context.default_environment_id,
                     agent_id: worker.clone(),
-                    invocation_key: IdempotencyKey::fresh(),
+                    invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                     oplog_index: OplogIndex::INITIAL,
                 },
             )

@@ -537,7 +537,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
-    use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::{Arc, Mutex};
     use test_r::test;
 
@@ -581,9 +581,9 @@ mod tests {
                 },
             ),
             InvocationExecutionMode::Live,
-            IdempotencyKey::fresh(),
+            uuid::Uuid::new_v4().into(),
             false,
-            IdempotencyKey::fresh(),
+            uuid::Uuid::new_v4().into(),
         )
         .unwrap();
         let registration = slot.register(&scope, Default::default()).unwrap();

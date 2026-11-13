@@ -30,9 +30,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val attr                          = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
   private val sampleTyped: TypedSchemaValue = IntoSchema[String].toTyped("test")
 
-  private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
-  private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
-  private val walletPin   = PublicInvocationWalletPin(
+  private val invocationUuid = new java.util.UUID(1L, 2L)
+  private val pluginDesc     = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
+  private val oplogRegion    = OplogRegion(BigInt(0), BigInt(10))
+  private val walletPin      = PublicInvocationWalletPin(
     PermissionsApi.WalletVersionToken(Vector[Byte](1, 2, 3), BigInt(7)),
     Some(new java.util.UUID(10L, 20L))
   )
@@ -44,7 +45,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val agentInvocations: List[AgentInvocation] = List(
     AgentInvocation.ExportedFunction(
       AgentMethodInvocationParameters(
-        "idem-1",
+        invocationUuid,
         "func",
         Some(List(sampleTyped)),
         "trace1",
@@ -116,7 +117,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.ActivatePlugin(p)               => s"activate(${p.plugin.name})"
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
-    case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.idempotencyKey})"
+    case OplogEntry.CancelPendingInvocation(p)      => s"cancel(${p.invocationId})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
@@ -155,8 +156,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
       OplogEntry.Resumed(ts),
-      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, "boom", BigInt(5))),
-      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, "replay failed", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, Some(invocationUuid), "boom", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, None, "replay failed", BigInt(5))),
       OplogEntry.RecoverySucceeded(ts),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
       OplogEntry.SetRetryPolicy(
@@ -165,7 +166,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.RemoveRetryPolicy(RemoveRetryPolicyParameters(ts, "default")),
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
-      OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
+      OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, invocationUuid)),
       OplogEntry.BeginRemoteTransaction(BeginRemoteTransactionParameters(ts, "tx-1")),
       OplogEntry.PreCommitRemoteTransaction(RemoteTransactionParameters(ts, BigInt(10))),
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
@@ -175,8 +176,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         .Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
       OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
       OplogEntry.SpanClosed(ts, Some(BigInt(7)), SpanFinished("span-1", ts, SpanOutcome.Completed)),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
-      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
+      OplogEntry.AgentInvocationFinished(
+        AgentInvocationFinishedParameters(ts, invocationUuid, Some(sampleTyped), 1000L)
+      ),
+      OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, invocationUuid, None, 0L)),
       OplogEntry.HostCall(
         HostCallParameters(
           ts,
@@ -206,7 +209,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           "increment",
           List(sampleTyped),
-          "idem-1",
+          Some(invocationUuid),
           "trace-1",
           List("state"),
           List(spanDatas),
@@ -272,10 +275,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       agentInvocations.foreach {
         case AgentInvocation.ExportedFunction(p)    => Predef.assert(p.functionName.nonEmpty)
         case AgentInvocation.ManualUpdate(rev)      => Predef.assert(rev > 0)
-        case AgentInvocation.AgentInitialization(k) => Predef.assert(k.nonEmpty)
+        case AgentInvocation.AgentInitialization(k) => Predef.assert(k == invocationUuid)
+        case AgentInvocation.ExternalTool(k)        => Predef.assert(k == invocationUuid)
         case AgentInvocation.SaveSnapshot           => ()
         case AgentInvocation.LoadSnapshot           => ()
-        case AgentInvocation.ProcessOplogEntries(k) => Predef.assert(k.nonEmpty)
+        case AgentInvocation.ProcessOplogEntries(k) => Predef.assert(k == invocationUuid)
       }
       assertCompletes
     },

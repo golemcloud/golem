@@ -7889,7 +7889,6 @@ fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
             r#"
 use golem_rust::agentic::InputStream;
 use golem_rust::golem_agentic::exports::golem::tool::guest::{Guest, InvocationResult, Tool, ToolError, TypedSchemaValue};
-use golem_rust::golem_agentic::golem::agent::common::Principal;
 
 struct Component;
 
@@ -7909,7 +7908,6 @@ impl Guest for Component {
         _stdin: Option<InputStream>,
         _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
-        _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         unimplemented!()
     }
