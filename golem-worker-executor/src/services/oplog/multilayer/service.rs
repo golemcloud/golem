@@ -572,11 +572,17 @@ impl OplogService for MultiLayerOplogService {
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await?;
         for layer in &self.lower {
-            if result.len() >= n as usize {
+            // Each layer holds an older part of the oplog than the layer above it and reads a
+            // suffix of the range it is given, so it is given the range below what is covered.
+            let count = match result.first_key_value() {
+                Some((first, _)) => first.as_u64().saturating_sub(idx.as_u64()),
+                None => n,
+            };
+            if count == 0 {
                 break;
             }
             let entries = layer
-                .read_source(owned_agent_id, agent_mode, idx, n)
+                .read_source(owned_agent_id, agent_mode, idx, count)
                 .await
                 .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
             for (index, entry) in entries {
