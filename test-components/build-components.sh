@@ -3,12 +3,12 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Spread the multi-component applications across chunks to balance compilation cost.
-rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
-effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect")
-scala_test_apps=("tool-streaming-scala")
-moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
-go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go")
+rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests" "fault-matrix-rust")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe" "fault-matrix-ts")
+effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect" "fault-matrix-effect")
+scala_test_apps=("tool-streaming-scala" "fault-matrix-scala")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "fault-matrix-moonbit")
+go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go" "fault-matrix-go")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -73,7 +73,7 @@ print_groups_json() {
     sep=","
   done
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
-  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
+  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifacts":"golem_it_tool_streaming_scala.wasm golem_it_fault_matrix_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
     printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
@@ -368,11 +368,17 @@ build_sdk_apps() {
         tool-streaming-scala)
           test -s ../golem_it_tool_streaming_scala.wasm
           ;;
+        fault-matrix-scala)
+          test -s ../golem_it_fault_matrix_scala.wasm
+          ;;
         tool-streaming-moonbit)
           test -s ../golem_it_tool_streaming_moonbit.wasm
           ;;
         tool-streaming-moonbit-lifecycle-gol40)
           test -s ../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm
+          ;;
+        fault-matrix-moonbit)
+          test -s ../golem_it_fault_matrix_moonbit.wasm
           ;;
       esac
     fi

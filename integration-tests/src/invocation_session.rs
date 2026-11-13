@@ -21,9 +21,10 @@ use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
-    InvocationRequest, InvocationResponse, InvocationSessionCompletion, InvocationSessionResult,
-    InvocationStart, OutputStreamItem, ResumeAttach, ResumeOperation, StreamCursor,
-    StreamMappingRole, invocation_request, invocation_response, invocation_session_completion,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+    InvocationSessionResult, InvocationStart, OutputStreamItem, ResumeAttach, ResumeOperation,
+    StreamCancel, StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole,
+    invocation_request, invocation_response, invocation_session_completion,
 };
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
@@ -89,6 +90,21 @@ impl OutputObservation {
             .collect()
     }
 }
+
+/// The worker service rejected an invocation or resume request.
+#[derive(Debug, Clone)]
+pub struct SessionRejected {
+    pub reason: InvocationRejectionReason,
+    pub error: String,
+}
+
+impl std::fmt::Display for SessionRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invocation rejected ({:?}): {}", self.reason, self.error)
+    }
+}
+
+impl std::error::Error for SessionRejected {}
 
 /// A detached checkpoint is owned by the caller; dropping a connection never sends cancellation.
 /// Keep this entire value, not just its cursors, to detect duplicate offsets across reconnects.
@@ -255,7 +271,11 @@ impl SessionCheckpoint {
                     .completed = Some(now);
             }
             invocation_response::Response::Rejected(rejected) => {
-                bail!("session rejected: {rejected:?}")
+                return Err(SessionRejected {
+                    reason: rejected.reason(),
+                    error: rejected.error.clone(),
+                }
+                .into());
             }
             invocation_response::Response::AttachmentRevoked(revoked) => {
                 bail!("attachment revoked: {revoked:?}")
@@ -283,7 +303,7 @@ impl SessionCheckpoint {
 
 pub struct InvocationSession {
     // Retain the request half until disconnect or completion, without sending cancellation.
-    _requests: mpsc::Sender<InvocationRequest>,
+    requests: mpsc::Sender<InvocationRequest>,
     responses: BoxStream<'static, anyhow::Result<InvocationResponse>>,
     state: InvocationSessionState,
     deadline: tokio::time::Instant,
@@ -396,7 +416,7 @@ impl InvocationSession {
         .context("invocation open deadline")??
         .into_inner();
         let mut session = Self {
-            _requests: requests,
+            requests,
             responses: inbound
                 .map(|response| response.map_err(anyhow::Error::from))
                 .boxed(),
@@ -413,6 +433,41 @@ impl InvocationSession {
             "expected acceptance"
         );
         Ok(session)
+    }
+
+    /// Reattaches the way a reconnecting client does. A detached session needs `Resume` and an
+    /// attached one needs `Takeover`, and the executor can detach the old transport between the
+    /// client's choice and the request, so an attachment-state rejection switches the operation,
+    /// as the executor's own RPC client does. Returns the operation that was accepted.
+    pub async fn reattach(
+        deps: &impl TestDependencies,
+        checkpoint: SessionCheckpoint,
+        preferred: ResumeOperation,
+        timeout: Duration,
+    ) -> anyhow::Result<(Self, ResumeOperation)> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut operation = preferred;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match Self::resume(deps, checkpoint.clone(), operation, remaining).await {
+                Ok(session) => return Ok((session, operation)),
+                Err(error)
+                    if tokio::time::Instant::now() < deadline
+                        && error
+                            .downcast_ref::<SessionRejected>()
+                            .is_some_and(|rejected| {
+                                rejected.reason == InvocationRejectionReason::InvalidAttachmentState
+                            }) =>
+                {
+                    operation = match operation {
+                        ResumeOperation::Resume => ResumeOperation::Takeover,
+                        _ => ResumeOperation::Resume,
+                    };
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub fn checkpoint(&self) -> &SessionCheckpoint {
@@ -448,7 +503,49 @@ impl InvocationSession {
         self.checkpoint
     }
 
-    pub async fn finish(mut self) -> anyhow::Result<SessionCheckpoint> {
+    /// Cancels an output stream as its consumer.
+    pub async fn cancel_output(&mut self, stream: StreamId) -> anyhow::Result<()> {
+        let output = self
+            .checkpoint
+            .outputs
+            .get(&stream)
+            .context("cancelled output has no mapping")?;
+        let transport_stream_id = self
+            .checkpoint
+            .mappings
+            .values()
+            .find(|mapping| mapping.handle == output.handle)
+            .context("cancelled output has no transport channel")?
+            .transport_stream_id;
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id,
+                producer_sequence: 0,
+                role: StreamCancelRole::OutputConsumer as i32,
+                reason: StreamCancelReason::Cancelled as i32,
+                details: Some("the consumer cancelled the output".to_string()),
+                durable_stream_id: Some(Uuid {
+                    high_bits: stream.0,
+                    low_bits: stream.1,
+                }),
+                epoch: self
+                    .checkpoint
+                    .acceptance
+                    .as_ref()
+                    .context("cancel before acceptance")?
+                    .epoch,
+                durable_offset: Vec::new(),
+            })),
+        };
+        self.state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
+        self.requests.send(request).await?;
+        Ok(())
+    }
+
+    /// Reads until the invocation completes, whether it succeeded or failed.
+    pub async fn complete(mut self) -> anyhow::Result<SessionCheckpoint> {
         while !self.state.is_complete() {
             self.receive().await?;
         }
@@ -459,8 +556,13 @@ impl InvocationSession {
                 .is_none(),
             "frame after completion"
         );
-        self.checkpoint.ensure_success()?;
         Ok(self.checkpoint)
+    }
+
+    pub async fn finish(self) -> anyhow::Result<SessionCheckpoint> {
+        let checkpoint = self.complete().await?;
+        checkpoint.ensure_success()?;
+        Ok(checkpoint)
     }
 }
 

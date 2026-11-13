@@ -1804,12 +1804,14 @@ jobs:
 
       - name: Collect built WASMs
         env:
-          EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
+          EXPECTED_ARTIFACTS: ${{ matrix.chunk.expected-artifacts }}
         run: |
           mkdir -p tmp/test-components-wasm
-          if [[ -n "$EXPECTED_ARTIFACT" ]]; then
-            test -s "test-components/$EXPECTED_ARTIFACT"
-            cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
+          if [[ -n "$EXPECTED_ARTIFACTS" ]]; then
+            for artifact in $EXPECTED_ARTIFACTS; do
+              test -s "test-components/$artifact"
+              cp "test-components/$artifact" tmp/test-components-wasm/
+            done
           else
             cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
           fi

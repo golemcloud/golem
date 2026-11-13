@@ -83,6 +83,11 @@ path = "tests/streaming_session_recovery.rs"
 harness = false
 
 [[test]]
+name = "fault-matrix"
+path = "tests/fault_matrix.rs"
+harness = false
+
+[[test]]
 name = "sharding"
 path = "tests/sharding.rs"
 harness = false
