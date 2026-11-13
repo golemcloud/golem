@@ -288,6 +288,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
     // scopes test namespace selection only; genuine reconstruction is covered separately.
     let wallet_cards = active.primary().get_wallet_cards().await?;
+    let mut live_initializer_calls = Vec::new();
     let mut live_decisions = Vec::new();
     for historical in [false, true] {
         let parent_start = active.execution().oplog().current_oplog_index().await;
@@ -323,13 +324,19 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
-            // The body reads its wallet once. Each of its two scope derivations records its
+            // Instantiating the entity Store runs the core initializer, whose calls come first.
+            // The body then reads its wallet once. Each of its two scope derivations records its
             // authorization decision and then checks the liveness of every wallet parent, and
-            // the refused wallet derivation records its decision. The decisions are copied from
-            // the live body, which decided on the same wallet cards.
-            record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
+            // the refused wallet derivation records its decision. The initializer calls and the
+            // decisions are copied from the live body, which decided on the same wallet cards.
+            let mut ordinal = 0u64;
+            for call in &live_initializer_calls {
+                record_entity_call(&active, parent_start.next(), ordinal, call).await?;
+                ordinal += 1;
+            }
+            record_entity_self_wallet(&active, parent_start.next(), ordinal, &wallet_cards).await?;
+            ordinal += 1;
             let mut decisions = live_decisions.iter();
-            let mut ordinal = 1u64;
             for _ in 0..2 {
                 let decision = decisions.next().expect("a live scope-derivation decision");
                 record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
@@ -459,15 +466,22 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .await?;
         } else {
             finish_entity_boundary(&active, parent_start.next()).await?;
-            live_decisions = recorded_entity_calls(
-                &active,
-                parent_start.next(),
-                &[
-                    HostFunctionName::GolemPermissionsDeriveScopeDecision,
-                    HostFunctionName::GolemPermissionsDeriveFromWalletDecision,
-                ],
-            )
-            .await;
+            let live_calls = recorded_entity_calls(&active, parent_start.next()).await;
+            live_initializer_calls = live_calls
+                .iter()
+                .take_while(|call| call.0 != HostFunctionName::GolemPermissionsSelfWallet)
+                .cloned()
+                .collect();
+            live_decisions = live_calls
+                .into_iter()
+                .filter(|call| {
+                    matches!(
+                        call.0,
+                        HostFunctionName::GolemPermissionsDeriveScopeDecision
+                            | HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+                    )
+                })
+                .collect();
         }
         drop(parent);
     }
@@ -484,12 +498,10 @@ type RecordedEntityCall = (
     Option<String>,
 );
 
-/// The completed calls of `functions` that the entity body started at `entity_start` recorded,
-/// in oplog order.
+/// The completed calls that the entity body started at `entity_start` recorded, in oplog order.
 async fn recorded_entity_calls(
     active: &ActiveAgent<TestWorkerCtx>,
     entity_start: OplogIndex,
-    functions: &[HostFunctionName],
 ) -> Vec<RecordedEntityCall> {
     let oplog = active.execution().oplog();
     let tip = oplog.current_oplog_index().await;
@@ -507,7 +519,7 @@ async fn recorded_entity_calls(
                 request,
                 denial,
                 ..
-            } if *parent == entity_start && functions.contains(function_name) => {
+            } if *parent == entity_start => {
                 let response =
                     entries
                         .range(index.next()..)
@@ -1569,6 +1581,7 @@ async fn stage_entity_boundary(
 async fn record_entity_self_wallet(
     active: &ActiveAgent<TestWorkerCtx>,
     entity_start_index: OplogIndex,
+    ordinal: u64,
     cards: &[StoredCard],
 ) -> Result<(), WorkerExecutorError> {
     let oplog = active.execution().oplog();
@@ -1577,7 +1590,7 @@ async fn record_entity_self_wallet(
             timestamp: golem_common::model::Timestamp::now_utc(),
             parent_start_index: Some(entity_start_index),
             function_name: HostFunctionName::GolemPermissionsSelfWallet,
-            invocation_id: Some(DurableInvocationId::new(entity_start_index, 0)),
+            invocation_id: Some(DurableInvocationId::new(entity_start_index, ordinal)),
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
