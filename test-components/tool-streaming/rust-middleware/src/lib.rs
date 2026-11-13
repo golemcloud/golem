@@ -241,40 +241,45 @@ fn invoke_mcp_projection(
     })
 }
 
+fn mcp_projection_descriptor() -> ToolMiddleware {
+    let mut presented = <McpProbeProjection as presented_mcp_probe::MiddlewareProbeMiddleware<
+        expected_mcp_probe::MiddlewareProbeUnderlying,
+    >>::__golem_presented_tool_descriptor();
+    let mut expected =
+        <expected_mcp_probe::MiddlewareProbeUnderlying as ToolUnderlying>::__golem_tool_descriptor(
+        );
+    for descriptor in [&mut presented, &mut expected] {
+        let body = descriptor.commands.nodes[0].body.as_mut().unwrap();
+        body.stdout.as_mut().unwrap().mime = vec!["*/*".to_string()];
+    }
+    presented.commands.nodes[0].body.as_mut().unwrap().result = None;
+    let expected_body = expected.commands.nodes[0].body.as_mut().unwrap();
+    expected_body.result.as_mut().unwrap().type_ = SchemaType::record(Vec::new());
+    expected_body.errors.push(ErrorCase {
+        name: "mcp-tool-error".to_string(),
+        doc: Default::default(),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 1,
+        payload: Some(SchemaType::string()),
+    });
+    ToolMiddleware {
+        name: "streaming-monomorphic-mcp-projection".to_string(),
+        version: "0.0.0".to_string(),
+        aliases: Vec::new(),
+        doc: Default::default(),
+        scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+            presented,
+            expected: Some(expected),
+        })),
+        parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+    }
+}
+
 golem_rust::ctor::__support::ctor_parse!(
     #[ctor]
     fn register_mcp_projection() {
-        let mut presented =
-            <McpProbeProjection as presented_mcp_probe::MiddlewareProbeMiddleware<
-                expected_mcp_probe::MiddlewareProbeUnderlying,
-            >>::__golem_presented_tool_descriptor();
-        let mut expected = <expected_mcp_probe::MiddlewareProbeUnderlying as ToolUnderlying>::__golem_tool_descriptor();
-        for descriptor in [&mut presented, &mut expected] {
-            let body = descriptor.commands.nodes[0].body.as_mut().unwrap();
-            body.stdout.as_mut().unwrap().mime = vec!["*/*".to_string()];
-        }
-        presented.commands.nodes[0].body.as_mut().unwrap().result = None;
-        let expected_body = expected.commands.nodes[0].body.as_mut().unwrap();
-        expected_body.result.as_mut().unwrap().type_ = SchemaType::record(Vec::new());
-        expected_body.errors.push(ErrorCase {
-            name: "mcp-tool-error".to_string(),
-            doc: Default::default(),
-            kind: ErrorKind::RuntimeError,
-            exit_code: 1,
-            payload: Some(SchemaType::string()),
-        });
-        golem_rust::tool::register_tool_middleware(
-            ToolMiddleware {
-                name: "streaming-monomorphic-mcp-projection".to_string(),
-                version: "0.0.0".to_string(),
-                aliases: Vec::new(),
-                doc: Default::default(),
-                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
-                    presented,
-                    expected: Some(expected),
-                })),
-                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
-            },
+        golem_rust::tool::register_tool_middleware_descriptor(
+            mcp_projection_descriptor,
             invoke_mcp_projection,
         );
     }
@@ -458,22 +463,26 @@ fn invoke_streaming_pass_through(
     })
 }
 
+fn streaming_pass_through_descriptor() -> ToolMiddleware {
+    let definition = <StreamingUnderlying as ToolUnderlying>::__golem_tool_descriptor();
+    ToolMiddleware {
+        name: "streaming-monomorphic-pass-through".to_string(),
+        version: "1.0.0".to_string(),
+        aliases: Vec::new(),
+        doc: Default::default(),
+        scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+            presented: definition.clone(),
+            expected: Some(definition),
+        })),
+        parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+    }
+}
+
 golem_rust::ctor::__support::ctor_parse!(
     #[ctor]
     fn register_streaming_pass_through() {
-        let definition = <StreamingUnderlying as ToolUnderlying>::__golem_tool_descriptor();
-        golem_rust::tool::register_tool_middleware(
-            ToolMiddleware {
-                name: "streaming-monomorphic-pass-through".to_string(),
-                version: "1.0.0".to_string(),
-                aliases: Vec::new(),
-                doc: Default::default(),
-                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
-                    presented: definition.clone(),
-                    expected: Some(definition),
-                })),
-                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
-            },
+        golem_rust::tool::register_tool_middleware_descriptor(
+            streaming_pass_through_descriptor,
             invoke_streaming_pass_through,
         );
     }
