@@ -229,8 +229,10 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
 A physical WebSocket session does not survive runtime reconstruction, whether caused by suspension, restart, or crash. Choose a reconstruction policy when you connect:
 
-- `reconnect-automatically` is the default when the option is absent. The first live access to a reconstructed successful handle opens a replacement connection. Your application must tolerate a new physical session.
-- `report-connection-loss` prevents replacement I/O on that handle. The first live `send`, `receive`, `receive-with-timeout`, or `close` returns the typed `session-lost` error and makes the handle terminal. Further accesses return that loss; they do not reconnect. Dropping the handle only releases it locally.
+- `report-connection-loss` is the default when the option is absent. It prevents replacement I/O on that handle. The first live `send`, `receive`, `receive-with-timeout`, or `close` returns the typed `session-lost` error and makes the handle terminal. Further accesses return that loss; they do not reconnect. Dropping the handle only releases it locally. To continue, open and initialize a new connection explicitly.
+- `reconnect-automatically` opens a replacement connection with the same URL and headers at the first live access to a reconstructed successful handle. The peer sees a new session. Choose it only when the peer accepts a new session in place of the lost one, for example a stateless feed that needs no initialization handshake and no per-session state.
+
+The standard JavaScript `WebSocket` global that Golem's JavaScript runtime provides sends no policy, so it always uses the default.
 
 Both policies replay recorded outcomes unchanged, including messages, timeouts, send results, and close results. Neither changes retry behavior for an ordinary live network disconnect. Session loss is **not proof that an earlier send never reached the peer**. Use application acknowledgments, deduplication, or reconciliation before resending effects.
 
@@ -316,10 +318,35 @@ let ws = WebsocketConnection::connect(
 ```
 </Tabs.Tab>
 <Tabs.Tab>
-See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+Scala's `golem.websocket.WebsocketConnection.connect` takes an optional `reconstructionPolicy`. Without it, the host default applies:
+
+```scala
+import golem.websocket.{ReconstructionPolicy, WebsocketConnection, WebsocketError, WebsocketMessage}
+
+val ws = WebsocketConnection
+  .connect("wss://example.com/chat", reconstructionPolicy = Some(ReconstructionPolicy.ReportConnectionLoss))
+  .fold(error => throw new Exception(s"Connect failed: $error"), identity)
+ws.send(WebsocketMessage.Text("Hello, server!")) match {
+  case Left(WebsocketError.SessionLost) => // reconcile, then connect and initialize again
+  case Left(other)                      => // an ordinary connection error
+  case Right(())                        => ()
+}
+// receive() and receiveWithTimeout(ms) return a Future of the same Either.
+```
 </Tabs.Tab>
 <Tabs.Tab>
-See [Runtime reconstruction and session loss](#runtime-reconstruction-and-session-loss) for the shared session-loss behavior.
+MoonBit's `@websocket.connect` takes an optional `reconstruction_policy~`. Without it, the host default applies:
+
+```moonbit
+let ws = @websocket.connect(
+  "wss://example.com/chat",
+  reconstruction_policy=ReportConnectionLoss,
+)
+ws.send(Text("Hello, server!")) catch {
+  @websocket.WebsocketError::SessionLost => () // reconcile, then connect and initialize again
+  error => raise error
+}
+```
 </Tabs.Tab>
 <Tabs.Tab>
 Go takes the policy as a `websocket.WithReconstructionPolicy` option:

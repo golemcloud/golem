@@ -29,6 +29,13 @@ pub struct WebsocketConnection {
 impl WebsocketConnection {
     /// Connect to a WebSocket server at the given URL (ws:// or wss://).
     /// Optional headers for auth, subprotocols, etc.
+    ///
+    /// `None` as `reconstruction_policy` sends no policy, so the host default
+    /// [`WebSocketReconstructionPolicy::ReportConnectionLoss`] applies: after runtime
+    /// reconstruction the next operation returns [`WebSocketError::SessionLost`] and no
+    /// replacement connection is opened. Choose
+    /// [`WebSocketReconstructionPolicy::ReconnectAutomatically`] only when the peer accepts a
+    /// new session in place of the lost one.
     pub fn connect(
         url: &str,
         headers: Option<Vec<(String, String)>>,

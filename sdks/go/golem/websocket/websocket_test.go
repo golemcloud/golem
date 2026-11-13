@@ -73,6 +73,28 @@ func TestErrorMapping(t *testing.T) {
 	}
 }
 
+// Without WithReconstructionPolicy, Connect sends no policy, so the host default
+// applies; with it, Connect sends exactly that policy.
+func TestReconstructionPolicyOption(t *testing.T) {
+	var absent connectOpts
+	if absent.policy.IsSome() {
+		t.Fatalf("no option must send no policy, got %v", absent.policy.Some())
+	}
+	for _, c := range []struct {
+		policy ReconstructionPolicy
+		want   client.ReconstructionPolicy
+	}{
+		{ReconnectAutomatically, client.ReconstructionPolicyReconnectAutomatically},
+		{ReportConnectionLoss, client.ReconstructionPolicyReportConnectionLoss},
+	} {
+		var o connectOpts
+		WithReconstructionPolicy(c.policy)(&o)
+		if !o.policy.IsSome() || o.policy.Some() != c.want {
+			t.Fatalf("policy %d sent %+v, want %d", c.policy, o.policy, c.want)
+		}
+	}
+}
+
 // A timeout of zero or less does not wait, instead of wrapping to an endless one.
 func TestNonPositiveTimeoutDoesNotWait(t *testing.T) {
 	for _, d := range []time.Duration{-time.Second, 0, time.Microsecond} {

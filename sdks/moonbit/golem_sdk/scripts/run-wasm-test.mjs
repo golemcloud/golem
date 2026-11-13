@@ -35,6 +35,7 @@ let nextDurableStreamHandle = 400
 const durableStreamResources = new Map()
 const durableStreamReplies = []
 const durableStreamConstructors = { reader: 0, writer: 0 }
+const websocketHost = { policies: [], errorCase: -1 }
 // Fake `golem:permissions` host for SDK unit tests. Strings and lists returned
 // to the guest are written into buffers that the test allocates with the
 // guest allocator and hands over with `push-permission-host-buffer`, because
@@ -532,6 +533,12 @@ const importObject = {
       toolPendingGet = false
       return 901
     },
+    "set-websocket-host-error"(errorCase) {
+      websocketHost.errorCase = errorCase
+    },
+    "websocket-connect-policy"(index) {
+      return websocketHost.policies.at(index) ?? -2
+    },
     "set-durable-stream-host-mode"(mode) {
       durableStreamHostMode = mode
     },
@@ -849,6 +856,40 @@ for (const imported of WebAssembly.Module.imports(module)) {
       default:
         importObject[imported.module][imported.name] = () => 0
         break
+    }
+    continue
+  }
+  if (
+    imported.kind === "function" &&
+    imported.module === "golem:websocket/client@1.5.0"
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = (...args) => {
+      const memory = new DataView(instance.exports.memory.buffer)
+      const result = args[args.length - 1]
+      // result<_, error>: an error case without payload, or none of `closed`.
+      const reply = () => {
+        new Uint8Array(instance.exports.memory.buffer, result, 24).fill(0)
+        if (websocketHost.errorCase >= 0) {
+          memory.setUint8(result, 1)
+          memory.setUint8(result + 4, websocketHost.errorCase)
+        }
+      }
+      switch (imported.name) {
+        case "[static]websocket-connection.connect":
+          websocketHost.policies.push(args[5] ? args[6] : -1)
+          new Uint8Array(instance.exports.memory.buffer, result, 24).fill(0)
+          memory.setInt32(result + 4, 500, true)
+          return
+        case "[method]websocket-connection.send":
+        case "[method]websocket-connection.close":
+          reply()
+          return
+        case "[resource-drop]websocket-connection":
+          return
+        default:
+          throw new Error(`unexpected live import in SDK state test: ${imported.name}`)
+      }
     }
     continue
   }

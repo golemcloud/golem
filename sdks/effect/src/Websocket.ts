@@ -281,7 +281,10 @@ export const isSessionLost = (
  */
 export interface ConnectOptions {
   /**
-   * Reconstruction behavior after recovery. Absence uses the host default.
+   * Reconstruction behavior after recovery. Absence sends no policy, so the host default
+   * `report-connection-loss` applies: after reconstruction the next operation fails with a
+   * `SessionLost` cause (see {@link isSessionLost}). Choose `reconnect-automatically` only when
+   * the peer accepts a new session in place of the lost one.
    * @since 1.6.0
    * @category models
    */

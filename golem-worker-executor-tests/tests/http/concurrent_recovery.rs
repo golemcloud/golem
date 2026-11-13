@@ -26,9 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures::StreamExt as _;
 use futures::stream;
-use golem_common::model::AgentId;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_worker_executor_test_utils::TestWorkerExecutor;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
@@ -206,29 +204,6 @@ async fn spawn_inference_server(
         .in_current_span(),
     );
     Ok((server, port, handle))
-}
-
-async fn wait_for_oplog(
-    executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
-    description: &str,
-    predicate: impl Fn(&[PublicOplogEntryWithIndex]) -> bool,
-) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        // A pending chunk's Start can follow the sibling's last commit. Flush the resident
-        // buffer so this checkpoint observes a durable prefix, not the commit race.
-        executor.commit_oplog(worker_id).await?;
-        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
-        if predicate(&oplog) {
-            return Ok(oplog);
-        }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for the oplog to show {description}: {oplog:#?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 fn jump_count(oplog: &[PublicOplogEntryWithIndex]) -> usize {

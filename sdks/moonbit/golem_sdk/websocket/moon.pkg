@@ -1,0 +1,5 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/websocket/client",
+}
+
+supported_targets = "+wasm"

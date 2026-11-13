@@ -136,10 +136,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
         let mut denied = false;
         let mut authorization_checked = false;
         let reconstruction_policy = match reconstruction_policy {
-            None | Some(ReconstructionPolicy::ReconnectAutomatically) => {
+            Some(ReconstructionPolicy::ReconnectAutomatically) => {
                 SerializableWebsocketReconstructionPolicy::ReconnectAutomatically
             }
-            Some(ReconstructionPolicy::ReportConnectionLoss) => {
+            None | Some(ReconstructionPolicy::ReportConnectionLoss) => {
                 SerializableWebsocketReconstructionPolicy::ReportConnectionLoss
             }
         };
