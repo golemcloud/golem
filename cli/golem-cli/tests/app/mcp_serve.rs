@@ -77,7 +77,7 @@ async fn counters_context_with(environments: &[&str], local: &str) -> TestContex
     let fixture = workspace_path().join("test-components/it_agent_counters_release.wasm");
     assert!(
         fixture.is_file(),
-        "build the agent-counters test component before running the MCP tests"
+        "build test-components/agent-counters before running the MCP tests"
     );
     fs::copy(&fixture, ctx.cwd_path_join("component.wasm")).unwrap();
     write_manifest(&ctx, "", local);
