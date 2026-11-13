@@ -83,6 +83,7 @@ impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
         Self {
             next_oplog_index: value.next_oplog_index,
             current_component_revision: value.current_component_revision,
+            query_hash: value.query_hash,
         }
     }
 }
@@ -92,6 +93,7 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
         Self {
             next_oplog_index: value.next_oplog_index,
             current_component_revision: value.current_component_revision,
+            query_hash: value.query_hash,
         }
     }
 }

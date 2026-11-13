@@ -574,22 +574,33 @@ mod tests {
 
     #[test]
     fn stale_oplog_cursor_maps_to_its_own_code() {
-        let api_error: ApiEndpointError =
-            WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(\"a\")".to_string(),
-                },
-                next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
-                last_oplog_index: golem_common::model::OplogIndex::from_u64(17),
-            })
-            .into();
+        use golem_service_base::error::worker_executor::StaleCursorReason;
 
-        match api_error {
-            ApiEndpointError::BadRequest(Json(body)) => {
-                assert_eq!(body.code, "STALE_CURSOR");
+        for reason in [
+            StaleCursorReason::PastEnd {
+                last_oplog_index: golem_common::model::OplogIndex::from_u64(17),
+            },
+            StaleCursorReason::QueryMismatch,
+        ] {
+            let api_error: ApiEndpointError =
+                WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
+                    agent_id: golem_common::model::AgentId {
+                        component_id: golem_common::model::component::ComponentId(
+                            uuid::Uuid::nil(),
+                        ),
+                        agent_id: "Counter(\"a\")".to_string(),
+                    },
+                    next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
+                    reason,
+                })
+                .into();
+
+            match api_error {
+                ApiEndpointError::BadRequest(Json(body)) => {
+                    assert_eq!(body.code, "STALE_CURSOR");
+                }
+                other => panic!("expected BadRequest, got: {other:?}"),
             }
-            other => panic!("expected BadRequest, got: {other:?}"),
         }
     }
 

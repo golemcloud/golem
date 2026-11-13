@@ -15,6 +15,7 @@
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use golem_common::model::oplog::OplogCursor;
+use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::time::Instant;
 
 /// Collects the entries of an oplog chunk in the form that its reader gets.
@@ -499,46 +500,57 @@ pub async fn find_component_revision_at(
     Ok(initial_component_revision)
 }
 
-/// The cursor of an oplog page whose next unread entry is `next_oplog_index`. A page has a cursor
-/// if and only if the oplog has entries after the page, also when the page itself is empty
-/// because a search spent its scan budget before any match.
+/// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
+/// a cursor if and only if the oplog has entries after the page, also when the page itself is
+/// empty because a search spent its scan budget before any match.
 pub fn oplog_page_cursor(
     next_oplog_index: OplogIndex,
     current_component_revision: ComponentRevision,
     last_index: OplogIndex,
+    query: Option<&str>,
 ) -> Option<OplogCursor> {
     (next_oplog_index <= last_index).then(|| OplogCursor {
         next_oplog_index: next_oplog_index.as_u64(),
         current_component_revision: current_component_revision.into(),
+        query_hash: OplogCursor::query_hash(query),
     })
 }
 
-/// Where a paged oplog read starts, and the component revision to decode its first entry with:
-/// the cursor of the previous page, or else `from` with the revision in effect there.
+/// Where a paged oplog read of `query` starts, and the component revision to decode its first
+/// entry with: the cursor of the previous page, or else `from` with the revision in effect there.
 ///
-/// A page hands out a cursor only while the oplog has entries after it, and the oplog only grows,
-/// so a cursor that points past the last entry did not come from a page of this oplog: the agent
-/// was deleted and created again since, or the cursor was made up. It is refused as stale instead
-/// of read as an empty page, which a caller would take for the end of the oplog. The revision of
-/// the cursor is not checked, because that would scan the oplog up to the cursor on every page.
+/// A cursor of the pages of another query is refused as stale, because continuing it would mix
+/// the results of two reads. A page hands out a cursor only while the oplog has entries after it,
+/// and the oplog only grows, so a cursor that points past the last entry did not come from a page
+/// of this oplog: the agent was deleted and created again since, or the cursor was made up. It is
+/// refused as stale too, instead of read as an empty page, which a caller would take for the end
+/// of the oplog. The revision of the cursor is not checked, because that would scan the oplog up
+/// to the cursor on every page.
 pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     cursor: Option<OplogCursor>,
     from: OplogIndex,
+    query: Option<&str>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
     match cursor {
         Some(cursor) => {
+            let stale = |reason| WorkerExecutorError::StaleCursor {
+                agent_id: owned_agent_id.agent_id.clone(),
+                next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
+                reason,
+            };
+            if cursor.query_hash != OplogCursor::query_hash(query) {
+                return Err(stale(StaleCursorReason::QueryMismatch));
+            }
             let last_index = oplog_service
                 .get_last_index(owned_agent_id, agent_mode)
                 .await?;
             if cursor.next_oplog_index > last_index.as_u64() {
-                return Err(WorkerExecutorError::StaleCursor {
-                    agent_id: owned_agent_id.agent_id.clone(),
-                    next_oplog_index: OplogIndex::from_u64(cursor.next_oplog_index),
+                return Err(stale(StaleCursorReason::PastEnd {
                     last_oplog_index: last_index,
-                });
+                }));
             }
             let revision = cursor.current_component_revision.try_into().map_err(|e| {
                 WorkerExecutorError::invalid_request(format!(

@@ -264,8 +264,8 @@ pub fn error_to_status(error: AgentError) -> Status {
                     format!("Permission Denied: {}", err.details)
                 }
                 worker_execution_error::Error::StaleCursor(err) => format!(
-                    "Stale Oplog Cursor: Worker ID = {:?}, Next Index = {}, Last Index = {}",
-                    err.agent_id, err.next_oplog_index, err.last_oplog_index
+                    "Stale Oplog Cursor: Worker ID = {:?}, Next Index = {}, Reason = {:?}",
+                    err.agent_id, err.next_oplog_index, err.reason
                 ),
             };
             Status::internal(message)
