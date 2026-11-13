@@ -1647,7 +1647,7 @@ mod tests {
     #[test]
     fn oplog_typed_values_show_safe_secret_metadata() {
         let secret_id = uuid::Uuid::from_u128(1);
-        let permission_card_id = uuid::Uuid::from_u128(2);
+        let permission_card_id = uuid::Uuid::from_u128(0xca4d);
         let schema = SchemaType::record(vec![
             NamedFieldType {
                 name: "credential".to_string(),

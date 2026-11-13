@@ -1077,7 +1077,7 @@ async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
         // authorize and repair the producer's missing activation.
         seed.active_agents().remove(&consumer_id).await;
         let source = register_stream(&producer).await?;
-        prepare_session(&producer, false).await?;
+        prepare_session(&producer, source.source_invocation.idempotency_key, false).await?;
         let consumer_stream = register_stream(&consumer).await?;
         let (attachment, mapping) =
             prepare_foreign_topology(&consumer, &source, consumer_stream.source_invocation, 17)
@@ -1153,11 +1153,11 @@ async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
 
 async fn prepare_session(
     worker: &Worker<TestWorkerCtx>,
+    idempotency_key: golem_common::model::InvocationId,
     completed: bool,
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
     let pending_index = oplog.current_oplog_index().await.next().next();
-    let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
@@ -1818,8 +1818,14 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let a_fingerprint = a.get_initial_worker_metadata().fingerprint;
     let (b_attachment, _) =
         prepare_foreign_topology(&b, &a_stream, b_stream.source_invocation.clone(), 29).await?;
-    let completed_session = prepare_session(&a, true).await?;
-    prepare_session(&b, false).await?;
+    prepare_session(&a, a_stream.source_invocation.idempotency_key, false).await?;
+    prepare_session(&b, b_stream.source_invocation.idempotency_key, false).await?;
+    let completed_session = prepare_session(
+        &a,
+        golem_common::model::InvocationId(uuid::Uuid::new_v4()),
+        true,
+    )
+    .await?;
     drop(a);
     drop(b);
     assert!(!executor.worker_is_cached(&a_id).await);

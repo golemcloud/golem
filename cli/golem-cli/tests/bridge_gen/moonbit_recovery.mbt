@@ -34,6 +34,11 @@ async fn run_recovery() -> Unit {
     "run",
     TupleValue([StringValue("x".repeat(__START_TEXT_BYTES__))]),
   )
+  assert_eq(result.agent_id, {
+    component_id: "component",
+    agent_id: "accepted-agent",
+  })
+  assert_eq(result.idempotency_key, "00000000-0000-0000-0000-000000000123")
   let stream = open_output_stream(
     result.result.unwrap(),
     value => as_u8(value),

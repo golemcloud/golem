@@ -90,6 +90,7 @@ priv struct LiveStreamSession {
   headers : @http.Headers
   mut session_token : String?
   mut attempt_id : String
+  agent_id : AgentId
   idempotency_key : String
   inputs : Array[InputRegistration]
   input_channels : Map[String, UInt32]
@@ -133,20 +134,20 @@ async fn connect_socket(
 }
 
 ///|
-const FIRST_RECONNECT_DELAY_MS : Int = 50
+const FIRST_RECONNECT_DELAY_MS : Int32 = 50
 
 ///|
-const MAX_RECONNECT_DELAY_MS : Int = 3000
+const MAX_RECONNECT_DELAY_MS : Int32 = 3000
 
 ///|
 /// Bounds one connection attempt: the TCP connect, the TLS handshake and the
 /// WebSocket upgrade together.
-let connect_attempt_timeout_ms : Ref[Int] = { val: 10000 }
+let connect_attempt_timeout_ms : Ref[Int32] = { val: 10000, }
 
 ///|
 /// How long a connection must stay up after the server accepted its operation
 /// for its loss to count as progress.
-let stable_connection_ms : Ref[Int] = { val: 5000 }
+let stable_connection_ms : Ref[Int32] = { val: 5000, }
 
 ///|
 /// Paces reconnects and ends them once the reconnect window passes without
@@ -160,7 +161,7 @@ priv struct ReconnectClock {
   /// When the server accepted the operation of the current connection.
   mut accepted_at : Int64?
   /// The delay before the next attempt; zero makes the next attempt at once.
-  mut delay_ms : Int
+  mut delay_ms : Int32
   mut last_cause : String
 }
 
@@ -217,7 +218,7 @@ fn ReconnectClock::failed(self : ReconnectClock, cause : String) -> Unit {
 }
 
 ///|
-fn ReconnectClock::remaining(self : ReconnectClock) -> Int? {
+fn ReconnectClock::remaining(self : ReconnectClock) -> Int32? {
   match self.policy {
     Unlimited => None
     Within(window_ms) =>
@@ -228,7 +229,7 @@ fn ReconnectClock::remaining(self : ReconnectClock) -> Int? {
 ///|
 /// Waits for the next attempt and returns how long that attempt may take;
 /// raises [BridgeError::Unreachable] once the window has passed.
-async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int {
+async fn ReconnectClock::next_attempt(self : ReconnectClock) -> Int32 {
   if self.delay_ms > 0 {
     let delay = match self.remaining() {
       None => self.delay_ms
@@ -263,7 +264,7 @@ async fn attach_attempt(
   url : String,
   headers : @http.Headers,
   descriptor : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[(@websocket.Conn, Map[String, Json]), String] {
   try {
     guard @async.with_timeout_opt(timeout_ms, () => connect_socket(url, headers))
@@ -302,9 +303,13 @@ async fn attach_attempt(
 
 ///|
 /// Replaces each provisional stream reference in `value` that `renamed` maps.
-fn replace_provisional_refs(value : Json, renamed : Map[String, String]) -> Json {
+fn replace_provisional_refs(
+  value : Json,
+  renamed : Map[String, String],
+) -> Json {
   match value {
-    Array(items) => Json::array(items.map(item => replace_provisional_refs(item, renamed)))
+    Array(items) =>
+      Json::array(items.map(item => replace_provisional_refs(item, renamed)))
     Object(fields) => {
       if fields.get("kind") is Some(String("stream")) &&
         fields.get("value") is Some(Object(reference)) &&
@@ -428,14 +433,14 @@ async fn send_session_binary(
 /// attachment revoked, or its attempt rejected with the retryable `rejection`.
 /// Losing a stable connection restarts the reconnect window; losing it sooner
 /// counts as a failed attempt.
-async fn resume_session(session : LiveStreamSession, rejection? : String) -> Unit {
+async fn resume_session(
+  session : LiveStreamSession,
+  rejection? : String,
+) -> Unit {
   let stable = session.clock.left_connection()
   match rejection {
     Some(cause) => session.clock.failed(cause)
-    None =>
-      if !stable {
-        session.clock.failed("connection closed")
-      }
+    None => if !stable { session.clock.failed("connection closed") }
   }
   guard session.session_token is Some(token) else {
     raise BridgeError("invalid-attachment-state: accepted session has no token")
@@ -454,13 +459,14 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
   let mut socket : @websocket.Conn? = None
   while accepted is None {
     let timeout_ms = session.clock.next_attempt()
-    match attach_attempt(
-      session.clock,
-      session.url,
-      session.headers,
-      frozen_resume,
-      timeout_ms,
-    ) {
+    match
+      attach_attempt(
+        session.clock,
+        session.url,
+        session.headers,
+        frozen_resume,
+        timeout_ms,
+      ) {
       Err(cause) => session.clock.failed(cause)
       Ok((candidate, response)) =>
         match expect_string(get_field(response, "type")) {
@@ -481,10 +487,8 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
             // A resume refused because the old attachment is still live is
             // retried once as a takeover; other retryable rejections are
             // retried as they are.
-            if !(
-                (!takeover && code == "invalid-attachment-state") ||
-                (retryable && code != "invalid-attachment-state")
-              ) {
+            if !((!takeover && code == "invalid-attachment-state") ||
+              (retryable && code != "invalid-attachment-state")) {
               raise reported_failure(response)
             }
             session.clock.failed("\{code}: \{message}")
@@ -501,13 +505,21 @@ async fn resume_session(session : LiveStreamSession, rejection? : String) -> Uni
             ])
           }
           _ =>
-            raise BridgeError("invalid-attachment-state: invalid resume response")
+            raise BridgeError(
+              "invalid-attachment-state: invalid resume response",
+            )
         }
     }
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
-  validate_acceptance_identity(accepted, attempt_id, session.idempotency_key)
+  ignore(
+    validate_acceptance_identity(
+      accepted,
+      attempt_id,
+      Some((session.agent_id, session.idempotency_key)),
+    ),
+  )
   session.clock.accepted()
   session.socket_write.acquire()
   session.socket = socket
@@ -738,18 +750,30 @@ async fn read_text(socket : @websocket.Conn) -> Json {
 fn validate_acceptance_identity(
   accepted : Map[String, Json],
   attempt_id : String,
-  idempotency_key : String,
-) -> Unit raise {
+  previous : (AgentId, String)?,
+) -> (AgentId, String) raise {
   if expect_string(get_field(accepted, "attemptId")) != attempt_id {
     raise BridgeError("attempt-conflict: acceptance attempt does not match")
   }
-  if expect_string(get_field(accepted, "idempotencyKey")) != idempotency_key {
-    raise BridgeError("idempotency-conflict: acceptance key does not match")
+  let owner = get_field(accepted, "agentId")
+  validate_object_fields(expect_object(owner), ["componentId", "agentId"], [])
+  let agent_id = AgentId::from_json(owner)
+  if agent_id.component_id == "" || agent_id.agent_id == "" {
+    raise BridgeError("malformed-message: invalid accepted agent identity")
+  }
+  let key = expect_string(get_field(accepted, "idempotencyKey"))
+  ignore(Uuid::parse_canonical(key))
+  let identity = (agent_id, key)
+  if previous is Some(expected) && expected != identity {
+    raise BridgeError(
+      "idempotency-conflict: accepted invocation identity changed",
+    )
   }
   let token = expect_string(get_field(accepted, "sessionToken"))
   if token == "" || token.length() > 8192 {
     raise BridgeError("token-invalid: invalid session token")
   }
+  identity
 }
 
 ///|
@@ -760,7 +784,8 @@ fn validate_message_fields(
   let required = match kind {
     "invocationAccepted" =>
       [
-        "version", "type", "attemptId", "idempotencyKey", "mappings", "sessionToken",
+        "version", "type", "attemptId", "agentId", "idempotencyKey", "mappings",
+        "sessionToken",
       ]
     "invocationRejected" => ["version", "type", "code", "message", "retryable"]
     "invocationResult" => ["version", "type", "mappings", "result"]
@@ -1748,7 +1773,6 @@ fn release_unclaimed_outputs(session : LiveStreamSession) -> Unit {
 ///|
 async fn dispatch_server_message(
   session : LiveStreamSession,
-  resolved : ResolvedAgent,
   message : Map[String, Json],
 ) -> Bool {
   match expect_string(get_field(message, "type")) {
@@ -1780,10 +1804,7 @@ async fn dispatch_server_message(
       }
       session.result_seen = true
       session.result_queue.put({
-        agent_id: resolved.agent_id.unwrap_or({
-          component_id: "",
-          agent_id: "",
-        }),
+        agent_id: session.agent_id,
         idempotency_key: session.idempotency_key,
         result: value,
         component_revision: None,
@@ -1886,10 +1907,7 @@ async fn dispatch_server_message(
 }
 
 ///|
-async fn receive_actor(
-  session : LiveStreamSession,
-  resolved : ResolvedAgent,
-) -> Unit {
+async fn receive_actor(session : LiveStreamSession) -> Unit {
   for ;; {
     let (kind, bytes) = try {
       let raw = session.socket.recv()
@@ -1932,7 +1950,7 @@ async fn receive_actor(
         }
         let kind = expect_string(get_field(message, "type"))
         validate_message_fields(message, kind)
-        if dispatch_server_message(session, resolved, message) {
+        if dispatch_server_message(session, message) {
           return
         }
       }
@@ -2022,14 +2040,19 @@ pub async fn invoke_streaming_agent(
       ])
     },
   )
-  validate_acceptance_identity(accepted, attempt_id, idempotency_key)
+  let (agent_id, accepted_key) = validate_acceptance_identity(
+    accepted,
+    attempt_id,
+    None,
+  )
   let session = {
     socket,
     url,
     headers,
     session_token: None,
     attempt_id,
-    idempotency_key,
+    agent_id,
+    idempotency_key: accepted_key,
     inputs,
     input_channels: {},
     input_tokens: {},
@@ -2068,7 +2091,7 @@ pub async fn invoke_streaming_agent(
   pump_next_input(session)
   session.actor_owner = Some(
     @io.MemoryReader(async fn(_) {
-      receive_actor(session, resolved) catch {
+      receive_actor(session) catch {
         error => fail_session(session, error)
       }
     }),

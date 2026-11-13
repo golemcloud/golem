@@ -58,8 +58,10 @@ class StreamRuntimeTest extends munit.FunSuite {
       try {
         val startPeer = connect()
         val start = startPeer.receive()
-        val key = field(start, "idempotencyKey")
+        val key = Json.string("00000000-0000-0000-0000-000000000123")
+        assertNotEquals(key.render, field(start, "idempotencyKey").render)
         def accepted(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
           "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> key,
           "sessionToken" -> Json.string("stable-session"), "mappings" -> mappings))
         accepted(startPeer, start)
@@ -110,6 +112,8 @@ class StreamRuntimeTest extends munit.FunSuite {
       "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
     try {
       val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, Some(PublicValueCodec.fromSchemaGraphJson(graph)), Nil), 15.seconds)
+      assertEquals(result.agentId, AgentId("component", "accepted-agent"))
+      assertEquals(result.idempotencyKey, "00000000-0000-0000-0000-000000000123")
       val stream = StreamSession.output(result.result.get, SchemaValueCodec.asString, "json",
         PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"string","value":{}}}"""))
       val consumer = Await.result(stream.consume(), 5.seconds)
@@ -145,7 +149,8 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally server.close()
   }
   private def accept(p: Peer, start: Json): Unit = p.send(message("invocationAccepted",
-    "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+    "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+    "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
     "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
 
   test("an agent failure rejection surfaces the agent's stderr") {
@@ -204,7 +209,8 @@ class StreamRuntimeTest extends munit.FunSuite {
         val first = connect()
         val start = first.receive()
         def accept(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
-          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> field(start, "idempotencyKey"),
+          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
         def reject(p: Peer, descriptor: Json, rejectionCode: String, canRetry: Boolean): Unit =
           p.send(message("invocationRejected", "attemptId" -> field(descriptor, "attemptId"),

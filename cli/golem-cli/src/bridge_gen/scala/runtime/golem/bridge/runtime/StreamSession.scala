@@ -259,6 +259,7 @@ object StreamSession {
     @volatile var pendingAttachOperation = "resume"
     @volatile var everAccepted = false
     val idempotencyKey = UUID.randomUUID.toString
+    @volatile var acceptedIdentity: Option[(AgentId, String)] = None
     val reconnecting = new AtomicBoolean(false)
     val reconnectRequested = new AtomicBoolean(false)
     val reconnectAction = new AtomicReference[() => Unit](() => ())
@@ -575,11 +576,9 @@ object StreamSession {
         kind match {
           case "invocationAccepted" =>
             if (accepted) throw BridgeException("duplicate invocation acceptance")
-            val attempt = Json.requireField(json, "attemptId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            val key = Json.requireField(json, "idempotencyKey").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
-            if (attempt != pendingAttempt || key != idempotencyKey) throw BridgeException("acceptance does not match the pending operation")
             val token = Json.requireField(json, "sessionToken").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
             StreamSessionProtocol.validateOpaqueToken(token, "session token")
+            acceptedIdentity = Some(StreamSessionProtocol.acceptanceIdentity(json, pendingAttempt, acceptedIdentity))
             install(json, complete = true)
             sessionToken = token
             accepted = true
@@ -631,7 +630,8 @@ object StreamSession {
                 Some(decoded)
               case _ => throw BridgeException("invalid invocation result kind")
             }
-            if (!result.trySuccess(AgentInvocationResult(resolved.agentId.getOrElse(AgentId("", "")), idempotencyKey, value, None)))
+            val (owner, key) = acceptedIdentity.getOrElse(throw BridgeException("invocation result has no accepted identity"))
+            if (!result.trySuccess(AgentInvocationResult(owner, key, value, None)))
               throw BridgeException("duplicate invocation result")
           case "outputStreamItem" =>
             install(json); val ch = StreamSessionProtocol.channel(json)

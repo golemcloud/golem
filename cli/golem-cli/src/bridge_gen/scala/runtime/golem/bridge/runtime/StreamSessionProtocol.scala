@@ -44,7 +44,7 @@ private[runtime] object StreamSessionProtocol {
   def validateServerMessage(json: Json): String = {
     val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
     kind match {
-      case "invocationAccepted" => validate(json, kind, Set("attemptId", "idempotencyKey", "mappings", "sessionToken"))
+      case "invocationAccepted" => validate(json, kind, Set("attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"))
       case "invocationRejected" => validate(json, kind, Set("code", "message", "retryable"), Set("attemptId", "stderr"))
       case "invocationResult" => validate(json, kind, Set("mappings", "result"))
       case "outputStreamItem" => validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
@@ -56,6 +56,21 @@ private[runtime] object StreamSessionProtocol {
       case _ => throw BridgeException(s"unsupported stream session message: $kind")
     }
     kind
+  }
+
+  def acceptanceIdentity(json: Json, attemptId: String, previous: Option[(AgentId, String)]): (AgentId, String) = {
+    val attempt = Json.requireField(json, "attemptId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    if (attempt != attemptId) throw BridgeException("attempt-conflict: acceptance attempt does not match")
+    val owner = Json.requireField(json, "agentId").fold(e => throw BridgeException(e), identity)
+    validateObject(owner, Set("componentId", "agentId"), "accepted agent identity")
+    val agentId = AgentId.fromJson(owner).fold(e => throw BridgeException(e), identity)
+    if (agentId.componentId.isEmpty || agentId.agentId.isEmpty) throw BridgeException("malformed-message: invalid accepted agent identity")
+    val key = Json.requireField(json, "idempotencyKey").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    if (!key.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+      throw BridgeException("malformed-message: accepted idempotency key is not a UUID")
+    val accepted = (agentId, key)
+    if (previous.exists(_ != accepted)) throw BridgeException("idempotency-conflict: accepted invocation identity changed")
+    accepted
   }
 
   private def optionalString(json: Json, name: String): Option[String] =

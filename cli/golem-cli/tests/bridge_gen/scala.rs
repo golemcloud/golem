@@ -698,6 +698,26 @@ import golem.bridge.runtime.StreamSessionState.*
 import golem.bridge.runtime.json.Json
 
 class StreamRuntimeTest extends munit.FunSuite {
+  test("accepted invocation identity is final and stable across resume") {
+    val key = "00000000-0000-0000-0000-000000000123"
+    def acceptance(attempt: String = "attempt", component: String = "component", agent: String = "accepted-agent", acceptedKey: String = key): Json =
+      Json.parse(StreamSessionProtocol.message("invocationAccepted", Vector(
+        "attemptId" -> Json.string(attempt),
+        "agentId" -> Json.obj("componentId" -> Json.string(component), "agentId" -> Json.string(agent)),
+        "idempotencyKey" -> Json.string(acceptedKey), "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector.empty)))).toOption.get
+    val message = acceptance()
+    StreamSessionProtocol.validateServerMessage(message)
+    val identity = StreamSessionProtocol.acceptanceIdentity(message, "attempt", None)
+    assertEquals(identity, (AgentId("component", "accepted-agent"), key))
+    assertEquals(StreamSessionProtocol.acceptanceIdentity(acceptance("resume"), "resume", Some(identity)), identity)
+    intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(message, "wrong", Some(identity)))
+    for (changed <- List(acceptance(component = "other"), acceptance(agent = "other"), acceptance(acceptedKey = "00000000-0000-0000-0000-000000000124")))
+      intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(changed, "attempt", Some(identity)))
+    intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(acceptance(acceptedKey = "not-a-uuid"), "attempt", None))
+    val missingOwner = Json.obj(Json.asObject(message).toOption.get.filterNot(_._1 == "agentId"))
+    intercept[BridgeException](StreamSessionProtocol.validateServerMessage(missingOwner))
+  }
+
   private def fixtureField(value: Json, name: String): Json =
     Json.asObject(value).toOption.get.find(_._1 == name).map(_._2).get
 

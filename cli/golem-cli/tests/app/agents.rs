@@ -4065,6 +4065,14 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         String::from_utf8_lossy(&repeated.stderr)
     );
     assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+    let document: serde_json::Value = serde_json::from_slice(repeated.stdout()).unwrap();
+    let receipt = &document["response"];
+    let owner: golem_common::model::AgentId =
+        serde_json::from_value(receipt["agentId"].clone()).unwrap();
+    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
+    Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
+    assert_ne!(invocation_id, "structured-cli-repeat");
 
     let lookup = ctx
         .cli_with_input(
@@ -4073,11 +4081,11 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
                 "json",
                 cmd::TOOL,
                 cmd::INVOKE,
-                "--component",
-                "tool-raw-stdout:provider",
+                "--agent",
+                &owner,
                 "--lookup",
                 "--idempotency-key",
-                "structured-cli-repeat",
+                invocation_id,
                 "raw-output",
                 "--",
                 "repeat",

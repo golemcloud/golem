@@ -265,6 +265,7 @@ async fn customized_json_routes_apply_aliases_and_route_local_load_limits(
     let secondary_base =
         format!("/durable-stream-agents/ds3-{session}/custom-echo-secondary/invocations/{session}");
     let secondary_input = format!("{secondary_base}/streams/secondary-messages");
+    let secondary_output = format!("{secondary_base}/streams/secondary-responses");
 
     assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
     assert_eq!(
@@ -290,7 +291,7 @@ async fn customized_json_routes_apply_aliases_and_route_local_load_limits(
                 .await?
                 .status(),
             StatusCode::NO_CONTENT,
-            "a second route to the same canonical stream has its own append budget"
+            "a separate route family has its own session and append budget"
         );
     }
     assert_eq!(
@@ -364,27 +365,30 @@ async fn customized_json_routes_apply_aliases_and_route_local_load_limits(
         ])
     );
     tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        agent
-            .client
-            .post(agent.base_url.join(&input)?)
-            .header("stream-closed", "true")
-            .send()
-            .await?
-            .status(),
-        StatusCode::NO_CONTENT
-    );
-    wait_for_closed(agent, &output).await?;
-    assert_eq!(
-        agent
-            .client
-            .get(agent.base_url.join(&output)?)
-            .send()
-            .await?
-            .json::<Value>()
-            .await?,
-        serde_json::json!(["héllo 🌍", "secondary-1", "secondary-2"])
-    );
+    for path in [&input, &secondary_input] {
+        assert_eq!(
+            agent
+                .client
+                .post(agent.base_url.join(path)?)
+                .header("stream-closed", "true")
+                .send()
+                .await?
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    for (path, expected) in [
+        (&output, serde_json::json!(["héllo 🌍"])),
+        (
+            &secondary_output,
+            serde_json::json!(["secondary-1", "secondary-2"]),
+        ),
+    ] {
+        wait_for_closed(agent, path).await?;
+        let response = agent.client.get(agent.base_url.join(path)?).send().await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await?, expected);
+    }
 
     let openapi = agent
         .client
@@ -1740,7 +1744,7 @@ async fn generated_session_location_and_manifest(
         create(agent, &format!("{location}?delay_ms=1"))
             .await?
             .status(),
-        StatusCode::CONFLICT
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     let data = agent
         .client
@@ -1910,7 +1914,7 @@ async fn phantom_and_ephemeral_sessions_have_stable_distinct_identities(
             format!("/{mode}-stream-agents/identity/second/invocations/{session}/streams/$result");
         assert_eq!(
             create(agent, &mismatch).await?.status(),
-            StatusCode::CONFLICT
+            StatusCode::UNPROCESSABLE_ENTITY
         );
         let data = agent.client.get(agent.base_url.join(&path)?).send().await?;
         assert_eq!(data.status(), StatusCode::OK);
@@ -2004,7 +2008,7 @@ async fn session_put_binds_body_query_header_and_path(
             .json(&serde_json::json!({"message": message}))
             .send()
             .await?;
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     assert_eq!(create(agent, &stream).await?.status(), StatusCode::OK);
@@ -2038,13 +2042,27 @@ async fn session_conflicts_unknown_slots_and_offsets(
     let changed_args = stream_path("isolated-a/3", &session, "$result", 0);
     assert_eq!(
         create(agent, &changed_args).await?.status(),
-        StatusCode::CONFLICT
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     let other_method = stream_path("isolated-b/2", &session, "$result", 0);
     assert_eq!(
         create(agent, &other_method).await?.status(),
-        StatusCode::CONFLICT
+        StatusCode::CREATED
     );
+    for (stream, expected) in [
+        (&path, serde_json::json!(["a-0", "a-1"])),
+        (&other_method, serde_json::json!(["b-0", "b-1"])),
+    ] {
+        wait_for_closed(agent, stream).await?;
+        assert_eq!(create(agent, stream).await?.status(), StatusCode::OK);
+        let response = agent
+            .client
+            .get(agent.base_url.join(stream)?)
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await?, expected);
+    }
 
     let unknown = stream_path("isolated-a/2", &session, "missing", 0);
     assert_eq!(
@@ -2095,7 +2113,7 @@ async fn session_conflicts_unknown_slots_and_offsets(
 
 #[test]
 #[timeout("120s")]
-async fn websocket_input_is_readable_through_http(
+async fn websocket_and_http_sessions_have_isolated_identities(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     use crate::api::streaming_rpc::{
@@ -2160,20 +2178,20 @@ async fn websocket_input_is_readable_through_http(
         }
     }
     let input_path = echo_stream_path(&session, "input");
+    for method in [Method::GET, Method::HEAD, Method::DELETE] {
+        let response = agent
+            .client
+            .request(method, agent.base_url.join(&input_path)?)
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
     assert_eq!(
-        append_json(agent, &input_path, serde_json::json!("post-middle"), false)
+        append_json(agent, &input_path, serde_json::json!("http-only"), true)
             .await?
             .status(),
         StatusCode::NO_CONTENT
     );
-    loop {
-        if let PublicServerMessage::OutputStreamItem { value, .. } =
-            receive_public_response(&mut socket).await?
-        {
-            output.push(value);
-            break;
-        }
-    }
     send_public_request(
         &mut socket,
         &PublicClientMessage::InputStreamItem {
@@ -2206,13 +2224,9 @@ async fn websocket_input_is_readable_through_http(
             _ => {}
         }
     }
-    let public_values = serde_json::json!([
-        native_string("ws-first"),
-        native_string("post-middle"),
-        native_string("ws-last")
-    ]);
+    let public_values = serde_json::json!([native_string("ws-first"), native_string("ws-last")]);
     assert_eq!(serde_json::json!(output), public_values);
-    let values = serde_json::json!(["ws-first", "post-middle", "ws-last"]);
+    let values = serde_json::json!(["http-only"]);
     for slot in ["input", "output"] {
         let path = stream_path("echo", &session, slot, 0);
         wait_for_closed(agent, &path).await?;
@@ -2333,67 +2347,34 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
 async fn input_slot_delete_is_guest_observable_and_tombstoned(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    use crate::api::streaming_rpc::{
-        connect_public_invocation_socket, receive_public_response, send_public_request,
-    };
-    use golem_common::model::invocation_session_public::{
-        DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
-        PublicServerMessage,
-    };
-
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let input_reference = Uuid::new_v4();
-    let mut socket =
-        connect_public_invocation_socket(&agent.user.deps, Some(&agent.user.token)).await?;
-    send_public_request(
-        &mut socket,
-        &PublicClientMessage::InvocationStart {
-            attempt_id: Uuid::new_v4(),
-            config: Vec::new(),
-            idempotency_key: session.clone(),
-            method_parameters: native_input_stream(input_reference),
-            selector: Box::new(InvocationSelector {
-                agent_type: "DurableStreamAgent".into(),
-                application: agent.application_name.clone(),
-                constructor_parameters: native_constructor_id(id.clone()),
-                environment: agent.environment_name.clone(),
-                method: "echo".into(),
-                phantom_id: None,
-            }),
-            version: INVOCATION_SESSION_VERSION,
-        },
-    )
-    .await?;
-    let input_channel = match receive_public_response(&mut socket).await? {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => {
-            mappings
-                .into_iter()
-                .find(|mapping| mapping.provisional_ref == Some(input_reference))
-                .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
-                .channel
-        }
-        other => anyhow::bail!("invocation was not accepted: {other:?}"),
-    };
-    send_public_request(
-        &mut socket,
-        &PublicClientMessage::InputStreamItem {
-            channel: input_channel,
-            sequence: DecimalU64(0),
-            value: native_string("kept"),
-            version: INVOCATION_SESSION_VERSION,
-        },
-    )
-    .await?;
-    loop {
-        if matches!(
-            receive_public_response(&mut socket).await?,
-            PublicServerMessage::OutputStreamItem { .. }
-        ) {
-            break;
-        }
-    }
     let input = stream_path("echo", &session, "input", 0);
+    let output = stream_path("echo", &session, "output", 0);
+    assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!("kept"), false)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let response = agent
+                .client
+                .get(agent.base_url.join(&output)?)
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            let values = response.json::<Value>().await?;
+            if values != serde_json::json!([]) {
+                assert_eq!(values, serde_json::json!(["kept"]));
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
     assert_eq!(
         agent
             .client
