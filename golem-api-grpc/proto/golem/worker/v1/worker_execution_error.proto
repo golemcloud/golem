@@ -43,12 +43,23 @@ message WorkerExecutionError {
   }
 }
 
-// An oplog cursor points past the last entry of the agent's oplog.
+// An oplog read refuses its cursor: the cursor did not come from a page of this read.
 message StaleCursor {
   AgentId agent_id = 1;
   uint64 next_oplog_index = 2;
-  uint64 last_oplog_index = 3;
+  oneof reason {
+    StaleCursorPastEnd past_end = 3;
+    StaleCursorQueryMismatch query_mismatch = 4;
+  }
 }
+
+// The cursor points past the last entry of the agent's oplog.
+message StaleCursorPastEnd {
+  uint64 last_oplog_index = 1;
+}
+
+// The cursor came from the pages of another query.
+message StaleCursorQueryMismatch {}
 
 message ComponentServiceUnavailable {
   golem.component.ComponentId component_id = 1;

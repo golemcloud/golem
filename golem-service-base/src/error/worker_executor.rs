@@ -166,15 +166,27 @@ pub enum WorkerExecutorError {
         agent_id: AgentId,
         details: String,
     },
-    /// An oplog cursor points past the last entry of the agent's oplog. A page hands out a
-    /// cursor only while the oplog has entries after it, and the oplog only grows, so the cursor
-    /// did not come from a page of this oplog: the agent was deleted and created again since, or
-    /// the cursor was made up. The caller starts again without a cursor.
+    /// An oplog read refuses its cursor, because the cursor did not come from a page of this
+    /// read. The caller starts again without a cursor.
     StaleCursor {
         agent_id: AgentId,
         next_oplog_index: OplogIndex,
-        last_oplog_index: OplogIndex,
+        reason: StaleCursorReason,
     },
+}
+
+/// Why an oplog read refuses a cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum StaleCursorReason {
+    /// The cursor points past the last entry of the oplog. A page hands out a cursor only while
+    /// the oplog has entries after it, and the oplog only grows, so the cursor did not come from
+    /// a page of this oplog: the agent was deleted and created again since, or the cursor was
+    /// made up.
+    PastEnd { last_oplog_index: OplogIndex },
+    /// The cursor came from the pages of another query: a search of another query, a search for
+    /// a read without a query, or a read without a query for a search.
+    QueryMismatch,
 }
 
 /// Why the component service refused a request.
@@ -511,11 +523,20 @@ impl Display for WorkerExecutorError {
             Self::StaleCursor {
                 agent_id,
                 next_oplog_index,
-                last_oplog_index,
+                reason: StaleCursorReason::PastEnd { last_oplog_index },
             } => write!(
                 f,
                 "Stale oplog cursor: it points to index {next_oplog_index}, but the oplog of \
                  {agent_id} ends at index {last_oplog_index}"
+            ),
+            Self::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                reason: StaleCursorReason::QueryMismatch,
+            } => write!(
+                f,
+                "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
+                 {agent_id} comes from the pages of another query"
             ),
         }
     }
@@ -1060,14 +1081,27 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
             WorkerExecutorError::StaleCursor {
                 agent_id,
                 next_oplog_index,
-                last_oplog_index,
+                reason,
             } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::StaleCursor(
                         golem::worker::v1::StaleCursor {
                             agent_id: Some(agent_id.into()),
                             next_oplog_index: next_oplog_index.into(),
-                            last_oplog_index: last_oplog_index.into(),
+                            reason: Some(match reason {
+                                StaleCursorReason::PastEnd { last_oplog_index } => {
+                                    golem::worker::v1::stale_cursor::Reason::PastEnd(
+                                        golem::worker::v1::StaleCursorPastEnd {
+                                            last_oplog_index: last_oplog_index.into(),
+                                        },
+                                    )
+                                }
+                                StaleCursorReason::QueryMismatch => {
+                                    golem::worker::v1::stale_cursor::Reason::QueryMismatch(
+                                        golem::worker::v1::StaleCursorQueryMismatch {},
+                                    )
+                                }
+                            }),
                         },
                     ),
                 ),
@@ -1299,7 +1333,16 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 Ok(Self::StaleCursor {
                     agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
                     next_oplog_index: OplogIndex::from_u64(error.next_oplog_index),
-                    last_oplog_index: OplogIndex::from_u64(error.last_oplog_index),
+                    reason: match error.reason.ok_or("Missing reason")? {
+                        golem::worker::v1::stale_cursor::Reason::PastEnd(past_end) => {
+                            StaleCursorReason::PastEnd {
+                                last_oplog_index: OplogIndex::from_u64(past_end.last_oplog_index),
+                            }
+                        }
+                        golem::worker::v1::stale_cursor::Reason::QueryMismatch(_) => {
+                            StaleCursorReason::QueryMismatch
+                        }
+                    },
                 })
             }
         }
@@ -1468,29 +1511,36 @@ mod read_only_violation_trap_tests {
     }
 
     #[test]
-    fn a_stale_cursor_keeps_its_kind_and_indices_through_grpc() {
-        let expected = WorkerExecutorError::StaleCursor {
-            agent_id: AgentId {
-                component_id: ComponentId(uuid::Uuid::nil()),
-                agent_id: "Counter(\"a\")".to_string(),
+    fn a_stale_cursor_keeps_its_reason_and_indices_through_grpc() {
+        for reason in [
+            StaleCursorReason::PastEnd {
+                last_oplog_index: OplogIndex::from_u64(17),
             },
-            next_oplog_index: OplogIndex::from_u64(42),
-            last_oplog_index: OplogIndex::from_u64(17),
-        };
+            StaleCursorReason::QueryMismatch,
+        ] {
+            let expected = WorkerExecutorError::StaleCursor {
+                agent_id: AgentId {
+                    component_id: ComponentId(uuid::Uuid::nil()),
+                    agent_id: "Counter(\"a\")".to_string(),
+                },
+                next_oplog_index: OplogIndex::from_u64(42),
+                reason,
+            };
 
-        let status: Status = expected.clone().into();
+            let status: Status = expected.clone().into();
 
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert_eq!(
-            WorkerExecutorError::from_status_details(&status),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
-                expected.clone()
-            )),
-            Ok(expected)
-        );
+            assert_eq!(status.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
+                WorkerExecutorError::from_status_details(&status),
+                Some(expected.clone())
+            );
+            assert_eq!(
+                WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
+                    expected.clone()
+                )),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

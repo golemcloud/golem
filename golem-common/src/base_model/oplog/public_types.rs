@@ -344,14 +344,33 @@ impl TryFrom<PublicTypedAgentConfigEntry> for crate::base_model::worker::Untyped
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_revision: u64,
+    /// The hash of the search query of the pages that gave the cursor, or empty for the pages of
+    /// an oplog read without a query. A read refuses a cursor of another query.
+    pub query_hash: String,
+}
+
+impl OplogCursor {
+    /// The query hash of the pages of `query`: the first 8 bytes of the SHA-256 of the query as
+    /// the caller sent it, in lowercase hex, or empty for a read without a query.
+    pub fn query_hash(query: Option<&str>) -> String {
+        use sha2::Digest as _;
+        query
+            .map(|query| {
+                sha2::Sha256::digest(query.as_bytes())[..8]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Display for OplogCursor {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}-{}",
-            self.next_oplog_index, self.current_component_revision
+            "{}-{}-{}",
+            self.next_oplog_index, self.current_component_revision, self.query_hash
         )
     }
 }

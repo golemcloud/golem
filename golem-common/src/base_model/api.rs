@@ -265,8 +265,8 @@ pub mod error_code {
     pub const RETRY_POLICY_INVALID_POLICY_JSON: &str = "RETRY_POLICY_INVALID_POLICY_JSON";
     pub const RETRY_POLICY_INVALID_PREDICATE_JSON: &str = "RETRY_POLICY_INVALID_PREDICATE_JSON";
     pub const RESOURCE_LIMIT_TYPE_IMMUTABLE: &str = "RESOURCE_LIMIT_TYPE_IMMUTABLE";
-    /// An oplog cursor points past the end of the agent's oplog, so it did not come from a page
-    /// of this oplog. The caller starts again without a cursor.
+    /// An oplog read refuses its cursor: the cursor points past the end of the agent's oplog, or
+    /// it came from the pages of another query. The caller starts again without a cursor.
     pub const STALE_CURSOR: &str = "STALE_CURSOR";
     pub const TYPE_CHECKER_ERROR: &str = "TYPE_CHECKER_ERROR";
     pub const UNKNOWN_OIDC_STATE: &str = "UNKNOWN_OIDC_STATE";

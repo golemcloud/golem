@@ -15,7 +15,7 @@
 use crate::Tracing;
 use golem_api_grpc::proto::golem::worker::OplogCursor;
 use golem_api_grpc::proto::golem::worker::v1::{
-    StaleCursor, WorkerExecutionError, worker_execution_error,
+    StaleCursor, StaleCursorPastEnd, WorkerExecutionError, stale_cursor, worker_execution_error,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetOplogRequest, SearchOplogRequest, SearchOplogSuccessResponse, get_oplog_response,
@@ -23,7 +23,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::worker_filter::StringFilterComparator;
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogPageEntry};
+use golem_common::model::oplog::{
+    OplogCursor as CommonOplogCursor, OplogIndex, PublicOplogEntry, PublicOplogPageEntry,
+};
 use golem_common::model::{AgentFilter, AgentId, PromiseId, ScanCursor};
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -451,6 +453,69 @@ async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
     Ok(())
 }
 
+async fn get_oplog(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    cursor: Option<OplogCursor>,
+    count: u64,
+) -> anyhow::Result<get_oplog_response::Result> {
+    executor
+        .client
+        .clone()
+        .get_oplog(GetOplogRequest {
+            agent_id: Some(worker_id.clone().into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            from_oplog_index: 1,
+            cursor,
+            count,
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner()
+        .result
+        .ok_or_else(|| anyhow::anyhow!("the oplog read has no result"))
+}
+
+async fn search_oplog(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    cursor: Option<OplogCursor>,
+    query: &str,
+    count: u64,
+) -> anyhow::Result<search_oplog_response::Result> {
+    executor
+        .client
+        .clone()
+        .search_oplog(SearchOplogRequest {
+            agent_id: Some(worker_id.clone().into()),
+            environment_id: Some(executor.context.default_environment_id.into()),
+            cursor,
+            count,
+            query: query.to_string(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner()
+        .result
+        .ok_or_else(|| anyhow::anyhow!("the oplog search has no result"))
+}
+
+/// The reason of a stale cursor failure for `worker_id` and the cursor index `next`.
+fn stale_reason(
+    failure: &WorkerExecutionError,
+    worker_id: &AgentId,
+    next: u64,
+) -> Option<stale_cursor::Reason> {
+    match &failure.error {
+        Some(worker_execution_error::Error::StaleCursor(StaleCursor {
+            agent_id: Some(agent_id),
+            next_oplog_index,
+            reason,
+        })) if *agent_id == worker_id.clone().into() && *next_oplog_index == next => reason.clone(),
+        _ => None,
+    }
+}
+
 #[test]
 #[timeout("4m")]
 async fn a_cursor_past_the_end_of_the_oplog_is_refused_as_stale(
@@ -469,66 +534,145 @@ async fn a_cursor_past_the_end_of_the_oplog_is_refused_as_stale(
         .start_agent(&component.id, agent_id!("GolemHostApi", "stale-cursor"))
         .await?;
     let last_index = executor.get_oplog_last_index(&worker_id).await?;
-    let cursor_at = |next_oplog_index| OplogCursor {
+    let cursor_at = |next_oplog_index, query| OplogCursor {
         next_oplog_index,
         current_component_revision: 0,
-    };
-    let get = |cursor| {
-        let mut client = executor.client.clone();
-        let request = GetOplogRequest {
-            agent_id: Some(worker_id.clone().into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
-            from_oplog_index: 1,
-            cursor: Some(cursor),
-            count: 100,
-            auth_ctx: Some(executor.auth_ctx().into()),
-        };
-        async move { client.get_oplog(request).await }
+        query_hash: CommonOplogCursor::query_hash(query),
     };
     // Far past the end, so a late entry of the new agent cannot make the cursor valid.
     let past_end = last_index + 1000;
-    let is_stale = |failure: &WorkerExecutionError| {
+    let is_past_end = |failure: &WorkerExecutionError| {
         matches!(
-            &failure.error,
-            Some(worker_execution_error::Error::StaleCursor(StaleCursor {
-                agent_id: Some(agent_id),
-                next_oplog_index,
-                last_oplog_index,
-            })) if *agent_id == worker_id.clone().into()
-                && *next_oplog_index == past_end
-                && (last_index..past_end).contains(last_oplog_index)
+            stale_reason(failure, &worker_id, past_end),
+            Some(stale_cursor::Reason::PastEnd(StaleCursorPastEnd { last_oplog_index }))
+                if (last_index..past_end).contains(&last_oplog_index)
         )
     };
 
     // A cursor at the last entry is valid and reads from there.
-    let at_last = get(cursor_at(last_index)).await?.into_inner();
-    let Some(get_oplog_response::Result::Success(page)) = at_last.result else {
+    let at_last = get_oplog(
+        &executor,
+        &worker_id,
+        Some(cursor_at(last_index, None)),
+        100,
+    )
+    .await?;
+    let get_oplog_response::Result::Success(page) = at_last else {
         panic!("a cursor at the last entry must be accepted, got {at_last:?}");
     };
     assert!(!page.entries.is_empty());
 
     // A cursor past it did not come from a page of this oplog, for get and for search.
-    let got = get(cursor_at(past_end)).await?.into_inner();
+    let got = get_oplog(&executor, &worker_id, Some(cursor_at(past_end, None)), 100).await?;
     assert!(
-        matches!(&got.result, Some(get_oplog_response::Result::Failure(failure)) if is_stale(failure)),
-        "expected a stale cursor failure, got {got:?}"
+        matches!(&got, get_oplog_response::Result::Failure(failure) if is_past_end(failure)),
+        "expected a stale cursor past the end, got {got:?}"
     );
-    let searched = executor
-        .client
-        .clone()
-        .search_oplog(SearchOplogRequest {
-            agent_id: Some(worker_id.clone().into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
-            cursor: Some(cursor_at(past_end)),
-            count: 100,
-            query: RARE_QUERY.to_string(),
-            auth_ctx: Some(executor.auth_ctx().into()),
-        })
-        .await?
-        .into_inner();
+    let searched = search_oplog(
+        &executor,
+        &worker_id,
+        Some(cursor_at(past_end, Some(RARE_QUERY))),
+        RARE_QUERY,
+        100,
+    )
+    .await?;
     assert!(
-        matches!(&searched.result, Some(search_oplog_response::Result::Failure(failure)) if is_stale(failure)),
-        "expected a stale cursor failure, got {searched:?}"
+        matches!(&searched, search_oplog_response::Result::Failure(failure) if is_past_end(failure)),
+        "expected a stale cursor past the end, got {searched:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_cursor_of_another_query_is_refused_as_stale(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "query-cursor");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "generate_idempotency_keys",
+            data_value!(),
+        )
+        .await?;
+
+    // The query matches more than one entry, so a page of one match hands out a cursor.
+    let search_cursor = match search_oplog(&executor, &worker_id, None, RARE_QUERY, 1).await? {
+        search_oplog_response::Result::Success(page) => page
+            .next
+            .expect("a page of the first of several matches has a cursor"),
+        other => panic!("the first search page failed: {other:?}"),
+    };
+    let get_cursor = match get_oplog(&executor, &worker_id, None, 1).await? {
+        get_oplog_response::Result::Success(page) => {
+            page.next.expect("a page of the first entry has a cursor")
+        }
+        other => panic!("the first oplog page failed: {other:?}"),
+    };
+
+    // The same query continues the search.
+    let same = search_oplog(
+        &executor,
+        &worker_id,
+        Some(search_cursor.clone()),
+        RARE_QUERY,
+        100,
+    )
+    .await?;
+    let search_oplog_response::Result::Success(page) = &same else {
+        panic!("the same query must continue its cursor, got {same:?}");
+    };
+    assert!(!page.entries.is_empty());
+
+    // Another query, a read without a query, and a search of a cursor without a query refuse it.
+    let is_query_mismatch = |failure: &WorkerExecutionError, cursor: &OplogCursor| {
+        matches!(
+            stale_reason(failure, &worker_id, cursor.next_oplog_index),
+            Some(stale_cursor::Reason::QueryMismatch(_))
+        )
+    };
+    let other_query = search_oplog(
+        &executor,
+        &worker_id,
+        Some(search_cursor.clone()),
+        "generate_idempotency_keys",
+        100,
+    )
+    .await?;
+    assert!(
+        matches!(&other_query, search_oplog_response::Result::Failure(failure) if is_query_mismatch(failure, &search_cursor)),
+        "a search of another query must refuse the cursor, got {other_query:?}"
+    );
+    let get = get_oplog(&executor, &worker_id, Some(search_cursor.clone()), 100).await?;
+    assert!(
+        matches!(&get, get_oplog_response::Result::Failure(failure) if is_query_mismatch(failure, &search_cursor)),
+        "a read without a query must refuse the cursor of a search, got {get:?}"
+    );
+    let search_of_get = search_oplog(
+        &executor,
+        &worker_id,
+        Some(get_cursor.clone()),
+        RARE_QUERY,
+        100,
+    )
+    .await?;
+    assert!(
+        matches!(&search_of_get, search_oplog_response::Result::Failure(failure) if is_query_mismatch(failure, &get_cursor)),
+        "a search must refuse the cursor of a read without a query, got {search_of_get:?}"
     );
     Ok(())
 }

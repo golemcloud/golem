@@ -5696,6 +5696,7 @@ components:
       required:
       - nextOplogIndex
       - currentComponentRevision
+      - queryHash
       properties:
         nextOplogIndex:
           type: integer
@@ -5703,6 +5704,11 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+        queryHash:
+          type: string
+          description: |-
+            The hash of the search query of the pages that gave the cursor, or empty for the pages of
+            an oplog read without a query. A read refuses a cursor of another query.
     OplogErrorKind:
       type: string
       enum:
