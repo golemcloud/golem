@@ -54,7 +54,7 @@ use golem_common::schema::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -460,8 +460,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let input_discarded = CancellationToken::new();
     let input_failed = CancellationToken::new();
     let stdin_format = args.stdin_format;
-    let validate_discarded_input =
-        stdin_format == InvocationStdinFormat::Value && !std::io::stdin().is_terminal();
+    let validate_discarded_input = stdin_format == InvocationStdinFormat::Value
+        && !crate::command_handler::interactive::stdin_is_terminal();
     let has_input = input_binding.is_some();
     if resuming_from_checkpoint && has_input {
         eprint_line(
@@ -1223,9 +1223,16 @@ fn read_stdin(
     discarded: &CancellationToken,
 ) -> Result<(), InputFailure> {
     let mut offset = 0_u64;
+    let stdin =
+        crate::command_handler::interactive::stdin("the invocation's input").map_err(|error| {
+            InputFailure {
+                error,
+                reason: PublicClientCancelReason::SourceUnavailable,
+            }
+        })?;
     match format {
         InvocationStdinFormat::Value => {
-            let mut stdin = BufReader::new(std::io::stdin().lock());
+            let mut stdin = BufReader::new(stdin.lock());
             let mut line = String::new();
             loop {
                 if cancelled.is_cancelled() {
@@ -1324,7 +1331,7 @@ fn read_stdin(
             }
         }
         InvocationStdinFormat::Raw => {
-            let mut stdin = std::io::stdin().lock();
+            let mut stdin = stdin.lock();
             let mut buffer = vec![0_u8; RAW_CHUNK_SIZE];
             loop {
                 if cancelled.is_cancelled() || discarded.is_cancelled() {

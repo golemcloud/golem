@@ -170,11 +170,11 @@ fn error(result: &CallToolResult) -> Value {
 }
 
 fn error_code(result: &CallToolResult) -> String {
-    error(result)["error"]["code"].as_str().unwrap().to_string()
+    error(result)["error"].as_str().unwrap().to_string()
 }
 
 fn error_message(result: &CallToolResult) -> String {
-    error(result)["error"]["message"]
+    error(result)["payload"]["message"]
         .as_str()
         .unwrap()
         .to_string()
@@ -450,6 +450,7 @@ async fn mcp_serve_destructive_tools_run_only_with_confirm() {
         for tool in ["agent_delete", "agent_simulate_crash"] {
             let refused = call(&client, tool, arguments.clone()).await;
             assert_eq!(error_code(&refused), "confirmation-required", "{tool}");
+            assert_eq!(error(&refused)["payload"]["answer_with"], "confirm");
         }
     }
     let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
@@ -463,7 +464,7 @@ async fn mcp_serve_destructive_tools_run_only_with_confirm() {
     .await;
     structured(&deleted);
     let get = call(&client, "agent_get", json!({"agent_id": agent})).await;
-    assert_eq!(error_code(&get), "command-failed");
+    assert_eq!(error_code(&get), "agent-not-found");
     client.cancel().await.unwrap();
 }
 

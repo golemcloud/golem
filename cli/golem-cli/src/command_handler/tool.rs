@@ -434,7 +434,7 @@ impl ToolCommandHandler {
                 session_token: None,
             };
             let mut reader = match args.stdin {
-                Some(path) if path == Path::new("-") => Some(process_stdin_reader()),
+                Some(path) if path == Path::new("-") => Some(process_stdin_reader()?),
                 Some(path) => Some(Box::pin(tokio::fs::File::open(&path).await.map_err(
                     |error| anyhow!("Failed to open tool stdin '{}': {error}", path.display()),
                 )?) as Pin<Box<dyn AsyncRead + Send>>),
@@ -927,10 +927,11 @@ pub(crate) fn public_typed_value(
     })
 }
 
-fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
+fn process_stdin_reader() -> anyhow::Result<Pin<Box<dyn AsyncRead + Send>>> {
+    let stdin = crate::command_handler::interactive::stdin("the tool's stdin")?;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin().lock();
+        let mut stdin = stdin.lock();
         let mut buffer = [0; 64 * 1024];
         loop {
             let item = match stdin.read(&mut buffer) {
@@ -945,9 +946,9 @@ fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
             }
         }
     });
-    Box::pin(tokio_util::io::StreamReader::new(
+    Ok(Box::pin(tokio_util::io::StreamReader::new(
         tokio_stream::wrappers::ReceiverStream::new(receiver),
-    ))
+    )))
 }
 
 /// A standard stream of the process that ends the process when the reader has gone.

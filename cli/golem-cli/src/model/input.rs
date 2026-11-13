@@ -32,7 +32,7 @@ impl PathBufOrStdin {
                 .with_context(|| anyhow!("Failed to read file: {}", path.display())),
             PathBufOrStdin::Stdin => {
                 let mut content = String::new();
-                let _ = std::io::stdin()
+                let _ = crate::command_handler::interactive::stdin("the input given as `-`")?
                     .read_to_string(&mut content)
                     .with_context(|| anyhow!("Failed to read from STDIN"))?;
                 Ok(content)

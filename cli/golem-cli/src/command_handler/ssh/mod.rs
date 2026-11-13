@@ -49,6 +49,7 @@ use self::look::{Loader, Palette, Readiness, shown, shown_message};
 use self::progress::Ticker;
 use crate::agent_help_hints::is_agent_help_enabled;
 use crate::command_handler::Handlers;
+use crate::command_handler::interactive::stdin_is_terminal;
 use crate::command_handler::tool::ToolOwner;
 use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
@@ -269,7 +270,7 @@ impl SshCommandHandler {
     ) -> anyhow::Result<()> {
         // Only the script's output may reach stdout. Without a terminal to talk to (with `-c` or
         // piped input), the CLI's own messages are held back until something fails.
-        let _log_output = LogOutput::new(if command.is_some() || !std::io::stdin().is_terminal() {
+        let _log_output = LogOutput::new(if command.is_some() || !stdin_is_terminal() {
             Output::BufferedUntilErr
         } else {
             Output::Stderr
@@ -351,11 +352,7 @@ impl SshCommandHandler {
     fn terminal(&self) -> Terminal {
         // An AI coding agent, as the CLI's help recognises one, gets a plain session.
         let agent = is_agent_help_enabled();
-        let mode = input_mode(
-            std::io::stdin().is_terminal(),
-            std::io::stdout().is_terminal(),
-            agent,
-        );
+        let mode = input_mode(stdin_is_terminal(), std::io::stdout().is_terminal(), agent);
         let colorize = decorated(mode, self.ctx.should_colorize(), agent);
         let palette = Palette::detect(|name| std::env::var(name).ok());
         let styled = (colorize && std::io::stderr().is_terminal()).then_some(palette);
@@ -484,8 +481,16 @@ impl SshCommandHandler {
                 );
                 Input::Editor(Some(Box::new(editor)))
             }
-            InputMode::PromptedLines => Input::lines(true),
-            InputMode::Lines => Input::lines(false),
+            InputMode::PromptedLines | InputMode::Lines => {
+                match Input::lines(mode == InputMode::PromptedLines) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        set_log_output(Output::Stderr);
+                        log_error(format!("the commands could not be read: {error:#}"));
+                        return exit_code(Outcome::NotRun);
+                    }
+                }
+            }
         };
         let mut history_failed = false;
         // The indicator belongs to the editor. It is drawn as wide as the window is at the time.
@@ -1235,7 +1240,9 @@ fn output_lost(status: u8, error: &std::io::Error) -> u8 {
 /// leave it to the shell it returns to, which would run it there.
 #[cfg(unix)]
 fn discard_typed_ahead() {
-    let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+    if let Ok(stdin) = crate::command_handler::interactive::stdin("typed-ahead input") {
+        let _ = rustix::termios::tcflush(stdin, rustix::termios::QueueSelector::IFlush);
+    }
 }
 
 #[cfg(not(unix))]
@@ -1249,7 +1256,9 @@ async fn terminal_gone() {
 
     loop {
         tokio::time::sleep(TERMINAL_CHECK).await;
-        let stdin = std::io::stdin();
+        let Ok(stdin) = crate::command_handler::interactive::stdin("the terminal") else {
+            return;
+        };
         // Asking for input as well: some systems report a hang-up only with a request.
         let mut waiting = [PollFd::new(&stdin, PollFlags::IN)];
         let at_once = Timespec {
@@ -1351,13 +1360,16 @@ enum ReadLine {
 }
 
 impl Input {
-    fn lines(prompt: bool) -> Self {
-        Input::Lines {
-            lines: BufReader::new(tokio::io::stdin()).lines(),
+    fn lines(prompt: bool) -> anyhow::Result<Self> {
+        Ok(Input::Lines {
+            lines: BufReader::new(crate::command_handler::interactive::async_stdin(
+                "the commands",
+            )?)
+            .lines(),
             prompt,
             gathered: Gathered::default(),
             read: 0,
-        }
+        })
     }
 
     fn is_editor(&self) -> bool {
@@ -1404,7 +1416,7 @@ impl Input {
                 // Keep the session, with plain line input from here on.
                 Err(error) => {
                     debug!(error = %error, "line editor failed; reading plain lines");
-                    *self = Input::lines(true);
+                    *self = Input::lines(true)?;
                 }
             }
         }

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command_handler::interactive::prompts_refused;
 use crate::config::Config;
 use crate::config::{
     AuthenticationConfig, AuthenticationConfigWithSource, AuthenticationSource,
     OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
+use crate::error::LoginRequired;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
 use crate::log::{log_warn_action, logln, release_held_log};
@@ -161,6 +163,17 @@ impl Auth {
         auth_source: &AuthenticationSource,
         config_dir: &Path,
     ) -> anyhow::Result<Authentication> {
+        if prompts_refused() {
+            bail!(LoginRequired {
+                login: match auth_source {
+                    AuthenticationSource::Profile(profile) => format!("profile {profile}"),
+                    AuthenticationSource::ApplicationEnvironment(environment) => format!(
+                        "environment {}/{}",
+                        environment.application_name.0, environment.environment_name.0
+                    ),
+                },
+            });
+        }
         let data = self.start_oauth2().await?;
         inform_user(&data);
         let token = self.complete_oauth2(data.state).await?;

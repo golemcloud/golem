@@ -97,6 +97,7 @@ use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, I
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
+use crate::command_handler::interactive::Ask;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
@@ -3109,7 +3110,7 @@ impl AgentCommandHandler {
             output_path.log_color_highlight()
         ))
         .with_default(false)
-        .prompt()?;
+        .ask()?;
 
         Ok(result)
     }
