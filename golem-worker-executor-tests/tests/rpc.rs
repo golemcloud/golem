@@ -5432,7 +5432,12 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     // Both records must already exist when the observer joins: scheduling must not
     // let the failed terminal hide the result's durable stream handles.
     let mut fresh = observer.clone();
-    fresh.idempotency_key = Some(IdempotencyKey::fresh().into());
+    let fresh_key = IdempotencyKey::fresh();
+    fresh.request_key = Some(
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&fresh_key))
+            .into(),
+    );
+    fresh.idempotency_key = Some(fresh_key.into());
     let (_observer_tx, mut observer_rx, observer_accepted) =
         open_raw_session(&executor, observer).await?;
     assert!(observer_accepted.joined_origin_observer);

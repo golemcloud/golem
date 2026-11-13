@@ -1424,7 +1424,9 @@ async fn test_streaming_invocation_cli_end_to_end() {
         ])
         .await;
     assert!(!after_interrupt.success());
-    assert!(after_interrupt.stderr_contains("INTERNAL_PREVIOUS_INVOCATION_FAILED"));
+    assert!(
+        after_interrupt.stderr_contains("Previous Invocation Failed (previous-invocation-failed)")
+    );
     assert!(after_interrupt.stderr_contains("invocation interrupted"));
 }
 
