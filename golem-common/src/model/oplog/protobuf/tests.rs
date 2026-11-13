@@ -290,8 +290,24 @@ mod observational_start_proto_tests {
         }
     }
 
+    fn attributes(keys: &[&str]) -> Vec<PublicAttribute> {
+        keys.iter()
+            .map(|key| PublicAttribute {
+                key: key.to_string(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: format!("{key}-value"),
+                }),
+            })
+            .collect()
+    }
+
+    /// Sends a message over the gRPC wire format, as the executor does to the worker service.
+    fn over_the_wire<M: prost::Message + Default>(message: M) -> M {
+        M::decode(message.encode_to_vec().as_slice()).unwrap()
+    }
+
     #[test]
-    fn span_lifecycle_public_protobuf_roundtrips() {
+    fn span_lifecycle_public_protobuf_roundtrips_with_attributes_sorted_by_key() {
         use crate::model::invocation_context::{SpanId, TraceId};
 
         let span_id = SpanId::generate();
@@ -306,12 +322,9 @@ mod observational_start_proto_tests {
                 trace_states: vec!["link=other-trace".into()],
             }],
             started_at: Timestamp::now_utc().rounded(),
-            attributes: vec![PublicAttribute {
-                key: "name".into(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "rpc".into(),
-                }),
-            }],
+            attributes: attributes(&[
+                "name", "target", "agent", "zone", "method", "budget", "kind", "client",
+            ]),
             kind: PublicSpanKind::Client,
         };
         let finished = PublicSpanFinished {
@@ -319,29 +332,44 @@ mod observational_start_proto_tests {
             finished_at: Timestamp::now_utc().rounded(),
             outcome: PublicSpanOutcome::Denied,
         };
-        let attributes = PublicSpanAttributes {
+        let updated = PublicSpanAttributes {
             span_id,
-            attributes: vec![PublicAttribute {
-                key: "result".into(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "denied".into(),
-                }),
-            }],
+            attributes: attributes(&[
+                "result", "bytes", "status", "error", "retries", "latency", "cache", "outcome",
+            ]),
+        };
+
+        let expected_started = PublicSpanStarted {
+            attributes: attributes(&[
+                "agent", "budget", "client", "kind", "method", "name", "target", "zone",
+            ]),
+            ..started.clone()
+        };
+        let expected_updated = PublicSpanAttributes {
+            attributes: attributes(&[
+                "bytes", "cache", "error", "latency", "outcome", "result", "retries", "status",
+            ]),
+            ..updated.clone()
         };
 
         assert_eq!(
-            public_span_started_from_proto(public_span_started_to_proto(started.clone())).unwrap(),
-            started
+            public_span_started_from_proto(over_the_wire(public_span_started_to_proto(started)))
+                .unwrap(),
+            expected_started
         );
         assert_eq!(
-            public_span_finished_from_proto(public_span_finished_to_proto(finished.clone()))
-                .unwrap(),
+            public_span_finished_from_proto(over_the_wire(public_span_finished_to_proto(
+                finished.clone()
+            )))
+            .unwrap(),
             finished
         );
         assert_eq!(
-            public_span_attributes_from_proto(public_span_attributes_to_proto(attributes.clone()))
-                .unwrap(),
-            attributes
+            public_span_attributes_from_proto(over_the_wire(public_span_attributes_to_proto(
+                updated
+            )))
+            .unwrap(),
+            expected_updated
         );
     }
 
@@ -382,7 +410,13 @@ mod observational_start_proto_tests {
         assert_eq!(keys(&public), expected);
 
         // The worker service receives the public oplog entry from the executor over gRPC.
-        let public = encode_public_span_data(decode_public_span_data(&public, 0)).unwrap();
+        let public = encode_public_span_data(
+            decode_public_span_data(&public, 0)
+                .into_iter()
+                .map(over_the_wire)
+                .collect(),
+        )
+        .unwrap();
         assert_eq!(keys(&public), expected);
     }
 }
