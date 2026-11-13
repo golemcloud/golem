@@ -17,9 +17,10 @@ struct InitializerState {
     environment_size: u32,
 }
 
-#[unsafe(export_name = "_initialize")]
-pub extern "C" fn initialize_snapshot_clock() {
-    // The reactor initializer runs during core instantiation, before snapshot loading.
+#[ctor::ctor]
+fn initialize_snapshot_clock() {
+    // The reactor `_initialize` runs the constructors during core instantiation, before snapshot
+    // loading.
     std::hint::black_box(std::time::Instant::now());
     // `RandomState::new` draws its keys from the platform random source.
     use std::hash::{BuildHasher, Hasher};

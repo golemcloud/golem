@@ -236,6 +236,16 @@ async fn pending_rpc_scenario(
         .invoke_and_await_agent(&component, &target_name_id, "create_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
+    // The core initializer grows the memory while the component is instantiated, which is not a
+    // lifecycle-actor job, so an invocation grows it for the gate.
+    let target_invocations = if target_growth.is_some() {
+        executor
+            .invoke_and_await_agent(&component, &target_name_id, "grow_memory", data_value!())
+            .await?;
+        4
+    } else {
+        3
+    };
     executor
         .wait_for_status(&target_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
@@ -271,9 +281,13 @@ async fn pending_rpc_scenario(
         ensure!(started == id);
         wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
         executor
+            .invoke_and_await_agent(&component, &name, "grow_memory", data_value!())
+            .await?;
+        executor
             .wait_for_status(&id, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
     }
+    let caller_invocations = if held_growth { 3 } else { 2 };
     let worker = Worker::get_or_create_suspended(
         target.all(),
         &owned,
@@ -317,8 +331,8 @@ async fn pending_rpc_scenario(
                 if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id, asynchronous, false, 0)? {
                     let target_key = executor.finalized_invocation_key(&target_id, &golem_common::model::InvocationRequestKey::Internal(call.target_key.clone()), "inc_after_promise").await?;
                     if let Some(wait) = history::target(&target_entries, &target_key, false)? {
-                    ensure!(count_agent_invocation_pair_since(&caller_entries, OplogIndex::INITIAL) == (2, 1));
-                    ensure!(count_agent_invocation_pair_since(&target_entries, OplogIndex::INITIAL) == (3, 2));
+                    ensure!(count_agent_invocation_pair_since(&caller_entries, OplogIndex::INITIAL) == (caller_invocations, caller_invocations - 1));
+                    ensure!(count_agent_invocation_pair_since(&target_entries, OplogIndex::INITIAL) == (target_invocations, target_invocations - 1));
                     info!(?call, ?wait, ?caller_entries, ?target_entries, "Committed caller RPC Start and target accepted invocation with open promise result");
                     return Ok::<_, anyhow::Error>((call, wait, target_key));
                     }
@@ -350,7 +364,7 @@ async fn pending_rpc_scenario(
                     caller_growth.as_ref().unwrap().entry(),
                     target_growth.as_ref().unwrap().entry(),
                 ))
-            }).await.context("existing RPC Wasm did not produce both real GrowMemory predecessors")??;
+            }).await.context("the grow_memory invocations did not produce both real GrowMemory predecessors")??;
             for entry in [&caller_entry, &target_entry] {
                 ensure!(matches!(entry, OplogEntry::GrowMemory { delta, .. } if *delta > 0),
                     "not a real positive memory-growth append: {entry:?}");
@@ -391,9 +405,10 @@ async fn pending_rpc_scenario(
         } else { None };
         let mut raw = worker.raw_interrupt_for_test();
         if hold_target_acceptance {
-            // Invocation exit refunds unused fuel before its result append. Hold the target's
-            // existing real GrowMemory append instead, so its lifecycle actor cannot accept a
-            // quota stop and refund that reservation before caller acceptance.
+            // Invocation exit refunds unused fuel before its result append. Hold the real
+            // GrowMemory append of the target's grow_memory invocation instead, so its lifecycle
+            // actor cannot accept a quota stop and refund that reservation before caller
+            // acceptance.
             let growth = target_growth.as_mut().unwrap();
             tokio::time::timeout(Duration::from_secs(15), growth.entered()).await?;
             ensure!(matches!(growth.entry(), OplogEntry::GrowMemory { delta, .. } if delta > 0));
@@ -445,7 +460,7 @@ async fn pending_rpc_scenario(
                 refund_ordering::physical_cleanup(&target).await?;
                 refund_ordering::compute_suspension(&target).await?;
                 let target_stopped = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-                ensure!(count_agent_invocation_pair_since(&target_stopped, OplogIndex::INITIAL) == (3, 2));
+                ensure!(count_agent_invocation_pair_since(&target_stopped, OplogIndex::INITIAL) == (target_invocations, target_invocations - 1));
                 ensure!(history::target(&target_stopped, &target_key, false)? == Some(target_wait));
                 let (caller_entry, target_entry) = growth_entries.as_ref().unwrap();
                 refund_ordering::entry_count(&target, target_entry, 1).await?;

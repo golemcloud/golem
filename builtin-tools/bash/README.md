@@ -600,16 +600,15 @@ Build it from the repository root:
 cargo make build-bash-tool
 ```
 
-It runs `golem.yaml`'s release preset with golem-cli: a Cargo build with the Rust toolchain
-`rust-toolchain.toml` pins and the profile `Cargo.toml` pins. The component is named
+It runs `golem.yaml`'s release preset with golem-cli: a Cargo build with the latest stable Rust
+toolchain and the profile `Cargo.toml` pins. The component is named
 `golem:bash`, and the `copy` command writes it to `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
 as part of tagged Golem releases and pinned by SHA-256 in the generated
 `builtin-artifacts.release.json`. Development uses `cargo make ensure-builtin-artifacts` to
 rebuild changed inputs locally. The Golem SDK is a path dependency: changes to it or to this
 workspace require a local rebuild, not a publication or lock update. See
-[the release procedure](../../BUILTIN_ARTIFACTS.md) for publication. A new Rust release means
-updating `rust-toolchain.toml`, then publishing a new artifact version.
+[the release procedure](../../BUILTIN_ARTIFACTS.md) for publication.
 
 A published artifact is immutable: any change to the component's bytes needs a new artifact
 version, and a change to the exported tool metadata a new tool version
