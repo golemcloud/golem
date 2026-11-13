@@ -3162,6 +3162,171 @@ async fn manual_update_with_periodic_snapshot(
 
 #[test]
 #[timeout("120s")]
+async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    with_snapshot_store(|store| async move {
+        let files = AgentFiles::Snapshotted(store);
+        let context = TestContext::new(last_unique_id);
+        let executor = files
+            .start(
+                deps,
+                &context,
+                SnapshotPolicy::EveryNInvocation { count: 1 },
+            )
+            .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .store()
+            .await?;
+        let agent_id = agent_id!("SnapshotUpdateTest");
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+
+        // The file survives in the filesystem snapshot, but its transient input allocation does
+        // not belong to the application snapshot. Recovery must replace this larger requirement.
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_file",
+                data_value!("/large-input".to_string(), "a".repeat(8 * 1024 * 1024)),
+            )
+            .await?;
+        let write_start = last_start_of(&executor, &worker_id, "write_file").await?;
+        let snapshot_index = wait_for_snapshot_after(&executor, &worker_id, write_start).await?;
+        let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            before
+                .iter()
+                .all(|entry| entry.oplog_index <= snapshot_index
+                    || !matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        );
+        let saved = executor
+            .get_worker_metadata(&worker_id)
+            .await?
+            .total_linear_memory_size;
+        assert!(saved >= 8 * 1024 * 1024);
+        drop(executor);
+
+        // Disable new snapshots so that the second restart exercises the ordinary replay suffix.
+        let executor = files
+            .start(deps, &context, SnapshotPolicy::Disabled)
+            .await?;
+        let mut events = executor.capture_output(&worker_id).await?;
+        let restored = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "loaded_snapshot_revision",
+                data_value!(),
+            )
+            .await?;
+        assert_eq!(restored.into_typed::<u32>()?, 1);
+        assert_snapshot_recovery_loaded(&mut events).await;
+        let fresh_start = last_start_of(&executor, &worker_id, "loaded_snapshot_revision").await?;
+        let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let baseline = recovered
+            .iter()
+            .filter(|entry| entry.oplog_index > snapshot_index && entry.oplog_index < fresh_start)
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::MemorySizeReconciled(params) => Some(params.bytes),
+                _ => None,
+            })
+            .expect("snapshot reconstruction must persist its allocation before fresh work starts");
+        assert!(
+            baseline > 0 && baseline < saved,
+            "baseline={baseline}, saved={saved}"
+        );
+        assert_eq!(
+            executor
+                .get_worker_metadata(&worker_id)
+                .await?
+                .total_linear_memory_size,
+            baseline
+        );
+
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_file",
+                data_value!("/large-input".to_string(), "b".repeat(16 * 1024 * 1024)),
+            )
+            .await?;
+        let grown = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let growth: u64 = grown
+            .iter()
+            .filter(|entry| entry.oplog_index > fresh_start)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::GrowMemory(params) => Some(params.delta),
+                _ => None,
+            })
+            .sum();
+        assert!(
+            growth > 0,
+            "fresh allocation must record growth after the snapshot baseline"
+        );
+        assert_eq!(
+            executor
+                .get_worker_metadata(&worker_id)
+                .await?
+                .total_linear_memory_size,
+            baseline + growth
+        );
+        drop(executor);
+
+        let executor = files
+            .start(deps, &context, SnapshotPolicy::Disabled)
+            .await?;
+        let mut events = executor.capture_output(&worker_id).await?;
+        let restored = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "loaded_snapshot_revision",
+                data_value!(),
+            )
+            .await?;
+        assert_eq!(restored.into_typed::<u32>()?, 1);
+        assert_snapshot_recovery_loaded(&mut events).await;
+        let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let replayed_growth: u64 = replayed
+            .iter()
+            .filter(|entry| entry.oplog_index > fresh_start)
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::GrowMemory(params) => Some(params.delta),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(
+            replayed_growth, growth,
+            "replay must not record additive growth for old work"
+        );
+        let file = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "read_file",
+                data_value!("/large-input".to_string()),
+            )
+            .await?;
+        assert_eq!(
+            file.into_typed::<Option<String>>()?,
+            Some("b".repeat(16 * 1024 * 1024))
+        );
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("120s")]
 async fn manual_periodic_snapshot_valid_tail_recovers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

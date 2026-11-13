@@ -21,7 +21,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
@@ -29,6 +29,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_resource_limits_and_configure,
 };
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -102,6 +103,115 @@ fn errors(entries: &[PublicOplogEntryWithIndex]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> IdempotencyKey {
+    let keys: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentInitialization(invocation) => {
+                    Some(invocation.idempotency_key.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys.len(), 1, "expected exactly one constructor start");
+    keys.into_iter().next().unwrap()
+}
+
+fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[IdempotencyKey]) {
+    let expected_keys: HashSet<_> = expected.iter().cloned().collect();
+    assert_eq!(
+        expected_keys.len(),
+        expected.len(),
+        "duplicate expected key"
+    );
+    let mut starts = HashMap::new();
+    let mut finishes = HashMap::new();
+    let mut active = None;
+    let mut pending_calls = HashSet::new();
+    let last_finished = entries
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .expect("settled history must contain a finished invocation");
+    for (position, entry) in entries.iter().enumerate() {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => {
+                let key = match &params.invocation {
+                    PublicAgentInvocation::AgentInitialization(invocation) => {
+                        &invocation.idempotency_key
+                    }
+                    PublicAgentInvocation::AgentMethodInvocation(invocation) => {
+                        &invocation.idempotency_key
+                    }
+                    other => panic!("unexpected invocation: {other:?}"),
+                };
+                assert!(
+                    active.replace(key.clone()).is_none(),
+                    "overlapping invocations"
+                );
+                *starts.entry(key.clone()).or_insert(0) += 1;
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                // Finished has no key; it terminates the preceding active invocation.
+                let key = active.take().expect("finished invocation has no start");
+                *finishes.entry(key).or_insert(0) += 1;
+                assert!(
+                    pending_calls.is_empty(),
+                    "unfinished calls at invocation finish"
+                );
+            }
+            PublicOplogEntry::Start(_) => {
+                // Core initialization may call the host before the constructor starts.
+                assert!(
+                    active.is_some() || starts.is_empty(),
+                    "Start between invocations"
+                );
+                assert!(position < last_finished, "Start after final Finished");
+                assert!(
+                    pending_calls.insert(entry.oplog_index),
+                    "duplicate call start"
+                );
+            }
+            PublicOplogEntry::End(params) => {
+                assert!(
+                    active.is_some() || starts.is_empty(),
+                    "End between invocations"
+                );
+                assert!(position < last_finished, "End after final Finished");
+                assert!(
+                    pending_calls.remove(&params.start_index),
+                    "End without unique Start"
+                );
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                assert!(
+                    active.is_some() || starts.is_empty(),
+                    "Cancelled between invocations"
+                );
+                assert!(
+                    pending_calls.remove(&params.start_index),
+                    "Cancelled without unique Start"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(active.is_none(), "unfinished invocation");
+    assert!(pending_calls.is_empty(), "unfinished durable calls");
+    let expected: HashMap<_, _> = expected_keys.into_iter().map(|key| (key, 1)).collect();
+    assert_eq!(
+        starts, expected,
+        "invocation starts must match expected identities"
+    );
+    assert_eq!(
+        finishes, expected,
+        "invocation finishes must match expected identities"
+    );
+    assert!(errors(entries).is_empty(), "{:?}", errors(entries));
 }
 
 /// Waits until the asynchronously persisted `GrowMemory` hints of the agent reach `at_least`
@@ -221,27 +331,49 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
     let control_id = executor.start_agent(&component.id, control.clone()).await?;
     let grown_id = executor.start_agent(&component.id, grown.clone()).await?;
 
-    for agent in [&control, &grown] {
+    let control_read = IdempotencyKey::fresh();
+    let grown_read = IdempotencyKey::fresh();
+    let retain_key = IdempotencyKey::fresh();
+    for (agent, key) in [(&control, &control_read), (&grown, &grown_read)] {
         executor
-            .invoke_and_await_agent(&component, agent, "retained_kib", data_value!())
+            .invoke_and_await_agent_with_key(&component, agent, key, "retained_kib", data_value!())
             .await?;
     }
     executor
-        .invoke_and_await_agent(&component, &grown, "retain", data_value!(32u32 * 1024))
+        .invoke_and_await_agent_with_key(
+            &component,
+            &grown,
+            &retain_key,
+            "retain",
+            data_value!(32u32 * 1024),
+        )
         .await?;
     let control_growth = wait_for_memory_growth(&executor, &control_id, 0).await?;
     let grown_growth =
         wait_for_memory_growth(&executor, &grown_id, control_growth + 32 * MIB).await?;
+    let control_entries = executor.get_oplog(&control_id, OplogIndex::INITIAL).await?;
+    let grown_entries = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
+    let mut control_keys = vec![constructor_key(&control_entries), control_read];
+    let mut grown_keys = vec![constructor_key(&grown_entries), grown_read, retain_key];
+    assert_settled_history(&control_entries, &control_keys);
+    assert_settled_history(&grown_entries, &grown_keys);
 
     drop(executor);
     let executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
 
     // Replay rebuilds the GC heap from the recorded invocations: the retained arrays are back.
-    for (agent, expected) in [(&control, 0u32), (&grown, 32 * 1024)] {
+    for (agent, worker_id, keys, expected) in [
+        (&control, &control_id, &mut control_keys, 0u32),
+        (&grown, &grown_id, &mut grown_keys, 32 * 1024),
+    ] {
+        let key = IdempotencyKey::fresh();
         let retained = executor
-            .invoke_and_await_agent(&component, agent, "retained_kib", data_value!())
+            .invoke_and_await_agent_with_key(&component, agent, &key, "retained_kib", data_value!())
             .await?;
         assert_eq!(retained.into_typed::<u32>()?, expected);
+        keys.push(key);
+        let entries = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        assert_settled_history(&entries, keys);
     }
 
     // Metadata folds the measured allocation, including GC capacity, after reconstruction.
@@ -264,6 +396,21 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
     let oplog = executor.get_oplog(&control_id, OplogIndex::INITIAL).await?;
     assert_eq!(total_memory_growth(&oplog), control_growth);
 
+    let fresh_key = IdempotencyKey::fresh();
+    let retained = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &grown,
+            &fresh_key,
+            "retain",
+            data_value!(4u32 * 1024),
+        )
+        .await?;
+    assert_eq!(retained.into_typed::<u32>()?, 36 * 1024);
+    grown_keys.push(fresh_key);
+    let entries = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&entries, &grown_keys);
+
     Ok(())
 }
 
@@ -284,13 +431,23 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         .await?;
     let agent = agent_id!("GcHeapAgent", "reconciled");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let retain_key = IdempotencyKey::fresh();
     executor
-        .invoke_and_await_agent(&component, &agent, "retain", data_value!(32u32 * 1024))
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &retain_key,
+            "retain",
+            data_value!(32u32 * 1024),
+        )
         .await?;
     wait_for_memory_growth(&executor, &worker_id, 32 * MIB).await?;
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut expected_keys = vec![constructor_key(&entries), retain_key];
+    assert_settled_history(&entries, &expected_keys);
 
     // Commit explicit saved requirements through the production status owner. This varies
-    // the prepaid baseline without changing guest code or relying on a collector heuristic.
+    // only the prepaid baseline, not the actual collector allocation.
     for saved in [8 * MIB, 256 * MIB] {
         let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
         executor
@@ -302,29 +459,27 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
             .await?;
         drop(executor);
         executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
+        let read_key = IdempotencyKey::fresh();
         let retained = executor
-            .invoke_and_await_agent(&component, &agent, "retained_kib", data_value!())
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &read_key,
+                "retained_kib",
+                data_value!(),
+            )
             .await?;
         assert_eq!(retained.into_typed::<u32>()?, 32 * 1024);
+        expected_keys.push(read_key);
         let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let actual = entries
-            .iter()
-            .rev()
-            .find_map(|entry| match &entry.entry {
-                PublicOplogEntry::MemorySizeReconciled(params) => Some(params.bytes),
-                _ => None,
-            })
-            .unwrap();
+        assert_settled_history(&entries, &expected_keys);
+        let reconciled = executor
+            .get_worker_metadata(&worker_id)
+            .await?
+            .total_linear_memory_size;
         assert!(
-            actual > 8 * MIB && actual < 256 * MIB,
-            "actual={actual}, saved={saved}"
-        );
-        assert_eq!(
-            executor
-                .get_worker_metadata(&worker_id)
-                .await?
-                .total_linear_memory_size,
-            actual
+            reconciled > 8 * MIB && reconciled < 256 * MIB,
+            "reconciled={reconciled}, saved={saved}"
         );
     }
 
@@ -334,10 +489,18 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         .get_worker_metadata(&worker_id)
         .await?
         .total_linear_memory_size;
+    let fresh_key = IdempotencyKey::fresh();
     let retained = executor
-        .invoke_and_await_agent(&component, &agent, "retain", data_value!(64u32 * 1024))
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &fresh_key,
+            "retain",
+            data_value!(64u32 * 1024),
+        )
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
+    expected_keys.push(fresh_key);
     let growth_after =
         wait_for_memory_growth(&executor, &worker_id, growth_before + 64 * MIB).await?;
     assert_eq!(
@@ -347,48 +510,24 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
             .total_linear_memory_size,
         baseline + growth_after - growth_before
     );
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&entries, &expected_keys);
     drop(executor);
     let executor = start_with_memory_limit(deps, &context, usize::MAX).await?;
+    let read_key = IdempotencyKey::fresh();
     let retained = executor
-        .invoke_and_await_agent(&component, &agent, "retained_kib", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &read_key,
+            "retained_kib",
+            data_value!(),
+        )
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
+    expected_keys.push(read_key);
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let mut keys = std::collections::HashSet::new();
-    let mut started = 0;
-    let mut finished = 0;
-    let mut pending_calls = std::collections::HashSet::new();
-    for entry in &entries {
-        match &entry.entry {
-            PublicOplogEntry::AgentInvocationStarted(params) => {
-                started += 1;
-                if let PublicAgentInvocation::AgentMethodInvocation(invocation) = &params.invocation
-                {
-                    assert!(
-                        keys.insert(invocation.idempotency_key.clone()),
-                        "duplicate invocation identity"
-                    );
-                }
-            }
-            PublicOplogEntry::AgentInvocationFinished(_) => {
-                finished += 1;
-            }
-            PublicOplogEntry::Start(_) => {
-                pending_calls.insert(entry.oplog_index);
-            }
-            PublicOplogEntry::End(params) => {
-                assert!(pending_calls.remove(&params.start_index));
-            }
-            PublicOplogEntry::Cancelled(params) => {
-                assert!(pending_calls.remove(&params.start_index));
-            }
-            _ => {}
-        }
-    }
-    assert_eq!(started, 6); // Constructor, two retains and three reads.
-    assert_eq!(finished, started);
-    assert!(pending_calls.is_empty());
-    assert!(errors(&entries).is_empty());
+    assert_settled_history(&entries, &expected_keys);
     Ok(())
 }
 

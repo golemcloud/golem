@@ -284,6 +284,11 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         worker: Arc<Worker<Ctx>>,
         growth: Arc<PendingMemoryGrowth>,
     },
+    ReconcileMemory {
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
         entry: Box<OplogEntry>,
@@ -650,6 +655,18 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     LifecycleJob::GrowMemory { worker, growth } => {
                         worker.persist_pending_memory_growth(growth).await;
                     }
+                    LifecycleJob::ReconcileMemory {
+                        worker,
+                        bytes,
+                        done,
+                    } => {
+                        let result = worker
+                            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(bytes))
+                            .await
+                            .map(|_| ())
+                            .map_err(WorkerExecutorError::from);
+                        let _ = done.send(result);
+                    }
                     LifecycleJob::OrderedOplogEntry {
                         worker,
                         entry,
@@ -958,6 +975,26 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 self.owned_agent_id
             );
         }
+    }
+
+    pub fn reconcile_memory(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        bytes: u64,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (done, result) = oneshot::channel();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::ReconcileMemory {
+                worker,
+                bytes,
+                done,
+            })
+            .is_err()
+        {
+            panic!("worker lifecycle actor stopped during memory reconciliation");
+        }
+        result
     }
 
     pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, memory: LinearMemoryTracker) {

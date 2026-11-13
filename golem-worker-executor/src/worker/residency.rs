@@ -580,6 +580,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.state_actor.grow_memory(self.clone(), growth.clone());
         }
     }
+    /// Orders an absolute baseline between the old and new growth accumulators.
+    pub(crate) fn request_memory_reconciliation(
+        self: &Arc<Self>,
+        bytes: u64,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let mut growth = self.memory_growth.lock().unwrap();
+        *growth = Arc::new(PendingMemoryGrowth::default());
+        self.state_actor.reconcile_memory(self.clone(), bytes)
+    }
+
     pub(in crate::worker) async fn persist_pending_memory_growth(
         self: &Arc<Self>,
         growth: Arc<PendingMemoryGrowth>,

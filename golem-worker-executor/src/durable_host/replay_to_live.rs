@@ -15,6 +15,16 @@
 use super::*;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(in crate::durable_host) async fn reconcile_memory_accounting(
+        &self,
+        reset: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.runtime == OwnerRuntime::Agent {
+            reconcile_primary_memory(&self.public_state, &self.linear_memory, reset).await?;
+        }
+        Ok(())
+    }
+
     pub(in crate::durable_host) async fn begin_switch_to_live(
         &self,
     ) -> Result<BeginReplayToLive, WorkerExecutorError> {
@@ -375,6 +385,23 @@ async fn await_incomplete_tool_attachment_reconstruction(
     Ok(())
 }
 
+async fn reconcile_primary_memory<Ctx: WorkerCtx>(
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    reset: bool,
+) -> Result<(), WorkerExecutorError> {
+    linear_memory
+        .start_memory_accounting(reset, |bytes| {
+            let commit = public_state.worker().request_memory_reconciliation(bytes);
+            async move {
+                commit.await.map_err(|_| {
+                    WorkerExecutorError::runtime("Memory reconciliation acknowledgement stopped")
+                })?
+            }
+        })
+        .await
+}
+
 pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
     replaying_incomplete_entity: bool,
     tool_entity: bool,
@@ -398,18 +425,8 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
         linear_memory,
     )
     .await?;
-    if role == ReplayToLiveRole::PrimaryAgent
-        && linear_memory.current_bytes() != linear_memory.persisted_startup_bytes()
-    {
-        // The primary Store is paused at its replay tail. Persist its measured allocation
-        // before live publication, so fresh growth starts from the reconstructed baseline.
-        // Entity reconstruction has separate trackers and does not change this total.
-        public_state
-            .worker()
-            .add_and_commit_oplog(OplogEntry::memory_size_reconciled(
-                linear_memory.current_bytes(),
-            ))
-            .await?;
+    if role == ReplayToLiveRole::PrimaryAgent {
+        reconcile_primary_memory(public_state, linear_memory, false).await?;
     }
     match replay_state.switch_to_live(linear_memory, role).await? {
         ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),

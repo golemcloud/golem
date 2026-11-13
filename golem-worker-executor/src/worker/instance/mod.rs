@@ -946,6 +946,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 .startup_linear_memory_bytes
                 .store(allocated_bytes, Ordering::Release);
         }
+        if self.runtime == OwnerRuntime::Agent && hosted.store.data().durable_ctx().is_live() {
+            tracker.start_live_memory_accounting();
+        }
 
         Ok(())
     }

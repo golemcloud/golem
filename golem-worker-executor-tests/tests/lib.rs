@@ -43,6 +43,7 @@ pub mod filesystem_snapshots;
 pub mod fork;
 pub mod fuel;
 pub mod gc_heap;
+mod gc_memory_accounting;
 pub mod hot_update;
 pub mod http;
 pub mod ignite_service;

@@ -58,21 +58,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn increase_memory(&mut self, delta: u64) {
-        let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.runtime == OwnerRuntime::Agent
-            && self.state.is_live()
-            && !self.state.snapshotting_mode
-            && !reconciling
-        {
-            // This is called from the `memory.grow` async resource limiter, which
-            // Wasmtime runs through a blocking libcall on the store's fiber. While
-            // that libcall waits, the store cannot make progress, so nothing may be
-            // awaited here (see https://github.com/bytecodealliance/wasmtime/issues/11869).
-            // The oplog hint runs as a fire-and-forget job on the worker-state
-            // actor. Host-capacity admission completed before Wasmtime committed
-            // this growth.
-            self.public_state.worker().request_memory_grow(delta);
-        }
+        self.linear_memory
+            .grow_and_record(delta, Instant::now(), |delta| {
+                if self.runtime == OwnerRuntime::Agent && !self.state.snapshotting_mode {
+                    // Enqueue under the tracker's accounting boundary, without awaiting on the
+                    // Wasmtime fiber. Growth after the absolute baseline must be recorded even
+                    // while reconstruction settlement still prevents live effects.
+                    self.public_state.worker().request_memory_grow(delta);
+                }
+            });
     }
 
     pub(crate) async fn try_acquire_linear_memory(&self, delta: u64) -> Option<MemoryGrant> {
@@ -407,6 +401,93 @@ mod tests {
             actual = measured;
         }
         Ok(())
+    }
+
+    #[test]
+    async fn live_publication_preserves_pending_growth_and_releases_failed_capacity() {
+        for (desired, succeeds) in [(100, true), (100, false), (60, false)] {
+            let controller = Arc::new(AdmissionController::new(
+                Box::new(FixedProbe::new(200, 0)),
+                AdmissionPolicy { usable_ratio: 1.0 },
+            ));
+            let reservation = controller.admit(80, &NoEvictionSource).await.unwrap();
+            let limits = Arc::new(AtomicResourceEntry::new(0, 200, 0, 0, 0));
+            let tracker = LinearMemoryTracker::new(
+                80,
+                80,
+                AgentMode::Durable,
+                true,
+                limits.clone(),
+                Arc::new(Mutex::new(reservation)),
+                Instant::now(),
+            );
+            tracker.begin_instantiation(false);
+            tracker.reconcile(40, Instant::now());
+            let (release, gate) = tokio::sync::oneshot::channel();
+            let admission_controller = controller.clone();
+            let admission =
+                admit_memory_growth(&tracker, 200, 40, desired, None, |bytes| async move {
+                    gate.await.unwrap();
+                    admission_controller.admit(bytes, &NoEvictionSource).await
+                });
+            tokio::pin!(admission);
+            if desired > 80 {
+                assert!(futures::poll!(&mut admission).is_pending());
+            } else {
+                assert!(futures::poll!(&mut admission).is_ready());
+            }
+            tracker.switch_to_live();
+            assert_eq!(tracker.reserved_bytes(), (desired as u64).min(80));
+            if desired > 80 {
+                release.send(()).unwrap();
+                assert!(admission.await.unwrap());
+            }
+            if succeeds {
+                tracker.grow((desired - 40) as u64, Instant::now());
+                assert_eq!(tracker.current_bytes(), desired as u64);
+                assert_eq!(tracker.reserved_bytes(), desired as u64);
+                assert_eq!(controller.headroom_bytes(), 200 - desired as u64);
+            } else {
+                tracker.memory_grow_failed();
+                assert_eq!(tracker.current_bytes(), 40);
+                assert_eq!(tracker.reserved_bytes(), 40);
+                assert_eq!(controller.headroom_bytes(), 160);
+                limits.update_memory_limit(50);
+                assert!(!tracker.exceeds_current_limit());
+            }
+        }
+    }
+
+    #[test]
+    async fn agent_limit_rejection_preserves_memory_and_host_capacity() {
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe::new(200, 0)),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let reservation = controller.admit(40, &NoEvictionSource).await.unwrap();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            40,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 50, 0, 0, 0)),
+            Arc::new(Mutex::new(reservation)),
+            Instant::now(),
+        );
+        tracker.reconcile(40, Instant::now());
+        tracker.meter().resume(40, Instant::now());
+        let denied = admit_memory_growth(&tracker, 50, 40, 51, None, |bytes| {
+            controller.admit(bytes, &NoEvictionSource)
+        })
+        .await;
+        assert!(matches!(
+            denied.unwrap_err().downcast_ref::<GolemSpecificWasmTrap>(),
+            Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)
+        ));
+        assert_eq!(tracker.current_bytes(), 40);
+        assert_eq!(tracker.reserved_bytes(), 40);
+        assert_eq!(tracker.billable_bytes(), 40);
+        assert_eq!(controller.headroom_bytes(), 160);
     }
 
     #[test]
