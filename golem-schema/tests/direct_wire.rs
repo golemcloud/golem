@@ -332,6 +332,7 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
     assert_eq!(decode::<uuid::Uuid>(tree).unwrap(), uuid);
     let promise = golem_schema::PromiseId::new(
         golem_schema::AgentId::new(golem_schema::ComponentId::new(uuid), "Counter(abc)".into()),
+        uuid::Uuid::from_u64_pair(0x5678, 0x4321),
         83,
     );
     assert_eq!(

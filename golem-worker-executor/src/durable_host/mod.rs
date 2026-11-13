@@ -1372,6 +1372,7 @@ impl WakeupScheduler {
             .promise_service
             .create(
                 &self.owned_agent_id.agent_id,
+                self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
             .await?;
