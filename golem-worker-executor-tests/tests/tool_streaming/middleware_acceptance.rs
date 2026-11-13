@@ -3315,6 +3315,294 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-universal-pass-through"],
+        context,
+        environment_state,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        _agent_type,
+        deployment,
+        agent_sockets = true
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
+        start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-owner-restart");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    // The probe reports the Start of every entity Store that is destroyed, for any reason.
+    async fn next_store_disposals(
+        disposals: &mut tokio::sync::mpsc::UnboundedReceiver<OplogIndex>,
+    ) -> anyhow::Result<Vec<OplogIndex>> {
+        let mut starts = Vec::new();
+        for _ in 0..2 {
+            starts.push(
+                tokio::time::timeout(std::time::Duration::from_secs(10), disposals.recv())
+                    .await?
+                    .expect("the disposal probe stays registered"),
+            );
+        }
+        starts.sort();
+        Ok(starts)
+    }
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("cascade-blocked(owner-restart-29)"),
+    );
+    tokio::pin!(invocation);
+    let _original = tokio::select! {
+        result = invocation.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+
+    let active = executor.active_agent(&owner).await.unwrap();
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let middleware_starts = entity_starts(
+        &oplog,
+        PublicAgentEntityKind::ToolMiddleware,
+        "streaming-universal-pass-through",
+    );
+    let leaf_starts = entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe");
+    assert_eq!(middleware_starts.len(), 1);
+    assert_eq!(leaf_starts.len(), 1);
+    let middleware_start = middleware_starts[0].oplog_index;
+    let leaf_start = leaf_starts[0].oplog_index;
+    let admitted_starts =
+        |metadata: golem_worker_executor::services::active_agents::ActiveAgentEntityMetadata| {
+            let mut starts = metadata
+                .slots
+                .iter()
+                .flat_map(|slot| {
+                    slot.invocations
+                        .iter()
+                        .map(|invocation| invocation.invocation_id.start_index())
+                })
+                .collect::<Vec<_>>();
+            starts.sort();
+            starts
+        };
+    assert!(active.entity_metadata().accepting_entities);
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        vec![middleware_start, leaf_start]
+    );
+
+    let crash = executor.signal_simulated_crash(&worker_id).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while active.entity_metadata().accepting_entities {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owner restart did not fence entity admission");
+    crash.await?;
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start]
+    );
+
+    let replayed = tokio::select! {
+        result = invocation.as_mut() => panic!("middleware call settled before its replayed leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+    assert!(
+        Arc::ptr_eq(&executor.active_agent(&owner).await.unwrap(), &active),
+        "an in-place restart keeps the active agent"
+    );
+    assert!(
+        active.entity_metadata().accepting_entities,
+        "a new primary generation must reopen entity admission after an in-place restart"
+    );
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        vec![middleware_start, leaf_start],
+        "the reconstructed owner claims the recorded entity Starts"
+    );
+    replayed
+        .release
+        .send(())
+        .expect("release the replayed leaf");
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(result, "leaf(cascade-blocked(owner-restart-29))");
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start],
+        "the completed call destroys its reconstructed Stores"
+    );
+
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted = executor.invoke_and_await_agent_with_key(
+        &caller_component,
+        &agent_id,
+        &interrupted_key,
+        "middleware_probe_once",
+        data_value!("cascade-blocked(owner-interrupt-31)"),
+    );
+    tokio::pin!(interrupted);
+    let _blocked = tokio::select! {
+        result = interrupted.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let interrupted_starts = vec![
+        entity_starts(
+            &oplog,
+            PublicAgentEntityKind::ToolMiddleware,
+            "streaming-universal-pass-through",
+        )[1]
+        .oplog_index,
+        entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe")[1].oplog_index,
+    ];
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        interrupted_starts
+    );
+    executor.interrupt(&worker_id).await?;
+    let interruption = tokio::time::timeout(std::time::Duration::from_secs(30), interrupted)
+        .await?
+        .expect_err("a terminal interrupt fails the awaiting caller");
+    assert!(
+        interruption
+            .to_string()
+            .contains("Interrupted via the Golem API"),
+        "{interruption}"
+    );
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
+    assert!(
+        !active.entity_metadata().accepting_entities,
+        "an interrupted owner must not admit entities"
+    );
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        interrupted_starts
+    );
+
+    executor.resume(&worker_id, false).await?;
+    let resumed = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf").await?;
+    // A terminal interrupt removes the retired generation's active agent, so the resumed owner
+    // admits its entities through a new one.
+    let resumed_active = executor.active_agent(&owner).await.unwrap();
+    assert!(!Arc::ptr_eq(&resumed_active, &active));
+    assert!(!active.entity_metadata().accepting_entities);
+    assert!(
+        resumed_active.entity_metadata().accepting_entities,
+        "a resumed primary generation must reopen entity admission after a terminal interrupt"
+    );
+    assert_eq!(
+        admitted_starts(resumed_active.entity_metadata()),
+        interrupted_starts,
+        "the resumed owner claims the recorded entity Starts"
+    );
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start],
+        "resuming replays the completed call's entity bodies in new Stores"
+    );
+    resumed.release.send(()).expect("release the resumed leaf");
+    let resumed_result: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &interrupted_key,
+            "middleware_probe_once",
+            data_value!("cascade-blocked(owner-interrupt-31)"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(resumed_result, "leaf(cascade-blocked(owner-interrupt-31))");
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        interrupted_starts,
+        "the completed call destroys its reconstructed Stores"
+    );
+    assert!(
+        disposals.try_recv().is_err(),
+        "no other entity Store was created"
+    );
+
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let finished = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .unwrap()
+        .oplog_index;
+    let middleware_starts = entity_starts(
+        &oplog,
+        PublicAgentEntityKind::ToolMiddleware,
+        "streaming-universal-pass-through",
+    );
+    let leaf_starts = entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe");
+    assert_eq!(
+        middleware_starts.len(),
+        2,
+        "replay must not admit the restarted or resumed call again"
+    );
+    assert_eq!(leaf_starts.len(), 2);
+    assert_eq!(
+        vec![middleware_starts[0].oplog_index, leaf_starts[0].oplog_index],
+        vec![middleware_start, leaf_start]
+    );
+    assert_eq!(
+        vec![middleware_starts[1].oplog_index, leaf_starts[1].oplog_index],
+        interrupted_starts
+    );
+    for start in middleware_starts.into_iter().chain(leaf_starts) {
+        assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
+    }
+    checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

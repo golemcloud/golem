@@ -1791,6 +1791,8 @@ pub trait RpcBlockingCounter {
     /// Blocks on a previously created promise
     fn await_promise(&self, promise_id: PromiseId);
     fn inc_after_promise(&mut self, promise_id: PromiseId) -> u64;
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 }
 
 struct RpcBlockingCounterImpl {
@@ -1827,6 +1829,10 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
         golem_rust::blocking_await_promise(&promise_id);
         self.value += 7;
         self.value
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 }
 
@@ -1897,6 +1903,9 @@ pub trait CancelTester {
     async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
 
     fn name(&self) -> String;
+
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
@@ -2140,6 +2149,10 @@ impl CancelTester for CancelTesterImpl {
             }
         })
         .await
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {
