@@ -520,6 +520,7 @@ version = "0.0.1"
 dependencies = [
  "capable-streaming-tool-guest-client",
  "clock-race-tool-guest-client",
+ "ctor",
  "environment-probe-tool-guest-client",
  "futures-concurrency",
  "golem-rust",
