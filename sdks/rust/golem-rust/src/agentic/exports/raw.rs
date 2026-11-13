@@ -64,6 +64,20 @@ crate::load_snapshot::export_load_snapshot!(Component with_types_in metadata);
 #[inline(never)]
 pub(crate) fn link() {}
 
+/// Creates the first `RandomState` of the instance in its first export call.
+///
+/// The first `RandomState` reads `wasi:random/insecure-seed`, a durable call. The first export
+/// call of an instance is the same in the live run and in every replay: the agent constructor,
+/// or `load-snapshot` in a start from a snapshot, which records no durable calls. A
+/// `RandomState` that a later invocation created first would read the seed in a different
+/// invocation after a start from a snapshot, and its replay would diverge.
+fn initialize_hash_keys_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = std::hash::RandomState::new();
+    });
+}
+
 // Signatures and layouts follow the pinned wit-bindgen's generated export
 // macros. Sync results use a returned pointer and a separate post-return;
 // async exports return the task status and complete through task-return imports.
@@ -89,6 +103,7 @@ macro_rules! capability {
                 #[unsafe(export_name = $export)]
                 unsafe extern "C" fn $name($($arg: $ty),*) -> $result {
                     wit_bindgen::rt::run_ctors_once();
+                    initialize_hash_keys_once();
                     match EXPORTS.get() {
                         Some(exports) => unsafe { (exports.$name)($($arg),*) },
                         None => unsafe { ($absent)($($arg),*) },
