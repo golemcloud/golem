@@ -30,6 +30,7 @@ use crate::services::oplog::CommitLevel;
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
+use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::StatusManagement;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -38,7 +39,8 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
@@ -74,6 +76,7 @@ use golem_common::model::oplog::host_functions::GolemApiResolveComponentId;
 use golem_common::model::oplog::host_functions::GolemApiRevertWorker;
 use golem_common::model::oplog::host_functions::GolemApiUpdateWorker;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
+use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::time::Duration;
 use tracing::debug;
@@ -629,6 +632,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
+                        Principal::Agent(AgentPrincipal {
+                            agent_id: self.agent_id().clone(),
+                        }),
                         handle.agent_auth_ctx(),
                     )
                     .await;
@@ -1000,7 +1006,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let retry_properties = RetryContext::golem_api("fork");
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                match ParsedAgentId::try_new(
+                match ParsedAgentKey::try_new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
@@ -1029,6 +1035,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
             let created_by = self.created_by();
+            let fork_request = CreateRequest::new(
+                CreateRequestKind::Fork,
+                None,
+                Principal::Agent(AgentPrincipal {
+                    agent_id: self.agent_id().clone(),
+                }),
+                &self.clone_as_inherited_stack(&self.state.current_span_id),
+            );
             let fork_result = loop {
                 let fork_result = self
                     .state
@@ -1042,6 +1056,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         handle.invocation_id(),
                         forked_phantom_id,
                         handle.agent_auth_ctx(),
+                        fork_request.clone(),
                     )
                     .await;
                 match handle

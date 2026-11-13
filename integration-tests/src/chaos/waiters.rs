@@ -73,7 +73,7 @@ use crate::chaos::history::{Stream, WaiterWakeupLog, WakeupRecord};
 use crate::chaos::workload::{self, WorkloadContext};
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::PromiseId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use std::sync::Arc;
@@ -165,7 +165,7 @@ pub async fn warm(ctx: &WorkloadContext, waiters: &[String]) -> usize {
         let ctx = ctx.clone();
         let waiter = waiter.clone();
         set.spawn(async move {
-            let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+            let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
             ctx.user
                 .invoke_and_await_agent(&ctx.promise, &parsed, "wakes", data_value!())
                 .await
@@ -196,7 +196,7 @@ pub async fn warm(ctx: &WorkloadContext, waiters: &[String]) -> usize {
 /// part of the workload, and its whole value is in saying *why*.
 pub async fn smoke_test(ctx: &WorkloadContext, dwell: Duration) -> Result<(), String> {
     let waiter = format!("{}-promise-smoke", ctx.key_prefix);
-    let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
     let token = format!("{waiter}-smoke");
 
     let created = ctx
@@ -296,7 +296,7 @@ async fn run_waiter(
     rounds: Arc<AtomicU64>,
     stalled: Arc<AtomicU64>,
 ) {
-    let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
     let mut round = 0u64;
 
     while running.load(Ordering::Relaxed) {
@@ -365,7 +365,7 @@ struct Armed {
 async fn arm(
     ctx: &WorkloadContext,
     waiter: &str,
-    parsed: &ParsedAgentId,
+    parsed: &ParsedAgentKey,
     token: &str,
 ) -> Option<Armed> {
     let cell: Arc<std::sync::Mutex<Option<Armed>>> = Arc::new(std::sync::Mutex::new(None));
@@ -412,7 +412,7 @@ async fn arm(
 async fn wait(
     ctx: &WorkloadContext,
     waiter: &str,
-    parsed: &ParsedAgentId,
+    parsed: &ParsedAgentKey,
     token: &str,
     promise: &PromiseId,
 ) {
@@ -497,7 +497,7 @@ pub async fn read_logs(ctx: &WorkloadContext, waiters: &[String]) -> Vec<WaiterW
 }
 
 async fn read_log(ctx: &WorkloadContext, waiter: &str) -> WaiterWakeupLog {
-    let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, waiter.to_string());
+    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.to_string());
 
     let wakes = match read_within(waiter, "wakes", async {
         ctx.user

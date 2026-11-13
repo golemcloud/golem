@@ -20,7 +20,7 @@ use crate::durability::assert_snapshot_recovery_loaded;
 use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
@@ -212,7 +212,7 @@ impl Operation {
 /// The agent under test, with its component.
 struct Agent {
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     worker_id: AgentId,
 }
 
@@ -3441,7 +3441,7 @@ pub(crate) async fn newest_snapshot_confirmed(
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentId,
+    agent: &ParsedAgentKey,
 ) -> anyhow::Result<serde_json::Value> {
     let state = executor
         .invoke_and_await_agent(component, agent, "getState", data_value!())

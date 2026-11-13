@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, OwnerKind, Principal};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::base_model::{AgentId, OplogIndex};
+use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::agent::UntypedAgentConfigEntry;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
+use crate::model::invocation_context::{
+    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
+};
 use crate::model::oplog::{OplogEntry, OplogPayload};
 use crate::model::quota::ResourceName;
 use desert_rust::{
@@ -56,6 +58,59 @@ pub struct CreateParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
+    pub create_request: CreateRequest,
+}
+
+/// The request that created an owner: its kind, its idempotency key, and the principal and
+/// invocation context of its caller.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateRequest {
+    pub kind: CreateRequestKind,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub principal: Principal,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<SpanData>,
+}
+
+impl CreateRequest {
+    pub fn new(
+        kind: CreateRequestKind,
+        idempotency_key: Option<IdempotencyKey>,
+        principal: Principal,
+        invocation_context: &InvocationContextStack,
+    ) -> Self {
+        Self {
+            kind,
+            idempotency_key,
+            principal,
+            trace_id: invocation_context.trace_id.clone(),
+            trace_states: invocation_context.trace_states.clone(),
+            invocation_context: invocation_context.to_oplog_data(),
+        }
+    }
+
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        InvocationContextStack::from_oplog_data(
+            self.trace_id.clone(),
+            self.trace_states.clone(),
+            self.invocation_context.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum CreateRequestKind {
+    /// Creates the owner unless it exists, and otherwise joins it.
+    GetOrCreate,
+    /// Creates the owner only if it does not exist yet.
+    Exclusive,
+    /// Creates an owner whose ID carries a phantom ID.
+    Phantom,
+    /// Copies another owner's history.
+    Fork,
 }
 
 /// Supplied oplog observations do not establish ownership of a canonical key.
@@ -108,6 +163,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             original_phantom_id,
             instance_id,
+            create_request: _,
         } = value;
         Self {
             agent_id,

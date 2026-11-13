@@ -23,7 +23,7 @@ use super::{ScheduleTargetPattern, ScheduleTargetResidency};
 use futures::stream::{StreamExt, TryStreamExt};
 use golem_common::agent_id;
 use golem_common::data_value;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
@@ -156,14 +156,14 @@ fn target_names(config: &CellConfig, count: u32) -> Vec<String> {
         .collect()
 }
 
-fn target_ids(names: &[String]) -> Vec<ParsedAgentId> {
+fn target_ids(names: &[String]) -> Vec<ParsedAgentKey> {
     names
         .iter()
         .map(|name| agent_id!(SCHEDULE_TARGET_AGENT_TYPE, name.clone()))
         .collect()
 }
 
-fn emitter_ids(config: &CellConfig, count: u32) -> Vec<ParsedAgentId> {
+fn emitter_ids(config: &CellConfig, count: u32) -> Vec<ParsedAgentKey> {
     (0..count)
         .map(|index| {
             agent_id!(
@@ -177,7 +177,7 @@ fn emitter_ids(config: &CellConfig, count: u32) -> Vec<ParsedAgentId> {
 async fn warm_targets(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    targets: &[ParsedAgentId],
+    targets: &[ParsedAgentKey],
 ) -> anyhow::Result<()> {
     for target in targets {
         user.invoke_and_await_agent(component, target, "poll", data_value!())
@@ -189,7 +189,7 @@ async fn warm_targets(
 async fn warm_emitters(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    emitters: &[ParsedAgentId],
+    emitters: &[ParsedAgentKey],
 ) -> anyhow::Result<()> {
     for emitter in emitters {
         user.invoke_and_await_agent(component, emitter, "warm", data_value!())
@@ -206,7 +206,7 @@ struct Batch {
 async fn schedule_batch(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    emitters: &[ParsedAgentId],
+    emitters: &[ParsedAgentKey],
     targets: &[String],
     context_spans: u32,
     rate: u32,
@@ -240,7 +240,7 @@ async fn schedule_batch(
 async fn run_rate_period(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    emitters: &[ParsedAgentId],
+    emitters: &[ParsedAgentKey],
     targets: &[String],
     context_spans: u32,
     rate: u32,

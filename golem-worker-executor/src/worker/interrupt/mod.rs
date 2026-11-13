@@ -274,7 +274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
     ) -> Option<Receiver<()>> {
         let instance_guard = self.instance.lock().await;
-        if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
+        if let Some(running) = instance_guard.running_runtime() {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
         drop(instance_guard);
@@ -319,8 +319,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     reacquire_permits,
                     UnloadRequest::ordinary(unload_reason),
                 )?;
-                let was_running =
-                    matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
+                let was_running = lifecycle.running_runtime().is_some();
                 return Some((pending, was_running));
             }
             drop(lifecycle);

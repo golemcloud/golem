@@ -245,7 +245,7 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
@@ -806,7 +806,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by_email
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.state.owner_context.agent().cloned()
     }
 

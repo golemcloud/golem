@@ -167,6 +167,11 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            agent_types: metadata
+                .agent_types()
+                .iter()
+                .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
+                .collect(),
             component_config: diff::ComponentConfig {
                 schema: metadata.config_schema().clone(),
                 initial_permissions: {
@@ -360,6 +365,7 @@ mod tests {
         };
         let expected = diff::Component {
             wasm_hash,
+            agent_types: BTreeMap::new(),
             component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([(
