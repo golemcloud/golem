@@ -766,12 +766,16 @@ Environment variables can be specified when an agent is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the agent's component
 - `GOLEM_COMPONENT_REVISION` - the revision of the component used for this agent
 
+An agent type with an explicit `initialCard` sees these variables only when its card allows the agent to read them, for example with `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`; see [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
+
 In addition to these, when using [Agent to Agent communication](/next/develop/rpc), agents created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of agents.
 
 #### Default environment variables
 It is possible to define default environment values and config key-value pairs for a component using the **app manifest**. These values are automatically set for each agent created from the component, but can be overridden when creating the agent.
+
+With an explicit `initialCard`, an agent sees an environment variable only if its card allows the agent to read it; see [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
 
 To set component level environment variables, use the `env` section of the `golem.yaml`:
 

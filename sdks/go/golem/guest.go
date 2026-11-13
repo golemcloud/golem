@@ -255,7 +255,7 @@ func init() {
 		}
 		agentID := selfAgentID()
 		if agentID == "" {
-			return witTypes.Err[witTypes.Unit](agentIDEnvVar + " is not set")
+			return witTypes.Err[witTypes.Unit](agentIDNotReadable)
 		}
 		agentType, ctorParams, err := parseRestoreIdentity(agentID)
 		if err != nil {

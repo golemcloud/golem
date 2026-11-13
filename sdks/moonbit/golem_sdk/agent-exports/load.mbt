@@ -42,13 +42,24 @@ pub async fn load(
 
 ///|
 fn get_golem_agent_id() -> String raise SnapshotLoadError {
-  let env = @environment.get_environment()
+  golem_agent_id_from(@environment.get_environment())
+}
+
+///|
+/// Finds GOLEM_AGENT_ID in the environment that the agent can read. The host
+/// shows the variable only when the agent's permission card allows the agent to
+/// read it.
+fn golem_agent_id_from(
+  env : Array[(String, String)],
+) -> String raise SnapshotLoadError {
   for pair in env {
     if pair.0 == "GOLEM_AGENT_ID" {
       return pair.1
     }
   }
-  raise SnapshotLoadError("GOLEM_AGENT_ID environment variable is not set")
+  raise SnapshotLoadError(
+    "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+  )
 }
 
 ///|

@@ -204,7 +204,10 @@ type Context[S any] struct {
 }
 
 // AgentID returns the raw id of the running agent. It is read from the host on
-// each call, so a copy made by [ForkSelf] sees its own id.
+// each call, so a copy made by [ForkSelf] sees its own id. The id comes from
+// the GOLEM_AGENT_ID environment variable, which the agent can read only when
+// its permission card allows env(?agent) @ ?agent : read : GOLEM_AGENT_ID;
+// without that grant AgentID returns "".
 func (c *Context[S]) AgentID() string { return selfAgentID() }
 
 // Principal returns the principal the agent was initialized with. The
@@ -230,6 +233,10 @@ func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 
 // AgentID returns the raw id of the agent being initialized, read from the host.
+// The id comes from the GOLEM_AGENT_ID environment variable, which the agent can
+// read only when its permission card allows
+// env(?agent) @ ?agent : read : GOLEM_AGENT_ID; without that grant AgentID
+// returns "".
 func (c *InitContext[Id, S, Cfg]) AgentID() string { return selfAgentID() }
 
 // AgentDefinition is the state-free handle returned by [DefineAgent] /
