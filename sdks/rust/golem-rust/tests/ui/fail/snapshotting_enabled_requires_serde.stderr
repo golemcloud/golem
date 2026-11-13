@@ -26,7 +26,6 @@ note: required by a bound in `SnapshottingAgent::__golem_auto_load_snapshot`
    |
  3 | #[agent_definition(snapshotting = "enabled")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `SnapshottingAgent::__golem_auto_load_snapshot`
- 4 | trait SnapshottingAgent {
    = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `SnapshottingAgentImpl: serde::de::DeserializeOwned` is not satisfied
@@ -56,5 +55,4 @@ note: required by a bound in `SnapshottingAgent::__golem_auto_load_snapshot`
    |
  3 | #[agent_definition(snapshotting = "enabled")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `SnapshottingAgent::__golem_auto_load_snapshot`
- 4 | trait SnapshottingAgent {
    = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
