@@ -32,7 +32,20 @@ golem agent list --component-name my-component
 
 ### Property-Based Filters (`--filter`)
 
-Use `--filter` to filter agents by metadata properties. Each filter has the format `property comparator value`. Multiple `--filter` flags are combined with AND logic.
+Use `--filter` to filter agents by metadata properties. The simplest filter has the format `property comparator value`. Multiple `--filter` flags are combined with AND logic.
+
+One filter can also combine conditions with `and`, `or`, `not` and parentheses. `not` binds tightest, then `and`, then `or`; keywords are case-insensitive:
+
+```shell
+golem agent list --filter '(status = Failed or status = Retrying) and not env.MODE = test'
+```
+
+A value needs double quotes when it contains whitespace outside parentheses, starts with `(` or `"`, or has unbalanced parentheses or quotes. Inside quotes, write `\"` for a quote and `\\` for a backslash. Agent IDs such as `CounterAgent("a b", 2)` need no extra quotes:
+
+```shell
+golem agent list --filter 'name = CounterAgent("a b", 2)'
+golem agent list --filter 'name startswith "CounterAgent("'
+```
 
 #### Filterable Properties
 
@@ -44,6 +57,7 @@ Use `--filter` to filter agents by metadata properties. Each filter has the form
 | `mode` | `=`, `!=` | `--filter "mode = ephemeral"` |
 | `created_at` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "created_at > 2025-01-01T00:00:00Z"` |
 | `env.<VAR>` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "env.MODE = production"` |
+| `config.<PATH>` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "config.db.host = localhost"` |
 
 #### Agent Status Values
 

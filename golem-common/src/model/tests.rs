@@ -990,6 +990,367 @@ fn worker_filter_parse() {
 }
 
 #[test]
+fn worker_filter_parse_agent_ids_without_quotes() {
+    assert_eq!(
+        AgentFilter::from_str(r#"name == CounterAgent("a b", 2)"#).unwrap(),
+        AgentFilter::new_name(
+            StringFilterComparator::Equal,
+            r#"CounterAgent("a b", 2)"#.to_string()
+        )
+    );
+    assert_eq!(
+        AgentFilter::from_str(r#"(name == Chat("x") or status == Failed)"#).unwrap(),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Failed),
+        ])
+    );
+}
+
+#[test]
+fn worker_filter_parse_precedence_and_keywords() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    assert_eq!(
+        AgentFilter::from_str("name == a or name == b AND not name == c").unwrap(),
+        AgentFilter::new_or(vec![
+            name("a"),
+            AgentFilter::new_and(vec![name("b"), name("c").not()]),
+        ])
+    );
+    assert_eq!(
+        AgentFilter::from_str("(name == a or name == b) and name == c").unwrap(),
+        AgentFilter::new_and(vec![
+            AgentFilter::new_or(vec![name("a"), name("b")]),
+            name("c"),
+        ])
+    );
+    assert_eq!(AgentFilter::from_str("name == and").unwrap(), name("and"));
+    assert_eq!(
+        AgentFilter::from_str("TRUE or false").unwrap(),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_and(vec![]),
+            AgentFilter::new_or(vec![])
+        ])
+    );
+}
+
+#[test]
+fn worker_filter_parse_quoted_values_and_keys() {
+    assert_eq!(
+        AgentFilter::from_str(r#"name startswith "Type(""#).unwrap(),
+        AgentFilter::new_name(StringFilterComparator::StartsWith, "Type(".to_string())
+    );
+    assert_eq!(
+        AgentFilter::from_str(r#"env."my key" == "a \"b\" \\ c""#).unwrap(),
+        AgentFilter::new_env(
+            "my key".to_string(),
+            StringFilterComparator::Equal,
+            r#"a "b" \ c"#.to_string()
+        )
+    );
+    assert_eq!(
+        AgentFilter::from_str("config.db.pool == 10").unwrap(),
+        AgentFilter::new_config(
+            "db.pool".to_string(),
+            StringFilterComparator::Equal,
+            "10".to_string()
+        )
+    );
+}
+
+#[test]
+fn worker_filter_parse_brackets_in_values() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    for (input, value) in [
+        ("name == a(())()", "a(())()"),
+        (r#"name == a(")")"#, r#"a(")")"#),
+        (r#"name == ")()(""#, ")()("),
+        (r#"name == "(())()""#, "(())()"),
+        ("((name == a))", "a"),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(input).unwrap(),
+            name(value),
+            "input: {input}"
+        );
+    }
+    for value in [")()(", "(())()", "a)(", "a(()", "(", ")", r#"a(")"#] {
+        let displayed = name(value).to_string();
+        assert_eq!(
+            AgentFilter::from_str(&displayed).unwrap(),
+            name(value),
+            "displayed: {displayed}"
+        );
+    }
+}
+
+#[test]
+fn worker_filter_parse_brackets_in_env_and_config_keys() {
+    let env = |k: &str| {
+        AgentFilter::new_env(
+            k.to_string(),
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        )
+    };
+    let config = |k: &str| {
+        AgentFilter::new_config(
+            k.to_string(),
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        )
+    };
+    for (input, filter) in [
+        ("env.a(b) == x", env("a(b)")),
+        ("config.a(())() == x", config("a(())()")),
+        (r#"env.a(")") == x"#, env(r#"a(")")"#)),
+        (r#"env.")()(" == x"#, env(")()(")),
+        (r#"config."(())()" == x"#, config("(())()")),
+        ("env.(())() == x", env("(())()")),
+        ("(env.a(b) == x)", env("a(b)")),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(input).unwrap(),
+            filter,
+            "input: {input}"
+        );
+    }
+    for key in [")()(", "(())()", "a)(", "a(()", "(", ")", r#"a(")"#, "a(b)"] {
+        for filter in [env(key), config(key)] {
+            let displayed = filter.to_string();
+            assert_eq!(
+                AgentFilter::from_str(&displayed).unwrap(),
+                filter,
+                "displayed: {displayed}"
+            );
+        }
+    }
+    for invalid in [
+        "env.)()( == x",
+        "config.a)( == x",
+        "env.a(() == x",
+        "config.a(b == x",
+        "env.a)b == x",
+        r#"env.a(") == x"#,
+        r#"config.")()( == x"#,
+        r#"env.")"b == x"#,
+    ] {
+        assert!(
+            AgentFilter::from_str(invalid).is_err(),
+            "expected `{invalid}` to be refused"
+        );
+    }
+}
+
+#[test]
+fn worker_filter_parse_limits_nesting() {
+    use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
+
+    let name = AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string());
+    let nots = |n: usize| format!("{}name == a", "not ".repeat(n));
+    let parens = |n: usize| format!("{}name == a{}", "(".repeat(n), ")".repeat(n));
+    let and_chain = |depth: usize| {
+        (1..depth).fold(name.clone(), |filter, _| {
+            AgentFilter::new_and(vec![filter, name.clone()])
+        })
+    };
+    let depth_error = format!("nested deeper than {MAX} levels");
+
+    assert_eq!(
+        AgentFilter::from_str(&nots(MAX - 1)).unwrap(),
+        not_chain(name.clone(), MAX)
+    );
+    assert_eq!(AgentFilter::from_str(&parens(MAX - 1)).unwrap(), name);
+    assert_eq!(
+        AgentFilter::from_str(&and_chain(MAX).to_string()).unwrap(),
+        and_chain(MAX)
+    );
+    assert!(AgentFilter::from(vec![nots(MAX - 1)]).is_ok());
+
+    for input in [
+        nots(MAX),
+        parens(MAX),
+        and_chain(MAX + 1).to_string(),
+        nots(1_000_000),
+        parens(1_000_000),
+    ] {
+        let error = AgentFilter::from_str(&input).unwrap_err();
+        assert!(
+            error.contains(&depth_error),
+            "{}",
+            &error[error.len() - 80..]
+        );
+    }
+    // Several `--filter` values join under one `And`, which is a level too.
+    assert!(
+        AgentFilter::from(vec![nots(MAX - 1), "name == b".to_string()])
+            .unwrap_err()
+            .contains(&depth_error)
+    );
+}
+
+#[test]
+fn worker_filter_canonical_form() {
+    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+
+    assert_eq!(
+        AgentFilter::new_or(vec![AgentFilter::new_and(vec![AgentFilter::new_not(
+            AgentFilter::new_or(vec![name("a")])
+        ),])])
+        .canonical(),
+        name("a").not()
+    );
+    assert_eq!(
+        AgentFilter::new_and(vec![name("a"), AgentFilter::new_or(vec![name("b")])]).canonical(),
+        AgentFilter::new_and(vec![name("a"), name("b")])
+    );
+    assert_eq!(
+        AgentFilter::new_and(vec![]).canonical(),
+        AgentFilter::new_and(vec![])
+    );
+
+    // The canonical form is what counts against the depth limit, and the text of a filter has
+    // no parentheses for a one-child `And` or `Or`, so such a filter parses back from its text.
+    use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
+    let wrapped = AgentFilter::new_or(vec![AgentFilter::new_and(vec![not_chain(name("a"), MAX)])]);
+    assert_eq!(wrapped.depth(), MAX + 2);
+    assert_eq!(
+        wrapped.clone().validated().unwrap(),
+        not_chain(name("a"), MAX)
+    );
+    assert_eq!(
+        AgentFilter::from_str(&wrapped.to_string()).unwrap(),
+        wrapped.canonical()
+    );
+    assert!(
+        AgentFilter::new_and(vec![not_chain(name("a"), MAX + 1)])
+            .validated()
+            .is_err()
+    );
+
+    // One `--filter` is its filter, not an `And` around it; none is the empty `And`.
+    assert_eq!(
+        AgentFilter::from(vec!["name == a".to_string()]).unwrap(),
+        name("a")
+    );
+    assert_eq!(
+        AgentFilter::from(vec![]).unwrap(),
+        AgentFilter::new_and(vec![])
+    );
+}
+
+#[test]
+fn worker_filter_parse_rejects_malformed_filters() {
+    for invalid in [
+        "name startswith Type(",
+        r#"name == "abc"#,
+        "(name == a",
+        "name == a)",
+        ")()(",
+        "(())()",
+        "()",
+        "((name == a)",
+        "(name == a))",
+        ")name == a(",
+        "name == )()(",
+        "name == (())()",
+        "name == a)(",
+        "name == a(()",
+        "name == a())",
+        r#"name == a(")"#,
+        "name ==",
+        "name == a name == b",
+        "env. == a",
+        "unknown == a",
+        "not",
+        "",
+    ] {
+        assert!(
+            AgentFilter::from_str(invalid).is_err(),
+            "expected `{invalid}` to be refused"
+        );
+    }
+}
+
+fn agent_filter_strategy() -> impl proptest::strategy::Strategy<Value = AgentFilter> {
+    use proptest::prelude::*;
+
+    // Text that hits every quoting rule: whitespace, parentheses, quotes, backslashes,
+    // keywords, empty text and agent-ID shapes.
+    let text = prop_oneof![
+        r#"[a-zA-Z0-9 ()"\\.,_\-]{0,10}"#,
+        Just("and".to_string()),
+        Just("NOT".to_string()),
+        Just(String::new()),
+        "[a-z]{1,6}".prop_map(|t| format!(r#"Agent("{t} x", 2)"#)),
+    ];
+    let comparator = prop_oneof![
+        Just(FilterComparator::Equal),
+        Just(FilterComparator::NotEqual),
+        Just(FilterComparator::GreaterEqual),
+        Just(FilterComparator::Greater),
+        Just(FilterComparator::LessEqual),
+        Just(FilterComparator::Less),
+    ];
+    let string_comparator = prop_oneof![
+        Just(StringFilterComparator::Equal),
+        Just(StringFilterComparator::NotEqual),
+        Just(StringFilterComparator::Like),
+        Just(StringFilterComparator::NotLike),
+        Just(StringFilterComparator::StartsWith),
+    ];
+    let status = prop_oneof![
+        Just(AgentStatus::Running),
+        Just(AgentStatus::Idle),
+        Just(AgentStatus::Suspended),
+        Just(AgentStatus::Interrupted),
+        Just(AgentStatus::Retrying),
+        Just(AgentStatus::Failed),
+        Just(AgentStatus::Exited),
+    ];
+    let mode = prop_oneof![Just(AgentMode::Durable), Just(AgentMode::Ephemeral)];
+
+    let leaf = prop_oneof![
+        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_name(c, v)),
+        (comparator.clone(), status).prop_map(|(c, v)| AgentFilter::new_status(c, v)),
+        (comparator.clone(), 0u64..1_000_000).prop_map(|(c, v)| {
+            AgentFilter::new_revision(c, ComponentRevision::new(v).unwrap())
+        }),
+        (comparator.clone(), mode).prop_map(|(c, v)| AgentFilter::new_mode(c, v)),
+        (comparator, 0u64..4_000_000_000_000)
+            .prop_map(|(c, millis)| AgentFilter::new_created_at(c, Timestamp::from(millis))),
+        (text.clone(), string_comparator.clone(), text.clone())
+            .prop_map(|(k, c, v)| AgentFilter::new_env(k, c, v)),
+        (text.clone(), string_comparator, text)
+            .prop_map(|(k, c, v)| AgentFilter::new_config(k, c, v)),
+    ];
+
+    leaf.prop_recursive(4, 24, 4, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(AgentFilter::new_and),
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(AgentFilter::new_or),
+            inner.prop_map(|f| f.not()),
+        ]
+    })
+}
+
+mod worker_filter_syntax {
+    use super::*;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    proptest! {
+        #[test]
+        fn display_parses_back_to_the_same_filter(filter in agent_filter_strategy()) {
+            let displayed = filter.to_string();
+            let parsed = AgentFilter::from_str(&displayed)
+                .map_err(|e| TestCaseError::fail(format!("{displayed}: {e}")))?;
+            prop_assert_eq!(parsed, filter.canonical(), "displayed: {}", displayed);
+        }
+    }
+}
+
+#[test]
 fn worker_filter_combination() {
     assert_eq!(
         AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
@@ -1259,6 +1620,29 @@ fn worker_filter_matches() {
         parsed,
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable)
     );
+
+    // `true` is the empty `and` and `false` the empty `or`, and both mean what they say.
+    for (text, expected) in [
+        ("true", true),
+        ("false", false),
+        ("not true", false),
+        ("not false", true),
+        ("name == worker-1 and true", true),
+        ("name == worker-1 and false", false),
+        ("name == worker-2 or true", true),
+        ("name == worker-2 or false", false),
+        ("name == worker-1 or false", true),
+        ("status == Idle and not false", true),
+    ] {
+        assert_eq!(
+            AgentFilter::from_str(text)
+                .unwrap()
+                .matches(&worker_metadata),
+            expected,
+            "{text}"
+        );
+    }
+    assert!(!AgentFilter::new_or(vec![]).matches(&worker_metadata));
 }
 
 #[test]
@@ -1731,4 +2115,35 @@ fn pod_uri_and_display_bracket_ipv6() {
     };
     assert_eq!(v6.to_string(), "[fdaa:0:1:a7b::2]:9000");
     assert_eq!(v6.uri(true).to_string(), "https://[fdaa:0:1:a7b::2]:9000/");
+}
+
+/// A chain of `not` above `leaf`, `depth` levels deep in total.
+fn not_chain(leaf: AgentFilter, depth: usize) -> AgentFilter {
+    (1..depth).fold(leaf, |filter, _| filter.not())
+}
+
+#[test]
+fn agent_filter_depth_limit_matches_grpc() {
+    use crate::model::MAX_AGENT_FILTER_DEPTH;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::GetWorkersMetadataRequest;
+    use prost::Message;
+
+    // A `created_at` leaf takes the most protobuf messages of any leaf.
+    let leaf = AgentFilter::new_created_at(FilterComparator::Equal, Timestamp::from(1u64));
+    let decodes = |filter: &AgentFilter| {
+        let request = GetWorkersMetadataRequest {
+            filter: Some(filter.clone().into()),
+            ..Default::default()
+        };
+        GetWorkersMetadataRequest::decode(request.encode_to_vec().as_slice()).is_ok()
+    };
+
+    let deepest = not_chain(leaf.clone(), MAX_AGENT_FILTER_DEPTH);
+    assert_eq!(deepest.depth(), MAX_AGENT_FILTER_DEPTH);
+    assert!(decodes(&deepest));
+    assert!(deepest.validate_depth().is_ok());
+
+    let too_deep = not_chain(leaf, MAX_AGENT_FILTER_DEPTH + 1);
+    assert!(!decodes(&too_deep));
+    assert!(too_deep.validate_depth().is_err());
 }

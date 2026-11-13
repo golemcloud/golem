@@ -90,7 +90,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_common::model::{
+    AgentFilter, FilterComparator, IdempotencyKey, OplogIndex, StringFilterComparator,
+};
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
@@ -1253,10 +1255,11 @@ impl AgentCommandHandler {
                 let mut filters = filters;
                 filters.insert(
                     0,
-                    format!(
-                        "name startswith {}(",
-                        agent_type.agent_type.type_name.0.clone()
-                    ),
+                    AgentFilter::new_name(
+                        StringFilterComparator::StartsWith,
+                        format!("{}(", agent_type.agent_type.type_name.0),
+                    )
+                    .to_string(),
                 );
 
                 Ok((
@@ -3358,10 +3361,7 @@ fn secret_config_paths_for_agent_type(
 /// `Ephemeral`, the corresponding equality filter is prepended so the
 /// executor narrows the oplog scan to only the matching mode.
 fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
-    let user_set_mode = filters
-        .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
-    if user_set_mode {
+    if user_set_mode_filter(&filters) {
         return filters;
     }
     let mode_filter = match mode {
@@ -3375,12 +3375,15 @@ fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<Stri
     out
 }
 
-/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint,
-/// meaning the caller should not add its own mode overlay.
+/// Returns `true` if `filters` contains a user-supplied `mode ...` constraint anywhere,
+/// also inside `and`, `or`, `not` or parentheses, meaning the caller should not add its own
+/// mode overlay. A filter that does not parse is refused later, when the list builds its
+/// structured filter.
 fn user_set_mode_filter(filters: &[String]) -> bool {
     filters
         .iter()
-        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()))
+        .filter_map(|filter| filter.parse::<AgentFilter>().ok())
+        .any(|filter| filter.mentions_mode())
 }
 
 /// Structured filter matching agents in either durability mode, used for
@@ -3739,9 +3742,22 @@ mod tests {
 
     #[test]
     fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
-        let input = vec!["MODE == ephemeral".to_string()];
+        let input = vec!["mode == EPHEMERAL".to_string()];
         let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_finds_user_mode_filter_inside_compound_filters() {
+        for filter in [
+            "(mode == ephemeral)",
+            "status == Idle or mode == ephemeral",
+            "not mode == durable",
+        ] {
+            let input = vec!["status == Running".to_string(), filter.to_string()];
+            let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+            assert_eq!(result, input, "filter: {filter}");
+        }
     }
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
