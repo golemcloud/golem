@@ -1813,7 +1813,10 @@ pub mod worker {
         },
         /// Simulates a crash on an agent for testing purposes.
         ///
-        /// The agent starts recovering and resuming immediately.
+        /// An interrupted durable agent is rebuilt from its oplog the next time it is used. An
+        /// ephemeral agent that is running, suspended or retrying is stopped for good. The command
+        /// fails for an agent that failed or exited, and for an idle ephemeral agent, because such
+        /// an agent does not recover.
         #[command(after_help = crate::command_examples::AGENT_SIMULATE_CRASH)]
         SimulateCrash {
             #[command(flatten)]

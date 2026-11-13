@@ -121,7 +121,8 @@ mod completed_history {
             completed_invocation_payload(&original, &key)?;
         assert_eq!((replay_start, replay_finished), (starts[0], finished_index));
         let (replay, release_replay) = executor.gate_next_oplog_payload_read(&id, payload);
-        // The public crash API ignores Idle. Restart the resident Worker through the same stop path.
+        // Restart the resident idle Worker through the handle this test holds; a simulated crash
+        // takes the same stop path.
         worker.set_interrupting(InterruptKind::Restart).await?;
         tokio::time::timeout(Duration::from_secs(10), replay)
             .await

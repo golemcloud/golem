@@ -37,6 +37,25 @@ enum InterruptDecision {
     Ignore,
     Interrupt,
     Restart,
+    Refuse(CrashRefusal),
+}
+
+/// Why a simulated crash of an agent is refused: the agent would not recover from it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CrashRefusal {
+    Failed,
+    Exited,
+    Ephemeral,
+}
+
+impl CrashRefusal {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Failed => "the agent is Failed, and a failed agent does not recover",
+            Self::Exited => "the agent is Exited, and an exited agent does not recover",
+            Self::Ephemeral => "the agent is ephemeral, and an ephemeral agent does not recover",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,19 +75,45 @@ enum UpdateDecision {
     QueueAndRestart,
 }
 
-fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> InterruptDecision {
-    match status {
-        AgentStatus::Exited
-        | AgentStatus::Idle
-        | AgentStatus::Failed
-        | AgentStatus::Interrupted => InterruptDecision::Ignore,
-        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying
-            if recover_immediately =>
-        {
-            InterruptDecision::Restart
+/// Whether a restart rebuilds the agent from its oplog. A restart stops an ephemeral agent, and an
+/// external tool owner, for good instead.
+fn can_restart(agent_mode: AgentMode, owner_kind: OwnerKind) -> bool {
+    agent_mode == AgentMode::Durable && owner_kind != OwnerKind::EphemeralExternalTool
+}
+
+/// A plain interrupt reaches only an agent that is running, suspended or retrying.
+///
+/// A simulated crash (`recover_immediately`) restarts an agent that is running, suspended or
+/// retrying, and an idle agent that `can_restart`: the agent is rebuilt from its oplog as after a
+/// real crash. An idle agent that cannot restart is refused, because the restart would stop it for
+/// good; while such an agent is running, suspended or retrying, the restart still stops it. An
+/// interrupted agent recovers on its next use in any case. A failed or exited agent does not
+/// recover, so a simulated crash of it is refused.
+fn interrupt_decision(
+    status: &AgentStatus,
+    recover_immediately: bool,
+    can_restart: bool,
+) -> InterruptDecision {
+    if recover_immediately {
+        match status {
+            AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying => {
+                InterruptDecision::Restart
+            }
+            AgentStatus::Idle if can_restart => InterruptDecision::Restart,
+            AgentStatus::Idle => InterruptDecision::Refuse(CrashRefusal::Ephemeral),
+            AgentStatus::Interrupted => InterruptDecision::Ignore,
+            AgentStatus::Failed => InterruptDecision::Refuse(CrashRefusal::Failed),
+            AgentStatus::Exited => InterruptDecision::Refuse(CrashRefusal::Exited),
         }
-        AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying => {
-            InterruptDecision::Interrupt
+    } else {
+        match status {
+            AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying => {
+                InterruptDecision::Interrupt
+            }
+            AgentStatus::Exited
+            | AgentStatus::Idle
+            | AgentStatus::Failed
+            | AgentStatus::Interrupted => InterruptDecision::Ignore,
         }
     }
 }
@@ -188,34 +233,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let metadata = worker.get_latest_worker_metadata().await;
 
-        let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
-        if decision == InterruptDecision::Ignore {
-            match metadata.last_known_status.status {
-                AgentStatus::Exited => warn!("Attempted interrupting worker which already exited"),
-                AgentStatus::Idle => warn!("Attempted interrupting worker which is idle"),
-                AgentStatus::Failed => warn!("Attempted interrupting worker which is failed"),
-                AgentStatus::Interrupted => {
-                    warn!("Attempted interrupting worker which is already interrupted")
-                }
-                _ => unreachable!(),
-            }
-            return Ok(());
-        }
-
-        if decision == InterruptDecision::Interrupt {
-            match metadata.last_known_status.status {
-                AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
-                AgentStatus::Retrying => {
-                    debug!("Marking worker scheduled to be retried as interrupted")
-                }
-                _ => {}
-            }
-        }
-
+        let decision = interrupt_decision(
+            &metadata.last_known_status.status,
+            recover_immediately,
+            can_restart(metadata.agent_mode, metadata.owner_kind),
+        );
         let interrupt_kind = match decision {
-            InterruptDecision::Interrupt => InterruptKind::Interrupt(Timestamp::now_utc()),
+            InterruptDecision::Refuse(refusal) => {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot simulate a crash of agent {agent_id}: {reason}",
+                    agent_id = owned_agent_id.agent_id,
+                    reason = refusal.reason()
+                )));
+            }
+            InterruptDecision::Ignore => {
+                match metadata.last_known_status.status {
+                    AgentStatus::Exited => {
+                        warn!("Attempted interrupting worker which already exited")
+                    }
+                    AgentStatus::Idle => warn!("Attempted interrupting worker which is idle"),
+                    AgentStatus::Failed => warn!("Attempted interrupting worker which is failed"),
+                    AgentStatus::Interrupted => {
+                        warn!("Attempted interrupting worker which is already interrupted")
+                    }
+                    _ => unreachable!(),
+                }
+                return Ok(());
+            }
+            InterruptDecision::Interrupt => {
+                match metadata.last_known_status.status {
+                    AgentStatus::Suspended => debug!("Marking suspended worker as interrupted"),
+                    AgentStatus::Retrying => {
+                        debug!("Marking worker scheduled to be retried as interrupted")
+                    }
+                    _ => {}
+                }
+                InterruptKind::Interrupt(Timestamp::now_utc())
+            }
             InterruptDecision::Restart => InterruptKind::Restart,
-            InterruptDecision::Ignore => unreachable!(),
         };
         if decision == InterruptDecision::Interrupt {
             worker
@@ -646,19 +701,59 @@ mod tests {
         ];
         let expected_recovering = [
             InterruptDecision::Restart,
-            InterruptDecision::Ignore,
+            InterruptDecision::Restart,
             InterruptDecision::Restart,
             InterruptDecision::Ignore,
             InterruptDecision::Restart,
+            InterruptDecision::Refuse(CrashRefusal::Failed),
+            InterruptDecision::Refuse(CrashRefusal::Exited),
+        ];
+        let expected_recovering_without_restart = [
+            InterruptDecision::Restart,
+            InterruptDecision::Refuse(CrashRefusal::Ephemeral),
+            InterruptDecision::Restart,
             InterruptDecision::Ignore,
-            InterruptDecision::Ignore,
+            InterruptDecision::Restart,
+            InterruptDecision::Refuse(CrashRefusal::Failed),
+            InterruptDecision::Refuse(CrashRefusal::Exited),
         ];
 
-        for ((status, expected), expected_recovering) in
-            STATUSES.iter().zip(expected).zip(expected_recovering)
+        for (((status, expected), expected_recovering), expected_recovering_without_restart) in
+            STATUSES
+                .iter()
+                .zip(expected)
+                .zip(expected_recovering)
+                .zip(expected_recovering_without_restart)
         {
-            assert_eq!(interrupt_decision(status, false), expected);
-            assert_eq!(interrupt_decision(status, true), expected_recovering);
+            assert_eq!(interrupt_decision(status, false, true), expected);
+            assert_eq!(interrupt_decision(status, false, false), expected);
+            assert_eq!(interrupt_decision(status, true, true), expected_recovering);
+            assert_eq!(
+                interrupt_decision(status, true, false),
+                expected_recovering_without_restart
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_durable_agent_that_is_not_an_external_tool_owner_can_restart() {
+        for (agent_mode, owner_kind, expected) in [
+            (AgentMode::Durable, OwnerKind::ComponentAgent, true),
+            (AgentMode::Durable, OwnerKind::OplogProcessor, true),
+            (AgentMode::Durable, OwnerKind::EphemeralExternalTool, false),
+            (AgentMode::Ephemeral, OwnerKind::ComponentAgent, false),
+            (
+                AgentMode::Ephemeral,
+                OwnerKind::EphemeralExternalTool,
+                false,
+            ),
+            (AgentMode::Ephemeral, OwnerKind::OplogProcessor, false),
+        ] {
+            assert_eq!(
+                can_restart(agent_mode, owner_kind),
+                expected,
+                "{agent_mode:?}, {owner_kind:?}"
+            );
         }
     }
 

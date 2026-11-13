@@ -183,7 +183,7 @@ async fn recovery_and_update(template: &str, path: &str, source: &str) {
             .success_or_dump()
         );
     }
-    // simulate-crash is a no-op for an idle worker; kill the executor process instead.
+    // Kill the executor process, so that the snapshot is loaded after a real process restart.
     ctx.server_process.take().unwrap().kill().await.unwrap();
     ctx.startup_ports = None;
     ctx.start_server().await;

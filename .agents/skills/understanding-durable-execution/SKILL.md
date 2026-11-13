@@ -1154,10 +1154,18 @@ Loop stop never claims a terminal merely to discard it. Tests:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and
 `tests/resource_limits/mod.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.
 
-`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
-turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
-remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
-restart does not fail the invocation waiter or append `Interrupted`.
+`recover_immediately` (a simulated crash) selects `Restart` for Running, Suspended and Retrying
+workers, and for an Idle worker whose restart rebuilds it from the oplog (`can_restart`: a durable
+agent that is not an external tool owner). A resident Idle worker's loop takes the queued
+`Restart`, unloads the generation and replays the oplog into a new instance; an Idle worker that is
+not resident consumes the pending `Restart` at its next start. A simulated crash of an Idle worker
+that cannot restart (an ephemeral agent or an external tool owner), or of a Failed or Exited
+worker, is refused with an invalid-request error before any state changes; an Interrupted worker
+is left as it is and recovers on its next use (`worker/lifecycle/mod.rs::interrupt_decision`).
+A Running, Suspended or Retrying worker that cannot restart is still restarted, which stops it for
+good. A simulated crash never turns a parked durable worker into a permanent interruption. If no
+invocation loop remains, the existing promise, scheduler or permit wakeup starts reconstruction;
+the queued restart does not fail the invocation waiter or append `Interrupted`.
 
 When a trap chooses `RetryDecision::Delayed`, the invocation loop snapshots the finite command
 prefix already queued before teardown. Duplicate `WorkAvailable` edges in that prefix collapse to
@@ -2466,11 +2474,13 @@ the start outcome decides: `UPDATE_REPLAY_FAILED` for `AutomaticUpdate`, a diver
 failure for `AssistedUpdate`, a rejection or a pass-through for `PeriodicRecovery`. An
 `Interrupt` trap takes its fixed decision; the replay writes no `Interrupted` entry and no
 `FailedUpdate`. During the startup replay the folded status is the status before the restart.
-For an idle agent it stays `Idle`, and `worker/lifecycle.rs::interrupt_decision` ignores an API
-interrupt (`Attempted interrupting worker which is idle`): nothing reaches the replay, no
+For an idle agent it stays `Idle`, and `worker/lifecycle/mod.rs::interrupt_decision` ignores a
+plain API interrupt (`Attempted interrupting worker which is idle`): nothing reaches the replay, no
 `Interrupted` entry and no `FailedUpdate` are written, and the update completes without a resume
 (`tests/hot_update.rs::an_interrupt_during_the_full_replay_of_a_pending_automatic_update_of_an_idle_agent_is_ignored_and_the_update_completes`).
-Only a status of `Running`, `Suspended` or `Retrying` lets the interrupt through; then the
+A simulated crash is not ignored for an idle agent: a durable agent gets a `Restart`, and an
+ephemeral agent or an external tool owner is refused (see `recover_immediately` above).
+Only a status of `Running`, `Suspended` or `Retrying` lets a plain interrupt through; then the
 invocation loop records the request after the start as at the end of any generation
 (`InvocationLoop::record_retry_interrupt_failure`). A lost shard writes nothing, and the new owner
 runs the attempt again. The trap path is the same for all three purposes.

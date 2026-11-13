@@ -238,6 +238,8 @@ impl WorkerApi {
     ///
     /// Interrupts the execution of a worker.
     /// The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+    /// With recover-immediately, an interrupted durable worker is rebuilt from its oplog the next time it is used, and an ephemeral worker that is running, suspended or retrying is stopped for good.
+    /// A failed or exited worker and an idle ephemeral worker are refused, because they do not recover.
     /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
     /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
