@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 use crate::command::resource_definition::ResourceDefinitionSubcommand;
@@ -90,6 +91,7 @@ impl GolemCliCommand {
                     vec!["clean"],
                     vec!["completion"],
                     vec!["generate-bridge"],
+                    vec!["mcp"],
                     vec!["new"],
                     vec!["output-schema"],
                     vec!["plugin"],
@@ -994,6 +996,11 @@ pub enum GolemCliSubcommand {
     Resource {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
+    },
+    /// Serve Golem management over the Model Context Protocol (MCP)
+    Mcp {
+        #[clap(subcommand)]
+        subcommand: McpSubcommand,
     },
     /// Print the structured CLI output JSON schema to stdout
     #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
@@ -1948,6 +1955,33 @@ pub mod worker {
             #[arg(long)]
             plugin_priority: Option<i32>,
         },
+    }
+}
+
+pub mod mcp {
+    use clap::Subcommand;
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpSubcommand {
+        /// Serve the management commands as MCP tools over stdio, for coding agents.
+        ///
+        /// This is the management server: one tool for each `golem agent` command and each
+        /// other management command that does not need a terminal, such as `golem agent list`
+        /// and `golem agent oplog`. A tool takes the command's arguments, runs the command as the
+        /// CLI does, with the CLI's signed-in identity, and returns the command's JSON output.
+        /// It is not the application MCP server that a deployment serves for its agents' tools.
+        ///
+        /// The server works in one environment, the one this command selects, for example with
+        /// `golem -E app/prod mcp serve` or from the application manifest. No tool takes an
+        /// environment, and a tool refuses an agent or component of another environment. Start
+        /// one server for each environment.
+        ///
+        /// The tool of a destructive command takes `confirm`, which confirms that one call as
+        /// `--yes` does on the CLI. Neither `--yes` nor `cli.autoConfirm` confirms a tool call.
+        /// stdin and stdout carry JSON-RPC; logs and progress go to stderr, and the server never
+        /// asks a question.
+        #[command(after_help = crate::command_examples::MCP_SERVE)]
+        Serve,
     }
 }
 

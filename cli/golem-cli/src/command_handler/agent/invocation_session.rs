@@ -2044,6 +2044,10 @@ fn write_output(
                 return Err(error);
             }
         };
+        if crate::log::capture_stdout(&bytes) {
+            let _ = written.send(Ok(()));
+            continue;
+        }
         let stdout = std::io::stdout();
         if let Err(error) = write_and_flush(&mut stdout.lock(), &bytes) {
             let diagnostic = if error

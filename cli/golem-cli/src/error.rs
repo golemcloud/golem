@@ -77,6 +77,42 @@ pub enum ContextInitHintError {
 
 impl Error for ContextInitHintError {}
 
+/// A command asked for a confirmation in a process that never asks, such as
+/// `golem mcp serve`, and the command was not confirmed in advance.
+#[derive(Debug)]
+pub struct ConfirmationRequired {
+    pub question: String,
+}
+
+impl Display for ConfirmationRequired {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "This action requires confirmation: {}", self.question)
+    }
+}
+
+impl Error for ConfirmationRequired {}
+
+/// A command named an environment other than the one that the process works in,
+/// such as the environment that `golem mcp serve` was started in.
+#[derive(Debug)]
+pub struct OutsideEnvironment {
+    pub requested: String,
+    pub environment: String,
+}
+
+impl Display for OutsideEnvironment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is outside the environment {} that this server works in; \
+             start another `golem mcp serve` for it",
+            self.requested, self.environment
+        )
+    }
+}
+
+impl Error for OutsideEnvironment {}
+
 pub mod service {
     use crate::client::ServerStartingError;
     use crate::log::LogColorize;
