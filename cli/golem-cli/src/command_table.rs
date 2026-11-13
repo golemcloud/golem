@@ -19,7 +19,8 @@
 //! This table adds what neither of them says: the command's class, the
 //! permission parts that the server checks for it and their targets, whether
 //! the command stays on the CLI, which of its arguments only the CLI may take,
-//! which arguments every other surface must pass, and whether it is destructive.
+//! which arguments every other surface must pass, which arguments read stdin
+//! when their value is `-`, and whether it is destructive.
 //!
 //! Every `golem agent` command has a row. The bulk controls outside
 //! `golem agent` (`update-agents`, `redeploy-agents`, `component update-agents`,
@@ -93,6 +94,9 @@ pub struct CommandRow {
     pub cli_only_args: &'static [&'static str],
     /// Long flags that every surface other than the CLI always passes.
     pub fixed_args: &'static [&'static str],
+    /// Clap argument IDs whose value `-` reads the process's stdin. A surface
+    /// other than the CLI must refuse `-` as their value.
+    pub stdin_marker_args: &'static [&'static str],
     /// The command changes or removes state that cannot be restored, or
     /// asks for a confirmation.
     pub destructive: bool,
@@ -129,11 +133,11 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // `agent : view` is for the live stream, which `--no-stream` turns off.
-    // An argument value of `-` binds stdin to a stream parameter; the table
-    // cannot express it, so a surface other than the CLI must refuse `-` values.
+    // An `arguments` value of `-` binds stdin to a direct stream parameter.
     // The post-deploy flags can update, redeploy or delete every agent of the
     // deployment without a prompt.
     CommandRow {
@@ -155,6 +159,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             "logs_only",
         ],
         fixed_args: &["--no-stream"],
+        stdin_marker_args: &["arguments"],
         destructive: false,
     },
     CommandRow {
@@ -164,6 +169,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     CommandRow {
@@ -173,6 +179,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: true,
     },
     CommandRow {
@@ -182,6 +189,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &["refresh"],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // Live following.
@@ -192,6 +200,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: true,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // Live following, for Bridge SDK-based REPLs.
@@ -202,6 +211,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: true,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // `agent : view` reads the agent's metadata before and after the update.
@@ -212,6 +222,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: true,
     },
     // Destructive although D9 does not list it: interrupting an ephemeral
@@ -223,6 +234,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: true,
     },
     CommandRow {
@@ -232,6 +244,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // The catalog has no simulate-crash verb; the server checks interrupt.
@@ -242,6 +255,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: true,
     },
     // `--html` writes a host file; the viewer flags serve or open it locally.
@@ -252,6 +266,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &["html", "serve", "port", "open", "no_open"],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     CommandRow {
@@ -261,6 +276,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: true,
     },
     CommandRow {
@@ -270,6 +286,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     CommandRow {
@@ -282,18 +299,20 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // The contents are not in the JSON output: the command writes them to a
     // host file, asking before it overwrites one, or as raw bytes to stdout
-    // with `--output -`. It stays on the CLI until a command returns them.
+    // when `--output` is `-`. It stays on the CLI until a command returns them.
     CommandRow {
         path: &["agent", "file-contents"],
         class: ManagementRead,
         parts: &[filesystem(FilesystemVerb::Read)],
         interactive: true,
-        cli_only_args: &[],
+        cli_only_args: &["output"],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     CommandRow {
@@ -303,6 +322,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     CommandRow {
@@ -312,6 +332,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // ── exec ─────────────────────────────────────────────────────────────
@@ -325,12 +346,14 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: true,
         cli_only_args: &[],
         fixed_args: &[],
+        stdin_marker_args: &[],
         destructive: false,
     },
     // `agent : view` describes the tool: on the agent with `--agent`, on the
     // component's agents with `--component`. `--lookup` checks only view; an
-    // invocation checks invoke on the agent or on the new owner. The raw
-    // output flags write to stdout or to host files.
+    // invocation checks invoke on the agent or on the new owner. `--stdin`
+    // reads a host file, or the process's stdin when its value is `-`; the
+    // raw output flags write to stdout or to host files.
     CommandRow {
         path: &["tool", "invoke"],
         class: Exec,
@@ -342,6 +365,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         interactive: false,
         cli_only_args: &["stdin", "stdout", "output", "stderr", "stderr_output"],
         fixed_args: &[],
+        stdin_marker_args: &["stdin"],
         destructive: false,
     },
 ];
@@ -404,6 +428,11 @@ mod test {
             for arg in row.cli_only_args {
                 if !command.get_arguments().any(|a| a.get_id() == *arg) {
                     problems.push(format!("`{path}` has no argument `{arg}`"));
+                }
+            }
+            for arg in row.stdin_marker_args {
+                if !command.get_arguments().any(|a| a.get_id() == *arg) {
+                    problems.push(format!("`{path}` has no stdin argument `{arg}`"));
                 }
             }
             for flag in row.fixed_args {
