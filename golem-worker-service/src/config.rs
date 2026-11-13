@@ -1125,7 +1125,7 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         make_worker_service_config_loader()
-            .load_or_dump_config()
+            .load()
             .expect("Failed to load config");
     }
 

@@ -20,15 +20,23 @@ import {
  * bills no usage during a trial.
  *
  * - `suspended`: the account did not pay for paid overage. An order with an amount for a metered
- *   price is `pending`, and a payment of its subscription failed (`past_due_at`, which stays after
- *   Polar revokes the subscription) or the order is older than `ORDER_PAYMENT_GRACE_MS`. The plan has no monthly amounts and no overage, so the agents of the
- *   account stop until the order is paid. A new subscription does not end the suspension.
- * - `paid`: a subscription is `active` and does not end within `SETTLEMENT_MARGIN_MS`. Only this
- *   plan has paid overage.
- * - `free`: otherwise. A declined payment of the price alone, a cancellation, a pause and a trial
- *   give the free plan. A subscription that is canceled at the period end moves the account to
- *   free `SETTLEMENT_MARGIN_MS` before the end, so the usage push sends the last paid overage
- *   while Polar still bills it.
+ *   price is `pending`, its subscription is not in the past-due grace, and a payment of the
+ *   subscription failed (`past_due_at`, which stays after Polar revokes the subscription) or the
+ *   order is older than `ORDER_PAYMENT_GRACE_MS`. The plan has no monthly amounts and no overage,
+ *   so the agents of the account stop until the order is paid. A new subscription does not end the
+ *   suspension.
+ * - `paid`: a subscription is `active` and does not end within `SETTLEMENT_MARGIN_MS`, or a
+ *   subscription is in the past-due grace. Only this plan has paid overage.
+ * - `free`: otherwise. A declined payment of the price alone after the past-due grace, a
+ *   cancellation, a pause and a trial give the free plan. A subscription that is canceled at the
+ *   period end moves the account to free `SETTLEMENT_MARGIN_MS` before the end, so the usage push
+ *   sends the last paid overage while Polar still bills it.
+ *
+ * The past-due grace: a subscription is `past_due`, and its first failed payment is less than
+ * `pastDueGraceMs` ago. Polar retries the payment in this time. The account keeps the paid plan,
+ * so it uses its monthly amounts and its paid overage as before. Polar bills the usage of a
+ * `past_due` subscription, so the paid overage of the past-due grace goes on the next invoice. A
+ * subscription that Polar revokes is `canceled` and has no past-due grace.
  *
  * The registry sets an account on a plan without overage to hardLimit. Only the owner can turn
  * paid overage on again, also after the account is back on the paid plan.
@@ -61,7 +69,10 @@ export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
  */
 export const HOLD_RECHECK_MS = 60 * 60 * 1000
 
-/** How long the sweep still checks a subscription after its end, or an order after the grace. */
+/**
+ * How long the sweep still checks a subscription after its end or after its past-due grace, or an
+ * order after `ORDER_PAYMENT_GRACE_MS`.
+ */
 const SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export type ManagedPlan = "free" | "paid" | "suspended"
@@ -71,17 +82,35 @@ const endsWithinMargin = (subscription: Subscription, now: Date): boolean =>
   subscription.currentPeriodEnd !== undefined &&
   now.getTime() >= subscription.currentPeriodEnd.getTime() - SETTLEMENT_MARGIN_MS
 
+/**
+ * When the past-due grace of the subscription ends: `pastDueGraceMs` after `past_due_at`, while
+ * the subscription is `past_due`. A subscription in another status has no past-due grace.
+ */
+export const pastDueGraceEnd = (subscription: Subscription, pastDueGraceMs: number): Date | undefined =>
+  subscription.status === "past_due" && subscription.pastDueAt !== undefined
+    ? new Date(subscription.pastDueAt.getTime() + pastDueGraceMs)
+    : undefined
+
+const inPastDueGrace = (subscription: Subscription, now: Date, pastDueGraceMs: number): boolean => {
+  const end = pastDueGraceEnd(subscription, pastDueGraceMs)
+  return end !== undefined && now.getTime() < end.getTime()
+}
+
 /** Whether the account did not pay for paid overage at `now` (see the rules above). */
 export const owesOverage = (
   subscriptions: ReadonlyArray<Subscription>,
   pendingOrders: ReadonlyArray<PendingOrder>,
-  now: Date
+  now: Date,
+  pastDueGraceMs: number
 ): boolean =>
   pendingOrders.some((order) => {
     if (order.meteredAmount <= 0) {
       return false
     }
     const subscription = subscriptions.find((candidate) => candidate.subscriptionId === order.subscriptionId)
+    if (subscription !== undefined && inPastDueGrace(subscription, now, pastDueGraceMs)) {
+      return false
+    }
     return (
       subscription?.pastDueAt !== undefined || now.getTime() - order.createdAt.getTime() >= ORDER_PAYMENT_GRACE_MS
     )
@@ -91,12 +120,17 @@ export const owesOverage = (
 export const planFor = (
   subscriptions: ReadonlyArray<Subscription>,
   pendingOrders: ReadonlyArray<PendingOrder>,
-  now: Date
+  now: Date,
+  pastDueGraceMs: number
 ): ManagedPlan => {
-  if (owesOverage(subscriptions, pendingOrders, now)) {
+  if (owesOverage(subscriptions, pendingOrders, now, pastDueGraceMs)) {
     return "suspended"
   }
-  return subscriptions.some((subscription) => subscription.status === "active" && !endsWithinMargin(subscription, now))
+  return subscriptions.some(
+    (subscription) =>
+      (subscription.status === "active" && !endsWithinMargin(subscription, now)) ||
+      inPastDueGrace(subscription, now, pastDueGraceMs)
+  )
     ? "paid"
     : "free"
 }
@@ -173,8 +207,9 @@ export interface SettlementShape {
   ) => Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError>
   /**
    * Reconciles every account whose plan or deletion hold can change with the time alone: a
-   * subscription that ends within the settlement margin, an order that is still pending after the
-   * grace, and the candidates of `Subscriptions.holdCandidates`.
+   * subscription that ends within the settlement margin, an order that is still pending after
+   * `ORDER_PAYMENT_GRACE_MS`, a subscription whose past-due grace ends, and the candidates of
+   * `Subscriptions.holdCandidates`.
    */
   readonly sweep: (now: Date) => Effect.Effect<void>
 }
@@ -255,7 +290,7 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           yield* registry.placeDeletionHold(config.registryBillingToken, accountId, holderId, reason)
           yield* subscriptions.recordHold(accountId, reason)
         }
-        yield* changePlan(account, planFor(accountSubscriptions, pendingOrders, now))
+        yield* changePlan(account, planFor(accountSubscriptions, pendingOrders, now, config.pastDueGraceMs))
         if (reasons.length === 0) {
           yield* registry.removeDeletionHold(config.registryBillingToken, accountId, holderId)
           yield* subscriptions.forgetHold(accountId)
@@ -294,12 +329,17 @@ export const make: Effect.Effect<SettlementShape, never, BillingConfig | Registr
           at(-ORDER_PAYMENT_GRACE_MS - SWEEP_WINDOW_MS),
           at(-ORDER_PAYMENT_GRACE_MS)
         )
+        const pastDueGraceEnding = yield* subscriptions.pastDue(
+          config.polar.productId,
+          at(-config.pastDueGraceMs - SWEEP_WINDOW_MS),
+          at(-config.pastDueGraceMs)
+        )
         const holdCandidates = yield* subscriptions.holdCandidates(
           config.polar.productId,
           at(-SWEEP_WINDOW_MS),
           at(-HOLD_RECHECK_MS)
         )
-        const candidates = [...new Set([...ending, ...awaitingPayment, ...holdCandidates])]
+        const candidates = [...new Set([...ending, ...awaitingPayment, ...pastDueGraceEnding, ...holdCandidates])]
         // The reconcile changes nothing for a deleted account, so the sweep skips it.
         const deleted = new Set(yield* registryAccounts.deletedAmong(candidates))
         yield* Effect.forEach(

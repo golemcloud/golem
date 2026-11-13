@@ -29,6 +29,7 @@ import {
 const MINUTE = 60 * 1000
 const DAY = 24 * 60 * MINUTE
 const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "UTC" })
+const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
 const fixedPriceId = "price_fixed"
 const meteredPriceId = "price_compute"
 
@@ -214,7 +215,7 @@ describe("Polar billing", () => {
       const { jar } = await signedIn()
 
       expect(await page(jar)).toContain(`action="/billing/checkout"`)
-      expect(await page(jar, "/?checkout_id=polar_c_test")).toContain("Activating Paid")
+      expect(await page(jar, "/?checkout_id=polar_c_test")).toContain("Polar has your payment")
     })
 
     it("links the stylesheet and the script with a hash of their content", async () => {
@@ -265,14 +266,14 @@ describe("Polar billing", () => {
       const html = await page(jar)
 
       expect(html).toContain("Paid overage")
-      expect(html).toContain("Off. When the account has used its monthly allowance, its agents stop")
+      expect(html).toContain("Off. When the account uses all of its monthly allowance, its agents stop")
       expect(html).toContain("$0.0112 per million GCU")
       expect(html).toContain("$0.045 per GB-hour")
       expect(html).toContain("$0.27 per GB-month")
       expect(html).toContain("$0.24 per GB-month")
       expect(html).toContain(`action="/billing/overage"`)
       expect(html).toContain(`value="allowOverage"`)
-      expect(html).toContain("A change takes effect within 5 minutes.")
+      expect(html).toContain("Golem uses a new setting within 5 minutes.")
     })
 
     it("turns paid overage on with the token of the owner, and tells the delay", async () => {
@@ -288,8 +289,8 @@ describe("Polar billing", () => {
       expect(change!.headers.get("authorization")).toBe(`Bearer ${upstreams.registryAccount.secret}`)
       expect(change!.body).toEqual({ mode: "allowOverage" })
       const html = await page(jar, "/?overage=on")
-      expect(html).toContain("Paid overage is on. The change takes effect within 5 minutes.")
-      expect(html).toContain("On. When the account has used its monthly allowance, its agents keep running")
+      expect(html).toContain("Paid overage is on. Golem uses the new setting within 5 minutes.")
+      expect(html).toContain("On. When the account uses all of its monthly allowance, its agents continue to run.")
       expect(html).toContain(`value="hardLimit"`)
     })
 
@@ -301,7 +302,7 @@ describe("Polar billing", () => {
 
       expect(response.headers.get("location")).toBe("/?overage=off")
       expect(upstreams.usageModes.get(accountId)).toBe("hardLimit")
-      expect(await page(jar, "/?overage=off")).toContain("Paid overage is off. The change takes effect within 5 minutes.")
+      expect(await page(jar, "/?overage=off")).toContain("Paid overage is off. Golem uses the new setting within 5 minutes.")
     })
 
     it("treats a repeated post as done", async () => {
@@ -352,7 +353,7 @@ describe("Polar billing", () => {
       expect(html).toContain("250 of 912.5 GB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
       expect(html).toContain("Not metered")
-      expect(html).toContain("No usage reported this month")
+      expect(html).toContain("No usage this month")
     })
 
     it("shows a used-up allowance and the paid overage above it", async () => {
@@ -377,6 +378,7 @@ describe("Polar billing", () => {
       expect(html).toContain("+ 1.5M GCU of paid overage · $0.02")
       expect(html).toContain("Paid overage so far this month: about $0.02 plus tax")
       expect(html).toContain("Polar bills it on the invoice of December 4, 2026, with the next month of the plan.")
+      expect(html).toContain("Polar shows this amount after a delay.")
     })
 
     it("shows a small usage with significant digits, not as 0", async () => {
@@ -398,7 +400,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).toContain("Golem did not return the usage of this month.")
+      expect(html).toContain("Golem did not send the usage of this month.")
       expect(html).toContain(`action="/billing/overage"`)
     })
 
@@ -413,6 +415,10 @@ describe("Polar billing", () => {
   })
 
   describe("webhooks", () => {
+    /** The `subscription.past_due` state of `sub_1` after a payment failed at `failedAt`. */
+    const pastDue = (accountId: string, failedAt: Date) =>
+      subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString(), modified_at: "2026-12-04T10:00:00Z" })
+
     it("moves the account to the paid plan when its subscription is active", async () => {
       const { jar, accountId } = await signedIn()
 
@@ -424,7 +430,7 @@ describe("Polar billing", () => {
       expect(change!.headers.get("authorization")).toBe(`Bearer ${registryBillingToken}`)
       expect(change!.body).toEqual({ currentRevision: 0, plan: paidPlanId })
       const html = await page(jar)
-      expect(html).toContain("You're on Paid")
+      expect(html).toContain("<h1>Paid</h1>")
       expect(html).toContain("renews on December 4, 2026")
       expect(html).toContain(`action="/billing/portal"`)
     })
@@ -466,7 +472,7 @@ describe("Polar billing", () => {
       )
 
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
-      expect(await page(jar)).toContain(`ends on ${longDate.format(end)}`)
+      expect(await page(jar)).toContain(`stops on ${longDate.format(end)}`)
     })
 
     it("moves a canceled subscription to the free plan within the settlement margin before its end", async () => {
@@ -482,7 +488,7 @@ describe("Polar billing", () => {
 
       await sweep(new Date(end.getTime() - Settlement.SETTLEMENT_MARGIN_MS + MINUTE))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
-      expect(await page(jar)).toContain("You're on Free")
+      expect(await page(jar)).toContain("<h1>Free</h1>")
 
       await sweep(new Date(end.getTime() - MINUTE))
       expect(upstreams.planChanges()).toHaveLength(2)
@@ -507,20 +513,28 @@ describe("Polar billing", () => {
       expect(upstreams.planChanges()).toEqual([])
     })
 
-    it("moves the account to Free when the payment of the price alone fails, and back after the payment", async () => {
+    it("keeps Paid in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
       const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
+      const graceEnd = new Date(failedAt.getTime() + config.pastDueGraceMs)
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId, priceOnly))
-      const response = await deliver(
-        "subscription.past_due",
-        subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" })
-      )
+      const response = await deliver("subscription.past_due", pastDue(accountId, failedAt))
 
       expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      expect(await page(jar)).toContain(
+        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
+      )
+
+      await sweep(new Date(graceEnd.getTime() - MINUTE))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await sweep(new Date(graceEnd.getTime() + MINUTE))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       const html = await page(jar)
-      expect(html).toContain("You're on Free")
+      expect(html).toContain("<h1>Free</h1>")
       expect(html).toContain("The last payment for Paid failed")
       expect(html).not.toContain(`action="/billing/checkout"`)
 
@@ -529,17 +543,36 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("suspends the account when an order with overage is not paid, until the order is paid", async () => {
+    it("keeps Paid when Polar gets the payment in the past-due grace", async () => {
       const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId))
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.past_due", pastDue(accountId, failedAt))
+      await deliver("order.paid", order(accountId, paidLater))
+      await deliver("subscription.updated", subscription(accountId, { modified_at: "2026-12-05T10:00:00Z" }))
+      await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
 
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      expect(upstreams.planChanges()).toHaveLength(1)
+      expect(await page(jar)).not.toContain("The last payment for Paid failed")
+    })
+
+    it("suspends the account after the past-due grace when an order with overage is not paid, until the order is paid", async () => {
+      const { jar, accountId } = await signedIn()
+      const failedAt = new Date()
+
+      await deliver("subscription.active", subscription(accountId))
+      await deliver("order.created", order(accountId))
+      await deliver("subscription.past_due", pastDue(accountId, failedAt))
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+      await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
       const html = await page(jar)
-      expect(html).toContain("Your account is suspended")
-      expect(html).toContain("An invoice for paid overage is not paid")
+      expect(html).toContain("<h1>Suspended</h1>")
+      expect(html).toContain("Polar did not get the payment of an invoice for paid overage, so Golem stopped the agents of this account.")
       expect(html).toContain(`action="/billing/portal"`)
 
       await deliver(
@@ -597,7 +630,7 @@ describe("Polar billing", () => {
 
       await deliver("subscription.active", subscription(accountId))
       await deliver("order.created", order(accountId, { product_id: randomUUID(), created_at: "2026-11-01T10:00:00Z" }))
-      await deliver("subscription.past_due", subscription(accountId, { status: "past_due", past_due_at: "2026-12-04T10:00:00Z", modified_at: "2026-12-04T10:00:00Z" }))
+      await deliver("subscription.past_due", pastDue(accountId, new Date(Date.now() - config.pastDueGraceMs - MINUTE)))
 
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })

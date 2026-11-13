@@ -14,6 +14,7 @@ import {
 } from "./Page.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, type AccountLimits, Registry } from "./Registry.ts"
+import { pastDueGraceEnd } from "./Settlement.ts"
 import { type Subscription, Subscriptions } from "./Subscriptions.ts"
 import * as Webhooks from "./Webhooks.ts"
 
@@ -37,7 +38,7 @@ const page = (body: SafeHtml, status = 200) =>
     headers: securityHeaders
   })
 
-const errorPage = HttpServerResponse.text("Something went wrong. Reload the page to try again.", {
+const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
   headers: securityHeaders
 })
@@ -165,6 +166,10 @@ export const routes = HttpRouter.use((router) =>
             account,
             plan,
             subscription,
+            pastDueGraceEnd:
+              plan === "paid" && subscription !== undefined
+                ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
+                : undefined,
             checkoutPending,
             cliCommand,
             limits,

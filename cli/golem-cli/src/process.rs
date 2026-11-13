@@ -186,19 +186,12 @@ fn is_explicit_program_path(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-fn clear_program_lookup_cache() {
+fn cached_program_lookup(program: &str) -> Option<Option<PathBuf>> {
     PROGRAM_LOOKUP_CACHE
         .lock()
         .expect("program lookup cache lock poisoned")
-        .clear();
-}
-
-#[cfg(test)]
-fn program_lookup_cache_len() -> usize {
-    PROGRAM_LOOKUP_CACHE
-        .lock()
-        .expect("program lookup cache lock poisoned")
-        .len()
+        .get(program)
+        .cloned()
 }
 
 pub trait ExitStatusExt {
@@ -396,8 +389,6 @@ mod tests {
 
     #[test]
     fn which_uses_cache_for_identical_lookup() {
-        clear_program_lookup_cache();
-
         #[cfg(windows)]
         let requested_program_name = "cargo.exe";
 
@@ -408,7 +399,10 @@ mod tests {
         let cached = which(requested_program_name).unwrap();
 
         assert_eq!(first, cached);
-        assert_eq!(program_lookup_cache_len(), 1);
+        assert_eq!(
+            cached_program_lookup(requested_program_name),
+            Some(Some(first))
+        );
     }
 
     #[test]

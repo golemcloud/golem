@@ -1,4 +1,4 @@
-import { Config, ConfigProvider, Context, Effect, Layer, Redacted } from "effect"
+import { Config, ConfigProvider, Context, Duration, Effect, Layer, Redacted } from "effect"
 
 /**
  * TLS mode of the PostgreSQL connection.
@@ -61,6 +61,11 @@ export interface BillingConfigShape {
     readonly suspended: string
   }
   readonly overagePrices: OveragePrices
+  /**
+   * How long an account keeps the paid plan after a payment of its subscription fails, in
+   * milliseconds (see `Settlement.ts`). Polar retries the payment in this time.
+   */
+  readonly pastDueGraceMs: number
   readonly polar: {
     /** The base URL of the Polar API: `https://sandbox-api.polar.sh` or `https://api.polar.sh`. */
     readonly apiUrl: URL
@@ -126,6 +131,16 @@ export const postgresConfig: Config.Config<PostgresConfig> = Config.all({
   })
 )
 
+/** The past-due grace in milliseconds, from a duration such as `7 days` or `30 minutes`. */
+export const pastDueGraceMs: Config.Config<number> = Config.Duration("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE").pipe(
+  Config.withDefault(Duration.days(7)),
+  Config.mapEffect((grace) =>
+    Duration.isFinite(grace)
+      ? Effect.succeed(Duration.toMillis(grace))
+      : invalid("GOLEM_CLOUD_BILLING_PAST_DUE_GRACE must be finite, such as 7 days")
+  )
+)
+
 export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   httpPort: Config.Port("GOLEM_CLOUD_BILLING_HTTP_PORT").pipe(Config.withDefault(8080)),
   baseUrl: Config.URL("BETTER_AUTH_URL"),
@@ -148,6 +163,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
     perDurableGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH"),
     perEphemeralGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH")
   }),
+  pastDueGraceMs,
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
     accessToken: Config.Redacted("POLAR_ACCESS_TOKEN"),

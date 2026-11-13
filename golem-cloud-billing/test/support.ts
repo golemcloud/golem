@@ -64,6 +64,7 @@ export const testConfig = (): BillingConfigShape => {
     registryBillingToken: Redacted.make(registryBillingToken),
     plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
     overagePrices,
+    pastDueGraceMs: 7 * 24 * 60 * 60 * 1000,
     polar: {
       apiUrl: new URL(polarApiUrl),
       accessToken: Redacted.make(polarWebToken),

@@ -19,6 +19,7 @@ import { polarProductId, testConfig } from "./support.ts"
 
 const now = new Date("2026-11-20T12:00:00Z")
 const MINUTE = 60 * 1000
+const PAST_DUE_GRACE_MS = 7 * 24 * 60 * MINUTE
 
 const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   subscriptionId: "sub_1",
@@ -46,6 +47,10 @@ const pending = (overrides: Partial<PendingOrder> = {}): PendingOrder => ({
 
 const priceOnly = pending({ meteredAmount: 0 })
 const pastDue = subscription({ status: "past_due", pastDueAt: new Date(now.getTime() - MINUTE) })
+const pastDueAfterGrace = subscription({
+  status: "past_due",
+  pastDueAt: new Date(now.getTime() - PAST_DUE_GRACE_MS - MINUTE)
+})
 const revokedUnpaid = subscription({ status: "canceled", pastDueAt: new Date(now.getTime() - MINUTE) })
 const overdue = pending({ createdAt: new Date(now.getTime() - ORDER_PAYMENT_GRACE_MS - MINUTE) })
 
@@ -56,8 +61,11 @@ describe("planFor", () => {
     ["a subscription that ends after the settlement margin", "paid", [endingIn(SETTLEMENT_MARGIN_MS + MINUTE)], []],
     ["a subscription that ends within the settlement margin", "free", [endingIn(SETTLEMENT_MARGIN_MS - MINUTE)], []],
     ["a subscription past its scheduled end", "free", [endingIn(-MINUTE)], []],
-    ["a past_due subscription with an unpaid price", "free", [pastDue], [priceOnly]],
-    ["a past_due subscription with unpaid overage", "suspended", [pastDue], [pending()]],
+    ["a past_due subscription in the past-due grace, with an unpaid price", "paid", [pastDue], [priceOnly]],
+    ["a past_due subscription in the past-due grace, with unpaid overage", "paid", [pastDue], [pending()]],
+    ["a past_due subscription in the past-due grace, with overdue overage", "paid", [pastDue], [overdue]],
+    ["a past_due subscription after the past-due grace, with an unpaid price", "free", [pastDueAfterGrace], [priceOnly]],
+    ["a past_due subscription after the past-due grace, with unpaid overage", "suspended", [pastDueAfterGrace], [pending()]],
     ["a subscription revoked after a failed payment, with unpaid overage", "suspended", [revokedUnpaid], [pending()]],
     ["an active subscription while Polar charges its overage", "paid", [subscription()], [pending()]],
     ["an active subscription with overdue overage", "suspended", [subscription()], [overdue]],
@@ -74,7 +82,12 @@ describe("planFor", () => {
       [overdue]
     ]
   ] as const)("%s gives the plan %s", (_, plan, subscriptions, orders) => {
-    expect(planFor(subscriptions, orders, now)).toBe(plan)
+    expect(planFor(subscriptions, orders, now, PAST_DUE_GRACE_MS)).toBe(plan)
+  })
+
+  it("gives no past-due grace when its length is 0", () => {
+    expect(planFor([pastDue], [priceOnly], now, 0)).toBe("free")
+    expect(planFor([pastDue], [pending()], now, 0)).toBe("suspended")
   })
 })
 
@@ -125,6 +138,7 @@ describe("sweeper", () => {
     const subscriptions = Layer.succeed(Subscriptions.Subscriptions, {
       ending: (productId: string) => Effect.sync(() => (sweeps.push(productId), [])),
       awaitingPayment: () => Effect.succeed([]),
+      pastDue: () => Effect.succeed([]),
       holdCandidates: () => Effect.succeed([]),
       settleUsage: () => Effect.die("unused"),
       recordHold: () => Effect.die("unused"),
