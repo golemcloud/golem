@@ -339,8 +339,22 @@ enum GeneratedInputEvent {
     },
     Failed {
         provisional_ref: uuid::Uuid,
-        message: String,
+        failure: Result<PendingInputFailure, SessionTransportError>,
     },
+}
+
+struct PendingInputFailure {
+    message: String,
+    byte_budget: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl GeneratedInputEvent {
+    fn failed(provisional_ref: uuid::Uuid, buffer: &InputReplayBuffer, message: String) -> Self {
+        Self::Failed {
+            provisional_ref,
+            failure: buffer.admit_failure(message),
+        }
+    }
 }
 
 trait GeneratedInputSource: Send {
@@ -581,6 +595,61 @@ impl InputReplayBuffer {
             item_budget: Arc::new(Semaphore::new(max_unacknowledged_items)),
             max_unacknowledged_bytes,
         }
+    }
+
+    fn admit_failure(&self, message: String) -> Result<PendingInputFailure, SessionTransportError> {
+        struct LimitedSize {
+            bytes: usize,
+            limit: usize,
+        }
+        impl std::io::Write for LimitedSize {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if bytes.len() > self.limit.saturating_sub(self.bytes) {
+                    return Err(std::io::Error::other(
+                        "input terminal exceeds replay budget",
+                    ));
+                }
+                self.bytes += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let exhausted =
+            || SessionTransportError::Protocol("unacknowledged input limit exceeded".into());
+        // A pending failure may not have an attachment yet. Reserve maximum-width identifiers.
+        let overhead = encode_text(&PublicClientMessage::StreamEnd {
+            channel: u32::MAX,
+            direction: PublicStreamDirection::Input,
+            sequence: DecimalU64(u64::MAX),
+            outcome: PublicStreamOutcome::Failed {
+                error: PublicStreamError::Interrupted {
+                    message: String::new(),
+                },
+            },
+            version: INVOCATION_SESSION_VERSION,
+        })
+        .map_err(|_| exhausted())?
+        .len()
+            - 2;
+        if overhead > self.max_unacknowledged_bytes {
+            return Err(exhausted());
+        }
+        let mut size = LimitedSize {
+            bytes: 0,
+            limit: self.max_unacknowledged_bytes - overhead,
+        };
+        serde_json::to_writer(&mut size, &message).map_err(|_| exhausted())?;
+        let byte_budget = self
+            .byte_budget
+            .clone()
+            .try_acquire_many_owned(u32::try_from(overhead + size.bytes).map_err(|_| exhausted())?)
+            .map_err(|_| exhausted())?;
+        Ok(PendingInputFailure {
+            message,
+            byte_budget,
+        })
     }
 
     pub async fn admit(
@@ -2514,7 +2583,7 @@ where
                         direction: PublicStreamDirection::Input,
                         sequence: DecimalU64(buffer.next_sequence()?),
                         outcome: PublicStreamOutcome::Failed {
-                            error: PublicStreamError::Cancelled,
+                            error: PublicStreamError::Interrupted { message: "native tool stdin stopped".to_string() },
                         },
                         version: INVOCATION_SESSION_VERSION,
                     }).await
@@ -3271,7 +3340,7 @@ async fn run_generated_invocation<T>(
     let mut result_tx = Some(result_tx);
     let mut inputs = HashMap::<uuid::Uuid, InputReplayBuffer>::new();
     let mut input_tasks = HashMap::<uuid::Uuid, GeneratedTaskAbortGuard>::new();
-    let mut failed_inputs = HashMap::<uuid::Uuid, String>::new();
+    let mut failed_inputs = HashMap::<uuid::Uuid, PendingInputFailure>::new();
     let mut pending_output_cancellations = HashMap::<String, Option<String>>::new();
     let mut cancelled_outputs = HashSet::<String>::new();
 
@@ -3287,7 +3356,7 @@ async fn run_generated_invocation<T>(
     }
 
     loop {
-        drain_generated_events(
+        if let Err(error) = drain_generated_events(
             &mut commands_rx,
             &mut input_rx,
             output_context.as_ref(),
@@ -3295,7 +3364,12 @@ async fn run_generated_invocation<T>(
             &mut pending_output_cancellations,
             &mut cancelled_outputs,
             &mut failed_inputs,
-        );
+        ) {
+            let message = error.to_string();
+            send_generated_result(&mut result_tx, Err(error));
+            fail_generated_outputs(output_context.as_ref(), &message).await;
+            return;
+        }
         failed_inputs.retain(|reference, _| inputs.contains_key(reference));
         if let Err(error) = install_generated_inputs(
             &mut session,
@@ -3348,7 +3422,12 @@ async fn run_generated_invocation<T>(
                 );
             }
             Some(event) = input_rx.recv() => {
-                admit_generated_input_event(event, &inputs, &mut failed_inputs);
+                if let Err(error) = admit_generated_input_event(event, &inputs, &mut failed_inputs) {
+                    let message = error.to_string();
+                    send_generated_result(&mut result_tx, Err(error));
+                    fail_generated_outputs(output_context.as_ref(), &message).await;
+                    return;
+                }
             }
             frame = session.receive() => {
                 let frame = match frame {
@@ -3395,8 +3474,8 @@ fn drain_generated_events(
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
     pending_output_cancellations: &mut HashMap<String, Option<String>>,
     cancelled_outputs: &mut HashSet<String>,
-    failed_inputs: &mut HashMap<uuid::Uuid, String>,
-) {
+    failed_inputs: &mut HashMap<uuid::Uuid, PendingInputFailure>,
+) -> Result<(), SessionTransportError> {
     while let Ok(command) = commands.try_recv() {
         admit_generated_command(
             command,
@@ -3406,8 +3485,9 @@ fn drain_generated_events(
         );
     }
     while let Ok(event) = input_events.try_recv() {
-        admit_generated_input_event(event, inputs, failed_inputs);
+        admit_generated_input_event(event, inputs, failed_inputs)?;
     }
+    Ok(())
 }
 
 fn admit_generated_command(
@@ -3437,8 +3517,8 @@ fn admit_generated_command(
 fn admit_generated_input_event(
     event: GeneratedInputEvent,
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
-    failed_inputs: &mut HashMap<uuid::Uuid, String>,
-) {
+    failed_inputs: &mut HashMap<uuid::Uuid, PendingInputFailure>,
+) -> Result<(), SessionTransportError> {
     match event {
         GeneratedInputEvent::Input {
             provisional_ref,
@@ -3450,20 +3530,21 @@ fn admit_generated_input_event(
         }
         GeneratedInputEvent::Failed {
             provisional_ref,
-            message,
+            failure,
         } => {
             if inputs.contains_key(&provisional_ref) {
-                failed_inputs.insert(provisional_ref, message);
+                failed_inputs.insert(provisional_ref, failure?);
             }
         }
     }
+    Ok(())
 }
 
 fn generated_invocation_is_complete<T>(
     result: &Option<tokio::sync::oneshot::Sender<Result<T, SessionTransportError>>>,
     output: Option<&GeneratedDecodeContext>,
     pending_output_cancellations: &HashMap<String, Option<String>>,
-    failed_inputs: &HashMap<uuid::Uuid, String>,
+    failed_inputs: &HashMap<uuid::Uuid, PendingInputFailure>,
 ) -> bool {
     result.is_none()
         && pending_output_cancellations.is_empty()
@@ -3548,7 +3629,7 @@ async fn flush_generated_inputs(
 async fn cancel_failed_inputs(
     session: &mut InvocationSession,
     inputs: &HashMap<uuid::Uuid, InputReplayBuffer>,
-    failed: &mut HashMap<uuid::Uuid, String>,
+    failed: &mut HashMap<uuid::Uuid, PendingInputFailure>,
 ) -> Result<(), SessionTransportError> {
     let ready = failed
         .keys()
@@ -3570,26 +3651,23 @@ async fn cancel_failed_inputs(
             .lock()
             .expect("input replay buffer mutex poisoned")
             .sequence_offset;
-        // Do not wait for acknowledgements while holding the session driver.
-        let Ok(byte_budget) = buffer.byte_budget.clone().try_acquire_owned() else {
-            continue;
-        };
+        // The pending diagnostic already owns byte credit. Do not wait for item ACKs here.
         let Ok(item_budget) = buffer.item_budget.clone().try_acquire_owned() else {
             continue;
         };
+        let failure = failed.remove(&reference).unwrap();
         let terminal = AdmittedInput {
             request: ReplayableInput::Failed {
                 sequence: sequence
                     .checked_sub(offset)
                     .ok_or(SessionTransportError::SequenceOverflow)?,
-                message: failed[&reference].clone(),
+                message: failure.message,
             },
             sent: false,
-            _byte_budget: byte_budget,
+            _byte_budget: failure.byte_budget,
             _item_budget: item_budget,
         };
         buffer.push(terminal);
-        failed.remove(&reference);
         if session.send_next_input(buffer).await? == Some(SessionSendOutcome::Reconnected) {
             break;
         }
@@ -3918,10 +3996,11 @@ async fn run_generated_input_source<T>(
         let item = match source.stream.next().await {
             Some(Ok(item)) => item,
             Some(Err(error)) => {
-                let _ = events.send(GeneratedInputEvent::Failed {
+                let _ = events.send(GeneratedInputEvent::failed(
                     provisional_ref,
-                    message: error.to_string(),
-                });
+                    &buffer,
+                    error.to_string(),
+                ));
                 return;
             }
             None => {
@@ -3938,20 +4017,22 @@ async fn run_generated_input_source<T>(
         let value = match (source.encode)(item, &context) {
             Ok(value) => value,
             Err(message) => {
-                let _ = events.send(GeneratedInputEvent::Failed {
+                let _ = events.send(GeneratedInputEvent::failed(
                     provisional_ref,
+                    &buffer,
                     message,
-                });
+                ));
                 return;
             }
         };
         if source.lane != StreamLane::Json
             && let Err(errors) = validate_value(&context.graph, &source.item_type, &value)
         {
-            let _ = events.send(GeneratedInputEvent::Failed {
+            let _ = events.send(GeneratedInputEvent::failed(
                 provisional_ref,
-                message: format!("binary input failed schema validation: {errors:?}"),
-            });
+                &buffer,
+                format!("binary input failed schema validation: {errors:?}"),
+            ));
             return;
         }
         let mut after_batch: Option<Result<(), String>> = None;
@@ -3960,10 +4041,11 @@ async fn run_generated_input_source<T>(
                 let value = match context.encode_value(&source.item_type, &value) {
                     Ok(value) => value,
                     Err(error) => {
-                        let _ = events.send(GeneratedInputEvent::Failed {
+                        let _ = events.send(GeneratedInputEvent::failed(
                             provisional_ref,
-                            message: error.to_string(),
-                        });
+                            &buffer,
+                            error.to_string(),
+                        ));
                         return;
                     }
                 };
@@ -3976,10 +4058,11 @@ async fn run_generated_input_source<T>(
             }
             StreamLane::Binary => {
                 let SchemaValue::Binary(binary) = value else {
-                    let _ = events.send(GeneratedInputEvent::Failed {
+                    let _ = events.send(GeneratedInputEvent::failed(
                         provisional_ref,
-                        message: "binary stream encoder returned a non-binary value".to_string(),
-                    });
+                        &buffer,
+                        "binary stream encoder returned a non-binary value".to_string(),
+                    ));
                     return;
                 };
                 let request = ReplayableInput::Binary(BinaryMessage {
@@ -4002,10 +4085,11 @@ async fn run_generated_input_source<T>(
             }
             StreamLane::U8 => {
                 let SchemaValue::U8(first) = value else {
-                    let _ = events.send(GeneratedInputEvent::Failed {
+                    let _ = events.send(GeneratedInputEvent::failed(
                         provisional_ref,
-                        message: "u8 stream encoder returned a non-u8 value".to_string(),
-                    });
+                        &buffer,
+                        "u8 stream encoder returned a non-u8 value".to_string(),
+                    ));
                     return;
                 };
                 let mut payload = Vec::with_capacity(4096);
@@ -4074,12 +4158,39 @@ async fn run_generated_input_source<T>(
             ReplayableInput::Binary(message) => message.payload.len(),
             ReplayableInput::End { .. } | ReplayableInput::Failed { .. } => 1,
         };
+        let after_batch = match after_batch {
+            Some(Err(message)) => match buffer.admit_failure(message) {
+                Ok(failure) => Some(Err(failure)),
+                Err(error) => {
+                    let _ = events.send(GeneratedInputEvent::Failed {
+                        provisional_ref,
+                        failure: Err(error),
+                    });
+                    return;
+                }
+            },
+            Some(Ok(())) => Some(Ok(())),
+            None => None,
+        };
+        // Earlier batches can release credit through ACKs, but this prefix and its
+        // already-retained terminal must fit together or admission can never finish.
+        if let Some(Err(failure)) = &after_batch
+            && byte_charge > buffer.max_unacknowledged_bytes - failure.byte_budget.num_permits()
+        {
+            let _ = events.send(GeneratedInputEvent::Failed {
+                provisional_ref,
+                failure: Err(SessionTransportError::Protocol(
+                    "unacknowledged input limit exceeded".into(),
+                )),
+            });
+            return;
+        }
         let input = match buffer.admit(request, byte_charge).await {
             Ok(input) => input,
             Err(error) => {
                 let _ = events.send(GeneratedInputEvent::Failed {
                     provisional_ref,
-                    message: error.to_string(),
+                    failure: Err(error),
                 });
                 return;
             }
@@ -4104,10 +4215,10 @@ async fn run_generated_input_source<T>(
                         });
                     }
                 }
-                Err(message) => {
+                Err(failure) => {
                     let _ = events.send(GeneratedInputEvent::Failed {
                         provisional_ref,
-                        message,
+                        failure: Ok(failure),
                     });
                 }
             }
@@ -5486,7 +5597,7 @@ mod tests {
                 channel: 11,
                 direction: PublicStreamDirection::Input,
                 outcome: PublicStreamOutcome::Failed {
-                    error: PublicStreamError::Cancelled,
+                    error: PublicStreamError::Interrupted { .. },
                 },
                 sequence: DecimalU64(0),
                 ..
@@ -5684,7 +5795,7 @@ mod tests {
                     channel: 11,
                     direction: PublicStreamDirection::Input,
                     outcome: PublicStreamOutcome::Failed {
-                        error: PublicStreamError::Cancelled,
+                        error: PublicStreamError::Interrupted { .. },
                     },
                     ..
                 }
@@ -5969,7 +6080,7 @@ mod tests {
                     channel: 11,
                     direction: PublicStreamDirection::Input,
                     outcome: PublicStreamOutcome::Failed {
-                        error: PublicStreamError::Cancelled,
+                        error: PublicStreamError::Interrupted { .. },
                     },
                     ..
                 }
@@ -5987,7 +6098,7 @@ mod tests {
                         channel: 21,
                         direction: PublicStreamDirection::Input,
                         outcome: PublicStreamOutcome::Failed {
-                            error: PublicStreamError::Cancelled,
+                            error: PublicStreamError::Interrupted { .. },
                         },
                         ..
                     }
@@ -7040,10 +7151,11 @@ mod tests {
         )]);
         let (input_tx, mut input_rx) = mpsc::unbounded_channel();
         input_tx
-            .send(GeneratedInputEvent::Failed {
+            .send(GeneratedInputEvent::failed(
                 provisional_ref,
-                message: "source failed".to_string(),
-            })
+                &inputs[&provisional_ref],
+                "source failed".to_string(),
+            ))
             .unwrap();
         let mut pending_output_cancellations = HashMap::new();
         let mut cancelled_outputs = HashSet::new();
@@ -7057,7 +7169,8 @@ mod tests {
             &mut pending_output_cancellations,
             &mut cancelled_outputs,
             &mut failed_inputs,
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             pending_output_cancellations.get("output-stream"),
@@ -7065,8 +7178,10 @@ mod tests {
         );
         assert!(cancelled_outputs.contains("output-stream"));
         assert_eq!(
-            failed_inputs.get(&provisional_ref),
-            Some(&"source failed".to_string())
+            failed_inputs
+                .get(&provisional_ref)
+                .map(|failure| failure.message.as_str()),
+            Some("source failed")
         );
         assert!(!generated_invocation_is_complete::<()>(
             &None,
@@ -7207,6 +7322,192 @@ mod tests {
 
         session.close().await.unwrap();
         server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn generated_input_failures_share_the_retained_prefix_budget() {
+        for (message, rejected) in [
+            ("source failed".to_string(), false),
+            ("\0".repeat(80), true),
+            ("x".repeat(1025), true),
+        ] {
+            for packed in [false, true] {
+                let item_type = if packed {
+                    SchemaType::u8()
+                } else {
+                    SchemaType::u32()
+                };
+                let graph = SchemaGraph::anonymous(SchemaType::stream(Some(item_type.clone())));
+                let context = GeneratedEncodeContext::new(graph.clone());
+                let stream = AgentStream::input(futures_util::stream::iter([
+                    Ok(7_u8),
+                    Err(message.clone()),
+                ]));
+                let value = context
+                    .register_input(stream, item_type, move |byte, _| {
+                        Ok(if packed {
+                            SchemaValue::U8(byte)
+                        } else {
+                            SchemaValue::U32(byte.into())
+                        })
+                    })
+                    .unwrap();
+                context.encode_value(&graph.root, &value).unwrap();
+                let pending = context.take_pending().pop().unwrap();
+                let buffer = InputReplayBuffer::new(1024, 4);
+                buffer.push(
+                    buffer
+                        .admit(
+                            ReplayableInput::Value {
+                                sequence: 0,
+                                value: serde_json::json!("retained prefix"),
+                            },
+                            600,
+                        )
+                        .await
+                        .unwrap(),
+                );
+                let (events, mut events_rx) = mpsc::unbounded_channel();
+                pending
+                    .source
+                    .spawn(pending.provisional_ref, buffer.clone(), context, events);
+                if !packed || !rejected {
+                    let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap()
+                    else {
+                        panic!("expected the source prefix");
+                    };
+                    buffer.push(input);
+                }
+                let GeneratedInputEvent::Failed { failure, .. } = events_rx.recv().await.unwrap()
+                else {
+                    panic!("expected the source failure");
+                };
+                match failure {
+                    Ok(failure) => {
+                        assert!(!rejected, "oversized diagnostic was retained");
+                        assert_eq!(
+                            failure.message,
+                            format!("stream producer failed: {message}")
+                        );
+                        // The queued diagnostic must own credit even before the driver sees it.
+                        assert!(
+                            tokio::time::timeout(
+                                Duration::from_millis(20),
+                                buffer.admit(ReplayableInput::End { sequence: 1 }, 400,)
+                            )
+                            .await
+                            .is_err()
+                        );
+                        drop(failure);
+                    }
+                    Err(error) => {
+                        assert!(rejected);
+                        assert!(matches!(error, SessionTransportError::Protocol(message)
+                            if message == "unacknowledged input limit exceeded"));
+                    }
+                }
+                // Dropping/rejecting the diagnostic releases its credit; prefix credit remains.
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_secs(1),
+                        buffer.admit(ReplayableInput::End { sequence: 1 }, 400,)
+                    )
+                    .await
+                    .unwrap()
+                    .is_ok()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn packed_failure_preserves_prefix_across_item_backpressure() {
+        let graph = SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8())));
+        let context = GeneratedEncodeContext::new(graph.clone());
+        let source = futures_util::stream::iter(
+            std::iter::repeat_n(Ok(7_u8), MAX_PACKED_U8_SIZE + 1)
+                .chain(std::iter::once(Err("original source failure".to_string()))),
+        );
+        let value = context
+            .register_input(AgentStream::input(source), SchemaType::u8(), |byte, _| {
+                Ok(SchemaValue::U8(byte))
+            })
+            .unwrap();
+        context.encode_value(&graph.root, &value).unwrap();
+        let pending = context.take_pending().pop().unwrap();
+        let buffer = InputReplayBuffer::new(MAX_PACKED_U8_SIZE + 1024, 1);
+        let (events, mut events_rx) = mpsc::unbounded_channel();
+        let task = pending
+            .source
+            .spawn(pending.provisional_ref, buffer.clone(), context, events);
+        let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected first full packed batch");
+        };
+        buffer.push(input);
+        buffer.mark_sent(0).unwrap();
+        let early = tokio::time::timeout(Duration::from_millis(20), events_rx.recv()).await;
+        if let Ok(Some(GeneratedInputEvent::Failed { failure, .. })) = early {
+            panic!(
+                "discarded final packed byte before ACK: {}",
+                match failure {
+                    Ok(failure) => failure.message,
+                    Err(error) => error.to_string(),
+                }
+            );
+        }
+        assert!(early.is_err(), "source must wait for the first batch ACK");
+        buffer
+            .acknowledge(MAX_PACKED_U8_SIZE as u64, false)
+            .unwrap();
+        let GeneratedInputEvent::Input { input, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected final packed byte after ACK");
+        };
+        assert!(matches!(&input.request, ReplayableInput::Binary(message)
+            if message.payload == vec![7]));
+        let GeneratedInputEvent::Failed { failure, .. } = events_rx.recv().await.unwrap() else {
+            panic!("expected original source failure after final byte");
+        };
+        assert_eq!(
+            failure.unwrap().message,
+            "stream producer failed: original source failure"
+        );
+        task.abort();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn packed_prefix_budget_rejection_is_not_a_stream_failure() {
+        let graph = SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::u8())));
+        let context = GeneratedEncodeContext::new(graph.clone());
+        let source = futures_util::stream::iter(
+            std::iter::repeat_n(Ok(7_u8), 900)
+                .chain(std::iter::once(Err("original source failure".to_string()))),
+        );
+        let value = context
+            .register_input(AgentStream::input(source), SchemaType::u8(), |byte, _| {
+                Ok(SchemaValue::U8(byte))
+            })
+            .unwrap();
+        context.encode_value(&graph.root, &value).unwrap();
+        let pending = context.take_pending().pop().unwrap();
+        let buffer = InputReplayBuffer::new(1024, 4);
+        let reference = pending.provisional_ref;
+        let (events, mut events_rx) = mpsc::unbounded_channel();
+        let task = pending
+            .source
+            .spawn(reference, buffer.clone(), context, events);
+        let event = events_rx.recv().await.unwrap();
+        let inputs = HashMap::from([(reference, buffer)]);
+        let mut failed = HashMap::new();
+        let result = admit_generated_input_event(event, &inputs, &mut failed);
+        assert!(
+            result.is_err(),
+            "size limit was downgraded to a recoverable stream terminal after discarding 900 bytes: {:?}",
+            failed.get(&reference).map(|failure| &failure.message)
+        );
+        task.abort();
     }
 
     #[test]
@@ -7747,6 +8048,125 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("10s")]
+    async fn generated_input_failure_waits_for_item_ack_without_blocking_the_driver() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let provisional_ref = uuid::Uuid::new_v4();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_session(&listener).await;
+            let start = receive_client_message(&mut socket).await;
+            send_server(
+                &mut socket,
+                accepted(
+                    operation_attempt_id(&start).unwrap(),
+                    vec![PublicStreamMapping {
+                        channel: 4,
+                        direction: PublicStreamDirection::Input,
+                        byte_role: None,
+                        input_high_water: Some(PublicInputHighWater {
+                            sequence: DecimalU64(0),
+                            terminal: false,
+                        }),
+                        provisional_ref: Some(provisional_ref),
+                        stream_token: "input".to_string(),
+                    }],
+                ),
+            )
+            .await;
+            assert!(matches!(
+                receive_client_message(&mut socket).await,
+                PublicClientMessage::InputStreamItem {
+                    channel: 4,
+                    sequence: DecimalU64(0),
+                    ..
+                }
+            ));
+            for terminal in [false, true] {
+                if terminal {
+                    assert!(matches!(receive_client_message(&mut socket).await,
+                        PublicClientMessage::StreamEnd {
+                            channel: 4, sequence: DecimalU64(1),
+                            outcome: PublicStreamOutcome::Failed {
+                                error: PublicStreamError::Interrupted { message }
+                            }, ..
+                        } if message == "source failed"));
+                }
+                send_server(
+                    &mut socket,
+                    PublicServerMessage::InputStreamAck {
+                        channel: 4,
+                        highest_contiguous_sequence: DecimalU64(1),
+                        mappings: Vec::new(),
+                        terminal,
+                        version: 1,
+                    },
+                )
+                .await;
+            }
+        });
+        let mut session = open_within(
+            address,
+            ReconnectPolicy::Unlimited,
+            start_request(uuid::Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let buffer = InputReplayBuffer::new(1024, 1);
+        session
+            .register_input(provisional_ref, None, buffer.clone())
+            .unwrap();
+        session.receive().await.unwrap();
+        buffer.push(
+            buffer
+                .admit(
+                    ReplayableInput::Value {
+                        sequence: 0,
+                        value: serde_json::json!(7),
+                    },
+                    600,
+                )
+                .await
+                .unwrap(),
+        );
+        let mut failed = HashMap::from([(
+            provisional_ref,
+            buffer.admit_failure("source failed".to_string()).unwrap(),
+        )]);
+        let inputs = HashMap::from([(provisional_ref, buffer.clone())]);
+        cancel_failed_inputs(&mut session, &inputs, &mut failed)
+            .await
+            .unwrap();
+        assert!(!failed.is_empty());
+        session.receive().await.unwrap();
+        cancel_failed_inputs(&mut session, &inputs, &mut failed)
+            .await
+            .unwrap();
+        assert!(failed.is_empty());
+        // Byte credit transfers to replay and stays there until the terminal ACK.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                buffer.admit(ReplayableInput::End { sequence: 1 }, 1024)
+            )
+            .await
+            .is_err()
+        );
+        session.receive().await.unwrap();
+        assert!(buffer.is_empty());
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                buffer.admit(ReplayableInput::End { sequence: 1 }, 1024)
+            )
+            .await
+            .unwrap()
+            .is_ok()
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
     async fn generated_input_failure_cancellation_is_retried_after_resume() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -7873,7 +8293,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         let inputs = HashMap::from([(provisional_ref, buffer)]);
-        let mut failed = HashMap::from([(provisional_ref, "source failed".to_string())]);
+        let mut failed = HashMap::from([(
+            provisional_ref,
+            inputs[&provisional_ref]
+                .admit_failure("source failed".to_string())
+                .unwrap(),
+        )]);
         cancel_failed_inputs(&mut session, &inputs, &mut failed)
             .await
             .unwrap();

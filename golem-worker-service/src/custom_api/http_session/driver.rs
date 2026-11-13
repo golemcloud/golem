@@ -353,7 +353,7 @@ pub(super) async fn run_session(
                 let request = cancel_request(
                     INPUT_STREAM_ID,
                     input.next_sequence,
-                    StreamTerminal::Failed(StreamError::Abandoned),
+                    StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
                     &mapping,
                     epoch,
                 );
@@ -542,7 +542,7 @@ async fn cancel_and_drain(
         cancellations.push(cancel_request(
             INPUT_STREAM_ID,
             input.next_sequence,
-            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
             mapping,
             epoch,
         ));
@@ -600,7 +600,7 @@ async fn cancel_and_drain(
             let request = cancel_request(
                 INPUT_STREAM_ID,
                 input.next_sequence,
-                StreamTerminal::Failed(StreamError::Abandoned),
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into())),
                 mapping,
                 epoch,
             );

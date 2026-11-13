@@ -2008,26 +2008,14 @@ async fn fail_session(
             .await;
         return;
     }
-    if send_text(
-        outbound,
-        &PublicServerMessage::InvocationFinished {
-            outcome: PublicInvocationOutcome::Failure {
-                code,
-                message: safe_rejection_message(code),
-            },
-            version: 1,
-        },
-    )
-    .await
-    .is_ok()
-    {
-        let _ = outbound
-            .send(
-                Message::close_with(CloseCode::Normal, "invocation finished"),
-                None,
-            )
-            .await;
-    }
+    // An attachment failure is not an authoritative invocation outcome. Closing without
+    // completion lets the client resume and recover the recorded stream terminals.
+    let _ = outbound
+        .send(
+            Message::close_with(CloseCode::Error, "session attachment failed"),
+            None,
+        )
+        .await;
 }
 
 async fn translate_private_response(
@@ -4456,7 +4444,7 @@ mod tests {
     }
 
     #[test]
-    async fn fatal_failure_does_not_invent_stream_terminals() {
+    async fn backend_transport_loss_detaches_without_inventing_completion() {
         let mut state = AdapterState::new();
         state.tokens = Some(TokenContext {
             bindings: token_bindings(&AuthCtx::system()),
@@ -4485,29 +4473,38 @@ mod tests {
             );
         }
         let state = Arc::new(Mutex::new(state));
-        let budgets = SessionBudgets::new();
-        let (sender, mut receiver) = mpsc::channel(8);
-        let outbound = Outbound { sender, budgets };
-        fail_session(
-            &outbound,
-            &state,
-            Uuid::from_u128(2),
-            PublicErrorCode::InvocationFailed,
-        )
-        .await;
+        for responses in [
+            Vec::new(),
+            vec![Err(tonic::Status::unavailable("backend disconnected"))],
+        ] {
+            let budgets = SessionBudgets::new();
+            let (sender, mut receiver) = mpsc::channel(8);
+            let outbound = Outbound { sender, budgets };
+            handle_private_responses(
+                futures::stream::iter(responses),
+                outbound,
+                state.clone(),
+                Arc::new(keyring()),
+                token_bindings(&AuthCtx::system()),
+                keyring().active_key_id().to_string(),
+                Uuid::from_u128(2),
+            )
+            .await;
 
-        let Message::Text(text) = receiver.recv().await.unwrap().message else {
-            panic!("invocation terminal was not text")
-        };
-        assert!(matches!(
-            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
-                .unwrap(),
-            PublicServerMessage::InvocationFinished { .. }
-        ));
-        assert!(matches!(
-            receiver.recv().await.unwrap().message,
-            Message::Close(Some((CloseCode::Normal, _)))
-        ));
+            assert!(matches!(
+                receiver.recv().await.unwrap().message,
+                Message::Close(Some((CloseCode::Error, _)))
+            ));
+            assert!(receiver.recv().await.is_none());
+            assert!(
+                state
+                    .lock()
+                    .await
+                    .channels
+                    .values()
+                    .all(|channel| !channel.terminal)
+            );
+        }
     }
 
     #[test]

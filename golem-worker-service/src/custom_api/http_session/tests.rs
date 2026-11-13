@@ -1697,7 +1697,7 @@ async fn lifecycle_early_response_is_independent_of_request_eof() {
     assert_eq!(cancel.producer_sequence, 1);
     assert_eq!(
         StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
-        StreamTerminal::Failed(StreamError::Abandoned)
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
     );
     send(&h.response_txs[0], ack(1, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
@@ -1779,7 +1779,7 @@ async fn input_disposal_is_reissued_only_when_resume_high_water_is_not_terminal(
             assert_eq!(cancel.epoch, 2);
             assert_eq!(
                 StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
-                StreamTerminal::Failed(StreamError::Abandoned)
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
             );
         }
         session.cancellation.cancel();
@@ -2108,7 +2108,10 @@ async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_i
             );
             send(&h.response_txs[0], ack(0, 1)).await;
         } else {
-            assert_eq!(terminal, StreamTerminal::Failed(StreamError::Abandoned));
+            assert_eq!(
+                terminal,
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            );
             assert_eq!(cancel.producer_sequence, 1);
         }
         cancelled_roles.push(cancel.direction());
@@ -2180,7 +2183,7 @@ async fn dropping_response_owner_sends_cancellation_before_closing_transport() {
             };
             assert_eq!(cancel.epoch, 1);
             let expected = if cancel.direction() == StreamDirection::Input {
-                StreamTerminal::Failed(StreamError::Abandoned)
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
             } else {
                 StreamTerminal::ConsumerCancelled { details: None }
             };
@@ -2227,7 +2230,7 @@ async fn dropping_owner_before_acceptance_cancels_late_output_mapping() {
     assert_eq!(cancel.direction(), StreamDirection::Input);
     assert_eq!(
         StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
-        StreamTerminal::Failed(StreamError::Abandoned)
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
     );
     send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;

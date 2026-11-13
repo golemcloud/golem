@@ -3432,6 +3432,78 @@ test('binary output passes a native binary node to the generated decoder', async
   }
 });
 
+test('backend attachment failure resumes open output before authoritative completion', async () => {
+  const operations = [];
+  let idempotencyKey;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const operation = JSON.parse(data);
+      operations.push(operation);
+      if (operations.length === 1) idempotencyKey = operation.idempotencyKey;
+      socket.send(JSON.stringify(accepted(operation, [outputMapping], idempotencyKey)));
+      if (operations.length === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationResult',
+            mappings: [],
+            result: {
+              kind: 'value',
+              graph: outputStreamGraph,
+              value: { kind: 'stream', value: { streamToken: 'output' } },
+            },
+          }),
+          () => socket.close(1011, 'session attachment failed'),
+        );
+      } else {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            direction: 'output',
+            channel: 2,
+            sequence: '0',
+            cursorToken: 'recorded-terminal',
+            outcome: {
+              kind: 'failed',
+              error: { kind: 'trapped', message: 'recorded stream failure' },
+            },
+          }),
+        );
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'invocationFinished',
+            outcome: {
+              kind: 'failure',
+              code: 'invocation-failed',
+              message: 'recorded invocation failure',
+            },
+          }),
+        );
+      }
+    });
+  });
+  try {
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      () => ({}),
+      (value, stream) => stream(value.value.value.streamToken, (item) => item, 'string'),
+    );
+    const output = await method();
+    const iterator = output[Symbol.asyncIterator]();
+    await assert.rejects(iterator.next(), /recorded stream failure/);
+    assert.deepEqual(await iterator.next(), { done: true, value: undefined });
+    assert.equal(operations.length, 2);
+    assert.equal(operations[1].type, 'resumeAttach');
+    assert.equal(operations[1].sessionToken, 'session');
+    assert.notEqual(operations[1].attemptId, operations[0].attemptId);
+  } finally {
+    await local.close();
+  }
+});
+
 test('invocation failure preserves an already-received output terminal', async () => {
   const local = await server((socket) => {
     socket.once('message', (data) => {
