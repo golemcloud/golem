@@ -172,6 +172,8 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+      - name: Test sticky disk cleanup
+        run: python3 -m unittest discover -s .github/scripts -p 'test_cleanup_sticky_disks.py'
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs
@@ -951,8 +953,8 @@ jobs:
           retention-days: 35
 
   # Each run creates one sticky disk per producer, and the Blacksmith installation allows 500.
-  # Keep the disks of a run that has a failed consumer, so its failed jobs can be rerun; inactive
-  # disks expire after seven days.
+  # Keep failed-run disks for consumer reruns. The cleanup-sticky-disks workflow can evict
+  # old PR publications under capacity pressure; Blacksmith also expires inactive disks after seven days.
   delete-sticky-disks:
     if: ${{ always() && !contains(needs.*.result, 'failure') }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
