@@ -1683,6 +1683,29 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_accepts_every_sample_oplog_entry() {
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
+    for entry in sample_public_oplog_entries() {
+        let entry_type =
+            serde_json::to_value(&entry).expect("oplog entry should serialize")["type"].clone();
+        let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+            index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+            entry: entry.into(),
+        })
+        .expect("agent.oplog should serialize");
+        assert!(
+            validator.is_valid(&output),
+            "schema should accept the {entry_type} oplog entry: {:?}",
+            validator
+                .iter_errors(&output)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
