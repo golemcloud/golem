@@ -3,15 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
 
-extern "C" fn initialize_snapshot_clock() {
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_snapshot_clock() {
     // The reactor initializer runs during core instantiation, before snapshot loading.
     std::hint::black_box(std::time::Instant::now());
 }
-
-// The toolchain's reactor `_initialize` runs the `.init_array` constructors.
-#[used]
-#[unsafe(link_section = ".init_array")]
-static INITIALIZE_SNAPSHOT_CLOCK: extern "C" fn() = initialize_snapshot_clock;
 
 #[agent_definition(snapshotting = "enabled")]
 trait SnapshotCounter {
