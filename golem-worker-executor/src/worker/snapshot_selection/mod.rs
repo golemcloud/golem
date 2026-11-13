@@ -250,6 +250,24 @@ pub(crate) fn periodic_baseline(
     }
 }
 
+/// The index of the automatic snapshot record that holds the state of the agent for its next
+/// periodic snapshot: the record that a start of `status` with an empty update queue selects under
+/// the rejections of `exclusions`. A record whose filesystem snapshot is not confirmed, such as a
+/// record whose upload failed, and a record that a start rejected hold no state, so a change before
+/// them still needs a periodic snapshot. `enabled` tells whether this executor keeps filesystem
+/// snapshots.
+pub(crate) fn periodic_snapshot_holding_state(
+    status: &AgentStatusRecord,
+    exclusions: &SnapshotExclusions,
+    enabled: bool,
+) -> Option<OplogIndex> {
+    let filter = AutomaticSnapshotFilter {
+        queue: QueueFilter::Empty,
+        ..exclusions.filter(status, enabled, false)
+    };
+    select_automatic_snapshot(status, filter).map(|snapshot| snapshot.index)
+}
+
 /// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
 /// `selected`, or a plain automatic update, which replays the whole history on the target.
 fn strategy(

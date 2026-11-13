@@ -36,7 +36,9 @@ use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId,
+};
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
@@ -11371,14 +11373,30 @@ async fn ts_reflected_ephemeral_invocation_returns_final_metadata(
     Ok(())
 }
 
-fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
-    let SchemaValue::Record { fields } = promise_id_value else {
+/// Decodes a promise ID returned by the TS `agent-rpc` component, whose schema encodes each UUID
+/// as a `{highBits, lowBits}` record.
+fn promise_id_from_ts_value(agent_id: &AgentId, value: &SchemaValue) -> PromiseId {
+    let SchemaValue::Record { fields } = value else {
         panic!("Expected a record for PromiseId");
     };
-    let SchemaValue::U64(oplog_idx) = fields[1] else {
-        panic!("Expected u64 oplog-idx field");
+    let [
+        _,
+        SchemaValue::Record {
+            fields: fingerprint,
+        },
+        SchemaValue::U64(oplog_idx),
+    ] = fields.as_slice()
+    else {
+        panic!("Expected agentId, fingerprint and oplogIdx PromiseId fields");
     };
-    OplogIndex::from_u64(oplog_idx)
+    let [SchemaValue::U64(high_bits), SchemaValue::U64(low_bits)] = fingerprint.as_slice() else {
+        panic!("Expected highBits and lowBits fingerprint fields");
+    };
+    PromiseId {
+        agent_id: agent_id.clone(),
+        fingerprint: AgentFingerprint(uuid::Uuid::from_u64_pair(*high_bits, *low_bits)),
+        oplog_idx: OplogIndex::from_u64(*oplog_idx),
+    }
 }
 
 #[test]
@@ -11412,7 +11430,7 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
         .into_return_value()
         .expect("Expected a single return value from prepareBlock");
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    let promise_id = promise_id_from_ts_value(&b_worker_id, &promise_id_value);
 
     // Start agent A (TsCancelCallerAgent)
     let a_name = "cancel_unblocks_a";
@@ -11461,15 +11479,7 @@ async fn ts_cancel_unblocks_caller_while_callee_blocked(
     assert_eq!(b_status, AgentStatus::Suspended);
 
     // Complete the promise to unblock B
-    executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: b_worker_id.clone(),
-                oplog_idx,
-            },
-            vec![],
-        )
-        .await?;
+    executor.complete_promise(&promise_id, vec![]).await?;
 
     // Wait for B to return to Idle
     executor
@@ -11518,7 +11528,7 @@ async fn ts_cancel_survives_executor_restart(
         .into_return_value()
         .expect("Expected a single return value from prepareBlock");
 
-    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    let promise_id = promise_id_from_ts_value(&b_worker_id, &promise_id_value);
 
     // Start agent A (TsCancelCallerAgent)
     let a_name = "cancel_restart_a";
@@ -11584,15 +11594,7 @@ async fn ts_cancel_survives_executor_restart(
     assert_eq!(outcome_value, "aborted".to_string());
 
     // Complete the promise to unblock B
-    executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: b_worker_id.clone(),
-                oplog_idx,
-            },
-            vec![],
-        )
-        .await?;
+    executor.complete_promise(&promise_id, vec![]).await?;
 
     // Wait for B to return to Idle
     executor

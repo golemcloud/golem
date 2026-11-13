@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 use serde::{Deserialize, Serialize};
 
 use crate::busy_loop;
@@ -269,6 +269,8 @@ trait JsonSnapshotCounter {
     fn get(&self) -> u32;
     /// The state the core initializer derived from its random seed.
     fn initializer_seed_hash(&self) -> u64;
+    #[read_only(cache = "no_cache")]
+    fn peek(&self) -> u32;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -295,5 +297,9 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
 
     fn initializer_seed_hash(&self) -> u64 {
         initializer_seed_hash()
+    }
+
+    fn peek(&self) -> u32 {
+        self.count
     }
 }

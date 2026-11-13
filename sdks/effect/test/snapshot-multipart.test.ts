@@ -193,6 +193,7 @@ describe("explicit multipart snapshots", () => {
           componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
           agentId: "waiting-agent",
         },
+        fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
         oplogIdx: 9007199254740993n,
       },
       controls: ["9007199254740993", 9007199254740993n],

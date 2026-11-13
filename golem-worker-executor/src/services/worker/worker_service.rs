@@ -83,7 +83,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
-        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("get");
 
@@ -303,7 +303,7 @@ impl WorkerService for DefaultWorkerService {
         after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
     ) -> Result<(), WorkerExecutorError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
-        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
         let current_identity = self
@@ -330,8 +330,9 @@ impl WorkerService for DefaultWorkerService {
         // The oplog goes after everything it can rebuild, so a crash part-way leaves an oplog
         // behind: the next attempt (or load) re-derives whatever of the state below is missing and
         // finishes from there. Removed first, a crash would leave orphaned keys that a retry reads
-        // as an agent already gone. The recovery-index entry comes after it: one a crash leaves
-        // behind names no oplog, and the next recovery scan drops it.
+        // as an agent already gone. The promises and the recovery-index entry come after it: the
+        // promises cannot be rebuilt from the oplog, and a recovery-index entry a crash leaves
+        // behind names no oplog, so the next recovery scan drops it.
         //
         // The epoch is confirmed before anything is removed, so a delete turned away by the fence
         // removes nothing. A new owner claiming the shard between this check and the oplog delete
@@ -372,6 +373,19 @@ impl WorkerService for DefaultWorkerService {
         }
         after_oplog_delete(fingerprint);
 
+        // Promises live only in key-value storage and nothing rebuilds them, so they go after the
+        // oplog: a delete refused by the fence keeps the agent with its promises. A failure before
+        // this point leaves rows only under the deleted fingerprint, which no promise ID of
+        // another incarnation reaches. An in-process retry removes them; after a crash they stay
+        // orphaned. Ordinary promise completion checks and writes under the lifecycle gate this
+        // holds (`run_excluding_removal`), so no completion on this executor adds a row after it.
+        self.remove_all_fields(
+            owned_agent_id,
+            crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint),
+            "promises",
+        )
+        .await?;
+
         let shard_assignment = self
             .shard_service
             .current_assignment()
@@ -387,6 +401,16 @@ impl WorkerService for DefaultWorkerService {
             },
         )
         .await
+    }
+
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        let lifecycle_gate = self.lifecycle_gate(agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.read().await;
+        operation.await
     }
 
     async fn remove_cached_status(

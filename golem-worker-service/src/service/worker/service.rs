@@ -78,7 +78,7 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
-    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, ScanCursor,
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId, ScanCursor,
 };
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
@@ -1007,11 +1007,11 @@ impl WorkerService {
 
     pub async fn complete_promise(
         &self,
-        agent_id: &AgentId,
-        oplog_id: u64,
+        promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
+        let agent_id = &promise_id.agent_id;
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1027,7 +1027,7 @@ impl WorkerService {
 
         let result = self
             .worker_client
-            .complete_promise(agent_id, oplog_id, data, component.environment_id, auth_ctx)
+            .complete_promise(&promise_id, data, component.environment_id, auth_ctx)
             .await?;
 
         Ok(result)
@@ -4524,8 +4524,7 @@ mod tests {
 
         async fn complete_promise(
             &self,
-            _: &AgentId,
-            _: u64,
+            _: &golem_common::model::PromiseId,
             _: Vec<u8>,
             _: EnvironmentId,
             _: AuthCtx,

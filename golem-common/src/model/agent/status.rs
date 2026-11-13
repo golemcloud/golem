@@ -144,17 +144,7 @@ impl AgentFilter {
                 result
             }
             AgentFilter::Or(AgentOrFilter { filters }) => {
-                let mut result = true;
-                if !filters.is_empty() {
-                    result = false;
-                    for filter in filters {
-                        if filter.matches(metadata) {
-                            result = true;
-                            break;
-                        }
-                    }
-                }
-                result
+                filters.iter().any(|filter| filter.matches(metadata))
             }
         }
     }
