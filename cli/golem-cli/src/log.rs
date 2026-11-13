@@ -515,7 +515,78 @@ impl StandardStream {
     }
 }
 
+#[derive(Default)]
+struct CapturedOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+static OUTPUT_CAPTURE: std::sync::Mutex<Option<CapturedOutput>> = std::sync::Mutex::new(None);
+
+/// While it lives, what this module would write to stdout is kept instead, and what it writes to
+/// stderr is written and also kept. `golem mcp serve` holds one, because its stdout carries
+/// JSON-RPC: a command that it runs prints its JSON output into the capture, and the messages that
+/// the command logged are kept for the tool call's error.
+pub struct OutputCapture(());
+
+impl OutputCapture {
+    pub fn new() -> Self {
+        *OUTPUT_CAPTURE.lock().unwrap() = Some(CapturedOutput::default());
+        Self(())
+    }
+
+    /// The stdout and stderr bytes kept since the capture started or since the last call.
+    pub fn take(&self) -> (Vec<u8>, Vec<u8>) {
+        let captured = std::mem::take(
+            OUTPUT_CAPTURE
+                .lock()
+                .unwrap()
+                .as_mut()
+                .expect("output capture is active"),
+        );
+        (captured.stdout, captured.stderr)
+    }
+}
+
+impl Default for OutputCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for OutputCapture {
+    fn drop(&mut self) {
+        *OUTPUT_CAPTURE.lock().unwrap() = None;
+    }
+}
+
+/// Keeps bytes for stdout in the active [`OutputCapture`], for a writer that does not go through
+/// this module. Returns `true` when they are kept and must not be written.
+pub(crate) fn capture_stdout(bytes: &[u8]) -> bool {
+    capture(StandardStream::Stdout, bytes)
+}
+
+/// Keeps the bytes in the active [`OutputCapture`]. Returns `true` when they must not be written.
+fn capture(stream: StandardStream, bytes: &[u8]) -> bool {
+    match OUTPUT_CAPTURE.lock().unwrap().as_mut() {
+        Some(captured) => match stream {
+            StandardStream::Stdout => {
+                captured.stdout.extend_from_slice(bytes);
+                true
+            }
+            StandardStream::Stderr => {
+                captured.stderr.extend_from_slice(bytes);
+                false
+            }
+        },
+        None => false,
+    }
+}
+
 fn try_write_to(stream: StandardStream, bytes: &[u8]) -> std::io::Result<()> {
+    if capture(stream, bytes) {
+        return Ok(());
+    }
     let written = match stream {
         StandardStream::Stdout => write_and_flush(&mut std::io::stdout().lock(), bytes),
         StandardStream::Stderr => write_and_flush(&mut std::io::stderr().lock(), bytes),

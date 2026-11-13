@@ -23,7 +23,7 @@ use crate::config::{
     AuthenticationSource, Config, NamedProfile,
 };
 use crate::config::{ClientConfig, ProfileName, resolved_builtin_local_url};
-use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, ProfileMissing};
 use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
 use crate::model::app::{
     ApplicationConfig, ApplicationPreload, ApplicationSourceMode, ComponentPresetName,
@@ -34,7 +34,9 @@ use crate::model::app_raw::{
     Server,
 };
 use crate::model::config::server::ToFormattedServerContext;
-use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, SelectedManifestEnvironment,
+};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::plugin::PluginGrantKey;
@@ -77,11 +79,13 @@ pub struct Context {
     explicit_profile_name: Option<ProfileName>,
     environment_reference: Option<EnvironmentReference>,
     global_environment_selector: Option<GlobalEnvironmentSelector>,
+    pinned_environment: Option<ResolvedEnvironmentIdentity>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
     manifest_version_source: Option<AppVersionSource>,
     manifest_local_server: Option<ResolvedLocalServer>,
     app_context_config: Option<ApplicationContextConfig>,
+    app_source_mode: ApplicationSourceMode,
     http_batch_size: u64,
     http_parallelism: usize,
     agent_stream_ping_interval: Duration,
@@ -363,6 +367,7 @@ impl Context {
             auth_token_override: global_flags.auth_token,
             environment_reference,
             global_environment_selector,
+            pinned_environment: None,
             manifest_environment,
             manifest_environment_deployment_options,
             manifest_version_source,
@@ -379,7 +384,68 @@ impl Context {
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
-                app_source_mode,
+                app_source_mode.clone(),
+            )),
+            app_source_mode,
+            caches: Caches::new(),
+        })
+    }
+
+    /// The context of one tool call of `golem mcp serve`, made from the server's context: the
+    /// same profile, server, manifest selection and settings, without a new selection of the
+    /// profile or the manifest environment. Only the profile's login token is read again from
+    /// the config, so that a login in a terminal applies to the next call. It works only in
+    /// `environment`, the server's environment. It confirms a command only when the call
+    /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
+    /// questions about the manifest itself keep the answer that the server got at start.
+    pub fn for_tool_call(
+        &self,
+        confirmed: bool,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Self> {
+        let mut profile = self.profile.clone();
+        // The built-in profiles are always in the config; a custom one can be gone.
+        let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? else {
+            bail!(ProfileMissing {
+                profile: profile.name,
+            });
+        };
+        profile.profile.auth = stored.profile.auth;
+        Ok(Self {
+            config_dir: self.config_dir.clone(),
+            format: self.format,
+            help_mode: self.help_mode,
+            post_deploy_args: self.post_deploy_args.clone(),
+            profile,
+            explicit_profile_name: self.explicit_profile_name.clone(),
+            environment_reference: self.environment_reference.clone(),
+            global_environment_selector: self.global_environment_selector.clone(),
+            pinned_environment: Some(environment),
+            manifest_environment: self.manifest_environment.clone(),
+            manifest_environment_deployment_options: self
+                .manifest_environment_deployment_options
+                .clone(),
+            manifest_version_source: self.manifest_version_source.clone(),
+            manifest_local_server: self.manifest_local_server.clone(),
+            app_context_config: self.app_context_config.clone(),
+            app_source_mode: self.app_source_mode.clone(),
+            http_batch_size: self.http_batch_size,
+            http_parallelism: self.http_parallelism,
+            agent_stream_ping_interval: self.agent_stream_ping_interval,
+            auth_token_override: self.auth_token_override.clone(),
+            server_config: self.server_config.clone(),
+            yes: confirmed,
+            show_secrets: self.show_secrets,
+            dev_mode: self.dev_mode,
+            server_no_limit_change: self.server_no_limit_change,
+            should_colorize: self.should_colorize,
+            file_download_client: self.file_download_client.clone(),
+            golem_clients: tokio::sync::OnceCell::new(),
+            selected_context_logging: std::sync::OnceLock::new(),
+            app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
+                self.yes,
+                self.should_colorize,
+                self.app_source_mode.clone(),
             )),
             caches: Caches::new(),
         })
@@ -447,6 +513,12 @@ impl Context {
 
     pub(crate) fn global_environment_selector(&self) -> Option<&GlobalEnvironmentSelector> {
         self.global_environment_selector.as_ref()
+    }
+
+    /// The only environment that commands may work in, when the process is bound to one, as
+    /// `golem mcp serve` is.
+    pub fn pinned_environment(&self) -> Option<&ResolvedEnvironmentIdentity> {
+        self.pinned_environment.as_ref()
     }
 
     pub fn explicit_profile_name(&self) -> Option<&ProfileName> {
@@ -795,6 +867,7 @@ impl Context {
     }
 }
 
+#[derive(Clone)]
 struct ResolvedServerConfig {
     builtin_local_url: Url,
     client_config: ClientConfig,
@@ -845,6 +918,7 @@ impl ResolvedServerConfig {
     }
 }
 
+#[derive(Clone)]
 struct ApplicationContextConfig {
     #[allow(unused)]
     app_manifest_path: Option<PathBuf>,

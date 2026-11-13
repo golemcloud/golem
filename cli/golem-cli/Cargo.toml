@@ -87,6 +87,7 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
 reqwest-retry = { workspace = true }
+rmcp = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -155,6 +156,7 @@ poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }

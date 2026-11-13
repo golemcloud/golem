@@ -4651,12 +4651,12 @@ async fn test_previous_invocation_failed_revert_workflow() {
     let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains_ordered([
-        "Previous Invocation Failed",
-        "intentional failure stderr",
-        "intentional invocation failure",
         "To discard the failed invocation",
         "agent revert",
         "External side effects",
+        "Previous Invocation Failed",
+        "intentional failure stderr",
+        "intentional invocation failure",
     ]));
     assert!(outputs.stderr_contains("--number-of-invocations 1"));
     assert!(!outputs.stderr_contains("agent revert --yes"));

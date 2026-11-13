@@ -1,0 +1,26 @@
+# The settings of the workspace clippy.toml, which this file replaces for golem-cli.
+too-many-arguments-threshold = 20
+large-error-threshold = 1024
+
+# Questions to the user and reads of stdin go through `command_handler::interactive`, which
+# refuses them in a process whose stdin carries a protocol, such as `golem mcp serve`.
+disallowed-methods = [
+    { path = "inquire::Confirm::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Confirm::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Text::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Text::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Password::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Password::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Select::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Select::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Select::raw_prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::Select::raw_prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::MultiSelect::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::MultiSelect::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::MultiSelect::raw_prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::MultiSelect::raw_prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::CustomType::prompt", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "inquire::CustomType::prompt_skippable", reason = "ask through `command_handler::interactive::Ask`" },
+    { path = "std::io::stdin", reason = "use `command_handler::interactive::stdin`" },
+    { path = "tokio::io::stdin", reason = "use `command_handler::interactive::async_stdin`" },
+]
