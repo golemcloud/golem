@@ -37,6 +37,7 @@ use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperatio
 use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
 use crate::services::environment_state::ToolDiscoveryError;
 use futures::FutureExt;
+use golem_common::base_model::durable_stream::StreamTerminal;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
@@ -193,7 +194,10 @@ async fn native_output_unfenced_eof_preserves_bytes_and_end() {
                 assert_eq!(event.offset, bytes.len() as u64);
                 match event.payload {
                     LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => bytes.push(byte),
-                    LiveStreamEventPayload::End => break,
+                    LiveStreamEventPayload::Terminal {
+                        terminal: StreamTerminal::Finished,
+                        ..
+                    } => break,
                     other => panic!("unexpected native output event: {other:?}"),
                 }
             }

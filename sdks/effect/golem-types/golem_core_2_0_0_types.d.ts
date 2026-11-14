@@ -88,6 +88,27 @@ declare module 'golem:core/types@2.0.0' {
     agentId: string;
   };
   /**
+   * The owner whose oplog records an invocation
+   */
+  export type InvocationOwner =
+  /** An agent. A tool invocation is owned by the agent of its external-tool owner. */
+  {
+    tag: 'agent'
+    val: AgentId
+  } |
+  /** A tool. The runtime does not produce this case yet. */
+  {
+    tag: 'tool'
+    val: string
+  };
+  /**
+   * Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+   */
+  export type InvocationId = {
+    owner: InvocationOwner;
+    id: Uuid;
+  };
+  /**
    * Represents a Golem account
    */
   export type AccountId = {
@@ -852,6 +873,35 @@ declare module 'golem:core/types@2.0.0' {
     graph: SchemaGraph;
     value: SchemaValueTree;
   };
+  /**
+   * The producer's failure, independent of a reader dropping its stream.
+   */
+  export type StreamError =
+  {
+    tag: 'failed'
+    val: TypedSchemaValue
+  } |
+  {
+    tag: 'trapped'
+    val: string
+  } |
+  /** An invocation cancellation request was recorded and honoured. */
+  {
+    tag: 'cancelled'
+  } |
+  /** The producing invocation completed with its writer still open. */
+  {
+    tag: 'abandoned'
+  } |
+  {
+    tag: 'interrupted'
+    val: string
+  } |
+  {
+    tag: 'resource-exhausted'
+    val: string
+  };
+  export type StreamOutcome = Result<void, StreamError>;
   /**
    * A declared tool failure shared by invocation and oplog interfaces.
    */

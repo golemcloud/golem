@@ -2018,6 +2018,9 @@ impl Streaming for StreamingImpl {
                 | "trap-after-clean-eof"
                 | "declared-error"
                 | "explicit-stdout-failure"
+                | "explicit-stdout-cancelled"
+                | "explicit-stdout-abandoned"
+                | "explicit-stdout-resource-exhausted"
                 | "finish-failure"
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
@@ -2159,13 +2162,19 @@ impl Streaming for StreamingImpl {
                 }
                 return Ok(summary);
             }
-            "explicit-stdout-failure" => {
-                stdout
-                    .fail(ByteStreamFailure::Failed(
+            "explicit-stdout-failure"
+            | "explicit-stdout-cancelled"
+            | "explicit-stdout-abandoned"
+            | "explicit-stdout-resource-exhausted" => {
+                let failure = match mode.as_str() {
+                    "explicit-stdout-cancelled" => ByteStreamFailure::Cancelled,
+                    "explicit-stdout-abandoned" => ByteStreamFailure::Abandoned,
+                    "explicit-stdout-resource-exhausted" => ByteStreamFailure::ResourceExhausted,
+                    _ => ByteStreamFailure::Failed(
                         "rust provider explicit stdout failure".to_string(),
-                    ))
-                    .await
-                    .expect("fail stdout explicitly");
+                    ),
+                };
+                stdout.fail(failure).await.expect("fail stdout explicitly");
                 return Ok(summary);
             }
             "writer-abandonment" => {

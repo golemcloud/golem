@@ -349,7 +349,7 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "d3b26c17256b958ef02094ef2a2e90f9fcec46e2", version = "=0.63.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.251"
 wit-encoder = "0.251"

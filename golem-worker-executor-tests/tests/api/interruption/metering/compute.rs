@@ -95,7 +95,11 @@ async fn pending_compute(
     } else {
         let finalized = name
             .clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "tcp_collect_p3",
+            ))
             .map_err(|e| anyhow!(e))?;
         (
             AgentId::from_agent_id(component.id, &finalized).map_err(|e| anyhow!(e))?,

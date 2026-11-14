@@ -64,6 +64,39 @@ fn resource_capacity_trap(
     }
 }
 
+/// The error that a failed instantiation of a Store of `runtime` reports as it is, or `None`
+/// when it is a creation failure.
+///
+/// An interrupt passes through, so the worker is suspended instead of failed. For the primary
+/// Store, a divergence of the core initializer from its recorded durable calls passes through
+/// for the start to classify as a replay divergence. So does the agent error of an ephemeral
+/// agent that a resource limit stops, or that sleeps too long, while its core initializer
+/// runs: the start records it as it does after instantiation. Every other agent error, such
+/// as an unavailable monthly policy, stays a creation failure, which the start retries.
+fn instantiation_failure(
+    runtime: &OwnerRuntime,
+    error: &wasmtime::Error,
+) -> Option<WorkerExecutorError> {
+    use golem_common::model::oplog::AgentError;
+
+    if let Some(kind) = interrupt_kind_in(error) {
+        return Some(WorkerExecutorError::Interrupted { kind });
+    }
+    match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+        Some(
+            failed @ (WorkerExecutorError::UnexpectedOplogEntry { .. }
+            | WorkerExecutorError::InvocationFailed {
+                error:
+                    AgentError::EphemeralCannotSuspend(_)
+                    | AgentError::EphemeralFuelExhausted(_)
+                    | AgentError::EphemeralSleepTooLong(_),
+                ..
+            }),
+        ) if *runtime == OwnerRuntime::Agent => Some(failed.clone()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
     Shared,
@@ -859,9 +892,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance = instance_pre
             .instantiate_async(&mut *store)
             .await
-            .map_err(|error| match interrupt_kind_in(&error) {
-                Some(kind) => WorkerExecutorError::Interrupted { kind },
-                None => self.creation_error(error.into()),
+            .map_err(|error| {
+                instantiation_failure(&self.runtime, &error)
+                    .unwrap_or_else(|| self.creation_error(error.into()))
             })?;
 
         let current_level = store.get_fuel().unwrap_or(0);
@@ -1412,7 +1445,10 @@ mod monthly_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{ObservedPrimaryStore, StoreFuelGuard, interrupt_kind_in, resource_capacity_trap};
+    use super::{
+        ObservedPrimaryStore, StoreFuelGuard, instantiation_failure, interrupt_kind_in,
+        resource_capacity_trap,
+    };
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
     use futures::FutureExt;
@@ -1482,11 +1518,16 @@ mod tests {
     /// Rust component's `_initialize`) fails with `WorkerExecutorError::Interrupted` when the
     /// worker is interrupted during replay. Instantiation must report that as an interruption,
     /// not as a creation failure, so the worker is suspended instead of marked as failed.
+    /// An ephemeral agent error passes through only for the primary Store, and an unavailable
+    /// monthly policy stays a creation failure, so the start retries it.
     #[test]
     #[timeout("10s")]
     async fn instantiation_error_classification_recognises_host_call_interruption()
     -> anyhow::Result<()> {
         use golem_common::model::Timestamp;
+        use golem_common::model::entity::{AgentEntity, OwnerRuntime};
+        use golem_common::model::oplog::EphemeralCannotSuspendError;
+        use golem_common::model::tool::ToolName;
         use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 
         let engine =
@@ -1505,14 +1546,38 @@ mod tests {
         )?;
 
         let suspended_at = Timestamp::now_utc();
-        for (failure, expected) in [
-            (
-                WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Suspend(suspended_at),
-                },
-                Some(InterruptKind::Suspend(suspended_at)),
+        let interrupted = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Suspend(suspended_at),
+        };
+        let cannot_suspend = WorkerExecutorError::InvocationFailed {
+            error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: "monthly memory exhausted".to_string(),
+            }),
+            stderr: String::new(),
+        };
+        let unavailable = WorkerExecutorError::InvocationFailed {
+            error: AgentError::Unknown(
+                crate::services::resource_limits::MonthlyResourceCapacityError::UNAVAILABLE_REASON
+                    .to_string(),
             ),
-            (WorkerExecutorError::runtime("registry unavailable"), None),
+            stderr: String::new(),
+        };
+        let entity = OwnerRuntime::Entity(AgentEntity::Tool(ToolName::try_from("lookup").unwrap()));
+        for (failure, expected, for_agent, for_entity) in [
+            (
+                interrupted.clone(),
+                Some(InterruptKind::Suspend(suspended_at)),
+                Some(interrupted.clone()),
+                Some(interrupted),
+            ),
+            (cannot_suspend.clone(), None, Some(cannot_suspend), None),
+            (unavailable, None, None, None),
+            (
+                WorkerExecutorError::runtime("registry unavailable"),
+                None,
+                None,
+                None,
+            ),
         ] {
             let mut linker = Linker::<()>::new(&engine);
             let host_failure = failure.clone();
@@ -1535,6 +1600,16 @@ mod tests {
                 "the reproducer must exercise Wasmtime's attached backtrace context"
             );
             assert_eq!(interrupt_kind_in(&error), expected, "{failure}");
+            assert_eq!(
+                instantiation_failure(&OwnerRuntime::Agent, &error),
+                for_agent,
+                "{failure}"
+            );
+            assert_eq!(
+                instantiation_failure(&entity, &error),
+                for_entity,
+                "{failure}"
+            );
         }
         Ok(())
     }

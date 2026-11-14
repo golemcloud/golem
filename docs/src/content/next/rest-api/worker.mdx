@@ -1051,7 +1051,8 @@ Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}`|DELETE|Yes
 
-The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+The invocation to be cancelled is identified by the idempotency key returned when the
+invoke API accepted it.
 
 **Example Response JSON**
 
@@ -1076,5 +1077,5 @@ Status Code|Description|Body
 409||`{"code":"string","error":"string"}`
 413||`{"code":"string","error":"string"}`
 415||`{"code":"string","error":"string"}`
-422||`{"code":"string","error":"string"}`
+422|A limit was exceeded, or the idempotency key was already used for a different request.|`{"code":"string","error":"string"}`
 500||`{"code":"string","error":"string","workerError":{"cause":"string","stderr":"string"}}`

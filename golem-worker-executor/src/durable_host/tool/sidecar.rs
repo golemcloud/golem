@@ -269,8 +269,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     store
         .data_mut()
         .durable_ctx_mut()
-        .set_invocation_principal(Some(principal.clone()));
-    let principal = principal.into();
+        .set_invocation_principal(Some(principal));
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
     let replay = store.data().durable_ctx().state.replay_state.clone();
@@ -300,7 +299,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdin,
                         stdout,
                         stderr,
-                        principal,
                     ),
                 )
                 .await
@@ -358,7 +356,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdin,
                         stdout,
                         stderr,
-                        principal,
                         wrapped,
                     ),
                 )

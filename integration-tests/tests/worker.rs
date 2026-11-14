@@ -31,8 +31,8 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator,
+    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, IdempotencyScope,
+    InvocationRequestKey, PromiseId, ScanCursor, StringFilterComparator,
 };
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue};
@@ -744,8 +744,13 @@ async fn get_running_workers(
     for _ in 0..ephemeral_count {
         let name = agent_id!("EphemeralHttpClient4");
         let key = IdempotencyKey::fresh();
+        let owner_key = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(*user.account_id())),
+            Some(&key),
+        )
+        .owner_key("get_for_quota_wait");
         let physical = name
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&owner_key)
             .map_err(|e| anyhow!(e))?;
         ephemeral_ids
             .insert(AgentId::from_agent_id(component.id, &physical).map_err(|e| anyhow!(e))?);
@@ -1401,7 +1406,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
             PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
                 match &pending.invocation {
                     PublicAgentInvocation::AgentMethodInvocation(method) => {
-                        Some(method.idempotency_key.clone())
+                        Some(method.invocation_id)
                     }
                     _ => None,
                 }
@@ -1445,7 +1450,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
                 PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                     invocation: PublicAgentInvocation::AgentMethodInvocation(method),
                     ..
-                }) if method.idempotency_key == key)
+                }) if method.invocation_id == key)
         })
         .count();
     assert_eq!(starts, 1);

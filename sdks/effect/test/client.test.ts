@@ -22,11 +22,11 @@ import {
 } from "../src/Unstructured.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
+import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
 
-const metadata = (suffix: string): AgentHost.InvocationMetadata => ({
-  agentId: `agent-${suffix}`,
-  idempotencyKey: `key-${suffix}`,
-})
+const metadata = (suffix: string): AgentHost.InvocationMetadata =>
+  hostInvocationMetadata(`agent-${suffix}`)
+const expectedMetadata = (suffix: string) => sdkInvocationMetadata(`agent-${suffix}`)
 
 interface Call {
   readonly kind: "await" | "trigger" | "schedule"
@@ -44,6 +44,7 @@ const makeRuntime = (
     readonly response?: CoreTypes.SchemaValueTree | undefined
     readonly error?: unknown
     readonly pending?: boolean
+    readonly rejected?: boolean
   } = {},
 ) => {
   const calls: Call[] = []
@@ -55,10 +56,7 @@ const makeRuntime = (
     tokenCancel: 0,
     tokenDrop: 0,
   }
-  const awaitedMetadata = metadata("await") as {
-    agentId: string
-    idempotencyKey: string
-  }
+  const awaitedMetadata = metadata("await")
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
   const connect = (
     agentType: string,
@@ -93,7 +91,7 @@ const makeRuntime = (
       asyncInvokeAndAwait: (methodName, input) => {
         record("await", methodName, input)
         return {
-          metadata: awaitedMetadata,
+          metadata: options.rejected ? undefined : awaitedMetadata,
           get: () => {
             if (options.error !== undefined) return Promise.reject(options.error)
             if (!options.pending) return Promise.resolve(options.response)
@@ -504,7 +502,7 @@ describe("Client 1.6 durable lifecycle", () => {
         runtime.resolve(response)
         return yield* Fiber.join(fiber)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
-      expect(result.metadata).toEqual(metadata("await"))
+      expect(result.metadata).toEqual(expectedMetadata("await"))
       expect(Object.isFrozen(result.metadata)).toBe(true)
     }),
   )
@@ -553,6 +551,31 @@ describe("Client 1.6 durable lifecycle", () => {
           expect(runtime.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
         }
       }
+    }),
+  )
+
+  it.effect("fails a rejected invocation with the error from its future", () =>
+    Effect.gen(function* () {
+      const response = yield* encode(Schema.String, "done")
+      const failureOf = (options: Parameters<typeof makeRuntime>[0]) => {
+        const runtime = makeRuntime({ ...options, rejected: true })
+        return Worker.client.newPhantom({ job: "rejected" }).pipe(
+          Effect.flatMap((remote) => remote.run({ times: 1 })),
+          Effect.scoped,
+          Effect.provide(runtime.layer),
+          Effect.flip,
+          Effect.map((failure) => ({ failure: failure as any, lifecycle: runtime.lifecycle })),
+        )
+      }
+      const denied = yield* failureOf({ error: { tag: "denied", val: "no permission" } })
+      expect(denied.failure).toEqual({
+        _tag: "RpcCallError",
+        cause: { tag: "denied", val: "no permission" },
+      })
+      expect(denied.lifecycle).toMatchObject({ futureCancel: 1, futureDrop: 1 })
+      const completed = yield* failureOf({ response })
+      expect(completed.failure._tag).toBe("RpcCallError")
+      expect(completed.failure.cause.tag).toBe("protocol-error")
     }),
   )
 
@@ -692,10 +715,10 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect((Worker.client as any).getPhantom).toBeTypeOf("function")
         const remote = yield* Worker.client.newPhantom({ job: "j" })
         const awaited = yield* remote.run({ times: 1 })
-        expect(awaited).toEqual({ metadata: metadata("await"), value: "done" })
-        expect(yield* remote.run.trigger({ times: 2 })).toEqual(metadata("trigger"))
+        expect(awaited).toEqual({ metadata: expectedMetadata("await"), value: "done" })
+        expect(yield* remote.run.trigger({ times: 2 })).toEqual(expectedMetadata("trigger"))
         const receipt = yield* remote.run.schedule({ seconds: 1n, nanoseconds: 0 }, { times: 3 })
-        expect(receipt.metadata).toEqual(metadata("scheduled"))
+        expect(receipt.metadata).toEqual(expectedMetadata("scheduled"))
         yield* receipt.cancel()
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.calls.every((call) => call.phantom === undefined)).toBe(true)
@@ -861,7 +884,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         const remote = yield* Worker.client.getPhantom({ job: "j" }, phantomId)
         const result = yield* remote.run({ times: 1 })
         expect(result).toEqual({
-          metadata: metadata("await"),
+          metadata: expectedMetadata("await"),
           value: "done",
         })
         expect(Object.isFrozen(result.metadata)).toBe(true)

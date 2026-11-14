@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -24,7 +28,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
-use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentId, OplogIndex};
 use golem_service_base::clients::registry::{
     RegistryInvalidationHandler, RegistryServiceError, ResourceUsageUpdate,
 };
@@ -1026,7 +1030,7 @@ async fn created_runtime_card_is_immediately_cached_as_live() {
             component_id: ComponentId::new(),
             agent_id: "deriving-agent".to_string(),
         },
-        invocation_key: IdempotencyKey::new("derive-test".to_string()),
+        invocation_key: test_invocation_id("derive-test".to_string()),
         oplog_index: OplogIndex::from_u64(42),
     };
 
@@ -1070,7 +1074,7 @@ async fn stale_missing_lookup_cannot_revoke_concurrently_created_runtime_card() 
                     component_id: ComponentId::new(),
                     agent_id: "deriving-agent".to_string(),
                 },
-                invocation_key: IdempotencyKey::new("concurrent-derive".to_string()),
+                invocation_key: test_invocation_id("concurrent-derive".to_string()),
                 oplog_index: OplogIndex::from_u64(42),
             },
         )
@@ -1100,7 +1104,7 @@ async fn revocation_after_runtime_creation_commit_wins_over_delayed_response() {
             component_id: ComponentId::new(),
             agent_id: "deriving-agent".to_string(),
         },
-        invocation_key: IdempotencyKey::new("delayed-create-response".to_string()),
+        invocation_key: test_invocation_id("delayed-create-response".to_string()),
         oplog_index: OplogIndex::from_u64(42),
     };
 
@@ -1138,7 +1142,7 @@ async fn successful_runtime_creation_supersedes_cached_missing_state() {
                     component_id: ComponentId::new(),
                     agent_id: "deriving-agent".to_string(),
                 },
-                invocation_key: IdempotencyKey::new("post-lookup-derive".to_string()),
+                invocation_key: test_invocation_id("post-lookup-derive".to_string()),
                 oplog_index: OplogIndex::from_u64(42),
             },
         )
@@ -1607,4 +1611,8 @@ async fn exhausted_generation_retries_do_not_return_expired_cached_live_card() {
         !matches!(states.get(&cached_card_id), Some(CardState::Live(_))),
         "expired cached live card was returned as live from the exhausted generation retry fallback: {states:?}"
     );
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

@@ -281,6 +281,43 @@ impl ReplayState {
         .await
     }
 
+    /// Fails with a divergence when the bootstrap block of this cursor still holds recorded
+    /// entries that the core initializer did not consume.
+    pub(crate) async fn ensure_bootstrap_consumed(&self) -> Result<(), WorkerExecutorError> {
+        self.validate_consumed_replay_prefix().await?;
+        if self.has_unclaimed_retained_starts() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "every durable call of the bootstrap block claimed by the core initializer",
+                "unclaimed durable call recorded in the bootstrap block",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Ends the replay of a bootstrap cursor, or returns `None` when this cursor is not one.
+    /// A strict bootstrap cursor cannot continue: a durable call after its recorded block is a
+    /// divergence. A live bootstrap cursor goes live locally, without primary settling, so the
+    /// core initializer appends its next calls after the block.
+    pub(crate) async fn finish_bootstrap_replay(
+        &self,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        let Some(tail) = self.cursor.bootstrap else {
+            return Ok(None);
+        };
+        self.validate_consumed_replay_prefix().await?;
+        match tail {
+            BootstrapTail::Strict => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "durable call recorded in the bootstrap block",
+                "core initializer made a durable call after its recorded bootstrap block",
+            )),
+            BootstrapTail::Live => {
+                let replay_target = self.exhaust_cursor_replay_prefix().await?;
+                self.cursor.publish_live();
+                Ok(Some(replay_target))
+            }
+        }
+    }
+
     pub(crate) async fn exhaust_replay_prefix(&self) -> Result<OplogIndex, WorkerExecutorError> {
         self.validate_consumed_replay_prefix().await?;
         self.exhaust_cursor_replay_prefix().await

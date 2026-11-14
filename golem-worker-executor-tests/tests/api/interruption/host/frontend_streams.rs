@@ -2,9 +2,9 @@ use super::*;
 use anyhow::{Context as _, ensure};
 use futures::FutureExt;
 use golem_api_grpc::proto::golem::worker::{
-    ExternalToolInvocation, InputStreamEnd, InputStreamItem, InvocationRequest, InvocationStart,
-    ToolByteStreamRole, input_stream_item, invocation_request, invocation_response,
-    invocation_session_completion, invocation_session_result,
+    ExternalToolInvocation, InputStreamItem, InvocationRequest, InvocationStart, StreamDirection,
+    StreamEnd, StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result, stream_terminal,
 };
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentMode, GolemUserPrincipal, Principal};
@@ -115,7 +115,14 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     .await?;
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
-    let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
+    let request_key = golem_common::model::InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&key),
+    );
+    let stored_key = executor
+        .finalized_invocation_key(&id, &request_key, "tool:streaming/run")
+        .await?;
+    let mut result_wait = crate::invocation_waits::result_wait(&id, &stored_key);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -155,6 +162,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                     fresh_owner: false,
                     expected_deployment_revision: None,
                 }),
+                request_key: Some(request_key.into()),
                 ..Default::default()
             })),
         })
@@ -237,11 +245,17 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         .await?;
     sender
         .send(InvocationRequest {
-            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id: stdin_id,
-                sequence: bytes.len() as u64,
+                producer_sequence: bytes.len() as u64,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(golem_api_grpc::proto::golem::worker::StreamTerminal {
+                    terminal: Some(stream_terminal::Terminal::Finished(Default::default())),
+                }),
                 durable_stream_id,
                 epoch: accepted.epoch,
+                ..Default::default()
             })),
         })
         .await?;
@@ -274,10 +288,10 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                     item.transport_stream_id, item.durable_stream_id, item.epoch,
                     item.producer_sequence, item.logical_item_count, item.packed_u8.len(), item.durable_offset,
                 ),
-                Some(invocation_response::Response::OutputEnd(end)) => format!(
-                    "OutputEnd stream={} durable_stream={:?} epoch={} sequence={} offset={:?}",
+                Some(invocation_response::Response::StreamEnd(end)) => format!(
+                    "StreamEnd stream={} durable_stream={:?} epoch={} sequence={} offset={:?} outcome={:?}",
                     end.transport_stream_id, end.durable_stream_id, end.epoch,
-                    end.producer_sequence, end.durable_offset,
+                    end.producer_sequence, end.durable_offset, end.outcome,
                 ),
                 Some(invocation_response::Response::Result(result)) => format!(
                     "Result agent={:?} key={:?} fingerprint={:?} index={:?} tool_result={}",
@@ -295,7 +309,9 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                 Some(invocation_response::Response::OutputItem(item)) => {
                     output.extend(item.packed_u8)
                 }
-                Some(invocation_response::Response::OutputEnd(_)) => {}
+                Some(invocation_response::Response::StreamEnd(end)) => {
+                    assert!(matches!(end.outcome.and_then(|outcome| outcome.terminal), Some(stream_terminal::Terminal::Finished(_))));
+                }
                 Some(invocation_response::Response::Result(result)) => {
                     let Some(invocation_session_result::Result::ToolResult(result)) = result.result
                     else {
@@ -368,7 +384,8 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     for (index, entry) in committed {
         match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => eprintln!(
                 "STDIN_COMMITTED index={index} kind=AgentInvocationStarted key={idempotency_key:?}"
             ),
@@ -401,13 +418,18 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                     "STDIN_COMMITTED index={index} kind=StreamItems payload_inspection_failed=true"
                 ),
             },
-            OplogEntry::StreamEnd { record, .. } => match oplog.download_payload(record).await {
+            OplogEntry::StreamTerminal { record, .. } => match oplog.download_payload(record).await
+            {
                 Ok(record) => eprintln!(
-                    "STDIN_COMMITTED index={index} kind=StreamEnd stream={:?} sequence={} offset={:?}",
-                    record.stream_id, record.sequence, record.offset,
+                    "STDIN_COMMITTED index={index} kind=StreamTerminal stream={:?} sequence={} offset={:?} authored_by={:?} terminal={:?}",
+                    record.stream_id,
+                    record.sequence,
+                    record.offset,
+                    record.authored_by,
+                    record.terminal,
                 ),
                 Err(_) => eprintln!(
-                    "STDIN_COMMITTED index={index} kind=StreamEnd payload_inspection_failed=true"
+                    "STDIN_COMMITTED index={index} kind=StreamTerminal payload_inspection_failed=true"
                 ),
             },
             OplogEntry::StreamSession { record, .. } => {

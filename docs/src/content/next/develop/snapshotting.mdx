@@ -820,7 +820,7 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | `'disabled'` | Disables automatic snapshot creation. Omitting `snapshotting` also disables it. |
         | `'default'` | Uses the server's default schedule, which may be disabled. |
         | `{ everyNInvocations: 10 }` | Takes a snapshot every 10 successful invocations. |
-        | `{ periodicSeconds: 5 }` | Schedules snapshots at safe invocation boundaries after each 5-second interval. |
+        | `{ periodicSeconds: 5 }` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. |
 
         For custom byte snapshots, pass the policy directly as `snapshotting` instead of wrapping it in `{ state, policy }`.
     </Tabs.Tab>
@@ -841,7 +841,7 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | Omit `snapshotting` | Disables automatic snapshot creation. There is no `Snapshot.policy.disabled`. |
         | `Snapshot.policy.default` | Uses the server's default schedule, which may be disabled. |
         | `Snapshot.policy.everyN(10)` | Takes a snapshot every 10 successful invocations. |
-        | `Snapshot.policy.periodic("5 seconds")` | Schedules snapshots at safe invocation boundaries after each 5-second interval. |
+        | `Snapshot.policy.periodic("5 seconds")` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. |
     </Tabs.Tab>
     <Tabs.Tab>
         Set `snapshotting` on `#[agent_definition]`:
@@ -855,7 +855,7 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | `"disabled"` | Disables automatic snapshot creation. This is also the default when the attribute argument is omitted. |
         | `"enabled"` | Uses the server's default schedule, which may be disabled. |
         | `"every(10)"` | Takes a snapshot every 10 successful invocations. |
-        | `"periodic(5s)"` | Schedules snapshots at safe invocation boundaries after each 5-second interval. Durations also accept units such as `1m`. |
+        | `"periodic(5s)"` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. Durations also accept units such as `1m`. |
     </Tabs.Tab>
     <Tabs.Tab>
         Set `snapshotting` on `@agentDefinition`:
@@ -869,7 +869,7 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | `"disabled"` | Disables automatic snapshot creation. This is also the default when the annotation argument is omitted. |
         | `"enabled"` | Uses the server's default schedule, which may be disabled. |
         | `"every(10)"` | Takes a snapshot every 10 successful invocations. |
-        | `"periodic(5 seconds)"` | Schedules snapshots at safe invocation boundaries after each 5-second interval. Use a finite Scala duration, such as `500 millis` or `1 minute`. |
+        | `"periodic(5 seconds)"` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. Use a finite Scala duration, such as `500 millis` or `1 minute`. |
     </Tabs.Tab>
     <Tabs.Tab>
         Set `snapshotting` on `#derive.agent`:
@@ -883,7 +883,7 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | `"disabled"` | Disables automatic snapshot creation. This is also the default when the attribute argument is omitted. |
         | `"default"` | Uses the server's default schedule, which may be disabled. |
         | `"every_n(10)"` | Takes a snapshot every 10 successful invocations. |
-        | `"periodic(5 seconds)"` | Schedules snapshots at safe invocation boundaries after each 5-second interval. A bare number, such as `periodic(5)`, is also measured in seconds. |
+        | `"periodic(5 seconds)"` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. A bare number, such as `periodic(5)`, is also measured in seconds. |
     </Tabs.Tab>
     <Tabs.Tab>
         Set `Snapshot` on the agent's `Spec` to one of `golem.SnapshotDisabled`, `golem.SnapshotDefault`, `golem.SnapshotEveryN(n)` or `golem.SnapshotPeriodic(d)`:
@@ -900,9 +900,11 @@ Choose when Golem takes automatic snapshots in the agent definition. Disabling a
         | `golem.SnapshotDisabled` | Disables automatic snapshot creation. This is also the zero value when `Spec.Snapshot` is omitted. |
         | `golem.SnapshotDefault` | Uses the server's default schedule, which may be disabled. |
         | `golem.SnapshotEveryN(10)` | Takes a snapshot every 10 successful invocations. |
-        | `golem.SnapshotPeriodic(5 * time.Second)` | Schedules snapshots at safe invocation boundaries after each 5-second interval. The argument is a positive `time.Duration`. |
+        | `golem.SnapshotPeriodic(5 * time.Second)` | Takes a snapshot at a safe invocation boundary 5 seconds after the last one, when a state-changing invocation completed since then. The argument is a positive `time.Duration`. |
     </Tabs.Tab>
 </Tabs>
+
+A periodic policy takes a snapshot only when the state of the agent can have changed since the last snapshot, that is, when at least one invocation that is not a read-only method completed after it. Once the period has passed since the last snapshot, Golem takes the snapshot at the next safe invocation boundary, also when the agent is idle. An agent that stays idle, or that serves only read-only invocations, takes no more periodic snapshots. A snapshot that a restart cannot use does not count: when the upload of its filesystem snapshot fails, or when a start cannot load it, Golem takes the snapshot again after the next period. The entries of read-only invocations stay in the replay tail until the next state-changing invocation and its snapshot. When the agent starts again after a restart, the state-changing invocations that it replays after its last snapshot count as changes, so the snapshot that was pending before the restart is still taken.
 
 ## Agent files and snapshots
 

@@ -73,8 +73,6 @@ function rawTool(): Tool {
   } as Tool;
 }
 
-const anonymous = { tag: 'anonymous' } as const;
-
 describe('tool middleware registry and guest boundary', () => {
   it('closes untouched stdin once when middleware short-circuits', async () => {
     const close = vi.fn(async () => ({ done: true, value: undefined }) as IteratorResult<never>);
@@ -96,7 +94,6 @@ describe('tool middleware registry and guest boundary', () => {
       stdin,
       undefined,
       undefined,
-      anonymous,
       adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
     );
 
@@ -197,7 +194,6 @@ describe('tool middleware registry and guest boundary', () => {
       undefined,
       undefined,
       undefined,
-      anonymous,
       adaptLegacyRawUnderlying(raw),
     );
 
@@ -219,7 +215,6 @@ describe('tool middleware registry and guest boundary', () => {
       undefined,
       undefined,
       undefined,
-      anonymous,
       adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
     );
     expect(decodeValue(z.string(), monomorphicResult.result!)).toBe('short-circuit');
@@ -245,7 +240,6 @@ describe('tool middleware registry and guest boundary', () => {
         undefined,
         undefined,
         undefined,
-        anonymous,
         adaptLegacyRawUnderlying(raw),
       ),
     ).rejects.toEqual({ tag: 'custom-error', val: { name: 'forwarded', payload: input } });
@@ -267,7 +261,6 @@ describe('tool middleware registry and guest boundary', () => {
         undefined,
         undefined,
         undefined,
-        anonymous,
         adaptLegacyRawUnderlying(raw),
       ),
     ).rejects.toEqual({ tag: 'constraint-violation', val: 'denied' });
@@ -361,7 +354,6 @@ describe('tool middleware registry and guest boundary', () => {
         undefined,
         undefined,
         undefined,
-        anonymous,
         raw,
       ),
     ).rejects.toMatchObject({ tag: 'invalid-result' });
@@ -394,7 +386,6 @@ describe('tool middleware registry and guest boundary', () => {
       undefined,
       undefined,
       undefined,
-      anonymous,
       adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
     );
     await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());

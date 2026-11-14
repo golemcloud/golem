@@ -65,7 +65,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         self.state.current_span_id = current_span_id;
                     }
                     self.state
-                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                        .set_current_idempotency_key(*scope.idempotency_key());
                     self.state.entity_logical_key_position =
                         scope.logical_key_positions().then_some(OplogIndex::INITIAL);
                 } else {
@@ -131,6 +131,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
         self.invocation_principal = principal;
+    }
+
+    /// Installs the ID of the running invocation, or removes it when `running` is false.
+    pub(crate) fn set_invocation_id(&mut self, running: bool) {
+        self.invocation_id = running
+            .then(|| self.state.get_current_idempotency_key())
+            .flatten()
+            .map(|key| {
+                golem_common::model::OwnedInvocationId::new(
+                    self.state.owned_agent_id.agent_id.clone(),
+                    key,
+                )
+            });
+    }
+
+    /// The ID of the agent invocation that runs the guest code of this Store. An entity Store
+    /// answers with the invocation that encloses its entity invocation.
+    pub(crate) fn current_invocation_id(&self) -> Option<golem_common::model::OwnedInvocationId> {
+        match &self.entity_invocation_scope {
+            Some(scope) => scope.enclosing_invocation_id().cloned(),
+            None => self.invocation_id.clone(),
+        }
     }
 
     pub(crate) fn invocation_principal(&self) -> Principal {

@@ -16,12 +16,12 @@ use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailure,
+    DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationFailure,
     InvocationFailureKind, InvocationRejectionReason, InvocationRequest, InvocationResponse,
     InvocationStart, ResumeAttach as PrivateResumeAttach,
-    ResumeOperation as PrivateResumeOperation, StreamCancel, StreamCancelReason, StreamCancelRole,
+    ResumeOperation as PrivateResumeOperation, StreamDirection, StreamEnd, StreamTerminalAuthor,
     input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result,
+    invocation_session_result, stream_terminal,
 };
 use golem_client::model::ComponentDto;
 use golem_common::base_model::durable_stream::AttachmentId;
@@ -32,10 +32,10 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
-    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, decode_server_text,
-    encode_text,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
+    decode_server_text, encode_text,
 };
-use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_schema::proto::golem::schema::{
@@ -235,8 +235,10 @@ async fn resume_public_input_with_end(
         other => anyhow::bail!("detached public invocation did not resume: {other:?}"),
     };
     assert_ne!(resumed_channel, input_channel);
-    let end = PublicClientMessage::InputStreamEnd {
+    let end = PublicClientMessage::StreamEnd {
         channel: resumed_channel,
+        direction: PublicStreamDirection::Input,
+        outcome: PublicStreamOutcome::Finished,
         sequence: DecimalU64(0),
         version: INVOCATION_SESSION_VERSION,
     };
@@ -367,6 +369,7 @@ async fn invoke_agent_session(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: None,
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -463,9 +466,13 @@ impl TrustedInvocationSession {
         ephemeral: bool,
     ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
+        let request_key = InvocationRequestKey::external(
+            AuthCtx::System.idempotency_scope(),
+            Some(&idempotency_key),
+        );
         let agent_id = if ephemeral {
             agent_id
-                .with_ephemeral_invocation_phantom(&idempotency_key)
+                .with_ephemeral_invocation_phantom(&request_key.owner_key(method_name))
                 .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?
         } else {
             agent_id.clone()
@@ -500,6 +507,7 @@ impl TrustedInvocationSession {
                 scope_card: None,
                 origin_invocation: None,
                 external_tool: None,
+                request_key: Some(request_key.into()),
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -655,11 +663,19 @@ impl TrustedInvocationSession {
     async fn end_input(&mut self, transport_stream_id: u64, sequence: u64) -> anyhow::Result<()> {
         let durable_stream_id = self.stream_identity(transport_stream_id)?;
         self.send(InvocationRequest {
-            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id,
-                sequence,
+                producer_sequence: sequence,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(
+                    golem_common::base_model::durable_stream::StreamTerminal::Finished
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                ),
                 durable_stream_id: Some(durable_stream_id),
                 epoch: self.acceptance.epoch,
+                ..Default::default()
             })),
         })
         .await
@@ -669,16 +685,24 @@ impl TrustedInvocationSession {
         &mut self,
         transport_stream_id: u64,
         producer_sequence: u64,
-        role: StreamCancelRole,
+        direction: StreamDirection,
     ) -> anyhow::Result<()> {
         let durable_stream_id = self.stream_identity(transport_stream_id)?;
         self.send(InvocationRequest {
-            request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id,
-                producer_sequence,
-                role: role as i32,
-                reason: StreamCancelReason::Cancelled as i32,
-                details: Some("integration test cancelled the stream".to_string()),
+                producer_sequence: if direction == StreamDirection::Output { 0 } else { producer_sequence },
+                direction: direction as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(if direction == StreamDirection::Output {
+                    golem_common::base_model::durable_stream::StreamTerminal::ConsumerCancelled {
+                        details: Some("integration test cancelled the stream".to_string()),
+                    }
+                } else {
+                    golem_common::base_model::durable_stream::StreamTerminal::Failed(
+                        golem_common::base_model::durable_stream::StreamError::Interrupted("integration test cancelled the stream".to_string()),
+                    )
+                }.try_into().map_err(anyhow::Error::msg)?),
                 durable_stream_id: Some(durable_stream_id),
                 epoch: self.acceptance.epoch,
                 durable_offset: Vec::new(),
@@ -733,9 +757,9 @@ struct TrustedInvocationReport {
     result: Option<ProtoSchemaValue>,
     outputs: HashMap<u64, Vec<ProtoSchemaValue>>,
     output_ends: HashSet<u64>,
-    output_errors: HashMap<u64, String>,
+    output_errors: HashMap<u64, golem_api_grpc::proto::golem::worker::StreamError>,
     input_acks: HashMap<u64, usize>,
-    stream_cancels: Vec<StreamCancel>,
+    stream_cancels: Vec<StreamEnd>,
     completion: Option<Result<(), InvocationFailure>>,
     /// Request frames the client could not send because the server finished the RPC first.
     unsent_requests: Vec<InvocationRequest>,
@@ -794,18 +818,35 @@ impl TrustedInvocationReport {
                         })?,
                     );
             }
-            Some(invocation_response::Response::OutputEnd(end)) => {
-                self.output_ends.insert(end.transport_stream_id);
-            }
-            Some(invocation_response::Response::OutputError(error)) => {
-                self.output_errors
-                    .insert(error.transport_stream_id, error.details);
+            Some(invocation_response::Response::StreamEnd(end)) => {
+                match end
+                    .outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.terminal.as_ref())
+                {
+                    Some(stream_terminal::Terminal::Finished(_)) => {
+                        anyhow::ensure!(
+                            end.direction == StreamDirection::Output as i32,
+                            "unexpected input producer end"
+                        );
+                        self.output_ends.insert(end.transport_stream_id);
+                    }
+                    Some(stream_terminal::Terminal::Failed(error)) => {
+                        anyhow::ensure!(
+                            end.direction == StreamDirection::Output as i32,
+                            "unexpected input producer failure"
+                        );
+                        self.output_errors
+                            .insert(end.transport_stream_id, error.clone());
+                    }
+                    Some(stream_terminal::Terminal::ConsumerCancelled(_)) => {
+                        self.stream_cancels.push(end)
+                    }
+                    None => anyhow::bail!("stream end omitted its outcome"),
+                }
             }
             Some(invocation_response::Response::InputAck(ack)) => {
                 *self.input_acks.entry(ack.transport_stream_id).or_default() += 1;
-            }
-            Some(invocation_response::Response::StreamCancel(cancel)) => {
-                self.stream_cancels.push(cancel);
             }
             Some(invocation_response::Response::Finished(finished)) => {
                 self.completion = Some(match finished.outcome {
@@ -1051,11 +1092,11 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         PrivateResumeOperation::Resume,
         PrivateResumeOperation::Takeover,
     ] {
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(
                 PrivateResumeAttach {
-                    idempotency_key: Some(idempotency_key.clone().into()),
+                    idempotency_key: Some(idempotency_key.into()),
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(environment_id.into()),
                     attachment_id: Some(
@@ -1156,7 +1197,7 @@ async fn dropped_durable_input_completes_while_producer_items_and_end_are_in_fli
             .stream_cancels
             .iter()
             .all(|cancel| cancel.transport_stream_id == input_id
-                && cancel.role == StreamCancelRole::InputConsumer as i32),
+                && cancel.direction == StreamDirection::Input as i32),
         "unexpected stream cancellations: {:?}",
         report.stream_cancels
     );
@@ -1199,9 +1240,10 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
         let response = session.receive().await?;
         let input_consumer_cancelled = matches!(
             response.response.as_ref(),
-            Some(invocation_response::Response::StreamCancel(cancel))
+            Some(invocation_response::Response::StreamEnd(cancel))
                 if cancel.transport_stream_id == input_id
-                    && cancel.role == StreamCancelRole::InputConsumer as i32
+                    && cancel.direction == StreamDirection::Input as i32
+                    && matches!(cancel.outcome.as_ref().and_then(|outcome| outcome.terminal.as_ref()), Some(stream_terminal::Terminal::ConsumerCancelled(_)))
         );
         report.record(response)?;
         if input_consumer_cancelled {
@@ -1228,10 +1270,222 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
             .stream_cancels
             .iter()
             .all(|cancel| cancel.transport_stream_id == input_id
-                && cancel.role == StreamCancelRole::InputConsumer as i32),
+                && cancel.direction == StreamDirection::Input as i32),
         "unexpected stream cancellations: {:?}",
         report.stream_cancels
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_common::model::durable_stream::{
+        StreamSessionRecord, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+        StreamTerminalRecord,
+    };
+    use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+    use golem_common::schema::FromSchema;
+    use golem_schema::StreamError;
+    use std::time::Duration;
+
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let routing = deps.shard_manager().get_routing_table().await?;
+    for (crash, lose_source) in [(false, false), (true, false), (true, true)] {
+        let (name, caller_id) = cross_executor_caller(
+            component.id,
+            &routing,
+            "StreamingRpcCaller",
+            "StreamingRpcTarget",
+            &format!("terminal-recovery-{crash}-{lose_source}"),
+        )?;
+        let caller =
+            AgentId::from_agent_id(component.id, &caller_id).map_err(anyhow::Error::msg)?;
+        let target = AgentId::from_agent_id(component.id, &agent_id!("StreamingRpcTarget", name))
+            .map_err(anyhow::Error::msg)?;
+        let gate = user
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let key = IdempotencyKey::fresh();
+        let invocation = user.invoke_and_await_agent_with_key(
+            &component,
+            &caller_id,
+            &key,
+            "call_producer_error_after_gate",
+            data_value!(gate.clone()),
+        );
+        tokio::pin!(invocation);
+        let producer_terminals =
+            |history: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+                history
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::StreamTerminal(params) => Some((
+                            entry.oplog_index,
+                            StreamTerminalRecord::from_value(params.record.value()).unwrap(),
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+        let producer_ready = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let caller_history = user.get_oplog(&caller, OplogIndex::INITIAL).await?;
+                let observed = caller_history
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::StreamSession(params) => {
+                            Some(StreamSessionRecord::from_value(params.record.value()).unwrap())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if observed
+                    .iter()
+                    .any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
+                {
+                    let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
+                    let terminals = producer_terminals(&target_history);
+                    if terminals.is_empty() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        continue;
+                    }
+                    assert!(
+                        !observed.iter().any(|record| matches!(
+                            record,
+                            StreamSessionRecord::ConsumerTerminal(_)
+                        )),
+                        "the promise must hold the caller before its terminal read"
+                    );
+                    assert_eq!(terminals.len(), 1);
+                    assert_eq!(terminals[0].1.authored_by, StreamTerminalAuthor::Protocol);
+                    assert_eq!(terminals[0].1.origin, StreamTerminalOrigin::Source);
+                    assert_eq!(terminals[0].1.sequence, 1);
+                    assert_eq!(
+                        terminals[0].1.terminal,
+                        StreamTerminal::Failed(StreamError::Interrupted(
+                            "value-node index out of range: 0".into()
+                        ))
+                    );
+                    return Ok::<_, anyhow::Error>(terminals);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let before = tokio::select! {
+            result = &mut invocation => {
+                anyhow::bail!("caller completed before its terminal-read gate: {result:?}");
+            }
+            before = producer_ready => before??,
+        };
+        let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
+        assert_eq!(target_history.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "produce_error")
+        )).count(), 1);
+        let source_loss = if lose_source {
+            user.delete_worker(&target).await?;
+            let history = user.get_oplog(&caller, OplogIndex::INITIAL).await?;
+            let losses = history
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(params) => {
+                        match StreamSessionRecord::from_value(params.record.value()).unwrap() {
+                            StreamSessionRecord::SourceUnavailable(record) => {
+                                Some((entry.oplog_index, record))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(losses.len(), 1);
+            assert_eq!(losses[0].1.source_offset, before[0].1.offset);
+            assert_eq!(losses[0].1.consumer_read_ordinal, 1);
+            Some(losses)
+        } else {
+            None
+        };
+        if crash {
+            user.simulated_crash(&caller).await?;
+            invocation.set(user.invoke_and_await_agent_with_key(
+                &component,
+                &caller_id,
+                &key,
+                "call_producer_error_after_gate",
+                data_value!(gate.clone()),
+            ));
+        }
+        user.complete_promise(&gate, vec![]).await?;
+        let failure = tokio::time::timeout(Duration::from_secs(90), invocation)
+            .await?
+            .expect_err("failed producer reached the reader as EOF");
+        let diagnostic = if lose_source {
+            "durable stream source unavailable"
+        } else {
+            "value-node index out of range: 0"
+        };
+        assert!(format!("{failure:#}").contains(diagnostic), "{failure:?}");
+        let caller_history = user.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let consumed = caller_history
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(params) => {
+                    match StreamSessionRecord::from_value(params.record.value()).unwrap() {
+                        StreamSessionRecord::ConsumerTerminal(terminal) => Some(terminal),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].authored_by, before[0].1.authored_by);
+        assert_eq!(
+            consumed[0].terminal,
+            StreamTerminal::Failed(StreamError::Interrupted(diagnostic.into()))
+        );
+        assert_eq!(consumed[0].source_offset, before[0].1.offset);
+        assert_eq!(caller_history.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "call_producer_error_after_gate")
+        )).count(), 1);
+        if let Some(before_loss) = source_loss {
+            let after_loss = caller_history
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(params) => {
+                        match StreamSessionRecord::from_value(params.record.value()).unwrap() {
+                            StreamSessionRecord::SourceUnavailable(record) => {
+                                Some((entry.oplog_index, record))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(after_loss, before_loss);
+        } else {
+            let target_history = user.get_oplog(&target, OplogIndex::INITIAL).await?;
+            assert_eq!(producer_terminals(&target_history), before);
+        }
+    }
     Ok(())
 }
 
@@ -1915,20 +2169,33 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     );
     assert!(recoverable.output_ends.contains(&recoverable_stream_id));
 
+    let failed_target = agent_id!("MoonbitStreamingRpcTarget", format!("{name}-failure"));
     let producer_failure = TrustedInvocationSession::start(
         deps,
         &component,
-        &target_agent_id,
+        &failed_target,
         "produce_failure",
         proto_record_values(Vec::new()),
     )
     .await?
     .finish(TrustedInvocationReport::default())
     .await?;
-    assert!(producer_failure.result.is_none());
-    assert!(producer_failure.outputs.is_empty());
+    if let Some(result) = &producer_failure.result {
+        let stream_id = proto_stream_id(result)?;
+        assert_eq!(
+            producer_failure.decoded_output(stream_id)?,
+            vec![SchemaValue::U32(41)]
+        );
+        assert_eq!(producer_failure.output_errors.len(), 1);
+        assert!(matches!(
+            producer_failure.output_errors[&stream_id].error,
+            Some(golem_api_grpc::proto::golem::worker::stream_error::Error::Trapped(_))
+        ));
+    } else {
+        assert!(producer_failure.outputs.is_empty());
+        assert!(producer_failure.output_errors.is_empty());
+    }
     assert!(producer_failure.output_ends.is_empty());
-    assert!(producer_failure.output_errors.is_empty());
     assert_eq!(
         producer_failure.failure()?.kind(),
         InvocationFailureKind::Execution
@@ -1973,7 +2240,7 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         .cancel_stream(
             cancellable_stream_id,
             cancel_sequence,
-            StreamCancelRole::OutputConsumer,
+            StreamDirection::Output,
         )
         .await?;
     let cancellable = cancellable
@@ -1985,8 +2252,14 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     assert!(!cancellable.output_ends.contains(&cancellable_stream_id));
     assert!(cancellable.stream_cancels.iter().any(|cancel| {
         cancel.transport_stream_id == cancellable_stream_id
-            && cancel.role() == StreamCancelRole::OutputProducer
-            && cancel.reason() == StreamCancelReason::Cancelled
+            && cancel.direction() == StreamDirection::Output
+            && matches!(
+                cancel
+                    .outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.terminal.as_ref()),
+                Some(stream_terminal::Terminal::ConsumerCancelled(_))
+            )
     }));
     assert_moonbit_target_ping(deps, &component, &target_agent_id, &name).await?;
 
@@ -2014,16 +2287,20 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         cancelled_input_report.record(response)?;
     }
     cancelled_input
-        .cancel_stream(cancelled_input_id, 1, StreamCancelRole::InputProducer)
+        .cancel_stream(cancelled_input_id, 1, StreamDirection::Input)
         .await?;
     let cancelled_input = cancelled_input.finish(cancelled_input_report).await?;
+    assert!(cancelled_input.result.is_none());
     assert_eq!(
-        decode_proto_value(cancelled_input.successful_result()?)?,
-        SchemaValue::List {
-            elements: vec![SchemaValue::U32(99)],
-        }
+        cancelled_input.failure()?.kind(),
+        InvocationFailureKind::Execution
     );
-    assert_moonbit_target_ping(deps, &component, &target_agent_id, &name).await?;
+    assert!(
+        cancelled_input
+            .failure()?
+            .message
+            .contains("integration test cancelled the stream")
+    );
 
     Ok(())
 }
@@ -2124,7 +2401,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     .await?;
     assert_eq!(checkpoint.item_count(), 4);
     let accepted = checkpoint.acceptance.as_ref().unwrap();
-    let key = accepted.idempotency_key.as_ref().unwrap().value.clone();
+    let key = golem_common::model::InvocationId::from(*accepted.idempotency_key.as_ref().unwrap());
     let epoch = accepted.epoch;
     // A finished producer is also a deterministic detach barrier; do not race Resume against
     // the server observing a socket close, and do not use Takeover to hide that distinction.
@@ -2138,7 +2415,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
                     matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
                         if matches!(StreamSessionRecord::from_value(session.record.value()),
                             Ok(StreamSessionRecord::Finished(finished))
-                                if finished.session_key.idempotency_key().value == key
+                                if *finished.session_key.idempotency_key() == key
                                     && finished.result.is_ok()))
                 })
             {
@@ -2188,7 +2465,7 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.idempotency_key.value == key)
+                if method.invocation_id == key)
     )).count(), 1);
     assert_eq!(
         oplog
@@ -2311,8 +2588,10 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     assert_eq!(items, vec![native_u32(3), native_u32(5), native_u32(8)]);
     assert!(matches!(
         produced[5],
-        PublicServerMessage::OutputStreamEnd {
+        PublicServerMessage::StreamEnd {
             channel,
+            direction: PublicStreamDirection::Output,
+            outcome: PublicStreamOutcome::Finished,
             sequence: DecimalU64(3),
             ..
         } if channel == output_mapping.channel
@@ -2367,8 +2646,10 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                 && highest_contiguous_sequence == DecimalU64(sequence as u64 + 1)
         ));
     }
-    let end = PublicClientMessage::InputStreamEnd {
+    let end = PublicClientMessage::StreamEnd {
         channel: input_channel,
+        direction: PublicStreamDirection::Input,
+        outcome: PublicStreamOutcome::Finished,
         sequence: DecimalU64(2),
         version: INVOCATION_SESSION_VERSION,
     };

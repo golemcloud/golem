@@ -539,20 +539,30 @@ impl StreamSession {
         &self,
         transport_stream_id: u64,
         sequence: u64,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, SessionError> {
+        let terminal = (authored_by, terminal);
+        let retained_bytes =
+            DurableStreamStore::external_input_reservation(None, Some(&terminal), None)?;
         let session = self.clone();
         self.producer
-            .run_admitted(None, 0, false, move |_, admission| async move {
-                let _session_guard = session.session_lock.lock().await;
-                let session_for_write = session.clone();
-                admission
-                    .submit(move |_, context| async move {
-                        session_for_write
-                            .end_input_owned(&context, transport_stream_id, sequence)
-                            .await
-                    })
-                    .await
-            })
+            .run_admitted(
+                None,
+                retained_bytes,
+                false,
+                move |_, admission| async move {
+                    let _session_guard = session.session_lock.lock().await;
+                    let session_for_write = session.clone();
+                    admission
+                        .submit(move |_, context| async move {
+                            session_for_write
+                                .end_input_owned(&context, transport_stream_id, sequence, terminal)
+                                .await
+                        })
+                        .await
+                },
+            )
             .await
     }
 
@@ -561,6 +571,7 @@ impl StreamSession {
         context: &StreamWriteContext,
         transport_stream_id: u64,
         sequence: u64,
+        terminal: (StreamTerminalAuthor, StreamTerminal),
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, SessionError> {
         self.ensure_current_attachment().await?;
         let handle = self
@@ -573,7 +584,7 @@ impl StreamSession {
                 &self.session_key,
                 handle.stream_id,
                 None,
-                true,
+                Some(terminal),
                 Some(crate::durable_host::durable_stream::ExternalProducer {
                     id: golem_common::base_model::durable_stream::ExternalProducerId::Attached,
                     epoch: 0,
@@ -1212,6 +1223,7 @@ impl StreamSession {
                                     })?,
                                     packed_u8_batch_end: Some(batch_end),
                                     terminal_author: None,
+                                    terminal_origin: None,
                                     nested_handles: Vec::new(),
                                     nested_references: Vec::new(),
                                     payload: CommittedProducerStreamEventPayload::PackedU8(byte),
@@ -1227,6 +1239,7 @@ impl StreamSession {
                                 offset: record.source_offset,
                                 packed_u8_batch_end: None,
                                 terminal_author: None,
+                                terminal_origin: None,
                                 nested_references: mappings
                                     .iter()
                                     .map(|mapping| {
@@ -1253,23 +1266,11 @@ impl StreamSession {
                             producer_sequence: record.consumer_read_ordinal,
                             offset: record.source_offset,
                             packed_u8_batch_end: None,
-                            terminal_author: None,
+                            terminal_author: Some(record.authored_by),
+                            terminal_origin: None,
                             nested_handles: Vec::new(),
                             nested_references: Vec::new(),
-                            payload: match record.terminal {
-                                StreamConsumerTerminal::End(result) => {
-                                    CommittedProducerStreamEventPayload::End(result)
-                                }
-                                StreamConsumerTerminal::Cancel {
-                                    role,
-                                    reason,
-                                    details,
-                                } => CommittedProducerStreamEventPayload::Cancel {
-                                    role,
-                                    reason,
-                                    details,
-                                },
-                            },
+                            payload: CommittedProducerStreamEventPayload::Terminal(record.terminal),
                         },
                     ));
                 }
@@ -1285,13 +1286,14 @@ impl StreamSession {
                             offset: record.source_offset,
                             packed_u8_batch_end: None,
                             terminal_author: None,
+                            terminal_origin: None,
                             nested_handles: Vec::new(),
                             nested_references: Vec::new(),
-                            payload: CommittedProducerStreamEventPayload::Cancel {
-                                role: StreamCancelRole::System,
-                                reason: StreamCancelReason::SourceUnavailable,
-                                details: None,
-                            },
+                            payload: CommittedProducerStreamEventPayload::Terminal(
+                                StreamTerminal::Failed(StreamError::Interrupted(
+                                    "durable stream source unavailable".into(),
+                                )),
+                            ),
                         },
                     ));
                 }
@@ -1325,12 +1327,12 @@ pub(super) fn discards_input_after_terminal(
     matches!(
         error,
         StreamStoreError::SessionFinished(finished) if finished == session_key
-    ) || matches!(
-        error,
-        StreamStoreError::ClosedByOtherProducer
-            | StreamStoreError::FencedByTerminal(CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer,
-                ..
-            })
-    )
+    ) || matches!(error, StreamStoreError::ClosedByOtherProducer)
+        || matches!(
+            error,
+            StreamStoreError::FencedByTerminal(event)
+                if matches!(event.payload, CommittedProducerStreamEventPayload::Terminal(
+                    StreamTerminal::ConsumerCancelled { .. }
+                ))
+        )
 }

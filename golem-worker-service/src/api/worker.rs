@@ -1077,7 +1077,8 @@ impl WorkerApi {
 
     /// Cancels a pending invocation if it has not started yet
     ///
-    /// The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
+    /// The invocation to be cancelled is identified by the idempotency key returned when the
+    /// invoke API accepted it.
     #[oai(
         path = "/:component_id/workers/:agent_name/invocations/:idempotency_key",
         method = "delete",

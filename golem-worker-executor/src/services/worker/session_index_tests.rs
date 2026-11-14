@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -145,7 +149,7 @@ fn create_entry(
 }
 
 fn local_registration(key: &StreamInvocationId) -> StreamRegistrationInvocation {
-    StreamRegistrationInvocation::Local(key.idempotency_key.clone())
+    StreamRegistrationInvocation::Local(key.idempotency_key)
 }
 
 fn remote_registration(key: &StreamInvocationId) -> StreamRegistrationInvocation {
@@ -160,7 +164,7 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     let owner = owned_agent("cancellation-consumer", ComponentId::new());
     let remote = owned_agent("cancellation-producer", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
-    let key = session_key(&remote, &IdempotencyKey::new("cancel-session".into()));
+    let key = session_key(&remote, &test_invocation_id("cancel-session".into()));
     let handle = DurableStreamHandle {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         stream_id: StreamId(uuid::Uuid::new_v4()),
@@ -175,12 +179,17 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     let intent = StreamConsumerCancelIntentRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: remote_registration(&key),
-        consumer_invocation: key.idempotency_key.clone(),
+        consumer_invocation: key.idempotency_key,
         source: StreamRecordReference::Foreign(handle),
         epoch: 3,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("external cancellation".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                "external cancellation".into(),
+            )),
+        },
     };
     append_session(
         oplog.as_ref(),
@@ -302,7 +311,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
     let (service, _, oplog_service) = service_with_oplog().await;
     let owner = owned_agent("cancel-authority", ComponentId::new());
     let remote = owned_agent("cancel-source", ComponentId::new());
-    let key = session_key(&owner, &IdempotencyKey::new("session".into()));
+    let key = session_key(&owner, &test_invocation_id("session".into()));
     let mut metadata = agent_metadata(&owner);
     metadata.fingerprint = key.callee_fingerprint;
     metadata.agent_mode = mode;
@@ -329,7 +338,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
             producer: remote.agent_id.clone(),
             expected_producer_fingerprint: AgentFingerprint(remote.agent_id.component_id.0),
             producer_generation: OplogIndex::NONE,
-            source_invocation: session_key(&remote, &IdempotencyKey::new("source".into())),
+            source_invocation: session_key(&remote, &test_invocation_id("source".into())),
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         },
@@ -346,7 +355,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         oplog.as_ref(),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: key.idempotency_key.clone(),
+            session_key: key.idempotency_key,
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -379,12 +388,17 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
         session_key: remote_registration(&key),
-        consumer_invocation: key.idempotency_key.clone(),
+        consumer_invocation: key.idempotency_key,
         source: StreamRecordReference::Foreign(mapping.handle.clone()),
         epoch: 1,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("committed external cancellation".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                "committed external cancellation".into(),
+            )),
+        },
     };
     oplog.commit(CommitLevel::Always).await.unwrap();
     let probe =
@@ -408,7 +422,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: key.idempotency_key.clone(),
+            session_key: key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -434,7 +448,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         ConsumerAttachmentStatus::EpochMismatch
     );
     let foreign = owned_agent("independent-consumer", ComponentId::new());
-    let consumer_invocation = session_key(&foreign, &IdempotencyKey::new("consumer".into()));
+    let consumer_invocation = session_key(&foreign, &test_invocation_id("consumer".into()));
     let mut foreign_metadata = agent_metadata(&foreign);
     foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
     foreign_metadata.agent_mode = mode;
@@ -504,7 +518,8 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         ConsumerAttachmentStatus::Active
     );
     let mut changed = intent.clone();
-    changed.details = Some("unrecorded cancellation".into());
+    changed.cancellation.terminal =
+        StreamTerminal::Failed(StreamError::Interrupted("unrecorded cancellation".into()));
     assert_eq!(
         probe
             .committed_cancellation_status(&attachment, &mapping, &changed)
@@ -600,21 +615,22 @@ fn independent_stream_index(
     StreamSessionIndexService::new(kv, Arc::downgrade(&oplog))
 }
 
-fn session_key(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamInvocationId {
+fn session_key(id: &OwnedAgentId, key: &InvocationId) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: id.environment_id,
         callee: id.agent_id.clone(),
         callee_fingerprint: test_fingerprint(),
-        idempotency_key: key.clone(),
+        idempotency_key: *key,
     }
 }
 
-fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionRecord {
+fn prepared_record(id: &OwnedAgentId, key: &InvocationId) -> StreamSessionRecord {
     let session_key = session_key(id, key);
     StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
-        public_session_id: key.value.clone(),
-        session_key: key.clone(),
+        public_session_id: key.to_string(),
+        route_scope: Some(test_route_scope()),
+        session_key: *key,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
@@ -642,7 +658,7 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
     })
 }
 
-fn prepared_with_reader(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionRecord {
+fn prepared_with_reader(id: &OwnedAgentId, key: &InvocationId) -> StreamSessionRecord {
     let StreamSessionRecord::Prepared(mut record) = prepared_record(id, key) else {
         unreachable!()
     };
@@ -808,7 +824,7 @@ async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
     let mut owners = Vec::new();
     for number in 0..1025 {
         let owner = owned_agent(&format!("quiescent-{number}"), ComponentId::new());
-        let key = IdempotencyKey::new("finished".into());
+        let key = test_invocation_id("finished".into());
         let session = session_key(&owner, &key);
         let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
         append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
@@ -856,7 +872,7 @@ async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
     assert_eq!(storage.reads(), 0, "idle history must not reopen storage");
 
     let (owner, fingerprint, oplog, committed, cache) = &mut owners[0];
-    let next = IdempotencyKey::new("new-session".into());
+    let next = test_invocation_id("new-session".into());
     let suffix = append_session(oplog.as_ref(), prepared_record(owner, &next)).await;
     cache
         .refresh_through(
@@ -914,7 +930,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
         Arc::new(GolemConfig::default()),
     );
     let owner = owned_agent("cached-cut", ComponentId::new());
-    let key = IdempotencyKey::new("discarded".into());
+    let key = test_invocation_id("discarded".into());
     let fingerprint = session_key(&owner, &key).callee_fingerprint;
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
@@ -1004,7 +1020,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
     for warm in [false, true] {
         let (service, _, oplog_service) = service_with_oplog().await;
         let id = owned_agent("reverted-session", ComponentId::new());
-        let key = IdempotencyKey::new("discarded".into());
+        let key = test_invocation_id("discarded".into());
         let fingerprint = session_key(&id, &key).callee_fingerprint;
         let mut metadata = agent_metadata(&id);
         metadata.fingerprint = fingerprint;
@@ -1112,7 +1128,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     let owner = owned_agent("consumer-journal-owner", ComponentId::new());
     let mut foreign = owner.clone();
     foreign.agent_id.agent_id = "source-journal-owner".into();
-    let local_key = IdempotencyKey::new("original-rpc".into());
+    let local_key = test_invocation_id("original-rpc".into());
     let local_session = session_key(&owner, &local_key);
     let foreign_session = session_key(&foreign, &local_key);
     let fingerprint = local_session.callee_fingerprint;
@@ -1321,7 +1337,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         Arc::new(GolemConfig::default()),
     );
     let owner = owned_agent("concurrent-refold", ComponentId::new());
-    let key = IdempotencyKey::new("session".into());
+    let key = test_invocation_id("session".into());
     let session = session_key(&owner, &key);
     let fingerprint = session.callee_fingerprint;
     let mut metadata = agent_metadata(&owner);
@@ -1485,11 +1501,11 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
     );
 }
 
-async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
+async fn append_pending_invocation(oplog: &dyn Oplog, key: &InvocationId) -> OplogIndex {
     oplog
         .add(OplogEntry::pending_agent_invocation(
             None,
-            key.clone(),
+            *key,
             OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             TraceId::generate(),
             Vec::new(),
@@ -1552,8 +1568,8 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
     let (service, kv, oplog_service) = service_with_oplog().await;
     let owner = owned_agent("forward-reservation", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
-    let source = session_key(&owner, &IdempotencyKey::new("source".into()));
-    let destination = session_key(&owner, &IdempotencyKey::new("destination".into()));
+    let source = session_key(&owner, &test_invocation_id("source".into()));
+    let destination = session_key(&owner, &test_invocation_id("destination".into()));
     let prepared = prepared_with_reader(&owner, &source.idempotency_key);
     let StreamSessionRecord::Prepared(record) = &prepared else {
         unreachable!()
@@ -1670,7 +1686,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     let service = make_service();
     let id = owned_agent("control-projection", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = session_key(&id, &IdempotencyKey::new("result".into()));
+    let key = session_key(&id, &test_invocation_id("result".into()));
     for _ in 0..2050 {
         append_memory_hint(oplog.as_ref()).await;
     }
@@ -1771,7 +1787,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         "the tip and one uncovered suffix read are sufficient"
     );
 
-    let consumer_key = session_key(&id, &IdempotencyKey::new("consumer".into()));
+    let consumer_key = session_key(&id, &test_invocation_id("consumer".into()));
     let stream = local_reader(OplogIndex::from_u64(2), 0);
     let other_stream = local_reader(OplogIndex::from_u64(2), 1);
     let mut expected = Vec::new();
@@ -1862,7 +1878,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
 
     let mut active = Vec::new();
     for number in 0..320 {
-        let record = prepared_record(&id, &IdempotencyKey::new(format!("recover-{number}")));
+        let record = prepared_record(&id, &test_invocation_id(format!("recover-{number}")));
         let StreamSessionRecord::Prepared(prepared) = &record else {
             unreachable!();
         };
@@ -1915,7 +1931,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         "unchanged recovery has no storage reads"
     );
 
-    let record = prepared_record(&id, &IdempotencyKey::new("raw-recovery".into()));
+    let record = prepared_record(&id, &test_invocation_id("raw-recovery".into()));
     let StreamSessionRecord::Prepared(prepared) = &record else {
         unreachable!();
     };
@@ -2041,7 +2057,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             StreamSessionRecord::ResumeAttempt(
                 golem_common::model::durable_stream::StreamSessionResumeAttemptRecord {
                     format_version: 1,
-                    session_key: key.idempotency_key.clone(),
+                    session_key: key.idempotency_key,
                     attempt: golem_common::model::durable_stream::ResumeAttemptDescriptor {
                         format_version: 1,
                         operation:
@@ -2135,8 +2151,8 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
     let owner = owned_agent("consumer", ComponentId::new());
     let remote = owned_agent("remote", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
-    let key = session_key(&remote, &IdempotencyKey::new("remote-session".into()));
-    let consumer = session_key(&owner, &IdempotencyKey::new("consumer-invocation".into()));
+    let key = session_key(&remote, &test_invocation_id("remote-session".into()));
+    let consumer = session_key(&owner, &test_invocation_id("consumer-invocation".into()));
     let mut mappings = Vec::new();
     let mut attachments = Vec::new();
     for transport_stream_id in 0..2 {
@@ -2234,7 +2250,8 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             reader_id: readers[0],
             source_offset: StreamOffset::new(OplogIndex::from_u64(100), 0),
             consumer_read_ordinal: 0,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         }),
     )
     .await;
@@ -2361,17 +2378,17 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
 #[test]
 fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session() {
     let mut index = DurableStreamSessionIndex::default();
-    let old = IdempotencyKey::new("oldest".into());
-    index.insert(old.clone(), completed(1, 2));
+    let old = test_invocation_id("oldest".into());
+    index.insert(old, completed(1, 2));
     for n in 0..140 {
         index.insert(
-            IdempotencyKey::new(format!("completed-{n}")),
+            test_invocation_id(format!("completed-{n}")),
             completed(3 + n * 2, 4 + n * 2),
         );
     }
-    let unfinished = IdempotencyKey::new("unfinished".into());
+    let unfinished = test_invocation_id("unfinished".into());
     index.insert(
-        unfinished.clone(),
+        unfinished,
         DurableStreamSessionStatus {
             first_prepared: Some(OplogIndex::from_u64(500)),
             prepared: Some(OplogIndex::from_u64(501)),
@@ -2390,13 +2407,128 @@ fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session()
     assert!(index.get(&unfinished).is_some());
 }
 
+fn test_route_scope() -> String {
+    golem_common::model::durable_stream::durable_stream_route_scope("environment", "1", "route")
+}
+
+#[test]
+async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild() {
+    use golem_common::model::durable_stream::durable_stream_route_scope;
+
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("route-bindings", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let public = "shared-name";
+    let scopes = [
+        durable_stream_route_scope("environment", "1", "first"),
+        durable_stream_route_scope("environment", "1", "second"),
+        durable_stream_route_scope("environment", "2", "first"),
+        durable_stream_route_scope("other-environment", "1", "first"),
+    ];
+    let keys = scopes
+        .iter()
+        .map(|_| InvocationId(Uuid::new_v4()))
+        .collect::<Vec<_>>();
+    let prepare = |key: &InvocationId, scope: Option<String>| {
+        let mut prepared = prepared_record(&id, key);
+        let StreamSessionRecord::Prepared(record) = &mut prepared else {
+            unreachable!()
+        };
+        record.public_session_id = public.into();
+        record.route_scope = scope;
+        record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 };
+        record.expiry_deadline_millis = Some(10_000);
+        prepared
+    };
+    for (scope, key) in scopes.iter().zip(&keys) {
+        append_session(oplog.as_ref(), prepare(key, Some(scope.clone()))).await;
+    }
+    // Ordinary invocation sessions never publish a route binding.
+    append_session(oplog.as_ref(), prepare(&InvocationId(Uuid::new_v4()), None)).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: keys[0],
+            public_session_id: public.into(),
+            route_scope: scopes[0].clone(),
+            expected_deadline_millis: 10_000,
+            expired_at_millis: 10_000,
+        }),
+    )
+    .await;
+    let replacement = InvocationId(Uuid::new_v4());
+    append_session(
+        oplog.as_ref(),
+        prepare(&replacement, Some(scopes[0].clone())),
+    )
+    .await;
+    // A delayed expiry of the retired generation cannot retire its replacement.
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: keys[0],
+            public_session_id: public.into(),
+            route_scope: scopes[0].clone(),
+            expected_deadline_millis: 10_000,
+            expired_at_millis: 20_000,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    for rebuild in [false, true] {
+        if rebuild {
+            service
+                .stream_session_index
+                .clear(&id, test_fingerprint())
+                .await
+                .unwrap();
+        }
+        for (index, scope) in scopes.iter().enumerate() {
+            let expected = if index == 0 {
+                &replacement
+            } else {
+                &keys[index]
+            };
+            assert!(matches!(service.stream_session_index.lookup_public_binding(
+                &id, AgentMode::Durable, test_fingerprint(), scope, public,
+            ).await.unwrap(), Some(DurableStreamPublicBinding::Live { session_key, .. }) if &session_key == expected));
+            let status = service
+                .stream_session_index
+                .lookup_latest(&id, AgentMode::Durable, test_fingerprint(), expected)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(status.route_scope.as_ref(), Some(scope));
+            assert_eq!(status.public_session_id.as_deref(), Some(public));
+            assert!(!status.expired);
+        }
+        assert_eq!(
+            service
+                .stream_session_index
+                .lookup_public_binding(
+                    &id,
+                    AgentMode::Durable,
+                    test_fingerprint(),
+                    &durable_stream_route_scope("environment", "1", "missing"),
+                    public,
+                )
+                .await
+                .unwrap(),
+            None
+        );
+    }
+}
+
 #[test]
 async fn public_binding_projection_is_fenced_and_rebuildable() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("public-binding", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let first = IdempotencyKey::new("internal-1".into());
-    let second = IdempotencyKey::new("internal-2".into());
+    let first = test_invocation_id("internal-1".into());
+    let second = test_invocation_id("internal-2".into());
     let public = "report-42";
 
     let mut prepared = prepared_record(&id, &first);
@@ -2411,8 +2543,9 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             refreshed_at_millis: 10_000,
             deadline_millis: 20_000,
@@ -2424,8 +2557,9 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             expired_at_millis: 20_000,
         }),
@@ -2435,8 +2569,9 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         oplog.as_ref(),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: first.clone(),
+            session_key: first,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
             expired_at_millis: 20_000,
         }),
@@ -2448,7 +2583,8 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
             public_session_id: public.into(),
-            session_key: second.clone(),
+            route_scope: test_route_scope(),
+            session_key: second,
             source_invocation: session_key(&id, &first),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::None,
@@ -2459,14 +2595,20 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: second.clone(),
+        session_key: second,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
     };
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2489,7 +2631,13 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)
@@ -2501,13 +2649,14 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("target-only-binding", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("internal".into());
+    let key = test_invocation_id("internal".into());
     let public = "report-42";
     let initialize = |deadline| {
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: 1,
             public_session_id: public.into(),
-            session_key: key.clone(),
+            route_scope: test_route_scope(),
+            session_key: key,
             source_invocation: session_key(&id, &key),
             request_hash: vec![7; 32],
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
@@ -2518,8 +2667,9 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
         initialize(10_000),
         StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 10_000,
             refreshed_at_millis: 10_000,
             deadline_millis: 20_000,
@@ -2527,8 +2677,9 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
         initialize(10_000),
         StreamSessionRecord::Expired(StreamSessionExpiredRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             public_session_id: public.into(),
+            route_scope: test_route_scope(),
             expected_deadline_millis: 20_000,
             expired_at_millis: 20_000,
         }),
@@ -2544,7 +2695,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     assert!(matches!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), &test_route_scope(), public)
             .await
             .unwrap(),
         Some(DurableStreamPublicBinding::Retired { session_key }) if session_key == key
@@ -2597,14 +2748,20 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: key.clone(),
+        session_key: key,
         expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
         expiry_deadline_millis: Some(40_000),
     };
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2627,7 +2784,13 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)
@@ -2657,7 +2820,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("public-binding-fork", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("internal".into());
+    let key = test_invocation_id("internal".into());
     let public = "report-42";
     let mut prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(record) = &mut prepared else {
@@ -2672,7 +2835,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert!(matches!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), &test_route_scope(), public)
             .await
             .unwrap(),
         Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
@@ -2696,7 +2859,13 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         None
@@ -2728,7 +2897,13 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         None
@@ -2762,7 +2937,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("public-binding-self-revert", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("internal".into());
+    let key = test_invocation_id("internal".into());
     let public = "retained-public";
     let mut prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(record) = &mut prepared else {
@@ -2776,14 +2951,20 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
-        session_key: key.clone(),
+        session_key: key,
         expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
         expiry_deadline_millis: Some(40_000),
     };
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2817,7 +2998,13 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected.clone())
@@ -2830,7 +3017,13 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     assert_eq!(
         service
             .stream_session_index
-            .lookup_public_binding(&id, AgentMode::Durable, test_fingerprint(), public)
+            .lookup_public_binding(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &test_route_scope(),
+                public
+            )
             .await
             .unwrap(),
         Some(expected)
@@ -2842,7 +3035,7 @@ async fn covered_physical_index_resolves_evicted_session_and_definitively_misses
     let (service, kv) = service().await;
     let id = owned_agent("coverage", ComponentId::new());
     let namespace = StreamSessionIndexService::namespace(&id, test_fingerprint());
-    let old = IdempotencyKey::new("evicted".into());
+    let old = test_invocation_id("evicted".into());
     let old_status = completed(2, 3);
     let metadata = Metadata {
         covered_through: OplogIndex::from_u64(300),
@@ -2867,7 +3060,7 @@ async fn covered_physical_index_resolves_evicted_session_and_definitively_misses
         oplog_idx: OplogIndex::from_u64(300),
         durable_stream_sessions: {
             let mut bounded = DurableStreamSessionIndex::default();
-            bounded.insert(IdempotencyKey::new("recent".into()), completed(290, 291));
+            bounded.insert(test_invocation_id("recent".into()), completed(290, 291));
             bounded
         },
         ..AgentStatusRecord::default()
@@ -2893,7 +3086,7 @@ async fn covered_physical_index_resolves_evicted_session_and_definitively_misses
                 AgentMode::Durable,
                 test_fingerprint(),
                 &status,
-                &IdempotencyKey::new("never-existed".into()),
+                &test_invocation_id("never-existed".into()),
             )
             .await
             .unwrap(),
@@ -2903,12 +3096,10 @@ async fn covered_physical_index_resolves_evicted_session_and_definitively_misses
 
 #[test]
 fn stream_session_index_survives_cache_and_checkpoint_binary_roundtrip() {
-    let key = IdempotencyKey::new("roundtrip".into());
+    let key = test_invocation_id("roundtrip".into());
     let expected = completed(7, 11);
     let mut status = AgentStatusRecord::default();
-    status
-        .durable_stream_sessions
-        .insert(key.clone(), expected.clone());
+    status.durable_stream_sessions.insert(key, expected.clone());
 
     let bytes = serialize(&status).unwrap();
     let decoded: AgentStatusRecord = deserialize(&bytes).unwrap();
@@ -2929,7 +3120,7 @@ async fn physical_indexes_are_isolated_per_agent_and_clear_deletes_only_target_a
     let component_id = ComponentId::new();
     let first = owned_agent("first", component_id);
     let second = owned_agent("second", component_id);
-    let key = IdempotencyKey::new("same-key".into());
+    let key = test_invocation_id("same-key".into());
     for (id, finished) in [(&first, 10), (&second, 20)] {
         let namespace = StreamSessionIndexService::namespace(id, test_fingerprint());
         kv.with_entity("test", "seed", "session")
@@ -3284,7 +3475,7 @@ async fn assert_raw_cache_owner_fingerprint(
 ) {
     let id = owned_agent(&format!("raw-owner-{mode:?}"), ComponentId::new());
     let oplog = create_oplog_with_identity(oplog_service, &id, mode, owner_fingerprint).await;
-    let mut prepared = prepared_record(&id, &IdempotencyKey::new("foreign".into()));
+    let mut prepared = prepared_record(&id, &test_invocation_id("foreign".into()));
     let StreamSessionRecord::Prepared(value) = &mut prepared else {
         unreachable!()
     };
@@ -3325,7 +3516,7 @@ async fn delayed_stream_projection_cannot_overwrite_a_rebuilt_generation() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
     let id = owned_agent("stream-generation-race", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
     let rebuilt_horizon = oplog.current_oplog_index().await;
@@ -3343,7 +3534,7 @@ async fn delayed_stream_projection_cannot_overwrite_a_rebuilt_generation() {
 
     append_session(
         oplog.as_ref(),
-        prepared_record(&id, &IdempotencyKey::new("concurrent-field".into())),
+        prepared_record(&id, &test_invocation_id("concurrent-field".into())),
     )
     .await;
     oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3390,7 +3581,7 @@ async fn stream_projection_clear_retries_when_a_writer_advances_its_snapshot() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
     let id = owned_agent("stream-clear-race", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
 
@@ -3405,7 +3596,7 @@ async fn stream_projection_clear_retries_when_a_writer_advances_its_snapshot() {
         .catch_up(&id, AgentMode::Durable, test_fingerprint(), initial_horizon)
         .await
         .unwrap();
-    let concurrent_key = IdempotencyKey::new("concurrent-field".into());
+    let concurrent_key = test_invocation_id("concurrent-field".into());
     append_session(oplog.as_ref(), prepared_record(&id, &concurrent_key)).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
     let advanced_horizon = oplog.current_oplog_index().await;
@@ -3457,7 +3648,7 @@ async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
     let id = owned_agent("resume-expiry-race", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(prepared_value) = &prepared else {
         unreachable!()
@@ -3470,7 +3661,7 @@ async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: key.clone(),
+            session_key: key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -3523,13 +3714,13 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("multi-chunk", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let old = IdempotencyKey::new("old".into());
+    let old = test_invocation_id("old".into());
     let old_first = append_session(oplog.as_ref(), prepared_record(&id, &old)).await;
     let old_result = append_session(
         oplog.as_ref(),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(old.clone()),
+            session_key: StreamRegistrationInvocation::Local(old),
             result: vec![1],
             stream_mappings: vec![],
         }),
@@ -3539,7 +3730,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(old.clone()),
+            session_key: StreamRegistrationInvocation::Local(old),
             result: Ok(()),
         }),
     )
@@ -3549,13 +3740,13 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     }
     let mut bounded = DurableStreamSessionIndex::default();
     for n in 0..129 {
-        let key = IdempotencyKey::new(format!("recent-{n}"));
+        let key = test_invocation_id(format!("recent-{n}"));
         let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         let finished = append_session(
             oplog.as_ref(),
             StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
-                session_key: StreamRegistrationInvocation::Local(key.clone()),
+                session_key: StreamRegistrationInvocation::Local(key),
                 result: Ok(()),
             }),
         )
@@ -3592,16 +3783,16 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("incremental", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("unfinished".into());
+    let key = test_invocation_id("unfinished".into());
     let first = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
     for _ in 0..130 {
-        let other = IdempotencyKey::new(uuid::Uuid::new_v4().to_string());
+        let other = test_invocation_id(InvocationId(Uuid::new_v4()).to_string());
         append_session(oplog.as_ref(), prepared_record(&id, &other)).await;
         append_session(
             oplog.as_ref(),
             StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                 format_version: 1,
-                session_key: StreamRegistrationInvocation::Local(other.clone()),
+                session_key: StreamRegistrationInvocation::Local(other),
                 result: Ok(()),
             }),
         )
@@ -3618,7 +3809,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
             let mut index = DurableStreamSessionIndex::default();
             for n in 0..129 {
                 index.insert(
-                    IdempotencyKey::new(format!("bounded-{n}")),
+                    test_invocation_id(format!("bounded-{n}")),
                     completed(n * 2 + 2, n * 2 + 3),
                 );
             }
@@ -3644,7 +3835,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         oplog.as_ref(),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: vec![2],
             stream_mappings: vec![],
         }),
@@ -3654,7 +3845,7 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         oplog.as_ref(),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: Ok(()),
         }),
     )
@@ -3692,7 +3883,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     use std::collections::BTreeMap;
 
     let id = owned_agent("fold", ComponentId::new());
-    let key = IdempotencyKey::new("local".into());
+    let key = test_invocation_id("local".into());
     let mut status = AgentStatusRecord::default();
     let mut outgoing_session = session_key(&id, &key);
     outgoing_session.callee.agent_id = "other-callee".into();
@@ -3717,13 +3908,13 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         prepared_record(&id, &key),
         StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: vec![],
             stream_mappings: vec![],
         }),
         StreamSessionRecord::Finished(StreamSessionFinishedRecord {
             format_version: 1,
-            session_key: StreamRegistrationInvocation::Local(key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key),
             result: Ok(()),
         }),
     ];
@@ -3773,7 +3964,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let (_, _, oplog_service) = service_with_oplog().await;
     let id = owned_agent("raw-authority", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
     assert!(prepared.has_supported_format());
     let StreamSessionRecord::Prepared(prepared_record) = &prepared else {
@@ -3788,7 +3979,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog.as_ref(),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session.idempotency_key.clone(),
+            session_key: session.idempotency_key,
             attachment_id,
             attempt_id: first_attempt,
             epoch: 1,
@@ -3813,7 +4004,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let old = StreamSession::new(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(session.idempotency_key),
         [],
     )
     .with_attachment(1, first_attempt);
@@ -3822,7 +4013,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let takeover_attempt = AttemptId::fresh();
     let resume = StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
         format_version: 1,
-        session_key: session.idempotency_key.clone(),
+        session_key: session.idempotency_key,
         attempt: ResumeAttemptDescriptor {
             format_version: 1,
             operation: StreamResumeOperation::Takeover,
@@ -3849,7 +4040,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let new = StreamSession::new(
         producer,
         oplog.clone(),
-        StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(session.idempotency_key),
         [],
     )
     .with_attachment(2, takeover_attempt);
@@ -3879,7 +4070,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         oplog.as_ref(),
         StreamSessionRecord::Detached(StreamSessionDetachedRecord {
             format_version: 1,
-            session_key: session.idempotency_key.clone(),
+            session_key: session.idempotency_key,
             attachment_id,
             owner_attempt_id: takeover_attempt,
             epoch: 2,
@@ -3899,7 +4090,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("raw-cold-reopen", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
@@ -3930,7 +4121,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -3981,7 +4172,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("raw-shared-authority", ComponentId::new());
     let first = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
@@ -4035,7 +4226,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
         second.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attempt: ResumeAttemptDescriptor {
                 format_version: 1,
                 operation: StreamResumeOperation::Takeover,
@@ -4072,7 +4263,7 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("raw-cache-eviction", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let old_key = IdempotencyKey::new("old".into());
+    let old_key = test_invocation_id("old".into());
     let prepared = prepared_record(&id, &old_key);
     let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
@@ -4110,7 +4301,7 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     );
 
     for n in 0..129 {
-        let other = self::session_key(&id, &IdempotencyKey::new(format!("evict-{n}")));
+        let other = self::session_key(&id, &test_invocation_id(format!("evict-{n}")));
         assert!(
             oplog
                 .raw_durable_stream_session_status(&other)
@@ -4154,7 +4345,7 @@ async fn persisted_exact_horizon_rejects_newer_index_and_offsets_hide_newer_atta
     let (service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("persisted-horizon", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("stream".into());
+    let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
@@ -4263,7 +4454,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
         Arc::new(GolemConfig::default()),
     );
     let oplog = create_oplog(multilayer.as_ref(), &id).await;
-    let key = IdempotencyKey::new("archived".into());
+    let key = test_invocation_id("archived".into());
     let prepared = prepared_record(&id, &key);
     let session_key = session_key(&id, &key);
     let prepared_idx = append_session(oplog.as_ref(), prepared).await;
@@ -4376,7 +4567,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     );
     let id = owned_agent("raw-indexed-reads", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let key = IdempotencyKey::new("session".into());
+    let key = test_invocation_id("session".into());
     let prepared = prepared_record(&id, &key);
     let StreamSessionRecord::Prepared(value) = &prepared else {
         unreachable!()
@@ -4463,7 +4654,7 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
     let id = owned_agent("raw-shared-idempotency-key", ComponentId::new());
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
-    let idempotency_key = IdempotencyKey::new("shared".into());
+    let idempotency_key = test_invocation_id("shared".into());
     let first = prepared_record(&id, &idempotency_key);
     let StreamSessionRecord::Prepared(first_value) = &first else {
         unreachable!()
@@ -4888,4 +5079,8 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
             assert_eq!(status, AgentStatus::Failed);
         }
     }
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

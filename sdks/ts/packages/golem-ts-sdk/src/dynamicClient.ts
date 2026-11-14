@@ -2,11 +2,8 @@
 //
 // Licensed under the Golem Source License v1.1
 
-import {
-  type CancelableScheduledInvocationReceipt,
-  type Datetime,
-  type InvocationMetadata,
-} from 'golem:agent/host@2.0.0';
+import type { Datetime } from 'golem:agent/host@2.0.0';
+import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/agent';
 import { type SchemaValue } from './internal/schema-model';
 import { decodeAgentId } from './internal/agentIdentity';

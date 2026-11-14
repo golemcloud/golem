@@ -111,7 +111,11 @@ async fn nonmatching_storage(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "tcp_collect_p3",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();

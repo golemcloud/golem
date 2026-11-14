@@ -45,7 +45,6 @@ interface tool-middleware-guest {
   use common.{invocation-result, tool, tool-error, tool-middleware};
   use streams.{byte-stream-item, tool-output-writer};
   use underlying.{underlying-tool};
-  use golem:agent/common@2.0.0.{principal};
   use golem:core/types@2.0.0.{typed-schema-value};
 
   /// Enumerate every middleware definition exported by this component.
@@ -55,6 +54,8 @@ interface tool-middleware-guest {
   get-tool-middleware: func(name: string) -> result<tool-middleware, tool-error>;
 
   /// Invoke one middleware layer around its runtime-bound next inner layer.
+  /// `golem:agent/invocation-context.caller` answers with the caller of the
+  /// wrapped tool invocation.
   invoke-tool-middleware: async func(
     middleware-name: string,
     tool-name:       string,
@@ -65,7 +66,6 @@ interface tool-middleware-guest {
     stdin:           option<stream<byte-stream-item>>,
     stdout:          option<own<tool-output-writer>>,
     stderr:          option<own<tool-output-writer>>,
-    principal:       principal,
     wrapped:         underlying-tool,
   ) -> result<invocation-result, tool-error>;
 }
@@ -75,6 +75,7 @@ interface tool-middleware-guest {
 world tool-middleware-runtime {
   import golem:api/host@1.5.0;
   import golem:agent/host@2.0.0;
+  import golem:agent/invocation-context@2.0.0;
   import common;
   import streams;
   import host;

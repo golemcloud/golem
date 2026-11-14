@@ -258,6 +258,18 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         }
         let mut linker_interface = linker.instance(interface_name)?;
         for (name, item) in interface.exports(&engine) {
+            if interface_name == "golem:agent/invocation-context@2.0.0" && name == "caller" {
+                linker_interface.func_wrap(
+                    name,
+                    |_store: wasmtime::StoreContextMut<'_, Host>, (): ()| {
+                        Ok((agent_wire::Caller {
+                            original: Principal::anonymous().into(),
+                            immediate: Principal::anonymous().into(),
+                        },))
+                    },
+                )?;
+                continue;
+            }
             match item.ty {
                 ComponentItem::ComponentFunc(function) if function.async_() => {
                     linker_interface.func_new_concurrent(name, |_accessor, _, _, _| {
@@ -313,10 +325,6 @@ fn input(
     ))?)
 }
 
-fn principal() -> agent_wire::Principal {
-    Principal::anonymous().into()
-}
-
 #[test]
 #[timeout("60s")]
 async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
@@ -367,7 +375,6 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         Option<wasmtime::component::StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
         Option<Resource<StdoutWriter>>,
         Option<Resource<StdoutWriter>>,
-        agent_wire::Principal,
     ), (Invocation,)>(&store)?;
     for (command, expected_bytes, expected_value) in [
         ("stream", b"moonbit-marker:\x00\xffABC\x80".as_slice(), 6),
@@ -401,7 +408,6 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
                     stdin,
                     writer,
                     None,
-                    principal(),
                 ),
             )
             .await?
@@ -469,7 +475,6 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
                     attachment,
                     writer,
                     None,
-                    principal(),
                 ),
             )
             .await?

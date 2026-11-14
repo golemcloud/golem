@@ -1,5 +1,5 @@
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, OplogIndex, Timestamp, oplog};
+use golem_common::model::{AgentEvent, InvocationId, LogLevel, OplogIndex, Timestamp, oplog};
 
 // Internal version of AgentEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -7,26 +7,29 @@ pub enum InternalWorkerEvent {
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<InvocationId>,
     },
     StdErr {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<InvocationId>,
     },
     Log {
         timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
+        invocation_id: Option<InvocationId>,
     },
     InvocationStart {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: InvocationId,
     },
     InvocationFinished {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: InvocationId,
     },
     PluginError {
         timestamp: Timestamp,
@@ -45,42 +48,50 @@ pub enum InternalWorkerEvent {
 }
 
 impl InternalWorkerEvent {
-    pub fn stdout(bytes: Vec<u8>) -> Self {
+    pub fn stdout(bytes: Vec<u8>, invocation_id: Option<InvocationId>) -> Self {
         Self::StdOut {
             timestamp: Timestamp::now_utc(),
             bytes,
+            invocation_id,
         }
     }
 
-    pub fn stderr(bytes: Vec<u8>) -> Self {
+    pub fn stderr(bytes: Vec<u8>, invocation_id: Option<InvocationId>) -> Self {
         Self::StdErr {
             timestamp: Timestamp::now_utc(),
             bytes,
+            invocation_id,
         }
     }
 
-    pub fn log(level: LogLevel, context: &str, message: &str) -> Self {
+    pub fn log(
+        level: LogLevel,
+        context: &str,
+        message: &str,
+        invocation_id: Option<InvocationId>,
+    ) -> Self {
         Self::Log {
             timestamp: Timestamp::now_utc(),
             level,
             context: context.to_string(),
             message: message.to_string(),
+            invocation_id,
         }
     }
 
-    pub fn invocation_start(function: &str, idempotency_key: &IdempotencyKey) -> Self {
+    pub fn invocation_start(function: &str, invocation_id: InvocationId) -> Self {
         Self::InvocationStart {
             timestamp: Timestamp::now_utc(),
             function: function.to_string(),
-            idempotency_key: idempotency_key.clone(),
+            invocation_id,
         }
     }
 
-    pub fn invocation_finished(function: &str, idempotency_key: &IdempotencyKey) -> Self {
+    pub fn invocation_finished(function: &str, invocation_id: InvocationId) -> Self {
         Self::InvocationFinished {
             timestamp: Timestamp::now_utc(),
             function: function.to_string(),
-            idempotency_key: idempotency_key.clone(),
+            invocation_id,
         }
     }
 
@@ -109,7 +120,9 @@ impl InternalWorkerEvent {
 
     pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
         match self {
-            Self::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
+            Self::StdOut {
+                timestamp, bytes, ..
+            } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
                 parent_start_index: None,
                 level: oplog::LogLevel::Stdout,
@@ -117,7 +130,9 @@ impl InternalWorkerEvent {
                 message: String::from_utf8_lossy(bytes).to_string(),
                 trace_context: None,
             }),
-            Self::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
+            Self::StdErr {
+                timestamp, bytes, ..
+            } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
                 parent_start_index: None,
                 level: oplog::LogLevel::Stderr,
@@ -130,6 +145,7 @@ impl InternalWorkerEvent {
                 level,
                 context,
                 message,
+                ..
             } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
                 parent_start_index: None,
@@ -157,36 +173,54 @@ impl InternalWorkerEvent {
 impl From<InternalWorkerEvent> for AgentEvent {
     fn from(event: InternalWorkerEvent) -> Self {
         match event {
-            InternalWorkerEvent::StdOut { timestamp, bytes } => Self::StdOut { timestamp, bytes },
-            InternalWorkerEvent::StdErr { timestamp, bytes } => Self::StdErr { timestamp, bytes },
+            InternalWorkerEvent::StdOut {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => Self::StdOut {
+                timestamp,
+                bytes,
+                invocation_id,
+            },
+            InternalWorkerEvent::StdErr {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => Self::StdErr {
+                timestamp,
+                bytes,
+                invocation_id,
+            },
             InternalWorkerEvent::Log {
                 timestamp,
                 level,
                 context,
                 message,
+                invocation_id,
             } => Self::Log {
                 timestamp,
                 level,
                 context,
                 message,
+                invocation_id,
             },
             InternalWorkerEvent::InvocationStart {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             } => Self::InvocationStart {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             },
             InternalWorkerEvent::InvocationFinished {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             } => Self::InvocationFinished {
                 timestamp,
                 function,
-                idempotency_key,
+                invocation_id,
             },
             InternalWorkerEvent::PluginError {
                 timestamp,

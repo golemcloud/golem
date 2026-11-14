@@ -279,6 +279,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<(OplogIndex, OplogEntry)>> {
         concurrent::drain_queued_dropped_call_events(self).await?;
         let expected = request.expected_description();
+        self.state.refuse_on_bootstrap_cursor(expected)?;
         loop {
             if self.is_live() {
                 return Ok(None);
@@ -485,12 +486,16 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
     )
     .await?;
     let finalization = store_replay_state.finalization(tool_entity, tool_operation)?;
-    let outcome = match store_replay_state {
-        StoreReplayState::Primary => replay_state.publish_primary_live(linear_memory).await?,
-        _ => {
-            let replay_target = replay_state.exhaust_replay_prefix().await?;
-            linear_memory.switch_to_live();
-            ReplayToLiveOutcome::Live { replay_target }
+    let outcome = if let Some(replay_target) = replay_state.finish_bootstrap_replay().await? {
+        ReplayToLiveOutcome::Live { replay_target }
+    } else {
+        match store_replay_state {
+            StoreReplayState::Primary => replay_state.publish_primary_live(linear_memory).await?,
+            _ => {
+                let replay_target = replay_state.exhaust_replay_prefix().await?;
+                linear_memory.switch_to_live();
+                ReplayToLiveOutcome::Live { replay_target }
+            }
         }
     };
     match outcome {
