@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::AgentId;
 use test_r::test;
 
 #[test]
@@ -46,7 +47,7 @@ async fn k3_rate_configuration_is_part_of_backend_identity(
         );
     }
     // Returning to the old identity reconstructs the old policy, not the latest configuration.
-    let old_worker = executor.start_agent(&component.id, old.clone()).await?;
+    let old_worker = AgentId::from_agent_id(component.id, &old).map_err(anyhow::Error::msg)?;
     executor.simulated_crash(&old_worker).await?;
     executor
         .invoke_and_await_agent(&component, &old, "admit", data_value!("principal", "first"))

@@ -2397,7 +2397,8 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
     drop(caller_worker);
     drop(executor);
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
-    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let caller_worker =
+        AgentId::from_agent_id(component.id, &caller).map_err(anyhow::Error::msg)?;
     let replayed_denial = executor
         .invoke_and_await_agent(
             &component,

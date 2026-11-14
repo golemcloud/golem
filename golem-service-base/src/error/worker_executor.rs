@@ -695,10 +695,16 @@ impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
-            | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }) => {
+            | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::AgentAlreadyExists { .. }) => {
+                let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
+                    tonic::Code::AlreadyExists
+                } else {
+                    tonic::Code::FailedPrecondition
+                };
                 let message = error.to_string();
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
-                Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+                Self::with_details(code, message, details.into())
             }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
@@ -1448,6 +1454,16 @@ mod read_only_violation_trap_tests {
                 Some(expected)
             );
         }
+        let expected = WorkerExecutorError::worker_already_exists(AgentId {
+            component_id: ComponentId(uuid::Uuid::nil()),
+            agent_id: "Counter(23)".to_string(),
+        });
+        let status: Status = expected.clone().into();
+        assert_eq!(status.code(), tonic::Code::AlreadyExists);
+        assert_eq!(
+            WorkerExecutorError::from_status_details(&status),
+            Some(expected)
+        );
         assert!(
             WorkerExecutorError::from_status_details(&Status::internal("plain error")).is_none()
         );

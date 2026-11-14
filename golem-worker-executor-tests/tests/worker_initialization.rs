@@ -66,6 +66,43 @@ mod create_config_admission;
 
 #[test]
 #[timeout("2 minutes")]
+async fn warm_get_or_create_does_not_wait_for_oplog_maintenance(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+
+    let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
+    let metadata = seed.get_initial_worker_metadata();
+    let oplog_service = seed.all().oplog_service();
+    let _maintenance = oplog_service.lock_lifecycle(&seed.agent_id()).await;
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        executor.client.clone().prepare_worker(CreateWorkerRequest {
+            agent_id: Some(seed.agent_id().into()),
+            component_owner_account_id: Some(metadata.created_by.into()),
+            environment_id: Some(metadata.environment_id.into()),
+            ignore_already_existing: true,
+            auth_ctx: Some(AuthCtx::System.into()),
+            ..Default::default()
+        }),
+    )
+    .await??
+    .into_inner();
+    match response.result {
+        Some(create_worker_response::Result::Success(success)) => {
+            assert_eq!(success.instance_id.unwrap(), metadata.fingerprint.0.into());
+        }
+        other => anyhow::bail!("warm acquisition failed: {other:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
 async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

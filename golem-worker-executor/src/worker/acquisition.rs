@@ -618,6 +618,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
                 result => result?,
             };
+            if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "execution owner kind does not match the requested creation mode",
+                ));
+            }
+            // Construction success belongs to all waiters. Only the task's originating caller
+            // may treat a newly written Create as its own, rather than an existing incarnation.
+            let exclusive = matches!(
+                create_intent,
+                CreateIntent::Create {
+                    exclusive: true,
+                    ..
+                }
+            );
+            if (started && newly_created) || !exclusive {
+                return Ok(());
+            }
             // Never hold this guard while joining construction: the constructing task needs it.
             let _lifecycle = self
                 .deps
@@ -626,17 +643,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             owned_shard_epoch(&self.deps, &self.owned_agent_id.agent_id)?;
             if self.answers_as_deleted().await {
-                return Err(WorkerExecutorError::worker_not_found(self.agent_id()));
-            }
-            if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
-                return Err(WorkerExecutorError::invalid_request(
-                    "execution owner kind does not match the requested creation mode",
-                ));
-            }
-            // Construction success belongs to all waiters. Only the task's originating caller
-            // may treat a newly written Create as its own, rather than an existing incarnation.
-            if started && newly_created {
-                return Ok(());
+                // Deletion won admission. Retry after its cached generation has been removed
+                // rather than returning a missing-agent result from an exclusive create.
+                return Err(WorkerExecutorError::ShardingNotReady);
             }
             let incoming_request = create_intent.request(
                 self.parsed_agent_id.as_ref().and_then(|id| id.phantom_id),
@@ -655,13 +664,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .cloned()
                 .map(AgentConfigEntryDto::from)
                 .collect();
-            let exclusive = matches!(
-                create_intent,
-                CreateIntent::Create {
-                    exclusive: true,
-                    ..
-                }
-            );
             let incoming_config = if exclusive
                 && incoming_request.idempotency_key.is_some()
                 && incoming_request.idempotency_key

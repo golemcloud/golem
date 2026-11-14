@@ -814,6 +814,7 @@ impl WorkerDeletionHook for DeletionStageHook {
 test_r::tag_suite!(fenced_outcome, group5);
 test_r::tag_suite!(p2_ready, group5);
 
+mod create_deletion_admission;
 mod fenced_outcome;
 mod interruption;
 mod p2_ready;
@@ -4483,12 +4484,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    assert_eq!(
-        executor
-            .start_agent(&component.id, counter_id.clone())
-            .await?,
-        worker_id
-    );
+    executor.resume(&worker_id, false).await?;
 
     let oldest_key = oldest_key.unwrap();
     let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
