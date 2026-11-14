@@ -89,6 +89,7 @@ async fn run_recovery() -> Unit {
       @async.sleep(1)
     }
     assert_true(session.finished)
+    assert_true(session.output_terminals["sibling"])
     if "__MODE__" == "output-cancel-after-resume-head" {
       assert_eq(session.output_sequences["output"], 1UL)
       assert_false(session.output_terminals["output"])
