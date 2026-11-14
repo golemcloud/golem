@@ -15,6 +15,46 @@
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// For a caller that pinned this incarnation by its expected fingerprint, an error is
+    /// replaced by the answer the deletion of this generation gives, see
+    /// [`Self::pinned_deletion_refusal`]; without a deletion it is returned unchanged.
+    pub(crate) async fn deleted_incarnation_as_not_found<T>(
+        &self,
+        expected_fingerprint: Option<AgentFingerprint>,
+        result: Result<T, WorkerExecutorError>,
+    ) -> Result<T, WorkerExecutorError> {
+        match result {
+            Err(error) if expected_fingerprint.is_some() => {
+                Err(self.pinned_deletion_refusal().await.unwrap_or(error))
+            }
+            result => result,
+        }
+    }
+    /// How a deletion of this generation answers a caller that pinned it by its fingerprint.
+    /// Once the deletion has removed the durable state, no invocation committed to this
+    /// generation can run, so the answer is `AgentNotFound`. Before that the deletion can still
+    /// fail and leave an invocation that an earlier attempt with the same key committed, so a
+    /// running deletion answers the refusal an unpinned enqueue gets. A failed attempt leaves the
+    /// agent in place and a lost shard is a routing miss, so neither answers.
+    pub(in crate::worker) async fn pinned_deletion_refusal(&self) -> Option<WorkerExecutorError> {
+        let instance = self.instance.lock().await;
+        let WorkerInstance::Deleting(deleting) = instance.state() else {
+            return None;
+        };
+        if deleting.completed_stage >= WorkerDeletionStage::DurableStateRemoved {
+            Some(WorkerExecutorError::worker_not_found(
+                self.owned_agent_id.agent_id(),
+            ))
+        } else if !matches!(deleting.handle.result(), Some(Err(_)))
+            && !self.retired_for_lost_shard()
+        {
+            Some(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ))
+        } else {
+            None
+        }
+    }
     pub(crate) async fn deletion_owns_retirement(&self) -> bool {
         self.instance.lock().await.deletion_owns_retirement()
     }

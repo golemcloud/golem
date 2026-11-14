@@ -585,6 +585,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     freshness_disposition: proto_freshness_disposition,
                     config: config.clone().into_iter().map(Into::into).collect(),
                     scope_card: proto_scope_card.clone(),
+                    expected_callee_fingerprint: None,
                 }))
             })
             .await?
@@ -1104,6 +1105,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         as i32,
                     config: Vec::new(),
                     scope_card: None,
+                    expected_callee_fingerprint: None,
                 }))
             })
             .await?

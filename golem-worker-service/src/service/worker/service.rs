@@ -741,12 +741,11 @@ impl WorkerService {
                 .await
             {
                 Ok(metadata) if metadata.fingerprint.0 == expected => Ok(metadata.fingerprint),
-                Ok(_) | Err(WorkerServiceError::AgentNotFound(_)) => {
-                    Err(WorkerServiceError::TypeChecker(
-                        "expected callee fingerprint does not match the active agent incarnation"
-                            .to_string(),
-                    ))
-                }
+                Ok(_)
+                | Err(WorkerServiceError::AgentNotFound(_))
+                | Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound {
+                    ..
+                })) => Err(WorkerServiceError::AgentNotFound(agent_id.clone())),
                 Err(error) => Err(error),
             };
         }
@@ -1895,6 +1894,7 @@ impl WorkerService {
         principal: golem_api_grpc::proto::golem::component::Principal,
         known_environment_id: Option<EnvironmentId>,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let target = agent_id;
         let AgentTarget::Current(agent_id) = target;
@@ -1921,6 +1921,7 @@ impl WorkerService {
             auth_ctx.clone(),
             principal,
             scope_card,
+            expected_fingerprint,
             |final_agent_id| {
                 authorize_agent_permission(
                     &auth_ctx,
@@ -2040,7 +2041,8 @@ impl WorkerService {
         )?;
         if observation_only {
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
-        } else if agent_id != original_agent_id
+        } else if start.expected_callee_fingerprint.is_none()
+            && agent_id != original_agent_id
             && matches!(request_key, InvocationRequestKey::Unkeyed(_))
         {
             freshness_disposition = InvocationFreshnessDisposition::KnownFresh;
@@ -2069,6 +2071,9 @@ impl WorkerService {
                     component.environment_id,
                     &auth_ctx,
                     freshness_disposition,
+                    start
+                        .expected_callee_fingerprint
+                        .map(|fingerprint| AgentFingerprint(fingerprint.into())),
                 )
                 .await?;
             if invocation_method_uses_streams(&invocation_component, &agent_id, method_name)? {
@@ -2096,7 +2101,10 @@ impl WorkerService {
                         start.expected_callee_fingerprint,
                     )
                     .await?;
+                // The resolution created or found the incarnation, so the start names an
+                // existing one, which the executor does not accept as KnownFresh.
                 start.expected_callee_fingerprint = Some(fingerprint.0.into());
+                freshness_disposition = InvocationFreshnessDisposition::MayExist;
             }
         }
 
@@ -2329,6 +2337,7 @@ impl WorkerService {
                 environment_id,
                 &auth,
                 freshness_disposition,
+                None,
             )
             .await?;
         let invocation_agent_type = invocation_component
@@ -2392,6 +2401,9 @@ impl WorkerService {
                     None,
                 )
                 .await?;
+            // The resolution created or found the incarnation, so the start names an existing
+            // one, which the executor does not accept as KnownFresh.
+            freshness_disposition = InvocationFreshnessDisposition::MayExist;
             Some(fingerprint.0.into())
         } else {
             None
@@ -2943,6 +2955,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        expected_fingerprint: Option<AgentFingerprint>,
         authorize: impl FnOnce(&AgentId) -> WorkerResult<()>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let AgentTarget::Current(agent_id) = agent_id;
@@ -2973,7 +2986,10 @@ impl WorkerService {
                 freshness_disposition,
                 authorize,
             )?;
+        // A derived phantom is fresh, but a caller that expects an existing incarnation must
+        // reach the guard, which refuses KnownFresh.
         if !observation_only
+            && expected_fingerprint.is_none()
             && agent_id != *original_agent_id
             && matches!(request_key, InvocationRequestKey::Unkeyed(_))
         {
@@ -2990,6 +3006,7 @@ impl WorkerService {
                     environment_id,
                     &auth_ctx,
                     freshness_disposition,
+                    expected_fingerprint,
                 )
                 .await?,
             )
@@ -3028,6 +3045,7 @@ impl WorkerService {
             auth_ctx,
             principal,
             scope_card,
+            expected_fingerprint,
         )
         .await
     }
@@ -3088,6 +3106,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let mut output = self
             .worker_client
@@ -3106,6 +3125,7 @@ impl WorkerService {
                 auth_ctx,
                 principal,
                 scope_card,
+                expected_fingerprint,
             )
             .await?;
         let AgentTarget::Current(agent_id) = agent_id;
@@ -3120,17 +3140,34 @@ impl WorkerService {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<std::borrow::Cow<'a, Component>> {
-        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+        if expected_fingerprint.is_none()
+            && freshness_disposition == InvocationFreshnessDisposition::KnownFresh
+        {
             return Ok(std::borrow::Cow::Borrowed(fallback));
         }
 
+        // A caller that names an incarnation is validated against that incarnation's revision
+        // only: a missing agent or another incarnation is not found before its input is checked
+        // against a component it was never invoked on.
         let component_revision = match self
             .worker_client
             .get_metadata(agent_id, environment_id, auth_ctx.clone())
             .await
         {
-            Ok(metadata) => metadata.component_revision,
+            Ok(metadata)
+                if expected_fingerprint.is_none_or(|expected| metadata.fingerprint == expected) =>
+            {
+                metadata.component_revision
+            }
+            Ok(_) => return Err(WorkerServiceError::AgentNotFound(agent_id.clone())),
+            Err(WorkerServiceError::AgentNotFound(_))
+            | Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }))
+                if expected_fingerprint.is_some() =>
+            {
+                return Err(WorkerServiceError::AgentNotFound(agent_id.clone()));
+            }
             Err(WorkerServiceError::AgentNotFound(_))
             | Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. })) => {
                 return Ok(std::borrow::Cow::Borrowed(fallback));
@@ -3684,6 +3721,7 @@ impl WorkerService {
                 environment_id,
                 &auth,
                 freshness_disposition,
+                None,
             )
             .await?;
 
@@ -3765,6 +3803,7 @@ impl WorkerService {
                 component_owner_account_id,
                 auth.clone(),
                 principal,
+                None,
                 None,
             )
             .await?;
@@ -4506,6 +4545,7 @@ mod tests {
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_modes_and_schedules: Mutex<Vec<(i32, Option<::prost_types::Timestamp>)>>,
         invocation_environments: Mutex<Vec<EnvironmentId>>,
+        invocation_expected_fingerprints: Mutex<Vec<Option<AgentFingerprint>>>,
         invocation_session_starts: Mutex<Vec<(AgentId, InvocationStart)>>,
         invocation_session_resumes: Mutex<Vec<(AgentId, ResumeAttach)>>,
         effects: Mutex<Vec<&'static str>>,
@@ -4525,6 +4565,7 @@ mod tests {
                 invocations: Mutex::new(Vec::new()),
                 invocation_modes_and_schedules: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
+                invocation_expected_fingerprints: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
                 invocation_session_resumes: Mutex::new(Vec::new()),
                 effects: Mutex::new(Vec::new()),
@@ -4547,6 +4588,7 @@ mod tests {
                 invocations: Mutex::new(Vec::new()),
                 invocation_modes_and_schedules: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
+                invocation_expected_fingerprints: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
                 invocation_session_resumes: Mutex::new(Vec::new()),
                 effects: Mutex::new(Vec::new()),
@@ -4580,6 +4622,13 @@ mod tests {
 
         fn invocation_modes_and_schedules(&self) -> Vec<(i32, Option<::prost_types::Timestamp>)> {
             self.invocation_modes_and_schedules.lock().unwrap().clone()
+        }
+
+        fn invocation_expected_fingerprints(&self) -> Vec<Option<AgentFingerprint>> {
+            self.invocation_expected_fingerprints
+                .lock()
+                .unwrap()
+                .clone()
         }
 
         fn invocation_environment(&self) -> EnvironmentId {
@@ -4972,8 +5021,13 @@ mod tests {
             _: AuthCtx,
             _: golem_api_grpc::proto::golem::component::Principal,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+            expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<AgentInvocationOutput> {
             let AgentTarget::Current(agent_id) = agent_id;
+            self.invocation_expected_fingerprints
+                .lock()
+                .unwrap()
+                .push(expected_fingerprint);
             let idempotency_key = if mode
                 == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             {
@@ -6378,6 +6432,76 @@ mod tests {
         );
     }
 
+    // The executor's admission refuses KnownFresh together with an expected callee fingerprint,
+    // so no start the worker service sends may combine the two.
+    #[test]
+    async fn public_ephemeral_streaming_start_is_not_known_fresh() {
+        let harness = RestHarness::new_with_output(
+            AgentMode::Ephemeral,
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+        );
+
+        harness
+            .worker_service
+            .invoke_public_agent_session_v1(
+                harness.public_invocation_start(IdempotencyKey::fresh()),
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                |_, _| panic!("stream resolver called for a stream-free input"),
+            )
+            .await
+            .unwrap();
+
+        let (_, trusted_start) = harness.worker_client.invocation_session_start();
+        assert!(
+            !(trusted_start.expected_callee_fingerprint.is_some()
+                && trusted_start.freshness_disposition()
+                    == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh),
+            "the start combines KnownFresh with an expected callee fingerprint, which the executor refuses"
+        );
+    }
+
+    #[test]
+    async fn session_start_with_expected_fingerprint_is_not_upgraded_to_known_fresh() {
+        let harness = RestHarness::new(AgentMode::Ephemeral);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let logical_agent_id = build_public_invocation_agent_id(
+            harness.component_id,
+            harness.agent_type_name.clone(),
+            empty_constructor_parameters(),
+            None,
+        )
+        .unwrap();
+        let start = InvocationStart {
+            agent_id: Some(logical_agent_id.into()),
+            method_name: Some("run".to_string()),
+            request_key: Some(InvocationRequestKey::Unkeyed(Uuid::new_v4()).into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(harness.worker_client.fingerprint.0.into()),
+            ..Default::default()
+        };
+
+        let _responses = harness
+            .worker_service
+            .invoke_agent_session(start, Box::pin(stream::empty()), true, AuthCtx::system())
+            .await
+            .unwrap();
+
+        let (_, admitted) = harness.worker_client.invocation_session_start();
+        assert!(admitted.expected_callee_fingerprint.is_some());
+        assert_eq!(
+            admitted.freshness_disposition(),
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist,
+            "a start that expects an existing incarnation must reach the executor's guard, which refuses KnownFresh"
+        );
+    }
+
     #[test]
     async fn public_resume_reauthorizes_and_preserves_attachment_identity() {
         let harness = RestHarness::new(AgentMode::Durable);
@@ -6629,6 +6753,179 @@ mod tests {
     }
 
     #[test]
+    async fn invoke_agent_forwards_the_expected_fingerprint_without_known_fresh() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let harness = RestHarness::new(mode);
+            harness
+                .worker_client
+                .set_metadata_component_revision(harness.component_revision);
+            let agent_id = AgentId {
+                component_id: harness.component_id,
+                agent_id: "weather-agent()".to_string(),
+            };
+            let expected = harness.worker_client.fingerprint;
+            for fingerprint in [Some(expected), None] {
+                harness
+                    .worker_service
+                    .invoke_agent(
+                        &AgentTarget::Current(agent_id.clone()),
+                        Some("run".to_string()),
+                        Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
+                        golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                        None,
+                        InvocationRequestKey::external(None, None),
+                        None,
+                        true,
+                        InvocationFreshnessDisposition::MayExist,
+                        Vec::new(),
+                        AuthCtx::system(),
+                        Principal::anonymous().into(),
+                        None,
+                        None,
+                        fingerprint,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                harness.worker_client.invocation_expected_fingerprints(),
+                vec![Some(expected), None],
+                "{mode:?}"
+            );
+            // A derived ephemeral phantom is otherwise known to be fresh, but a caller that
+            // expects an existing incarnation must reach the executor's existing-only guard.
+            let freshness: Vec<_> = harness
+                .worker_client
+                .invocations()
+                .into_iter()
+                .map(|invocation| invocation.2)
+                .collect();
+            let unpinned = match mode {
+                AgentMode::Ephemeral => InvocationFreshnessDisposition::KnownFresh,
+                _ => InvocationFreshnessDisposition::MayExist,
+            };
+            assert_eq!(
+                freshness,
+                vec![InvocationFreshnessDisposition::MayExist, unpinned],
+                "{mode:?}"
+            );
+        }
+    }
+
+    // A caller that names an incarnation is answered for that incarnation before its input is
+    // validated, so a method that only the incarnation's own revision may have is not reported
+    // as invalid input when the incarnation is gone or was replaced.
+    #[test]
+    async fn invoke_agent_with_expected_fingerprint_checks_the_incarnation_before_the_method() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let target = AgentTarget::Current(AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        });
+        let invoke = |fingerprint| {
+            harness.worker_service.invoke_agent(
+                &target,
+                Some("no-such-method".to_string()),
+                Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                None,
+                InvocationRequestKey::external(None, None),
+                None,
+                true,
+                InvocationFreshnessDisposition::MayExist,
+                Vec::new(),
+                AuthCtx::system(),
+                Principal::anonymous().into(),
+                None,
+                None,
+                fingerprint,
+            )
+        };
+
+        let missing = invoke(Some(harness.worker_client.fingerprint)).await;
+        assert!(
+            matches!(missing, Err(WorkerServiceError::AgentNotFound(_))),
+            "{missing:?}"
+        );
+
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let replaced = invoke(Some(AgentFingerprint::new())).await;
+        assert!(
+            matches!(replaced, Err(WorkerServiceError::AgentNotFound(_))),
+            "{replaced:?}"
+        );
+
+        let unpinned = invoke(None).await;
+        assert!(
+            matches!(unpinned, Err(WorkerServiceError::TypeChecker(_))),
+            "{unpinned:?}"
+        );
+        assert!(harness.worker_client.invocations().is_empty());
+    }
+
+    // A session start that names an incarnation is answered for that incarnation before its
+    // method is looked up, so a method missing from the deployed component is not reported as a
+    // validation failure when the incarnation is gone or was replaced.
+    #[test]
+    async fn session_start_with_expected_fingerprint_checks_the_incarnation_before_the_method() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let start = |fingerprint: AgentFingerprint| InvocationStart {
+            agent_id: Some(
+                AgentId {
+                    component_id: harness.component_id,
+                    agent_id: "weather-agent()".to_string(),
+                }
+                .into(),
+            ),
+            method_name: Some("no-such-method".to_string()),
+            request_key: Some(InvocationRequestKey::external(None, None).into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(fingerprint.0.into()),
+            ..Default::default()
+        };
+
+        let missing = harness
+            .worker_service
+            .invoke_agent_session(
+                start(harness.worker_client.fingerprint),
+                Box::pin(stream::empty()),
+                true,
+                AuthCtx::system(),
+            )
+            .await;
+        assert!(
+            matches!(missing, Err(WorkerServiceError::AgentNotFound(_))),
+            "{:?}",
+            missing.err()
+        );
+
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let replaced = harness
+            .worker_service
+            .invoke_agent_session(
+                start(AgentFingerprint::new()),
+                Box::pin(stream::empty()),
+                true,
+                AuthCtx::system(),
+            )
+            .await;
+        assert!(
+            matches!(replaced, Err(WorkerServiceError::AgentNotFound(_))),
+            "{:?}",
+            replaced.err()
+        );
+        assert_eq!(harness.worker_client.invocation_session_start_count(), 0);
+    }
+
+    #[test]
     async fn one_shot_native_and_protobuf_inputs_validate_before_dispatch() {
         let harness = RestHarness::new_with_input(
             AgentMode::Durable,
@@ -6696,6 +6993,7 @@ mod tests {
                     Vec::new(),
                     AuthCtx::system(),
                     Principal::anonymous().into(),
+                    None,
                     None,
                     None,
                 )
@@ -6904,6 +7202,7 @@ mod tests {
                     Principal::anonymous().into(),
                     Some(a.environment_id),
                     None,
+                    None,
                 )
                 .await
                 .expect_err(
@@ -6926,6 +7225,7 @@ mod tests {
                     AuthCtx::system(),
                     Principal::anonymous().into(),
                     Some(a.environment_id),
+                    None,
                     None,
                 )
                 .await

@@ -20,6 +20,7 @@ use super::{
 use crate::worker::CreateIntent;
 use golem_common::base_model::agent::Principal;
 use golem_common::base_model::{AgentId, IdempotencyKey};
+use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -392,9 +393,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await
     }
 
+    /// With an expected fingerprint, only that existing incarnation is looked up: a missing agent
+    /// or another incarnation is `AgentNotFound`, and no agent is created.
     pub(super) async fn get_or_create_pending_for_lookup<Req: CanStartWorker>(
         &self,
         request: &Req,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<
         Option<(
             Arc<Worker<Ctx>>,
@@ -408,9 +412,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
             self.ensure_worker_belongs_to_this_executor(agent_id)?;
             let owner = OwnedAgentId::new(environment_id, agent_id);
-            if Worker::<Ctx>::get_latest_metadata(self, &owner)
-                .await?
-                .is_none()
+            if expected_fingerprint.is_none()
+                && Worker::<Ctx>::get_latest_metadata(self, &owner)
+                    .await?
+                    .is_none()
             {
                 return Ok(None);
             }
@@ -418,6 +423,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 &owner,
                 request.principal(),
+                expected_fingerprint,
             )
             .await
             .map(Some);
@@ -427,6 +433,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .canonicalize_agent_target(environment_id, &target)
             .await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        if expected_fingerprint.is_some() {
+            return Worker::get_exact_existing_suspended_for_response(
+                self,
+                &owned_agent_id,
+                request.principal(),
+                expected_fingerprint,
+            )
+            .await
+            .map(Some);
+        }
 
         let component = self
             .component_service()
@@ -472,10 +489,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .map(Some)
     }
 
+    /// With an expected fingerprint, only that existing incarnation is acquired: a missing agent
+    /// or another incarnation is `AgentNotFound`, and no agent is created.
     pub(super) async fn get_or_create_pending_with_freshness<Req: CanStartWorker>(
         &self,
         request: &Req,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<
         (
             Arc<Worker<Ctx>>,
@@ -491,6 +511,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
+        if let Some(expected) = expected_fingerprint {
+            // The incarnation is pinned before its status is read, so the failure of a re-created
+            // agent never answers a caller that named the deleted incarnation.
+            let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
+                self,
+                &owned_agent_id,
+                request.principal(),
+                Some(expected),
+            )
+            .await?;
+            if worker.agent_mode() != AgentMode::Ephemeral
+                && worker.pending_startup_attempt().is_none()
+            {
+                let status = worker
+                    .deleted_incarnation_as_not_found(
+                        Some(expected),
+                        worker.try_get_last_known_status().await,
+                    )
+                    .await?;
+                self.ensure_not_failed(&owned_agent_id, worker.agent_mode(), &status)
+                    .await?;
+            }
+            return Ok((worker, response_lease));
+        }
+
         // This runs on every invocation. For a resident agent, read the status the worker already
         // publishes; only an agent that is not resident has its record materialised (from the
         // cache and the oplog), which is the same cold path as before.
@@ -500,7 +545,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if worker.pending_startup_attempt().is_some() {
                 None
             } else {
-                Some((worker.agent_mode(), worker.get_last_known_status().await))
+                Some((
+                    worker.agent_mode(),
+                    worker.try_get_last_known_status().await?,
+                ))
             }
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)

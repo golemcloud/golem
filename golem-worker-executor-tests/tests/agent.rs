@@ -1973,3 +1973,160 @@ async fn pending_payload_reuse_keeps_manual_snapshot_update_distinct_from_method
     );
     Ok(())
 }
+
+fn counter_invocation(
+    component: &golem_common::model::component::ComponentDto,
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &AgentId,
+    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
+    schedule_at: Option<prost_types::Timestamp>,
+    expected_fingerprint: Option<golem_common::model::AgentFingerprint>,
+) -> anyhow::Result<InvocationStart> {
+    let lookup = mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+    Ok(InvocationStart {
+        agent_id: Some(worker_id.clone().into()),
+        method_name: (!lookup).then(|| "increment".to_string()),
+        input: if lookup {
+            None
+        } else {
+            Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            )
+        },
+        mode: mode as i32,
+        schedule_at,
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        context: None,
+        principal: None,
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        config: Vec::new(),
+        attempt_id: None,
+        expected_callee_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
+        durable_input_mappings: Vec::new(),
+        scope_card: None,
+        origin_invocation: None,
+        external_tool: None,
+        request_key: (!lookup).then(|| InvocationRequestKey::external(None, None).into()),
+    })
+}
+
+/// Every invocation mode with `expected_fingerprint`, which must each fail as not found.
+async fn assert_every_mode_refuses_fingerprint(
+    component: &golem_common::model::component::ComponentDto,
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &AgentId,
+    expected_fingerprint: golem_common::model::AgentFingerprint,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+    let later = prost_types::Timestamp {
+        seconds: chrono::Utc::now().timestamp() + 3600,
+        nanos: 0,
+    };
+    for (mode, schedule_at) in [
+        (AgentInvocationMode::Await, None),
+        (AgentInvocationMode::Schedule, None),
+        (AgentInvocationMode::Schedule, Some(later)),
+        (AgentInvocationMode::Lookup, None),
+    ] {
+        let error = executor
+            .invoke_agent_session(counter_invocation(
+                component,
+                executor,
+                worker_id,
+                mode,
+                schedule_at,
+                Some(expected_fingerprint),
+            )?)
+            .await
+            .expect_err("a stale expected fingerprint must be refused");
+        assert!(
+            error.to_string().contains("Worker not found"),
+            "{mode:?} with schedule_at {schedule_at:?}: unexpected error: {error:#}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn expected_fingerprint_admits_only_the_named_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_id!("Counter", "expected-fingerprint");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let first = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+
+    for expected in [Some(first), None] {
+        executor
+            .invoke_agent_session(counter_invocation(
+                &component,
+                &executor,
+                &worker_id,
+                AgentInvocationMode::Await,
+                None,
+                expected,
+            )?)
+            .await?;
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3,
+        "the call with the matching fingerprint and the call without one both ran"
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert_every_mode_refuses_fingerprint(&component, &executor, &worker_id, first).await?;
+    assert_eq!(
+        executor.get_worker_metadata_opt(&worker_id).await?,
+        None,
+        "a refused call must not create the agent"
+    );
+
+    executor.start_agent(&component.id, agent.clone()).await?;
+    let second = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    assert_ne!(first, second);
+    // The new incarnation is resident, so the guard compares a worker that is already resolved.
+    assert_every_mode_refuses_fingerprint(&component, &executor, &worker_id, first).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    // After a restart the agent is cold, so the guard compares the metadata it loads.
+    assert_every_mode_refuses_fingerprint(&component, &executor, &worker_id, first).await?;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.fingerprint, second);
+    assert_eq!(
+        metadata.pending_invocation_count, 0,
+        "a refused call must not enqueue or schedule an invocation"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1,
+        "no refused call ran on the new incarnation"
+    );
+    Ok(())
+}

@@ -131,6 +131,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 Principal::anonymous().into(),
                 Some(call.environment_id),
                 None,
+                None,
             )
             .await
             .map_err(|_| OpenApiError::new("provider-invocation"))?;

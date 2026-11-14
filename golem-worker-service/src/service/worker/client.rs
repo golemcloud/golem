@@ -686,6 +686,7 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput>;
 
     async fn invoke_agent_session(
@@ -2251,6 +2252,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let target = agent_id;
         let AgentTarget::Current(agent_id) = target;
@@ -2296,7 +2298,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             }
                         },
                         attempt_id: Some(attempt_id.into()),
-                        expected_callee_fingerprint: None,
+                        expected_callee_fingerprint: expected_fingerprint
+                            .map(|fingerprint| fingerprint.0.into()),
                         durable_input_mappings: Vec::new(),
                         scope_card: scope_card.clone(),
                         origin_invocation: None,
@@ -4016,6 +4019,7 @@ mod rejection_mapping_tests {
                 AccountId::new(),
                 AuthCtx::System,
                 Principal::anonymous().into(),
+                None,
                 None,
             )
             .await

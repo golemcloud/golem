@@ -323,17 +323,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
-        let (worker, _response_lease) =
-            match self.get_or_create_pending_for_lookup(&request).await? {
-                Some(worker) => worker,
-                None => {
-                    self.get_or_create_pending_with_freshness(
-                        &request,
-                        InvocationFreshnessDisposition::MayExist,
-                    )
-                    .await?
-                }
-            };
+        let (worker, _response_lease) = match self
+            .get_or_create_pending_for_lookup(&request, None)
+            .await?
+        {
+            Some(worker) => worker,
+            None => {
+                self.get_or_create_pending_with_freshness(
+                    &request,
+                    InvocationFreshnessDisposition::MayExist,
+                    None,
+                )
+                .await?
+            }
+        };
         let operation = request
             .method_name
             .as_deref()

@@ -1354,6 +1354,28 @@ not published yet; it carries no principal or context. Tests:
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+`ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
+`AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
+whether the worker was resident or loaded cold. A caller that joined another caller's load loads
+again with its own fingerprint when that load answered not found. Invocation admission uses the
+guard for every mode when `InvocationStart.expected_callee_fingerprint` is set, before any
+schedule or `PendingAgentInvocation`, and validates a schedule against the pinned worker; such a
+request cannot be `KnownFresh`. A generation under deletion stays cached until the deletion ends,
+so with a fingerprint set `Worker::get_exact_existing_suspended_for_response` and a refused
+task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` once the deletion
+has completed `DurableStateRemoved`, because nothing committed to the generation can run after
+that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
+still fail and leave an invocation an earlier attempt with the same key committed. A failed
+deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
+worker's status before the bind, with or without a fingerprint, without panicking on a stopped
+status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
+deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
+as reads do, until a retried delete claims it. Failures after the bind keep
+their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
+while it runs. External-tool sessions bind the same way after each acquisition. A call on an
+existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
+owner (`fresh_owner`) has no incarnation a caller can name, so a fingerprint with it is an invalid
+request in every mode.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete

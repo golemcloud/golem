@@ -123,12 +123,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     &owned_agent_id,
                     request.principal(),
+                    None,
                 )
                 .await?
             } else {
                 self.get_or_create_pending_with_freshness(
                     &request,
                     InvocationFreshnessDisposition::MayExist,
+                    None,
                 )
                 .await?
             };

@@ -12080,6 +12080,383 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
     Ok(())
 }
 
+// Sends an `increment` in `mode`, scheduled an hour ahead when `delayed`, that names the
+// incarnation by `fingerprint` when one is given, and describes how it was answered.
+async fn send_increment(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    worker_id: &AgentId,
+    fingerprint: Option<AgentFingerprint>,
+    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
+    delayed: bool,
+) -> anyhow::Result<String> {
+    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+        agent_id: Some(worker_id.clone().into()),
+        method_name: Some("increment".to_string()),
+        input: Some(
+            SchemaValue::Record { fields: vec![] }
+                .try_into()
+                .map_err(anyhow::Error::msg)?,
+        ),
+        mode: mode as i32,
+        schedule_at: delayed.then(|| prost_types::Timestamp {
+            seconds: chrono::Utc::now().timestamp() + 3600,
+            nanos: 0,
+        }),
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        expected_callee_fingerprint: fingerprint.map(|fingerprint| fingerprint.0.into()),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_agent_session(start),
+    )
+    .await;
+    let pinned = fingerprint.is_some();
+    Ok(match result {
+        Err(_) => format!("{mode:?} delayed={delayed} pinned={pinned}: timed out"),
+        Ok(Ok(_)) => format!("{mode:?} delayed={delayed} pinned={pinned}: admitted"),
+        Ok(Err(error)) => format!("{mode:?} delayed={delayed} pinned={pinned}: {error:#}"),
+    })
+}
+
+// Sends an `increment` with the incarnation's expected fingerprint while a deletion of that
+// incarnation is held before `stage`, and returns how each mode was answered.
+async fn fingerprinted_calls_during_deletion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_counters: &PrecompiledComponent,
+    stage: WorkerDeletionStage,
+) -> anyhow::Result<Vec<String>> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
+    let mut report = Vec::new();
+    for (mode, delayed) in [
+        (Mode::Await, false),
+        (Mode::Schedule, false),
+        (Mode::Schedule, true),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let name = agent_id!("Counter", "fingerprinted-deleting");
+        let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+        let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let hook = Arc::new(DeletionStageHook::new(owned.clone(), Some(stage), None));
+        executor.set_worker_deletion_hook(hook.clone());
+        let deleting = tokio::spawn({
+            let executor = executor.clone();
+            let worker_id = worker_id.clone();
+            async move { executor.delete_worker(&worker_id).await }
+        });
+        hook.wait_until_gated().await;
+        let answer = send_increment(
+            &executor,
+            &component,
+            &worker_id,
+            Some(fingerprint),
+            mode,
+            delayed,
+        )
+        .await?;
+        report.push(format!("{stage:?} {answer}"));
+        hook.release();
+        let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
+        drop(executor);
+    }
+    Ok(report)
+}
+
+// A caller that names an incarnation by its fingerprint gets the deletion's refusal while a
+// deletion of that incarnation runs, because the deletion can still fail and leave the agent in
+// place, and not found once the deletion has removed its durable state.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_removed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+    for (stage, expected) in [
+        (WorkerDeletionStage::ExecutionFenced, "VALIDATION"),
+        (WorkerDeletionStage::StreamsCleaned, "VALIDATION"),
+        (WorkerDeletionStage::DurableStateRemoved, "VALIDATION"),
+        (WorkerDeletionStage::CacheRemoved, "NOT_FOUND"),
+    ] {
+        failures.extend(
+            fingerprinted_calls_during_deletion(last_unique_id, deps, agent_counters, stage)
+                .await?
+                .into_iter()
+                .filter(|line| !line.contains(expected)),
+        );
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+// A deletion that fails after stopping the incarnation's runtime leaves the agent in place, with
+// the stopped generation still resident. A caller gets the deletion's refusal, as reads do,
+// whether or not it names that incarnation by its fingerprint, and the executor keeps serving:
+// the retried deletion succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", "fingerprinted-failed-delete"),
+        )
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // Armed once the delete reaches the durable state, so the failure lands after the runtime
+    // and its status actor stopped and before the oplog is deleted.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_some()
+    );
+
+    let mut failures = Vec::new();
+    for (mode, delayed, fingerprint) in [
+        (Mode::Await, false, Some(fingerprint)),
+        (Mode::Schedule, false, Some(fingerprint)),
+        (Mode::Schedule, true, Some(fingerprint)),
+        (Mode::Await, false, None),
+        (Mode::Schedule, false, None),
+        (Mode::Schedule, true, None),
+    ] {
+        let answer = send_increment(
+            &executor,
+            &component,
+            &worker_id,
+            fingerprint,
+            mode,
+            delayed,
+        )
+        .await?;
+        // The deletion's refusal is a validation error, not the runtime error of a refused bind.
+        if !(answer.contains("VALIDATION") && answer.contains("being deleted")) {
+            failures.push(answer);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+// An external-tool lookup that names an incarnation is answered by the existing-only guard for
+// that incarnation: the matching incarnation is looked up, another one is not found, and one whose
+// deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
+// answer from the deleting generation. A fresh owner cannot be named by a fingerprint.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn expected_fingerprint_external_tool_lookup_is_guarded(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_agent(&component.id, agent_id!("Counter", "tool-lookup"))
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let lookup =
+        |fingerprint: AgentFingerprint| golem_api_grpc::proto::golem::worker::InvocationStart {
+            agent_id: Some(worker_id.clone().into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            expected_callee_fingerprint: Some(fingerprint.0.into()),
+            external_tool: Some(
+                golem_api_grpc::proto::golem::worker::ExternalToolInvocation {
+                    tool_name: "tool".into(),
+                    command_path: vec!["run".into()],
+                    fresh_owner: false,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+    let answer = |result: anyhow::Result<_>| match result {
+        Ok(_) => "admitted".to_string(),
+        Err(error) => format!("{error:#}"),
+    };
+
+    let matching = answer(executor.invoke_agent_session(lookup(fingerprint)).await);
+    assert_eq!(matching, "admitted");
+    let stale = answer(
+        executor
+            .invoke_agent_session(lookup(AgentFingerprint::new()))
+            .await,
+    );
+    assert!(stale.contains("NOT_FOUND"), "{stale}");
+    // A fresh owner is created for the call, so a fingerprint cannot name it in any mode.
+    for mode in [
+        golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup,
+        golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await,
+    ] {
+        let mut fresh = lookup(fingerprint);
+        fresh.mode = mode as i32;
+        if let Some(tool) = fresh.external_tool.as_mut() {
+            tool.fresh_owner = true;
+        }
+        let fresh = answer(executor.invoke_agent_session(fresh).await);
+        assert!(
+            fresh.contains("VALIDATION") && fresh.contains("fresh external tool owner"),
+            "{mode:?}: {fresh}"
+        );
+    }
+    let mut unnamed = lookup(fingerprint);
+    unnamed.expected_callee_fingerprint = None;
+    let unnamed = answer(executor.invoke_agent_session(unnamed).await);
+    assert!(
+        unnamed.contains("VALIDATION")
+            && unnamed.contains("requires its expected agent fingerprint"),
+        "{unnamed}"
+    );
+
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::ExecutionFenced),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    hook.wait_until_gated().await;
+    let during_deletion = answer(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.invoke_agent_session(lookup(fingerprint)),
+        )
+        .await?,
+    );
+    // A call, not only a lookup, is refused before it is resolved against the deleting generation.
+    let mut call = lookup(fingerprint);
+    call.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    call.request_key = Some(golem_common::model::InvocationRequestKey::external(None, None).into());
+    if let Some(tool) = call.external_tool.as_mut() {
+        tool.input = Some(
+            golem_common::schema::TypedSchemaValue::new(
+                golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::record(vec![]),
+                ),
+                SchemaValue::Record { fields: vec![] },
+            )
+            .try_into()
+            .map_err(anyhow::Error::msg)?,
+        );
+    }
+    let call_during_deletion = answer(
+        tokio::time::timeout(Duration::from_secs(10), executor.invoke_agent_session(call)).await?,
+    );
+    hook.release();
+    let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
+    assert!(
+        during_deletion.contains("VALIDATION") && during_deletion.contains("being deleted"),
+        "{during_deletion}"
+    );
+    assert!(
+        call_during_deletion.contains("VALIDATION")
+            && call_during_deletion.contains("being deleted"),
+        "{call_during_deletion}"
+    );
+    drop(executor);
+    Ok(())
+}
+
 /// A duplicate request is compared with the accepted one by reading the request entry that the
 /// status or the result index points at. It must not search the oplog for it, so the reads of a
 /// duplicate check do not grow with the body of the invocation: while it runs, after it
