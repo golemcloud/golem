@@ -121,6 +121,8 @@ const signInErrorMessage = (code: string): string => {
       return "Another GitHub account signed in with this email address before. Sign in with that GitHub account."
     case "unable_to_create_session":
       return "GitHub accepted the sign-in, but Golem could not link it to your Golem account. Try again after one minute."
+    case "too_many_requests":
+      return "Too many sign-in attempts came from your network. Wait 10 seconds, then try again."
     default:
       return "Sign-in failed. Try again."
   }

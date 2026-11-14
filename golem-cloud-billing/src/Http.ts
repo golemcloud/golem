@@ -125,9 +125,9 @@ export const routes = HttpRouter.use((router) =>
       request.headers["origin"] === config.baseUrl.origin
 
     // The browser reaches Better Auth only for the OAuth callback. The pages call the other
-    // endpoints on the server through `auth.api`. The rest of /api/auth stays unrouted: it
-    // includes get-access-token, which returns the decrypted GitHub access token, and
-    // link-social and update-user, which change the user.
+    // endpoints on the server, through `auth.api` or, for the sign-in, `auth.handler`. The rest
+    // of /api/auth stays unrouted: it includes get-access-token, which returns the decrypted
+    // GitHub access token, and link-social and update-user, which change the user.
     yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
 
     // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
@@ -224,20 +224,42 @@ export const routes = HttpRouter.use((router) =>
       )
     )
 
+    // The form calls the sign-in endpoint through `auth.handler`, not `auth.api`, so that the rate
+    // limit of Better Auth applies to it (`rateLimit` in `authOptions`).
+    const signInSocial = (request: HttpServerRequest.HttpServerRequest) => {
+      const headers = toWebHeaders(request)
+      headers.delete("content-length")
+      headers.delete("transfer-encoding")
+      headers.set("content-type", "application/json")
+      return auth.handler(
+        new Request(new URL("/api/auth/sign-in/social", config.baseUrl), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ provider: "github", callbackURL: "/", errorCallbackURL: "/" })
+        })
+      )
+    }
+
     yield* router.add("POST", "/sign-in/github", (request) =>
       isSameOrigin(request)
-        ? Effect.tryPromise(() =>
-            auth.api.signInSocial({
-              body: { provider: "github", callbackURL: "/", errorCallbackURL: "/" },
-              headers: toWebHeaders(request),
-              returnHeaders: true
-            })
-          ).pipe(
-            Effect.flatMap(({ headers, response }) =>
-              response.url === undefined
-                ? Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
-                : Effect.succeed(redirectWithCookies(response.url, headers))
-            ),
+        ? Effect.tryPromise(() => signInSocial(request)).pipe(
+            Effect.flatMap((response) => {
+              if (response.status === 429) {
+                return Effect.logWarning("Refused a GitHub sign-in over the rate limit").pipe(
+                  Effect.as(HttpServerResponse.redirect("/?error=too_many_requests", { status: 303 }))
+                )
+              }
+              if (!response.ok) {
+                return Effect.fail(new Error(`Better Auth answered ${response.status}`))
+              }
+              return Effect.tryPromise(() => response.json() as Promise<{ readonly url?: unknown }>).pipe(
+                Effect.flatMap((body) =>
+                  typeof body.url === "string"
+                    ? Effect.succeed(redirectWithCookies(body.url, response.headers))
+                    : Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
+                )
+              )
+            }),
             Effect.catch((error) =>
               Effect.logError("Cannot start the GitHub sign-in").pipe(
                 Effect.annotateLogs({ error: String(error) }),

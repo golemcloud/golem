@@ -476,15 +476,28 @@ export const request = async (
   return response
 }
 
+let clientAddresses = 0
+
+/**
+ * A new client address, as the gateway sets it in `x-forwarded-for`. Better Auth limits the
+ * sign-ins of each address, so each sign-in of the tests comes from its own address.
+ */
+export const newClientAddress = (): string => {
+  clientAddresses++
+  return `198.18.${Math.floor(clientAddresses / 256)}.${clientAddresses % 256}`
+}
+
 /**
  * Runs the browser side of the GitHub sign-in: posts the sign-in form, lets the fake GitHub
  * authorize, and follows the callback. Returns the callback response.
  */
 export const signInWithGitHub = async (
   handler: (request: Request) => Promise<Response>,
-  jar: CookieJar
+  jar: CookieJar,
+  clientAddress: string = newClientAddress()
 ): Promise<Response> => {
-  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl })
+  const forwardedFor = { "x-forwarded-for": clientAddress }
+  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl, ...forwardedFor })
   if (start.status !== 303) {
     throw new Error(`The sign-in form returned ${start.status}: ${await start.text()}`)
   }
@@ -493,5 +506,5 @@ export const signInWithGitHub = async (
     throw new Error(`The sign-in form redirected to ${authorize.href}`)
   }
   const state = authorize.searchParams.get("state")!
-  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`)
+  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`, forwardedFor)
 }

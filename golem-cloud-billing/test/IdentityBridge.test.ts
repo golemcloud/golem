@@ -1,6 +1,7 @@
 import { symmetricDecrypt } from "better-auth/crypto"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { signInRateLimit } from "../src/Auth.ts"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import { breakAtHyphens } from "../src/Page.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
@@ -10,6 +11,7 @@ import {
   CookieJar,
   FakeUpstreams,
   makeApp,
+  newClientAddress,
   newGitHubIdentity,
   queryPool,
   request,
@@ -261,6 +263,36 @@ describe("GitHub sign-in", () => {
     })
 
     expect(response.status).toBe(403)
+  })
+
+  it("limits the GitHub sign-ins that one client address starts", async () => {
+    const client = { origin: baseUrl, "x-forwarded-for": newClientAddress() }
+    const states = async () =>
+      Number(
+        (await pool.query<{ count: string }>(`SELECT count(*) FROM "${config.db.schema}"."verification"`)).rows[0]!
+          .count
+      )
+    const before = await states()
+
+    const locations: Array<string | null> = []
+    for (let attempt = 0; attempt <= signInRateLimit.max; attempt++) {
+      const response = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", client)
+      expect(response.status).toBe(303)
+      locations.push(response.headers.get("location"))
+    }
+
+    for (const location of locations.slice(0, signInRateLimit.max)) {
+      expect(location).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+    }
+    expect(locations[signInRateLimit.max]).toBe("/?error=too_many_requests")
+    expect(await states()).toBe(before + signInRateLimit.max)
+    const page = await request(app.handler, new CookieJar(), "GET", "/?error=too_many_requests")
+    expect(await page.text()).toContain(`Wait ${signInRateLimit.window} seconds, then try again.`)
+    const otherClient = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", {
+      origin: baseUrl,
+      "x-forwarded-for": newClientAddress()
+    })
+    expect(otherClient.headers.get("location")).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
   })
 
   it("signs out", async () => {

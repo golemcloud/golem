@@ -377,6 +377,13 @@ until the cleanup has deleted the user of the deleted account (see
 The form targets answer 403 to a post whose `Origin` header is not the origin of `BETTER_AUTH_URL`,
 also to a post without `Origin`. The webhook route of Polar does not check `Origin`.
 
+Better Auth limits the requests to its handler for each client address, in the memory of each
+replica. `POST /sign-in/github` goes through the handler: a client address starts at most 3 GitHub
+sign-ins in 10 seconds, and the next one redirects to `/?error=too_many_requests`. Better Auth
+reads the client address from `x-forwarded-for` only when the header has one address. The gateway
+must set it so: Envoy Gateway appends the address of the connection, so a browser gets its own
+limit. A request without a usable address counts in one limit that all such requests share.
+
 ## Development
 
 Use Node.js 24 and pnpm.
