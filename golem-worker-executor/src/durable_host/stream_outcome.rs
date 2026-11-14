@@ -123,6 +123,7 @@ pub(crate) struct ProducerOutcome {
 }
 
 struct ProducerPublication {
+    publisher: LiveStreamPublisher<SchemaValue>,
     sender: mpsc::UnboundedSender<ProducerPublicationCommand>,
     closed: bool,
     tasks: JoinedChildren<Result<(), LiveStreamPublishError>>,
@@ -139,7 +140,7 @@ impl Drop for ProducerPublication {
 
 enum ProducerPublicationCommand {
     Item(
-        SchemaValue,
+        Pin<Box<dyn Future<Output = Result<u64, LiveStreamPublishError>> + Send>>,
         oneshot::Sender<Result<u64, LiveStreamPublishError>>,
     ),
     Close,
@@ -259,13 +260,14 @@ impl ProducerOutcome {
         let (sender, mut commands) = mpsc::unbounded_channel();
         let mut selected = self.selected.subscribe();
         let task_lifecycle = lifecycle.clone();
+        let task_publisher = publisher.clone();
         let mut tasks = self.tasks.children();
         tasks.spawn(async move {
             let publish = async {
                 while let Some(command) = commands.recv().await {
                     match command {
-                        ProducerPublicationCommand::Item(value, receipt) => {
-                            let result = publisher.publish_item(value).await;
+                        ProducerPublicationCommand::Item(publish, receipt) => {
+                            let result = publish.await;
                             let _ = receipt.send(result);
                             match result {
                                 Ok(_) => {}
@@ -282,7 +284,7 @@ impl ProducerOutcome {
                                     return Ok(());
                                 }
                             };
-                            match publisher
+                            match task_publisher
                                 .publish_terminal_with_origin(
                                     outcome.authored_by,
                                     outcome.origin,
@@ -307,6 +309,7 @@ impl ProducerOutcome {
             result
         });
         *publication = Some(ProducerPublication {
+            publisher,
             sender,
             closed: false,
             tasks,
@@ -324,9 +327,26 @@ impl ProducerOutcome {
         let publication = self.publication.lock().unwrap();
         let publication = publication.as_ref().expect("bound schema stream publisher");
         if !publication.closed {
+            let publisher = publication.publisher.clone();
+            let mut publish: Pin<
+                Box<dyn Future<Output = Result<u64, LiveStreamPublishError>> + Send>,
+            > = Box::pin(async move { publisher.publish_item(value).await });
+            // Keep ready writes synchronous. A blocked write transfers to the native
+            // owner before returning, so losing the Store cannot lose an accepted item.
+            let publish = match publish
+                .as_mut()
+                .poll(&mut Context::from_waker(futures::task::noop_waker_ref()))
+            {
+                Poll::Ready(Ok(offset)) => {
+                    let _ = receipt.send(Ok(offset));
+                    return completion;
+                }
+                Poll::Ready(Err(error)) => Box::pin(std::future::ready(Err(error))),
+                Poll::Pending => publish,
+            };
             let _ = publication
                 .sender
-                .send(ProducerPublicationCommand::Item(value, receipt));
+                .send(ProducerPublicationCommand::Item(publish, receipt));
         }
         completion
     }
@@ -714,12 +734,13 @@ mod tests {
             // Capacity is exhausted. The native lane must retain this accepted item even
             // when the Store-side observer and the source consumer disappear.
             drop(producer.publish_item(SchemaValue::U8(29)));
+            drop(producer.publish_item(SchemaValue::U8(47)));
             drop(consumer);
             drop(store);
             scope.settle(Err("later trap".into()));
             let mut finished = Box::pin(scope.finish_publications());
             assert!(futures::poll!(&mut finished).is_pending());
-            for (offset, value) in [(0, 11), (1, 29)] {
+            for (offset, value) in [(0, 11), (1, 29), (2, 47)] {
                 let event = source.recv().await.unwrap();
                 assert_eq!(event.offset, offset);
                 assert_eq!(
@@ -728,7 +749,7 @@ mod tests {
                 );
             }
             let event = source.recv().await.unwrap();
-            assert_eq!(event.offset, 2);
+            assert_eq!(event.offset, 3);
             assert_eq!(
                 event.payload,
                 LiveStreamEventPayload::Terminal {
