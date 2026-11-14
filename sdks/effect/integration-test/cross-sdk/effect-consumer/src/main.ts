@@ -3,6 +3,7 @@ import {
   AgentIdentity,
   defineAgent,
   defineAgentClient,
+  InvocationId,
   method,
   Principal,
   Quota,
@@ -238,7 +239,7 @@ defineAgent({
           yield* scheduled.cancel
           yield* Effect.sleep("2500 millis")
           const count = yield* (yield* client.method("scheduledCount")).invoke({})
-          return `${invoked.metadata.agentId}:${invoked.metadata.idempotencyKey}:${scheduled.metadata.agentId}:${String(count.value)}`
+          return `${invoked.metadata.agentId}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId}:${String(count.value)}`
         }),
       ),
     callTsTool: ({ payload }) =>

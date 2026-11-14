@@ -17,7 +17,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
+use crate::base_model::{AgentId, InvocationId, OplogIndex};
 use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -98,7 +98,7 @@ declare_structs! {
     pub struct CardManagedByRuntimeDerived {
         pub environment_id: EnvironmentId,
         pub agent_id: AgentId,
-        pub invocation_key: IdempotencyKey,
+        pub invocation_key: InvocationId,
         pub oplog_index: OplogIndex,
     }
 

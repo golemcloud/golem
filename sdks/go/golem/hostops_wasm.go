@@ -17,6 +17,8 @@
 package golem
 
 import (
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	invocationContext "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_invocation_context"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	environment "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_cli_0_3_0_environment"
@@ -36,6 +38,9 @@ var selfAgentID = func() string {
 	}
 	return ""
 }
+
+// immediateCaller reads the principal that made the running invocation.
+var immediateCaller = func() common.Principal { return invocationContext.Caller().Immediate }
 
 type witHost struct{}
 

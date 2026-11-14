@@ -326,7 +326,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
-        let idempotency_key = request
+        let idempotency_key: golem_common::model::InvocationId = request
             .idempotency_key
             .ok_or(WorkerExecutorError::invalid_request(
                 "idempotency_key not found",

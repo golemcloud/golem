@@ -48,6 +48,7 @@ pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod instance_layer;
+pub mod invocation_context;
 mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -150,6 +151,7 @@ tag_suite!(effect_permissions, group4);
 tag_suite!(permission_cards_scala, group4);
 tag_suite!(scalability, group4);
 tag_suite!(readonly, group4);
+tag_suite!(invocation_context, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);

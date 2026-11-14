@@ -69,7 +69,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey,
+    InvocationRequestKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
@@ -118,7 +119,7 @@ pub trait Rpc: Send + Sync {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -131,6 +132,7 @@ pub trait Rpc: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,

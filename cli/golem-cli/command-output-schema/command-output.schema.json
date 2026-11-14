@@ -2059,6 +2059,9 @@
         "error": {
           "type": "string"
         },
+        "stderr": {
+          "type": "string"
+        },
         "streamId": {
           "type": "integer",
           "minimum": 0
@@ -2370,8 +2373,9 @@
         "functionName": {
           "type": "string"
         },
-        "idempotencyKey": {
-          "type": "string"
+        "invocationId": {
+          "type": "string",
+          "description": "The invocation that produced the event, as `<agent-id>.<uuid>`. Absent for output written outside an invocation."
         },
         "numberOfMissedMessages": {
           "type": "integer",
@@ -5763,6 +5767,7 @@
         { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshotConfirmed" },
+        { "$ref": "#/definitions/PublicOplogEntrySpanClosed" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
         { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
@@ -5896,10 +5901,11 @@
     },
     "PublicOplogEntryAgentInvocationFinished": {
       "type": "object",
-      "required": ["type", "timestamp", "result", "consumedFuel", "componentRevision"],
+      "required": ["type", "timestamp", "invocationId", "result", "consumedFuel", "componentRevision"],
       "properties": {
         "type": { "const": "AgentInvocationFinished" },
         "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
         "result": { "$ref": "#/definitions/PublicAgentInvocationResult" },
         "methodName": { "type": ["string", "null"] },
         "consumedFuel": { "type": "integer" },
@@ -5929,6 +5935,7 @@
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
         "kind": { "type": "string", "enum": ["invocation", "recovery"] },
+        "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
@@ -5956,7 +5963,7 @@
     "PublicOplogEntrySuccessfulUpdate": {
       "type": "object",
       "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
-      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntryFailedUpdate": {
@@ -6018,8 +6025,8 @@
     },
     "PublicOplogEntryCancelPendingInvocation": {
       "type": "object",
-      "required": ["type", "timestamp", "idempotencyKey"],
-      "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
+      "required": ["type", "timestamp", "invocationId"],
+      "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "invocationId": { "type": "string" } },
       "additionalProperties": false
     },
     "PublicOplogEntryBeginRemoteTransaction": {
@@ -6080,7 +6087,7 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntrySnapshotConfirmed": {
@@ -6089,10 +6096,16 @@
       "properties": { "type": { "const": "SnapshotConfirmed" }, "timestamp": { "type": "string" }, "filesystemSnapshot": { "type": "string" } },
       "additionalProperties": false
     },
+    "PublicOplogEntrySpanClosed": {
+      "type": "object",
+      "required": ["type", "timestamp", "resourceStartIndex", "spanFinished"],
+      "properties": { "type": { "const": "SpanClosed" }, "timestamp": { "type": "string" }, "resourceStartIndex": { "type": ["integer", "null"], "minimum": 0 }, "spanFinished": { "$ref": "#/definitions/PublicSpanFinished" } },
+      "additionalProperties": false
+    },
     "PublicOplogEntryOplogProcessorCheckpoint": {
       "type": "object",
-      "required": ["type", "timestamp", "plugin", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
-      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
+      "required": ["type", "timestamp", "plugin", "sourceComponentRevision", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
+      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySetRetryPolicy": {
@@ -6245,26 +6258,26 @@
         { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "invocationId"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocationAgentInitialization": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "constructorParameters", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentInitialization" }, "idempotencyKey": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationAgentMethodInvocation": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationExternalTool": {
       "type": "object",
-      "required": ["type", "idempotencyKey", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "ExternalTool" }, "idempotencyKey": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationResult": {

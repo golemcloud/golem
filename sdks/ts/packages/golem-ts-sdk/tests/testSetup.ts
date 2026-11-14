@@ -18,13 +18,15 @@ import { AgentClassName } from '../src/agentClassName';
 // The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
 // registry and RPC surfaces; tests that inspect an agent ID configure the exact
 // canonical host result they expect.
-const makeWasmRpc = () => ({
-  invokeAndAwait: vi.fn(),
-  invoke: vi.fn(),
-  asyncInvokeAndAwait: vi.fn(),
-  scheduleInvocation: vi.fn(),
-  scheduleCancelableInvocation: vi.fn(),
-});
+function makeWasmRpc() {
+  return {
+    invokeAndAwait: vi.fn(),
+    invoke: vi.fn(),
+    asyncInvokeAndAwait: vi.fn(),
+    scheduleInvocation: vi.fn(),
+    scheduleCancelableInvocation: vi.fn(),
+  };
+}
 
 const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
   create: vi.fn(makeWasmRpc),
@@ -77,12 +79,21 @@ vi.mock('golem:agent/host@2.0.0', () => ({
   WasmRpc: MockWasmRpc,
 }));
 
+// Entry points read the caller from the invocation context. Tests that need a
+// specific principal override `caller` with `mockReturnValue`.
+vi.mock('golem:agent/invocation-context@2.0.0', () => ({
+  invocationId: vi.fn(() => undefined),
+  caller: vi.fn(() => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } })),
+}));
+
 vi.mock('golem:tool/host@0.1.0', () => {
-  const rpc = vi.fn().mockImplementation(() => ({
-    invokeAndAwait: vi.fn(),
-    invoke: vi.fn(),
-    asyncInvokeAndAwait: vi.fn(),
-  }));
+  const rpc = vi.fn(function () {
+    return {
+      invokeAndAwait: vi.fn(),
+      invoke: vi.fn(),
+      asyncInvokeAndAwait: vi.fn(),
+    };
+  });
   return {
     createStdin: vi.fn(),
     createOutput: vi.fn(),

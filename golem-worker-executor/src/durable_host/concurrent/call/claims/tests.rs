@@ -38,6 +38,7 @@ fn entity_lineage_does_not_authorize_explicit_protocol_children() {
             observational_owner: None,
             invocation_id: None,
             logical_key_position: None,
+            agent_invocation: None,
         },
         declared: false,
     });
@@ -86,6 +87,7 @@ fn replaying_call(
             entity_parent_start_index: None,
             invocation_id: None,
             logical_key_position: None,
+            agent_invocation: None,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,

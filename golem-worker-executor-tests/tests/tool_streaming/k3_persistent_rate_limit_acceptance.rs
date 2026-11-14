@@ -515,10 +515,9 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
 
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;

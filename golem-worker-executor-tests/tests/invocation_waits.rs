@@ -1,5 +1,5 @@
 use crate::Tracing;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentId, InvocationId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use test_r::test;
@@ -92,7 +92,7 @@ impl Collector {
     }
 }
 
-pub fn result_wait(agent: &AgentId, key: &IdempotencyKey) -> Subscription {
+pub fn result_wait(agent: &AgentId, key: &InvocationId) -> Subscription {
     collector().subscribe(Identity {
         agent: agent.to_string(),
         key: key.to_string(),

@@ -53,6 +53,27 @@ impl EntityAttribution {
 }
 
 impl OplogEntry {
+    /// Checks the invariants between fields that the entry types cannot express.
+    ///
+    /// A recovery `Error` never names an invocation. An invocation `Error` names the invocation
+    /// whose work failed; it names none only when a host call fails while no invocation runs.
+    pub fn check_well_formed(&self) -> Result<(), String> {
+        match self {
+            OplogEntry::Error {
+                kind: OplogErrorKind::Recovery,
+                invocation_id: Some(_),
+                ..
+            } => Err("a recovery error must not name an invocation".to_string()),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn debug_assert_well_formed(&self) {
+        if let Err(error) = self.check_well_formed() {
+            debug_assert!(false, "{error}");
+        }
+    }
+
     pub fn entity_parent_start_index(&self) -> Option<OplogIndex> {
         match self.entity_attribution() {
             EntityAttribution::EntityBody(start) => Some(start),
@@ -135,11 +156,7 @@ impl OplogEntry {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::StreamEnd {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::StreamCancel {
+            | OplogEntry::StreamTerminal {
                 entity_parent_start_index,
                 ..
             }
@@ -285,8 +302,7 @@ impl OplogEntry {
             | OplogEntry::HostStreamFrame { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. }
@@ -357,8 +373,7 @@ impl OplogScopeProjection {
             | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. }

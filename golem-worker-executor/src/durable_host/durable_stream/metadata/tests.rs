@@ -32,6 +32,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::{AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp};
 use golem_common::read_only_lock;
+use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use test_r::{test, timeout};
 
 fn local_reader(introducing_oplog_index: u64, binding_slot: u32) -> LocalStreamReaderId {
@@ -372,7 +373,7 @@ async fn cold_session_mapping_loads_its_local_registration() {
         StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: StreamRegistrationInvocation::Local(
-                fixture.identity.invocation.idempotency_key.clone(),
+                fixture.identity.invocation.idempotency_key,
             ),
             mapping: binding.clone(),
         }),
@@ -398,8 +399,93 @@ async fn persisted_metadata_restores_entity_attribution() {
     let mut request = fixture.registration(0);
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = producer.register(None, request).await.unwrap().value;
+    let reference =
+        StreamRegistrationInvocation::Local(fixture.identity.invocation.idempotency_key);
+    producer
+        .append_session_record_attributed(
+            None,
+            entity_parent_start_index,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: reference.clone(),
+                mapping: StreamBindingRecord {
+                    transport_stream_id: 7,
+                    source: StreamRecordReference::Foreign(handle.clone()),
+                    role: SessionStreamRole::Input,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    let reader = LocalStreamReaderId {
+        introducing_oplog_index: fixture.oplog.current_oplog_index().await,
+        binding_slot: 0,
+    };
+    producer
+        .prepare_consumer_observation(
+            entity_parent_start_index,
+            crate::durable_host::durable_stream::tests::consumer_item_record(
+                reference,
+                reader,
+                StreamOffset::new(OplogIndex::from_u64(100), 0),
+                0,
+                vec![7],
+                true,
+            ),
+        )
+        .await
+        .unwrap()
+        .enqueue(None)
+        .unwrap()
+        .await
+        .unwrap();
     fixture.persist().await;
     drop(producer);
+
+    let mut key = crate::durable_host::durable_stream::tests::attachment_key(
+        &fixture.identity,
+        handle.stream_id,
+    );
+    key.consumer_environment_id = fixture.identity.environment_id;
+    key.consumer = fixture.identity.agent_id.clone();
+    key.expected_consumer_fingerprint = fixture.identity.fingerprint;
+    key.session_key = fixture.identity.invocation.clone();
+    key.consumer_invocation = fixture.identity.invocation.clone();
+    key.attachment_id = AttachmentId::primary(
+        key.consumer_environment_id,
+        &key.consumer,
+        &key.consumer_invocation.idempotency_key,
+    )
+    .unwrap();
+    let missing = StreamOffset::new(OplogIndex::from_u64(100), 1);
+    let cold = fixture.producer().await;
+    assert!(
+        !cold
+            .commit_source_unavailable_overlay(None, key.clone(), reader, missing, 1)
+            .await
+            .unwrap()
+    );
+    let overlay_index = fixture.oplog.current_oplog_index().await;
+    assert_eq!(
+        fixture
+            .oplog
+            .read(overlay_index)
+            .await
+            .unwrap()
+            .entity_parent_start_index(),
+        entity_parent_start_index
+    );
+    fixture.persist().await;
+    drop(cold);
+    assert!(
+        fixture
+            .producer()
+            .await
+            .commit_source_unavailable_overlay(None, key, reader, missing, 1)
+            .await
+            .unwrap()
+    );
+    assert_eq!(fixture.oplog.current_oplog_index().await, overlay_index);
 
     let cold = fixture.producer().await;
     let index = cold
@@ -443,7 +529,8 @@ async fn persisted_metadata_restores_entity_attribution() {
             fixture.identity.invocation.clone(),
             entity_parent_start_index,
             Ok(()),
-            StreamCancelReason::Protocol,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Interrupted("session finished".into())),
         )
         .await
         .unwrap();
@@ -498,7 +585,8 @@ async fn result_without_owned_outputs_retains_entity_attribution_after_reload() 
             fixture.identity.invocation.clone(),
             attribution,
             Ok(()),
-            StreamCancelReason::Protocol,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Interrupted("session finished".into())),
         )
         .await
         .unwrap();
@@ -536,7 +624,7 @@ async fn external_producer_offsets_survive_indexed_cold_load() {
             &fixture.identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
-            false,
+            None,
             Some(request.clone()),
         )
         .await
@@ -554,7 +642,7 @@ async fn external_producer_offsets_survive_indexed_cold_load() {
             &fixture.identity.invocation,
             handle.stream_id,
             Some(StreamItemsPayload::PackedU8(vec![7])),
-            false,
+            None,
             Some(request),
         )
         .await
@@ -564,6 +652,141 @@ async fn external_producer_offsets_survive_indexed_cold_load() {
             highest_sequence: Some(0),
         }
     );
+}
+
+#[test]
+#[timeout("60s")]
+async fn attached_typed_failed_terminal_retry_survives_indexed_cold_load() {
+    for value in [f64::from_bits(0x7ff8_0000_0000_0001), -0.0] {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(None, fixture.input_registration(0))
+            .await
+            .unwrap()
+            .value;
+        producer
+            .write_attached_items_with_nested(
+                None,
+                &fixture.identity.invocation,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![7, 8]),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let failed = |value| {
+            StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::f64()),
+                SchemaValue::F64(value),
+            ))))
+        };
+        let terminal = failed(value);
+        let request = ExternalProducer {
+            id: ExternalProducerId::Attached,
+            epoch: 0,
+            sequence: 2,
+        };
+        let accepted = producer
+            .append_external_input(
+                None,
+                &fixture.identity.invocation,
+                handle.stream_id,
+                None,
+                Some((StreamTerminalAuthor::Guest, terminal.clone())),
+                Some(request.clone()),
+            )
+            .await
+            .unwrap();
+        let ExternalAppendOutcome::Accepted(offset) = accepted else {
+            panic!("attached terminal must be accepted: {accepted:?}")
+        };
+        let tip = fixture.oplog.current_oplog_index().await;
+        for cold in [false, true] {
+            let current = if cold {
+                fixture.persist().await;
+                fixture.producer().await
+            } else {
+                producer.clone()
+            };
+            assert_eq!(
+                current
+                    .append_external_input(
+                        None,
+                        &fixture.identity.invocation,
+                        handle.stream_id,
+                        None,
+                        Some((StreamTerminalAuthor::Guest, terminal.clone())),
+                        Some(request.clone()),
+                    )
+                    .await
+                    .unwrap(),
+                ExternalAppendOutcome::Duplicate {
+                    offset,
+                    highest_sequence: Some(2),
+                }
+            );
+            for candidate in [
+                (StreamTerminalAuthor::Host, terminal.clone()),
+                (StreamTerminalAuthor::Guest, StreamTerminal::Finished),
+                (StreamTerminalAuthor::Guest, failed(0.0)),
+                (
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminal::ConsumerCancelled { details: None },
+                ),
+            ] {
+                assert!(matches!(
+                    current
+                        .append_external_input(
+                            None,
+                            &fixture.identity.invocation,
+                            handle.stream_id,
+                            None,
+                            Some(candidate),
+                            Some(request.clone()),
+                        )
+                        .await,
+                    Err(StreamStoreError::EventConflict)
+                ));
+            }
+            assert_eq!(
+                current
+                    .append_external_input(
+                        None,
+                        &fixture.identity.invocation,
+                        handle.stream_id,
+                        None,
+                        Some((StreamTerminalAuthor::Guest, terminal.clone())),
+                        Some(ExternalProducer {
+                            sequence: 3,
+                            ..request.clone()
+                        }),
+                    )
+                    .await
+                    .unwrap(),
+                ExternalAppendOutcome::Closed
+            );
+            let high_water = current
+                .attached_input_high_water(&fixture.identity.invocation, handle.stream_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(high_water.highest_contiguous_sequence, 2);
+            assert_eq!(high_water.resulting_offset, offset);
+            assert!(high_water.terminal);
+            let event = current.terminal_event(&handle).await.unwrap().unwrap();
+            assert_eq!(event.terminal_author, Some(StreamTerminalAuthor::Guest));
+            assert_eq!(event.terminal_origin, Some(StreamTerminalOrigin::Source));
+            assert_eq!(event.offset, offset);
+            assert_eq!(event.producer_sequence, 2);
+            assert_eq!(
+                event.payload,
+                CommittedProducerStreamEventPayload::Terminal(terminal.clone())
+            );
+            assert_eq!(fixture.oplog.current_oplog_index().await, tip);
+        }
+    }
 }
 
 #[test]
@@ -599,7 +822,7 @@ async fn attached_transport_sequences_survive_indexed_cold_load_with_http_interl
                     vec![30],
                     vec![31],
                 ])),
-                false,
+                None,
                 None,
             )
             .await
@@ -701,7 +924,7 @@ async fn attached_transport_sequences_survive_indexed_cold_load_with_http_interl
         &fixture.identity.invocation,
         handle.stream_id,
         None,
-        true,
+        Some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
         Some(ExternalProducer {
             id: ExternalProducerId::Attached,
             epoch: 0,
@@ -735,7 +958,8 @@ async fn persisted_finished_session_rejects_new_events_after_cold_load_and_evict
             session.clone(),
             None,
             Ok(()),
-            StreamCancelReason::Protocol,
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Interrupted("session finished".into())),
         )
         .await
         .unwrap();
@@ -760,8 +984,7 @@ async fn persisted_finished_session_rejects_new_events_after_cold_load_and_evict
 
     for ordinal in 0..130 {
         let mut other = session.clone();
-        other.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("open-session-{ordinal}"));
+        other.idempotency_key = uuid::Uuid::from_u128(1000 + ordinal as u128).into();
         cold.ensure_session_accepts_new_events(&other)
             .await
             .unwrap();
@@ -1067,7 +1290,13 @@ async fn deletion_complete_cold_fallback_preserves_full_locator_prefix() {
         );
     }
     let terminal_offset = producer
-        .end(None, handle.stream_id, 140, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            140,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap()
         .value;
@@ -1090,11 +1319,12 @@ async fn deletion_complete_cold_fallback_preserves_full_locator_prefix() {
     );
     assert!(page[..140].iter().enumerate().all(|(sequence, event)| {
         event.producer_sequence == sequence as u64
+            && event.terminal_origin.is_none()
             && event.payload == CommittedProducerStreamEventPayload::Value(vec![sequence as u8])
     }));
     assert!(matches!(
         &page.last().unwrap().payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     ));
 
     let index = cold.index.lock().await;
@@ -1279,7 +1509,13 @@ async fn persisted_reconciliation_pages_active_catalogue_without_payloads() {
         .await
         .unwrap();
     let terminal_offset = producer
-        .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+        .end(
+            None,
+            handle.stream_id,
+            1,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap()
         .value;
@@ -1289,8 +1525,7 @@ async fn persisted_reconciliation_pages_active_catalogue_without_payloads() {
             &fixture.identity,
             handle.stream_id,
         );
-        key.session_key.idempotency_key =
-            golem_common::model::IdempotencyKey::new(format!("consumer-{ordinal}"));
+        key.session_key.idempotency_key = uuid::Uuid::from_u128(2000 + ordinal as u128).into();
         key.consumer_invocation = key.session_key.clone();
         key.attachment_id = AttachmentId::primary(
             key.consumer_environment_id,
@@ -1642,7 +1877,13 @@ async fn cold_fork_terminal_reads_use_owner_relative_identity() {
         .unwrap()
         .value;
     let terminal = producer
-        .end(None, original.stream_id, 0, StreamEndResult::Ok)
+        .end(
+            None,
+            original.stream_id,
+            0,
+            StreamTerminalAuthor::Guest,
+            StreamTerminal::Finished,
+        )
         .await
         .unwrap()
         .value;
@@ -1678,7 +1919,7 @@ async fn cold_fork_terminal_reads_use_owner_relative_identity() {
     assert_eq!(events[0].offset, terminal);
     assert_eq!(
         events[0].payload,
-        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
     );
 }
 
@@ -1857,7 +2098,7 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
     let raw = StreamSession::new(
         raw_producer.clone(),
         oplog,
-        StreamRegistrationInvocation::Local(target.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(target.invocation.idempotency_key),
         [],
     );
     let raw = raw.current_control_metadata().await.unwrap();
@@ -1900,7 +2141,7 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
 #[timeout("60s")]
 async fn persisted_fork_chain_preserves_consumer_only_heads() {
     use golem_common::model::durable_stream::{
-        StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
+        StreamConsumerItemValueRecord, StreamConsumerTerminalRecord,
     };
     for terminal_record in [false, true] {
         let fixture =
@@ -1954,7 +2195,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                 observation:
                     golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                 reobserves: None,
-                session_key: StreamRegistrationInvocation::Local(source.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(source.idempotency_key),
                 reader_id: reader,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(90), 3),
                 consumer_read_ordinal: 0,
@@ -1968,12 +2209,13 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
-                            source.idempotency_key.clone(),
+                            source.idempotency_key,
                         ),
                         reader_id: reader,
                         source_offset: terminal,
                         consumer_read_ordinal: 2,
-                        terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::Finished,
                     })
             } else {
                 StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
@@ -1981,7 +2223,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                         format_version: golem_common::base_model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         session_key: StreamRegistrationInvocation::Local(
-                            source.idempotency_key.clone(),
+                            source.idempotency_key,
                         ),
                         reader_id: reader,
                         source_offset: terminal,
@@ -2118,7 +2360,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
         let raw = crate::durable_host::durable_session::StreamSession::new(
             raw_producer.clone(),
             fixture.oplog.clone(),
-            StreamRegistrationInvocation::Local(target.idempotency_key.clone()),
+            StreamRegistrationInvocation::Local(target.idempotency_key),
             [],
         );
         let raw_control = raw.current_control_metadata().await.unwrap();
@@ -2191,7 +2433,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                                 observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                                 reobserves: None,
                                 session_key: StreamRegistrationInvocation::Local(
-                                    target.idempotency_key.clone(),
+                                    target.idempotency_key,
                                 ),
                                 reader_id: reader,
                                 source_offset: StreamOffset::new(OplogIndex::from_u64(92), 4),
@@ -2251,8 +2493,7 @@ async fn persisted_session_catalogue_includes_mapping_free_foreign_sessions_once
         let producer = fixture.producer().await;
         for ordinal in range {
             let mut session = fixture.identity.invocation.clone();
-            session.idempotency_key =
-                golem_common::model::IdempotencyKey::new(format!("outbound-{ordinal}"));
+            session.idempotency_key = uuid::Uuid::from_u128(3000 + ordinal as u128).into();
             session.callee.agent_id = "foreign()".into();
             let repeated = !expected.insert(session.clone());
             let reader_id = local_reader(1, 0);
@@ -2329,7 +2570,7 @@ async fn persisted_consumer_head_summarizes_long_journal_without_history_reads()
                             observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                             reobserves: None,
                             session_key: StreamRegistrationInvocation::Local(
-                                session_key.idempotency_key.clone(),
+                                session_key.idempotency_key,
                             ),
                             reader_id,
                             source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
@@ -2353,14 +2594,13 @@ async fn persisted_consumer_head_summarizes_long_journal_without_history_reads()
                         observation: golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                         reobserves: None,
                         session_key: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         reader_id,
                         source_offset: terminal_offset,
                         consumer_read_ordinal: 512,
-                        terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
-                            StreamEndResult::Ok,
-                        ),
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::Finished,
                     },
                 ),
             )
@@ -2394,6 +2634,81 @@ async fn persisted_consumer_head_summarizes_long_journal_without_history_reads()
 
 #[test]
 #[timeout("30s")]
+async fn host_observation_includes_native_append_before_its_mutation() {
+    use crate::durable_host::durable_stream::tests::consumer_item_record;
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+
+    let fixture = Fixture::with_buffer(false, Arc::new(InMemoryKeyValueStorage::new()), 1000).await;
+    let consumer = fixture.producer().await;
+    let session = fixture.identity.invocation.clone();
+    let reader = local_reader(2, 0);
+    let reference = StreamRegistrationInvocation::Local(session.idempotency_key);
+    let item = |ordinal, bytes| {
+        consumer_item_record(
+            reference.clone(),
+            reader,
+            StreamOffset::new(OplogIndex::from_u64(100), ordinal as u32),
+            ordinal,
+            bytes,
+            true,
+        )
+    };
+    consumer
+        .append_session_record(None, item(0, vec![3, 5]))
+        .await
+        .unwrap();
+    fixture.persist().await;
+    let mut native = item(2, vec![7, 11]);
+    let StreamSessionRecord::ConsumerItemValue(record) = &mut native else {
+        unreachable!()
+    };
+    record.observation = StreamConsumerObservation::Guest {
+        parent_start_index: None,
+    };
+    let prepared = consumer
+        .prepare_consumer_observation(None, native)
+        .await
+        .unwrap();
+    let host = item(4, vec![13]);
+    let late_receipt = consumer
+        .run_owned(None, 0, move |owner, context| async move {
+            let (introduced, assigned) = tokio::sync::oneshot::channel();
+            let receipt = prepared.enqueue(Some(introduced))?;
+            assigned.await.unwrap().unwrap();
+            // The native append is buffered, but its mutation cannot enter this owned lane yet.
+            owner.append_session_record(Some(&context), host).await?;
+            Ok::<_, StreamStoreError>(receipt)
+        })
+        .await
+        .unwrap();
+    late_receipt.await.unwrap();
+    drop(consumer);
+    let cold = fixture.producer().await;
+    let terminal = StreamSessionRecord::ConsumerTerminal(
+        golem_common::model::durable_stream::StreamConsumerTerminalRecord {
+            format_version:
+                golem_common::model::durable_stream::STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+            observation: StreamConsumerObservation::Host,
+            reobserves: None,
+            session_key: reference,
+            reader_id: reader,
+            source_offset: StreamOffset::new(OplogIndex::from_u64(101), 0),
+            consumer_read_ordinal: 5,
+            authored_by: StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
+        },
+    );
+    cold.append_session_record(None, terminal.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        cold.append_session_record(None, terminal).await,
+        Err(StreamStoreError::ConsumerJournalAdvanced)
+    );
+}
+
+#[test]
+#[timeout("30s")]
 async fn cancelled_control_query_drains_detached_index_catch_up() {
     let fixture = Fixture::new().await;
     let producer = fixture.producer().await;
@@ -2408,7 +2723,7 @@ async fn cancelled_control_query_drains_detached_index_catch_up() {
                 observation:
                     golem_common::base_model::durable_stream::StreamConsumerObservation::Host,
                 reobserves: None,
-                session_key: StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(session.idempotency_key),
                 reader_id: reader,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(17), 0),
                 consumer_read_ordinal: 0,
@@ -2480,7 +2795,8 @@ async fn suspended_host_does_not_retain_producer_hydration_lock() {
             None,
             handle.stream_id,
             0,
-            StreamEndResult::ErrorContext(vec![7; 256]),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped("x".repeat(256))),
         )
         .await
         .unwrap();
@@ -2492,7 +2808,8 @@ async fn suspended_host_does_not_retain_producer_hydration_lock() {
         None,
         handle.stream_id,
         0,
-        StreamEndResult::ErrorContext(vec![7; 256]),
+        StreamTerminalAuthor::Host,
+        StreamTerminal::Failed(StreamError::Trapped("x".repeat(256))),
     ));
     assert!(futures::poll!(suspended.as_mut()).is_pending());
     tokio::time::timeout(std::time::Duration::from_secs(5), started)
@@ -2527,7 +2844,8 @@ async fn retirement_joins_unary_hydration_before_and_after_parent_cancellation()
                 None,
                 handle.stream_id,
                 0,
-                StreamEndResult::ErrorContext(vec![7; 256]),
+                StreamTerminalAuthor::Host,
+                StreamTerminal::Failed(StreamError::Trapped("x".repeat(256))),
             )
             .await
             .unwrap();
@@ -2625,7 +2943,8 @@ async fn metadata_task_admission_workloads() {
             None,
             handle.stream_id,
             3,
-            StreamEndResult::ErrorContext(vec![7; 256]),
+            StreamTerminalAuthor::Host,
+            StreamTerminal::Failed(StreamError::Trapped("x".repeat(256))),
         )
         .await
         .unwrap();
@@ -2642,7 +2961,7 @@ async fn metadata_task_admission_workloads() {
                 golem_common::model::durable_stream::StreamCallerAttemptRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: StreamRegistrationInvocation::Local(
-                        fixture.identity.invocation.idempotency_key.clone(),
+                        fixture.identity.invocation.idempotency_key,
                     ),
                     attempt_id,
                 },
@@ -2725,7 +3044,7 @@ async fn metadata_task_admission_workloads() {
                                 producer.clone(),
                                 fixture.oplog.clone(),
                                 StreamRegistrationInvocation::Local(
-                                    fixture.identity.invocation.idempotency_key.clone(),
+                                    fixture.identity.invocation.idempotency_key,
                                 ),
                                 [],
                             );
@@ -2800,4 +3119,152 @@ async fn contended_warm_producer_queries_make_progress() {
     .await
     .unwrap()
     .unwrap();
+}
+
+#[test]
+#[timeout("60s")]
+async fn cold_metadata_preserves_terminal_author_and_typed_outcome() {
+    let typed = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::string()),
+        SchemaValue::String("typed failure".into()),
+    );
+    for terminal in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(Box::new(typed))),
+        StreamTerminal::Failed(StreamError::Trapped("trap".into())),
+        StreamTerminal::Failed(StreamError::Cancelled),
+        StreamTerminal::Failed(StreamError::Abandoned),
+        StreamTerminal::Failed(StreamError::Interrupted("interrupted".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("resource".into())),
+        StreamTerminal::ConsumerCancelled {
+            details: Some("reader dropped".into()),
+        },
+    ] {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(None, fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let offset = producer
+            .end(
+                None,
+                handle.stream_id,
+                0,
+                StreamTerminalAuthor::Host,
+                terminal.clone(),
+            )
+            .await
+            .unwrap()
+            .value;
+        fixture.persist().await;
+        drop(producer);
+        let cold = fixture.producer().await;
+        let horizon = fixture.oplog.current_oplog_index().await;
+        let replay = cold
+            .end(
+                None,
+                handle.stream_id,
+                0,
+                StreamTerminalAuthor::Host,
+                terminal.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.value, offset);
+        assert!(matches!(
+            cold.end(
+                None,
+                handle.stream_id,
+                0,
+                StreamTerminalAuthor::Guest,
+                terminal.clone()
+            )
+            .await,
+            Err(StreamStoreError::FencedByTerminal(_))
+        ));
+        assert!(matches!(
+            cold.write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::Values(vec![vec![1]])
+            )
+            .await,
+            Err(StreamStoreError::FencedByTerminal(_))
+        ));
+        let events = cold.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].terminal_author, Some(StreamTerminalAuthor::Host));
+        assert_eq!(
+            events[0].terminal_origin,
+            Some(StreamTerminalOrigin::Source)
+        );
+        assert_eq!(
+            events[0].payload,
+            CommittedProducerStreamEventPayload::Terminal(terminal)
+        );
+        assert_eq!(fixture.oplog.current_oplog_index().await, horizon);
+    }
+}
+
+#[test]
+#[timeout("60s")]
+async fn cold_metadata_recovers_terminal_origin_before_cancellation() {
+    for origin in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control] {
+        for terminal in [
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Cancelled),
+        ] {
+            let fixture = Fixture::new().await;
+            let producer = fixture.producer().await;
+            let handle = producer
+                .register(None, fixture.registration(0))
+                .await
+                .unwrap()
+                .value;
+            producer
+                .end_open(
+                    None,
+                    handle.stream_id,
+                    StreamTerminalAuthor::Host,
+                    origin,
+                    terminal.clone(),
+                )
+                .await
+                .unwrap();
+            fixture.persist().await;
+            drop(producer);
+            let cold = fixture.producer().await;
+            let horizon = fixture.oplog.current_oplog_index().await;
+            let cancellation = CancellationToken::new();
+            let registration =
+                cold.register_source_cancellation(handle.stream_id, cancellation.clone());
+            cold.cancel_open(
+                None,
+                handle.stream_id,
+                StreamTerminalAuthor::Host,
+                StreamTerminal::Failed(StreamError::Cancelled),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                cancellation.is_cancelled(),
+                origin == StreamTerminalOrigin::Control
+            );
+            cold.unregister_source_cancellation(handle.stream_id, registration);
+            let event = cold.terminal_event(&handle).await.unwrap().unwrap();
+            assert_eq!(event.terminal_origin, Some(origin));
+            assert_eq!(event.terminal_author, Some(StreamTerminalAuthor::Host));
+            assert_eq!(
+                event.payload,
+                CommittedProducerStreamEventPayload::Terminal(terminal)
+            );
+            let events = cold.read_segment(&handle, None, None).await.unwrap();
+            assert_eq!(events, vec![event]);
+            assert_eq!(fixture.oplog.current_oplog_index().await, horizon);
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use golem_rust::agentic::{Component, Principal};
+use golem_rust::agentic::{Component, Principal, get_tool_invoker_by_name};
 use golem_rust::golem_agentic::exports::golem::{
     agent::guest as agent,
     tool::{guest as tool, tool_middleware_guest as middleware},
@@ -25,9 +25,8 @@ async fn only_implemented_capabilities_are_live() {
             .unwrap()
         };
         for result in [
-            <Component as agent::Guest>::initialize("absent".into(), input(), Principal::Anonymous)
-                .await,
-            <Component as agent::Guest>::invoke("absent".into(), input(), Principal::Anonymous)
+            <Component as agent::Guest>::initialize("absent".into(), input()).await,
+            <Component as agent::Guest>::invoke("absent".into(), input())
                 .await
                 .map(|_| ()),
         ] {
@@ -62,23 +61,36 @@ async fn only_implemented_capabilities_are_live() {
             matches!(error, tool::ToolError::InvalidToolName(name) if name == "public-echo")
         ),
     }
-    let result = <Component as tool::Guest>::invoke(
-        "public-echo".into(),
-        vec!["echo".into()],
-        golem_rust::encode_typed_schema_value_owned(
-            EchoInput {
-                value: "asymmetric".into(),
-            }
-            .into_typed_schema_value()
-            .unwrap(),
-        )
+    let input = golem_rust::encode_typed_schema_value_owned(
+        EchoInput {
+            value: "asymmetric".into(),
+        }
+        .into_typed_schema_value()
         .unwrap(),
-        None,
-        None,
-        None,
-        Principal::Anonymous,
     )
-    .await;
+    .unwrap();
+    let result = if cfg!(feature = "tool") {
+        // The guest export reads the caller from the host, which is unavailable in native tests.
+        get_tool_invoker_by_name("public-echo").unwrap()(
+            vec!["echo".into()],
+            input,
+            None,
+            None,
+            None,
+            Principal::Anonymous,
+        )
+        .await
+    } else {
+        <Component as tool::Guest>::invoke(
+            "public-echo".into(),
+            vec!["echo".into()],
+            input,
+            None,
+            None,
+            None,
+        )
+        .await
+    };
     if cfg!(feature = "tool") {
         let result = result.unwrap();
         assert!(result.stdout.is_none());

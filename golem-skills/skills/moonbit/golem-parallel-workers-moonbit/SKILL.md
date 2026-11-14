@@ -18,7 +18,9 @@ Spawn child agents, dispatch work via fire-and-forget triggers, and collect resu
 
 Import `"moonbitlang/core/encoding/utf8" @utf8` in `moon.pkg`.
 Raw `@types.PromiseId` has no `IntoWire` implementation. Transport its primitive
-fields across RPC, then reconstruct the host record in the worker.
+fields (component ID, agent ID, fingerprint and oplog index) across RPC, then
+reconstruct the host record in the worker. The fingerprint identifies the agent
+incarnation that created the promise, so carry it unchanged.
 
 ### Basic Pattern with Promises
 
@@ -43,7 +45,15 @@ pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[S
     WorkerClient::scoped(i.to_uint64(), async fn(child) {
       let pid = promise_ids[i]
       let uuid = pid.agent_id.component_id.uuid
-      child.trigger_process(item, uuid.high_bits, uuid.low_bits, pid.agent_id.agent_id, pid.oplog_idx)
+      child.trigger_process(
+        item,
+        uuid.high_bits,
+        uuid.low_bits,
+        pid.agent_id.agent_id,
+        pid.fingerprint.high_bits,
+        pid.fingerprint.low_bits,
+        pid.oplog_idx,
+      )
     })
   }
 
@@ -72,6 +82,8 @@ pub fn Worker::process(
   component_high : UInt64,
   component_low : UInt64,
   agent_name : String,
+  fingerprint_high : UInt64,
+  fingerprint_low : UInt64,
   oplog_idx : UInt64,
 ) -> Unit {
   let promise_id = @types.PromiseId::{
@@ -79,6 +91,7 @@ pub fn Worker::process(
       component_id: { uuid: { high_bits: component_high, low_bits: component_low } },
       agent_id: agent_name,
     },
+    fingerprint: { high_bits: fingerprint_high, low_bits: fingerprint_low },
     oplog_idx,
   }
   let result = "processed-\{data}"
@@ -108,7 +121,15 @@ pub async fn Coordinator::fan_out_chunked(
       promise_ids.push(pid)
       WorkerClient::scoped(i.to_uint64(), async fn(child) {
         let uuid = pid.agent_id.component_id.uuid
-        child.trigger_process(items[i], uuid.high_bits, uuid.low_bits, pid.agent_id.agent_id, pid.oplog_idx)
+        child.trigger_process(
+          items[i],
+          uuid.high_bits,
+          uuid.low_bits,
+          pid.agent_id.agent_id,
+          pid.fingerprint.high_bits,
+          pid.fingerprint.low_bits,
+          pid.oplog_idx,
+        )
       })
     }
     for pid in promise_ids {

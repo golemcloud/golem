@@ -36,6 +36,7 @@ import {
   schemaValueToWit,
   v,
 } from '../src/internal/schema-model';
+import { hostInvocationMetadata } from './invocationMetadataTestSupport';
 
 const Pending = z.object({ tag: z.literal('pending'), retryAfter: z.number() });
 type Pending = z.infer<typeof Pending>;
@@ -171,7 +172,7 @@ describe('unstructured outputs under option and result', () => {
         expect(ref.validateValue(value)).toMatchObject({ success: true });
 
         rpc.asyncInvokeAndAwait.mockReturnValue({
-          metadata: { agentId: 'unstructured', idempotencyKey: 'key' },
+          metadata: hostInvocationMetadata('unstructured'),
           future: { get: vi.fn().mockResolvedValue(tree), cancel: vi.fn() },
         });
         const remote = await (client as any)[name]({ id });

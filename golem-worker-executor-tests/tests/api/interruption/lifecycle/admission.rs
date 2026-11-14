@@ -402,6 +402,9 @@ mod loaded_compute_admission {
         assert!(worker.is_loaded().await);
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "increment")
+            .await?;
         let before = executor.oplog_max_index(&id).await?;
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
@@ -434,7 +437,7 @@ mod loaded_compute_admission {
                 _ => None,
             })
             .collect();
-        assert_eq!(entries.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 0);
+        assert_eq!(entries.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 0);
         assert!(!entries.values().any(|entry| matches!(
             entry,
             OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }
@@ -478,7 +481,7 @@ mod loaded_compute_admission {
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await?;
-        assert_eq!(recovered.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        assert_eq!(recovered.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
         let recovered_raw = executor.stored_oplog(&id).await;
         assert!(recovered_raw.len() >= stopped_prefix.len());
         assert_eq!(

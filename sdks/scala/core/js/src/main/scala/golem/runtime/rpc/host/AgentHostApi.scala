@@ -299,8 +299,8 @@ object AgentHostApi {
   }
 
   object PromiseIdLiteral {
-    def apply(agentId: AgentIdLiteral, oplogIndex: OplogIndex): PromiseIdLiteral =
-      JsPromiseId(agentId, oplogIndex)
+    def apply(agentId: AgentIdLiteral, fingerprint: UuidLiteral, oplogIndex: OplogIndex): PromiseIdLiteral =
+      JsPromiseId(agentId, fingerprint, oplogIndex)
   }
 
   object UuidLiteral {

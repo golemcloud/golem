@@ -86,12 +86,15 @@ object JsAccountId {
 @js.native
 sealed trait JsPromiseId extends js.Object {
   def agentId: JsAgentId  = js.native
+  def fingerprint: JsUuid = js.native
   def oplogIdx: js.BigInt = js.native
 }
 
 object JsPromiseId {
-  def apply(agentId: JsAgentId, oplogIdx: js.BigInt): JsPromiseId =
-    js.Dynamic.literal("agentId" -> agentId, "oplogIdx" -> oplogIdx).asInstanceOf[JsPromiseId]
+  def apply(agentId: JsAgentId, fingerprint: JsUuid, oplogIdx: js.BigInt): JsPromiseId =
+    js.Dynamic
+      .literal("agentId" -> agentId, "fingerprint" -> fingerprint, "oplogIdx" -> oplogIdx)
+      .asInstanceOf[JsPromiseId]
 }
 
 // ---------------------------------------------------------------------------

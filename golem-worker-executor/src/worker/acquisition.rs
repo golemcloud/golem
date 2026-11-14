@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -814,10 +819,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     newly_created,
                                 }) => {
                                     worker.unpublished_create.store(false, Ordering::Release);
-                                    initializing.complete_initialization(
-                                        reconstructed_ephemeral
-                                            .then(inactive_ephemeral_agent_error),
-                                    );
+                                    if reconstructed_ephemeral {
+                                        initializing
+                                            .complete_inactive(inactive_ephemeral_agent_error());
+                                    } else {
+                                        initializing.complete_initialization();
+                                    }
                                     // Publish immutable data last: cache readers use this cell as
                                     // their lock-free initialization-completion boundary.
                                     worker.resolved.set(data).map(|()| newly_created).map_err(
@@ -1203,7 +1210,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocation_entry(
                     &worker.oplog,
                     AgentInvocation::AgentInitialization {
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
                         principal,
@@ -1764,8 +1771,8 @@ pub fn merge_agent_env_with_default_env(
 /// runs.
 pub fn never_started_ephemeral_admission(
     status: &AgentStatusRecord,
-    initialization_key: Option<&IdempotencyKey>,
-) -> Option<Option<IdempotencyKey>> {
+    initialization_key: Option<&InvocationId>,
+) -> Option<Option<InvocationId>> {
     let is_initialization = |pending: &golem_common::model::agent::PendingInvocationRef| {
         initialization_key.is_some_and(|key| pending.has_idempotency_key(key))
     };

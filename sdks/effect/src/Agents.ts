@@ -20,6 +20,7 @@
  */
 import { Effect, Option, Stream } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
+import { uuidToString } from "golem:core/types@2.0.0"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { PromiseClient } from "./host/PromiseClient.js"
 
@@ -547,7 +548,7 @@ export class PromiseAlreadyCompletedError {
   readonly _tag = "PromiseAlreadyCompletedError"
   readonly message: string
   constructor(readonly promiseId: ApiHost.PromiseId) {
-    this.message = `PromiseAlreadyCompletedError: promise (oplog idx ${promiseId.oplogIdx.toString()}) was already completed`
+    this.message = `PromiseAlreadyCompletedError: promise (fingerprint ${uuidToString(promiseId.fingerprint)}, oplog idx ${promiseId.oplogIdx.toString()}) was already completed`
   }
 }
 

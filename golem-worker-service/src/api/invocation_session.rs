@@ -29,22 +29,22 @@ use crate::service::worker::{
 };
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::worker::{
-    DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
+    DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
-    OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, ToolByteStreamRole,
-    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result,
+    OutputStreamItem, ResumeOperation, StreamCursor, StreamDirection, StreamEnd, StreamMappingRole,
+    StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::SafeDisplay;
+use golem_common::model::InvocationId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
-    PublicByteStreamRole, PublicClientCancelReason, PublicClientMessage, PublicErrorCode,
-    PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
-    PublicOutputStreamOutcome, PublicResumeOperation, PublicServerCancelReason,
-    PublicServerMessage, PublicStreamDirection, PublicStreamMapping, PublicTypedValue,
+    PublicByteStreamRole, PublicClientMessage, PublicErrorCode, PublicInputHighWater,
+    PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation, PublicServerMessage,
+    PublicStreamDirection, PublicStreamMapping, PublicStreamOutcome, PublicTypedValue,
     decode_binary_message, decode_client_text, encode_binary_message, encode_text,
 };
 use golem_common::schema::agent::reachable_defs;
@@ -65,6 +65,7 @@ use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
+use prost::Message as _;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -82,6 +83,7 @@ const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 const INPUT_BYTE_BUDGET: usize = SESSION_BYTE_BUDGET - OUTPUT_BYTE_BUDGET;
 const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
+const MAX_FAILURE_STDERR_BYTES: usize = 1024 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
@@ -1164,6 +1166,7 @@ async fn serve_session_messages(
                     code,
                     message,
                     retryable: false,
+                    stderr: None,
                     version: 1,
                 },
             )
@@ -1747,50 +1750,39 @@ async fn translate_client_text(
                 cancelled_output: None,
             })
         }
-        PublicClientMessage::InputStreamEnd {
-            channel, sequence, ..
+        PublicClientMessage::StreamEnd {
+            channel,
+            direction,
+            sequence,
+            outcome,
+            ..
         } => {
-            let (transport_id, durable_stream_id, epoch, _) = input_channel(&state, channel)?;
-            let request = request(invocation_request::Request::InputEnd(InputStreamEnd {
-                transport_stream_id: transport_id,
-                sequence: sequence.0,
-                durable_stream_id: Some(durable_stream_id.into()),
-                epoch,
-            }));
-            state
-                .protocol_state
-                .validate_trusted_request(&request)
-                .map_err(request_protocol_error)?;
-            Ok(TranslatedRequest {
-                request,
-                input: Some(PendingInput {
-                    channel,
-                    terminal: true,
-                    byte_charge: 1,
-                }),
-                cancelled_output: None,
-            })
-        }
-        PublicClientMessage::StreamCancel {
-            channel, reason, ..
-        } => {
-            let cancelled_output = state
-                .channels
-                .get(&channel)
-                .filter(|channel| channel.direction == PublicStreamDirection::Output)
-                .map(|_| channel);
-            let request = translate_cancel(&state, channel, reason)?;
+            let request = translate_stream_end(&state, channel, direction, sequence, outcome)?;
+            let byte_charge = request.encoded_len().max(1);
+            if byte_charge > MAX_LOGICAL_VALUE_SIZE {
+                return Err(AdapterError::new(
+                    PublicErrorCode::ResourceExhausted,
+                    "stream terminal exceeds the logical value limit",
+                ));
+            }
             state
                 .protocol_state
                 .validate_received_trusted_request(&request)
                 .map_err(request_protocol_error)?;
-            let channel_state = state.channels.get_mut(&channel).unwrap();
-            channel_state.terminal = true;
-            channel_state.pending_input.clear();
+            let is_input = direction == PublicStreamDirection::Input;
+            if !is_input {
+                let channel_state = state.channels.get_mut(&channel).unwrap();
+                channel_state.terminal = true;
+                channel_state.pending_input.clear();
+            }
             Ok(TranslatedRequest {
                 request,
-                input: None,
-                cancelled_output,
+                input: is_input.then_some(PendingInput {
+                    channel,
+                    terminal: true,
+                    byte_charge,
+                }),
+                cancelled_output: (!is_input).then_some(channel),
             })
         }
         PublicClientMessage::InvocationStart { .. }
@@ -2003,28 +1995,7 @@ async fn fail_session(
     attempt_id: Uuid,
     code: PublicErrorCode,
 ) {
-    let (accepted, open_channels) = {
-        let mut state = state.lock().await;
-        let accepted = state.tokens.is_some();
-        let open_channels = if accepted {
-            state
-                .channels
-                .iter_mut()
-                .filter_map(|(channel, state)| {
-                    if state.exposed && !state.terminal {
-                        state.terminal = true;
-                        state.pending_input.clear();
-                        Some(*channel)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        (accepted, open_channels)
-    };
+    let accepted = state.lock().await.tokens.is_some();
     if !accepted {
         send_rejection(
             outbound,
@@ -2041,41 +2012,14 @@ async fn fail_session(
             .await;
         return;
     }
-    for channel in open_channels {
-        if send_text(
-            outbound,
-            &PublicServerMessage::StreamCancel {
-                channel,
-                reason: PublicServerCancelReason::InvocationFailed,
-                version: 1,
-            },
+    // An attachment failure is not an authoritative invocation outcome. Closing without
+    // completion lets the client resume and recover the recorded stream terminals.
+    let _ = outbound
+        .send(
+            Message::close_with(CloseCode::Error, "session attachment failed"),
+            None,
         )
-        .await
-        .is_err()
-        {
-            return;
-        }
-    }
-    if send_text(
-        outbound,
-        &PublicServerMessage::InvocationFinished {
-            outcome: PublicInvocationOutcome::Failure {
-                code,
-                message: safe_rejection_message(code),
-            },
-            version: 1,
-        },
-    )
-    .await
-    .is_ok()
-    {
-        let _ = outbound
-            .send(
-                Message::close_with(CloseCode::Normal, "invocation finished"),
-                None,
-            )
-            .await;
-    }
+        .await;
 }
 
 async fn translate_private_response(
@@ -2116,8 +2060,16 @@ async fn translate_private_response(
                 worker_error = ?rejected.worker_error,
                 "Private invocation session response was rejected"
             );
-            Ok(vec![frame(text_message(
-                &PublicServerMessage::InvocationRejected {
+            let message = match agent_failure(rejected.worker_error.as_ref()) {
+                Some(failure) => PublicServerMessage::InvocationRejected {
+                    attempt_id: Some(attempt_id),
+                    code: failure.code,
+                    message: failure.message,
+                    retryable: false,
+                    stderr: failure.stderr,
+                    version: 1,
+                },
+                None => PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
                     code,
                     message: safe_rejection_message(code),
@@ -2125,9 +2077,11 @@ async fn translate_private_response(
                         code,
                         PublicErrorCode::ResourceExhausted | PublicErrorCode::RoutingMiss
                     ),
+                    stderr: None,
                     version: 1,
                 },
-            )?)])
+            };
+            Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Result(result) => {
             translate_result(&mut state, result, keyring)
@@ -2135,17 +2089,8 @@ async fn translate_private_response(
         invocation_response::Response::OutputItem(item) => {
             translate_output_item(&mut state, item, keyring)
         }
-        invocation_response::Response::OutputEnd(end) => {
-            translate_output_end(&mut state, end, keyring, PublicOutputStreamOutcome::Ok)
-        }
-        invocation_response::Response::OutputError(error) => {
-            tracing::warn!(
-                attempt_id = %attempt_id,
-                transport_stream_id = error.transport_stream_id,
-                error = %error.details,
-                "Invocation session output stream producer failed"
-            );
-            translate_output_error(&mut state, error, keyring)
+        invocation_response::Response::StreamEnd(end) => {
+            translate_stream_terminal(&mut state, end, keyring)
         }
         invocation_response::Response::InputAck(ack) => {
             let mut mappings = Vec::new();
@@ -2192,21 +2137,6 @@ async fn translate_private_response(
                 },
             )?)])
         }
-        invocation_response::Response::StreamCancel(cancel) => {
-            let channel = channel_for_transport(&state, cancel.transport_stream_id)?;
-            if let Some(channel_state) = state.channels.get_mut(&channel) {
-                channel_state.terminal = true;
-                channel_state.pending_input.clear();
-            }
-            Ok(vec![cancel_frame(
-                text_message(&PublicServerMessage::StreamCancel {
-                    channel,
-                    reason: server_cancel_reason(cancel.reason),
-                    version: 1,
-                })?,
-                channel,
-            )])
-        }
         invocation_response::Response::AttachmentRevoked(_revoked) => Ok(vec![frame(
             text_message(&PublicServerMessage::AttachmentRevoked {
                 reason: PublicAttachmentRevokedReason::Replaced,
@@ -2227,9 +2157,17 @@ async fn translate_private_response(
                         worker_error = ?failure.worker_error,
                         "Invocation session finished with failure"
                     );
-                    PublicInvocationOutcome::Failure {
-                        code: PublicErrorCode::InvocationFailed,
-                        message: "invocation failed".to_string(),
+                    match agent_failure(failure.worker_error.as_ref()) {
+                        Some(failure) => PublicInvocationOutcome::Failure {
+                            code: failure.code,
+                            message: failure.message,
+                            stderr: failure.stderr,
+                        },
+                        None => PublicInvocationOutcome::Failure {
+                            code: PublicErrorCode::InvocationFailed,
+                            message: "invocation failed".to_string(),
+                            stderr: None,
+                        },
                     }
                 }
                 None => {
@@ -2240,6 +2178,7 @@ async fn translate_private_response(
                     PublicInvocationOutcome::Failure {
                         code: PublicErrorCode::InvocationFailed,
                         message: "invocation failed".to_string(),
+                        stderr: None,
                     }
                 }
             };
@@ -2285,9 +2224,8 @@ fn translate_accepted(
         .map(|value| required_uuid(Some(value), "callee fingerprint"))
         .transpose()?
         .unwrap_or_else(|| deterministic_uuid(b"non-durable-callee"));
-    let idempotency_key: golem_common::model::IdempotencyKey = accepted
+    let idempotency_key: InvocationId = accepted
         .idempotency_key
-        .clone()
         .ok_or_else(|| AdapterError::protocol("accepted response has no idempotency key"))?
         .into();
     let agent_id: golem_common::model::AgentId = accepted
@@ -2336,8 +2274,7 @@ fn translate_accepted(
             }
         }
     }
-    let logical_invocation_id =
-        invocation_uuid(&agent_id, &idempotency_key.value, callee_incarnation);
+    let logical_invocation_id = invocation_uuid(&agent_id, &idempotency_key, callee_incarnation);
     state.tokens = Some(TokenContext {
         bindings: bindings.clone(),
         key_id: token_key_id.to_string(),
@@ -2353,7 +2290,7 @@ fn translate_accepted(
                 application: state.application.clone().unwrap_or_default(),
                 environment: state.environment.clone().unwrap_or_default(),
                 agent: encoded_identity,
-                idempotency_key: idempotency_key.value.clone(),
+                idempotency_key: idempotency_key.to_string(),
                 logical_invocation_id,
                 attachment_id,
                 expected_attachment_generation: accepted.epoch,
@@ -2390,7 +2327,8 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
-        idempotency_key: idempotency_key.value,
+        agent_id,
+        idempotency_key,
         mappings,
         session_token,
         version: 1,
@@ -2410,10 +2348,20 @@ fn translate_result(
     let mut mappings = Vec::new();
     let result = match result.result {
         Some(invocation_session_result::Result::NoResult(_)) => PublicInvocationResult::None,
+        Some(invocation_session_result::Result::MethodResult(value))
+            if state.output_schema.is_none() =>
+        {
+            let value = decode_public_session_schema_value(value)
+                .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
+            if !matches!(value, SchemaValue::Tuple { elements } if elements.is_empty()) {
+                return Err(AdapterError::protocol(
+                    "private invocation returned a value for a unit method",
+                ));
+            }
+            PublicInvocationResult::None
+        }
         Some(invocation_session_result::Result::MethodResult(value)) => {
-            let schema = state.output_schema.clone().ok_or_else(|| {
-                AdapterError::protocol("private invocation returned a value for a unit method")
-            })?;
+            let schema = state.output_schema.clone().unwrap();
             let value = decode_public_session_schema_value(value)
                 .map_err(|_| AdapterError::protocol("private result value is malformed"))?;
             let graph = state.graph.clone().unwrap();
@@ -2657,48 +2605,56 @@ fn translate_output_item(
     )])
 }
 
-fn translate_output_end(
+fn translate_stream_terminal(
     state: &mut AdapterState,
-    end: OutputStreamEnd,
+    end: StreamEnd,
     keyring: &InvocationSessionTokenKeyring,
-    outcome: PublicOutputStreamOutcome,
 ) -> Result<Vec<TranslatedFrame>, AdapterError> {
     let channel = channel_for_transport(state, end.transport_stream_id)?;
-    let cursor_token = sign_cursor_token(keyring, state, channel, end.durable_offset)?;
-    state.channels.get_mut(&channel).unwrap().terminal = true;
-    Ok(vec![stream_terminal_frame(
-        text_message(&PublicServerMessage::OutputStreamEnd {
+    let direction = match StreamDirection::try_from(end.direction) {
+        Ok(StreamDirection::Input) => PublicStreamDirection::Input,
+        Ok(StreamDirection::Output) => PublicStreamDirection::Output,
+        _ => return Err(AdapterError::protocol("unknown stream terminal direction")),
+    };
+    if state.channels[&channel].direction != direction {
+        return Err(AdapterError::protocol(
+            "stream terminal direction does not match channel",
+        ));
+    }
+    let terminal: golem_common::model::durable_stream::StreamTerminal = end
+        .outcome
+        .ok_or_else(|| AdapterError::protocol("stream terminal has no outcome"))?
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid stream terminal outcome"))?;
+    let outcome = PublicStreamOutcome::try_from(terminal)
+        .map_err(|_| AdapterError::protocol("invalid public stream terminal outcome"))?;
+    let cursor_token = if direction == PublicStreamDirection::Output {
+        Some(sign_cursor_token(
+            keyring,
+            state,
             channel,
-            cursor_token: Some(cursor_token),
-            outcome,
-            sequence: DecimalU64(end.producer_sequence),
-            version: 1,
-        })?,
+            end.durable_offset,
+        )?)
+    } else {
+        None
+    };
+    let channel_state = state.channels.get_mut(&channel).unwrap();
+    channel_state.terminal = true;
+    let message = text_message(&PublicServerMessage::StreamEnd {
         channel,
-        1,
-    )])
-}
-
-fn translate_output_error(
-    state: &mut AdapterState,
-    error: OutputStreamError,
-    keyring: &InvocationSessionTokenKeyring,
-) -> Result<Vec<TranslatedFrame>, AdapterError> {
-    translate_output_end(
-        state,
-        OutputStreamEnd {
-            transport_stream_id: error.transport_stream_id,
-            producer_sequence: error.producer_sequence,
-            durable_stream_id: error.durable_stream_id,
-            durable_offset: error.durable_offset,
-            epoch: error.epoch,
-        },
-        keyring,
-        PublicOutputStreamOutcome::Error {
-            code: PublicErrorCode::ProducerError,
-            message: "output producer failed".to_string(),
-        },
-    )
+        direction,
+        cursor_token,
+        outcome,
+        sequence: DecimalU64(end.producer_sequence),
+        version: 1,
+    })?;
+    if direction == PublicStreamDirection::Input {
+        channel_state.pending_input.clear();
+        Ok(vec![cancel_frame(message, channel)])
+    } else {
+        let byte_charge = message_size(&message).max(1);
+        Ok(vec![stream_terminal_frame(message, channel, byte_charge)])
+    }
 }
 
 fn input_channel(
@@ -2726,18 +2682,18 @@ fn input_channel(
     ))
 }
 
-fn translate_cancel(
+fn translate_stream_end(
     state: &AdapterState,
     channel: u32,
-    reason: PublicClientCancelReason,
+    direction: PublicStreamDirection,
+    sequence: DecimalU64,
+    outcome: PublicStreamOutcome,
 ) -> Result<InvocationRequest, AdapterError> {
     let attachment_epoch = state.attachment_epoch;
     let channel_state = state.channels.get(&channel).ok_or_else(|| {
         AdapterError::new(PublicErrorCode::InvalidChannel, "unknown stream channel")
     })?;
-    if !channel_state.exposed
-        || (channel_state.terminal && channel_state.direction == PublicStreamDirection::Input)
-    {
+    if channel_state.direction != direction || !channel_state.exposed {
         return Err(AdapterError::new(
             PublicErrorCode::InvalidChannel,
             "stream channel is not open",
@@ -2747,27 +2703,31 @@ fn translate_cancel(
         .durable
         .as_ref()
         .ok_or_else(|| AdapterError::protocol("stream channel has no durable mapping"))?;
-    let role = match channel_state.direction {
-        PublicStreamDirection::Input => StreamCancelRole::InputProducer,
-        PublicStreamDirection::Output => StreamCancelRole::OutputConsumer,
-    };
-    let reason = match reason {
-        PublicClientCancelReason::Cancelled => StreamCancelReason::Cancelled,
-        PublicClientCancelReason::ConsumerDrop => StreamCancelReason::ConsumerDrop,
-        PublicClientCancelReason::SourceUnavailable => StreamCancelReason::SourceUnavailable,
-    };
-    Ok(request(invocation_request::Request::StreamCancel(
-        StreamCancel {
-            transport_stream_id: channel_state.transport_id,
-            producer_sequence: 0,
-            role: role as i32,
-            reason: reason as i32,
-            details: None,
-            durable_stream_id: Some(durable.durable_stream_id.into()),
-            epoch: attachment_epoch,
-            durable_offset: Vec::new(),
+    let consumer_cancelled = matches!(&outcome, PublicStreamOutcome::ConsumerCancelled { .. });
+    if consumer_cancelled != (direction == PublicStreamDirection::Output) {
+        return Err(AdapterError::protocol(
+            "stream terminal outcome is invalid for client direction",
+        ));
+    }
+    let terminal: golem_common::model::durable_stream::StreamTerminal = outcome
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid stream terminal outcome"))?;
+    let outcome = terminal
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid private stream terminal outcome"))?;
+    Ok(request(invocation_request::Request::StreamEnd(StreamEnd {
+        transport_stream_id: channel_state.transport_id,
+        producer_sequence: sequence.0,
+        direction: match direction {
+            PublicStreamDirection::Input => StreamDirection::Input as i32,
+            PublicStreamDirection::Output => StreamDirection::Output as i32,
         },
-    )))
+        outcome: Some(outcome),
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        durable_stream_id: Some(durable.durable_stream_id.into()),
+        epoch: attachment_epoch,
+        durable_offset: Vec::new(),
+    })))
 }
 
 fn sign_stream_token(
@@ -2930,6 +2890,46 @@ fn is_routing_miss(rejected: &InvocationRejected) -> bool {
         })
 }
 
+/// A failure of the agent itself, which the caller sees as the agent reported it: its error text
+/// and what the failed invocation wrote to stderr. The unary HTTP API returns the same details.
+/// Other worker errors describe the platform, so the caller sees only the generic text of their
+/// public code.
+struct AgentFailure {
+    code: PublicErrorCode,
+    message: String,
+    stderr: Option<String>,
+}
+
+fn agent_failure(worker_error: Option<&WorkerExecutionError>) -> Option<AgentFailure> {
+    let (code, error, stderr) = match WorkerExecutorError::try_from(worker_error?.clone()).ok()? {
+        WorkerExecutorError::InvocationFailed { error, stderr } => {
+            (PublicErrorCode::InvocationFailed, error, stderr)
+        }
+        WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
+            (PublicErrorCode::PreviousInvocationFailed, error, stderr)
+        }
+        _ => return None,
+    };
+    Some(AgentFailure {
+        code,
+        message: error.message().to_string(),
+        stderr: (!stderr.is_empty()).then(|| stderr_tail(stderr)),
+    })
+}
+
+/// The end of a failed invocation's stderr, at most `MAX_FAILURE_STDERR_BYTES` long, so that the
+/// failure fits in one WebSocket message within the session's output budget.
+fn stderr_tail(stderr: String) -> String {
+    if stderr.len() <= MAX_FAILURE_STDERR_BYTES {
+        return stderr;
+    }
+    let mut start = stderr.len() - MAX_FAILURE_STDERR_BYTES;
+    while !stderr.is_char_boundary(start) {
+        start += 1;
+    }
+    stderr[start..].to_string()
+}
+
 fn safe_rejection_message(code: PublicErrorCode) -> String {
     match code {
         PublicErrorCode::UnsupportedSubprotocol => "required WebSocket subprotocol is unsupported",
@@ -2956,6 +2956,7 @@ fn safe_rejection_message(code: PublicErrorCode) -> String {
         PublicErrorCode::ResourceExhausted => "session resource limit exceeded",
         PublicErrorCode::ProducerError => "stream producer failed",
         PublicErrorCode::InvocationFailed => "invocation failed",
+        PublicErrorCode::PreviousInvocationFailed => "previous invocation failed",
         PublicErrorCode::ProtocolError => "invocation protocol failed",
         PublicErrorCode::RoutingMiss => {
             "the agent's shard is moving between executors; retry the invocation"
@@ -3060,7 +3061,7 @@ fn required_uuid(
 
 fn invocation_uuid(
     agent_id: &golem_common::model::AgentId,
-    idempotency_key: &str,
+    idempotency_key: &InvocationId,
     callee_incarnation: Uuid,
 ) -> Uuid {
     let identity = format!("{}\0{idempotency_key}\0{callee_incarnation}", agent_id);
@@ -3083,18 +3084,6 @@ fn mapping_uuid(
         PublicStreamDirection::Output => 2,
     });
     Uuid::new_v5(&logical_invocation_id, &value)
-}
-
-fn server_cancel_reason(reason: i32) -> PublicServerCancelReason {
-    match StreamCancelReason::try_from(reason) {
-        Ok(StreamCancelReason::ConsumerDrop) => PublicServerCancelReason::ConsumerDrop,
-        Ok(StreamCancelReason::Transport) => PublicServerCancelReason::TransportDetached,
-        Ok(StreamCancelReason::SourceUnavailable) => PublicServerCancelReason::SourceUnavailable,
-        Ok(StreamCancelReason::ProducerDeleting) => PublicServerCancelReason::ProducerDeleted,
-        Ok(StreamCancelReason::InvocationFailed) => PublicServerCancelReason::InvocationFailed,
-        Ok(StreamCancelReason::Protocol) => PublicServerCancelReason::ProtocolError,
-        _ => PublicServerCancelReason::Cancelled,
-    }
 }
 
 fn request(request: invocation_request::Request) -> InvocationRequest {
@@ -3224,6 +3213,7 @@ async fn send_text(sender: &Outbound, message: &PublicServerMessage) -> Result<(
                 code: *code,
                 message: safe_rejection_message(*code),
                 retryable: *retryable,
+                stderr: None,
                 version: *version,
             })
             .map_err(|_| ())?;
@@ -3247,6 +3237,7 @@ async fn send_rejection(
             code,
             message: message.into(),
             retryable: false,
+            stderr: None,
             version: 1,
         },
     )
@@ -3326,7 +3317,11 @@ mod tests {
         }
     }
 
-    fn idempotency_key() -> Option<ProtoIdempotencyKey> {
+    fn idempotency_key() -> Option<ProtoUuid> {
+        Some(proto_uuid(5))
+    }
+
+    fn request_idempotency_key() -> Option<ProtoIdempotencyKey> {
         Some(ProtoIdempotencyKey {
             value: "session-key".to_string(),
         })
@@ -3428,7 +3423,7 @@ mod tests {
                 InvocationStart {
                     method_name: Some("run".to_string()),
                     input: Some(input),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -3597,6 +3592,9 @@ mod tests {
             budgets.clone(),
             attempt,
         );
+        // Manual polls must stop on backpressure, not Tokio's cooperative task budget.
+        let reader = tokio::task::unconstrained(reader);
+        let client = tokio::task::unconstrained(client);
         futures::pin_mut!(reader, client);
         assert!(futures::poll!(&mut reader).is_pending());
         assert!(futures::poll!(&mut client).is_pending());
@@ -3702,6 +3700,47 @@ mod tests {
         assert_eq!(PublicErrorCode::RoutingMiss.as_str(), "routing-miss");
     }
 
+    /// A failure of the agent reaches the caller with the agent's error text and stderr, which
+    /// survive the private wire; a platform error keeps the generic text of its public code.
+    #[test]
+    fn agent_failures_carry_the_agent_error_and_stderr() {
+        let failure = |error: WorkerExecutorError| agent_failure(Some(&error.into()));
+        let guest_error = || golem_common::model::oplog::AgentError::Unknown("boom".to_string());
+
+        let failed = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: "trace\n".to_string(),
+        })
+        .unwrap();
+        assert_eq!(failed.code, PublicErrorCode::InvocationFailed);
+        assert_eq!(failed.message, "boom");
+        assert_eq!(failed.stderr.as_deref(), Some("trace\n"));
+
+        let previous = failure(WorkerExecutorError::PreviousInvocationFailed {
+            error: guest_error(),
+            stderr: String::new(),
+        })
+        .unwrap();
+        assert_eq!(previous.code, PublicErrorCode::PreviousInvocationFailed);
+        assert_eq!(previous.message, "boom");
+        assert_eq!(previous.stderr, None);
+
+        assert!(failure(WorkerExecutorError::unknown("internal detail")).is_none());
+        assert!(agent_failure(None).is_none());
+
+        // The kept tail starts at a character boundary: the cut falls inside the 'é'.
+        let stderr = format!("é{}", "x".repeat(MAX_FAILURE_STDERR_BYTES - 1));
+        let long = failure(WorkerExecutorError::InvocationFailed {
+            error: guest_error(),
+            stderr: format!("dropped{stderr}"),
+        })
+        .unwrap();
+        assert_eq!(
+            long.stderr.unwrap(),
+            "x".repeat(MAX_FAILURE_STDERR_BYTES - 1)
+        );
+    }
+
     #[test]
     async fn input_retries_gaps_and_terminal_high_water_use_public_sequences() {
         let state = active_input_state();
@@ -3748,8 +3787,10 @@ mod tests {
         }
 
         translate_client_text(
-            PublicClientMessage::InputStreamEnd {
+            PublicClientMessage::StreamEnd {
                 channel: 1,
+                direction: PublicStreamDirection::Input,
+                outcome: PublicStreamOutcome::Finished,
                 sequence: DecimalU64(1),
                 version: 1,
             },
@@ -3780,6 +3821,296 @@ mod tests {
                 ..
             }
         ));
+
+        assert!(
+            translate_client_text(
+                PublicClientMessage::StreamEnd {
+                    channel: 1,
+                    direction: PublicStreamDirection::Input,
+                    outcome: PublicStreamOutcome::Failed {
+                        error: golem_common::model::invocation_session_public::PublicStreamError::Interrupted {
+                            message: "changed outcome".into(),
+                        },
+                    },
+                    sequence: DecimalU64(1),
+                    version: 1,
+                },
+                &state,
+            )
+            .await
+            .is_err()
+        );
+        translate_client_text(
+            PublicClientMessage::StreamEnd {
+                channel: 1,
+                direction: PublicStreamDirection::Input,
+                outcome: PublicStreamOutcome::Finished,
+                sequence: DecimalU64(1),
+                version: 1,
+            },
+            &state,
+        )
+        .await
+        .unwrap();
+        admit_input(&state, true).await;
+        let retry_frames = translate_private_response(
+            input_ack(1, durable_offset(2)),
+            &state,
+            &keyring(),
+            &token_bindings(&AuthCtx::system()),
+            keyring().active_key_id(),
+            Uuid::from_u128(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry_frames[0].message, frames[0].message);
+    }
+
+    #[test]
+    async fn typed_stream_terminals_preserve_outcomes_and_directions() {
+        use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+        let declared = golem_common::schema::TypedSchemaValue::new(
+            SchemaGraph {
+                defs: vec![],
+                root: SchemaType::u8(),
+            },
+            SchemaValue::U8(42),
+        );
+        let terminals = vec![
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
+            StreamTerminal::Failed(StreamError::Trapped("trap details".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::Interrupted("interruption details".into())),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("budget details".into())),
+            StreamTerminal::ConsumerCancelled { details: None },
+            StreamTerminal::ConsumerCancelled {
+                details: Some("consumer details".into()),
+            },
+        ];
+        for direction in [PublicStreamDirection::Input, PublicStreamDirection::Output] {
+            for terminal in &terminals {
+                if direction == PublicStreamDirection::Input
+                    && !matches!(terminal, StreamTerminal::ConsumerCancelled { .. })
+                {
+                    continue;
+                }
+                let state = active_input_state();
+                let mut state = state.lock().await;
+                state.channels.get_mut(&1).unwrap().direction = direction;
+                let frames = translate_stream_terminal(
+                    &mut state,
+                    StreamEnd {
+                        transport_stream_id: 7,
+                        producer_sequence: 3,
+                        durable_stream_id: Some(proto_uuid(107)),
+                        durable_offset: durable_offset(4),
+                        epoch: 1,
+                        direction: match direction {
+                            PublicStreamDirection::Input => StreamDirection::Input as i32,
+                            PublicStreamDirection::Output => StreamDirection::Output as i32,
+                        },
+                        authored_by: StreamTerminalAuthor::Guest as i32,
+                        outcome: Some(terminal.clone().try_into().unwrap()),
+                    },
+                    &keyring(),
+                )
+                .unwrap();
+                let Message::Text(text) = &frames[0].message else {
+                    panic!("terminal is not text")
+                };
+                let PublicServerMessage::StreamEnd {
+                    direction: actual_direction,
+                    outcome,
+                    sequence,
+                    cursor_token,
+                    version,
+                    ..
+                } = golem_common::model::invocation_session_public::decode_server_text(
+                    text.as_bytes(),
+                )
+                .unwrap()
+                else {
+                    panic!("terminal has the wrong message type")
+                };
+                assert_eq!(actual_direction, direction);
+                assert_eq!(sequence, DecimalU64(3));
+                assert_eq!(version, 1);
+                assert_eq!(StreamTerminal::try_from(outcome).unwrap(), *terminal);
+                assert_eq!(
+                    cursor_token.is_some(),
+                    direction == PublicStreamDirection::Output
+                );
+            }
+        }
+    }
+
+    #[test]
+    async fn input_failures_use_sequential_terminal_acknowledgements() {
+        use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+        for terminal in [
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Trapped("input trap".into())),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::Interrupted("input interrupted".into())),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("input budget".into())),
+        ] {
+            let state = active_input_state();
+            let translated = translate_client_text(
+                PublicClientMessage::StreamEnd {
+                    channel: 1,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(0),
+                    outcome: terminal.clone().try_into().unwrap(),
+                    version: 1,
+                },
+                &state,
+            )
+            .await
+            .unwrap();
+            assert!(translated.cancelled_output.is_none());
+            let pending = translated.input.unwrap();
+            assert!(pending.terminal);
+            assert!(pending.byte_charge > 1);
+            assert!(!state.lock().await.channels[&1].terminal);
+            let Some(invocation_request::Request::StreamEnd(end)) = translated.request.request
+            else {
+                panic!("input failure is not a stream end")
+            };
+            assert_eq!(end.direction(), StreamDirection::Input);
+            assert_eq!(end.authored_by(), StreamTerminalAuthor::Guest);
+            assert_eq!(
+                StreamTerminal::try_from(end.outcome.unwrap()).unwrap(),
+                terminal
+            );
+            admit_input(&state, true).await;
+            let frames = translate_private_response(
+                input_ack(0, durable_offset(1)),
+                &state,
+                &keyring(),
+                &token_bindings(&AuthCtx::system()),
+                keyring().active_key_id(),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+            let Message::Text(text) = &frames[0].message else {
+                panic!("ACK is not text")
+            };
+            assert!(matches!(
+                golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                    .unwrap(),
+                PublicServerMessage::InputStreamAck {
+                    terminal: true,
+                    highest_contiguous_sequence: DecimalU64(0),
+                    ..
+                }
+            ));
+            assert!(state.lock().await.channels[&1].terminal);
+        }
+    }
+
+    #[test]
+    async fn invalid_client_terminal_roles_and_unknown_outcomes_are_rejected() {
+        for (direction, outcome) in [
+            (
+                PublicStreamDirection::Input,
+                PublicStreamOutcome::ConsumerCancelled { details: None },
+            ),
+            (PublicStreamDirection::Output, PublicStreamOutcome::Finished),
+        ] {
+            let state = active_input_state();
+            state.lock().await.channels.get_mut(&1).unwrap().direction = direction;
+            assert!(
+                translate_client_text(
+                    PublicClientMessage::StreamEnd {
+                        channel: 1,
+                        direction,
+                        sequence: DecimalU64(0),
+                        outcome,
+                        version: 1
+                    },
+                    &state
+                )
+                .await
+                .is_err()
+            );
+        }
+        let state = active_input_state();
+        assert!(
+            translate_client_text(
+                PublicClientMessage::StreamEnd {
+                    channel: 1,
+                    direction: PublicStreamDirection::Output,
+                    sequence: DecimalU64(0),
+                    outcome: PublicStreamOutcome::ConsumerCancelled { details: None },
+                    version: 1
+                },
+                &state
+            )
+            .await
+            .is_err()
+        );
+        assert!(decode_client_text(br#"{"type":"stream-end","channel":1,"direction":"input","sequence":"0","outcome":{"kind":"unknown"},"version":1}"#).is_err());
+        let mut state = state.lock().await;
+        assert!(
+            translate_stream_terminal(
+                &mut state,
+                StreamEnd {
+                    transport_stream_id: 7,
+                    direction: StreamDirection::Input as i32,
+                    outcome: Some(golem_api_grpc::proto::golem::worker::StreamTerminal {
+                        terminal: None
+                    }),
+                    ..Default::default()
+                },
+                &keyring()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    async fn closed_or_dropped_websockets_only_detach_the_request_stream() {
+        for ending in 0..3 {
+            let state = active_input_state();
+            let budgets = SessionBudgets::new();
+            let messages = match ending {
+                0 => vec![Ok(AdmittedMessage {
+                    message: Message::Close(None),
+                    admission: budgets.admit_inbound_frame(1).await.unwrap(),
+                })],
+                1 => vec![Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "socket dropped",
+                ))],
+                _ => vec![],
+            };
+            let (requests, mut received) = mpsc::channel(1);
+            let (sender, mut outgoing) = mpsc::channel(1);
+            handle_client_messages(
+                futures::stream::iter(messages),
+                requests,
+                Outbound {
+                    sender,
+                    budgets: budgets.clone(),
+                },
+                state.clone(),
+                budgets,
+                Uuid::new_v4(),
+            )
+            .await;
+            assert!(
+                received.recv().await.is_none(),
+                "socket loss synthesized a request"
+            );
+            assert!(
+                outgoing.recv().await.is_none(),
+                "socket loss synthesized a public terminal"
+            );
+            assert!(!state.lock().await.channels[&1].terminal);
+        }
     }
 
     #[test]
@@ -3862,6 +4193,8 @@ mod tests {
             )
             .unwrap();
             let PublicServerMessage::InvocationAccepted {
+                idempotency_key,
+                agent_id: accepted_agent_id,
                 mappings,
                 session_token,
                 ..
@@ -3880,6 +4213,17 @@ mod tests {
             let InvocationSessionTokenPayload::Session(session) = verified.payload else {
                 panic!("expected session token")
             };
+            assert_eq!(idempotency_key, InvocationId(Uuid::from_u128(5)));
+            assert_eq!(session.idempotency_key, idempotency_key.to_string());
+            let agent_id: golem_common::model::AgentId = proto_agent_id().try_into().unwrap();
+            assert_eq!(accepted_agent_id, agent_id);
+            assert_eq!(
+                session.logical_invocation_id,
+                Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!("{agent_id}\0{idempotency_key}\0{}", Uuid::from_u128(4)).as_bytes(),
+                )
+            );
             assert_eq!(
                 decode_session_agent_identity(&session.agent)
                     .unwrap()
@@ -4233,7 +4577,7 @@ mod tests {
     }
 
     #[test]
-    async fn fatal_failure_terminalizes_all_open_streams_before_finishing() {
+    async fn backend_transport_loss_detaches_without_inventing_completion() {
         let mut state = AdapterState::new();
         state.tokens = Some(TokenContext {
             bindings: token_bindings(&AuthCtx::system()),
@@ -4262,46 +4606,38 @@ mod tests {
             );
         }
         let state = Arc::new(Mutex::new(state));
-        let budgets = SessionBudgets::new();
-        let (sender, mut receiver) = mpsc::channel(8);
-        let outbound = Outbound { sender, budgets };
-        fail_session(
-            &outbound,
-            &state,
-            Uuid::from_u128(2),
-            PublicErrorCode::InvocationFailed,
-        )
-        .await;
+        for responses in [
+            Vec::new(),
+            vec![Err(tonic::Status::unavailable("backend disconnected"))],
+        ] {
+            let budgets = SessionBudgets::new();
+            let (sender, mut receiver) = mpsc::channel(8);
+            let outbound = Outbound { sender, budgets };
+            handle_private_responses(
+                futures::stream::iter(responses),
+                outbound,
+                state.clone(),
+                Arc::new(keyring()),
+                token_bindings(&AuthCtx::system()),
+                keyring().active_key_id().to_string(),
+                Uuid::from_u128(2),
+            )
+            .await;
 
-        let mut cancelled = HashSet::new();
-        for _ in 0..2 {
-            let Message::Text(text) = receiver.recv().await.unwrap().message else {
-                panic!("stream terminal was not text")
-            };
-            let PublicServerMessage::StreamCancel {
-                channel,
-                reason: PublicServerCancelReason::InvocationFailed,
-                ..
-            } = golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
-                .unwrap()
-            else {
-                panic!("fatal stream terminal had the wrong shape")
-            };
-            cancelled.insert(channel);
+            assert!(matches!(
+                receiver.recv().await.unwrap().message,
+                Message::Close(Some((CloseCode::Error, _)))
+            ));
+            assert!(receiver.recv().await.is_none());
+            assert!(
+                state
+                    .lock()
+                    .await
+                    .channels
+                    .values()
+                    .all(|channel| !channel.terminal)
+            );
         }
-        assert_eq!(cancelled, HashSet::from([1, 2]));
-        let Message::Text(text) = receiver.recv().await.unwrap().message else {
-            panic!("invocation terminal was not text")
-        };
-        assert!(matches!(
-            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
-                .unwrap(),
-            PublicServerMessage::InvocationFinished { .. }
-        ));
-        assert!(matches!(
-            receiver.recv().await.unwrap().message,
-            Message::Close(Some((CloseCode::Normal, _)))
-        ));
     }
 
     #[test]
@@ -4322,7 +4658,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4366,9 +4702,16 @@ mod tests {
             .unwrap();
         protocol_state
             .validate_response(&InvocationResponse {
-                response: Some(invocation_response::Response::OutputEnd(OutputStreamEnd {
+                response: Some(invocation_response::Response::StreamEnd(StreamEnd {
                     transport_stream_id: 8,
                     producer_sequence: 0,
+                    direction: StreamDirection::Output as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        golem_common::model::durable_stream::StreamTerminal::Finished
+                            .try_into()
+                            .unwrap(),
+                    ),
                     durable_stream_id: Some(proto_uuid(108)),
                     durable_offset: durable_offset(1),
                     epoch: 1,
@@ -4415,15 +4758,83 @@ mod tests {
         }));
 
         translate_client_text(
-            PublicClientMessage::StreamCancel {
+            PublicClientMessage::StreamEnd {
                 channel: 1,
-                reason: PublicClientCancelReason::ConsumerDrop,
+                direction: PublicStreamDirection::Output,
+                sequence: DecimalU64(0),
+                outcome: PublicStreamOutcome::ConsumerCancelled { details: None },
                 version: 1,
             },
             &state,
         )
         .await
         .expect("a received cancellation may race with a terminal not yet observed by the client");
+    }
+
+    #[test]
+    fn method_results_distinguish_unit_from_an_explicit_empty_tuple() {
+        for output_schema in [None, Some(SchemaType::tuple(Vec::new()))] {
+            let mut state = AdapterState::new();
+            state.graph = Some(SchemaGraph::anonymous(SchemaType::tuple(Vec::new())));
+            state.output_schema = output_schema.clone();
+            let value: ProtoSchemaValue = SchemaValue::Tuple {
+                elements: Vec::new(),
+            }
+            .try_into()
+            .unwrap();
+            let frames = translate_result(
+                &mut state,
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(value)),
+                    ..Default::default()
+                },
+                &keyring(),
+            )
+            .unwrap();
+            let Message::Text(text) = &frames[0].message else {
+                panic!("method result was not text")
+            };
+            let PublicServerMessage::InvocationResult {
+                result, mappings, ..
+            } = golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap()
+            else {
+                panic!("method result translated to the wrong public message")
+            };
+            assert!(mappings.is_empty());
+            match (output_schema, *result) {
+                (None, PublicInvocationResult::None) => {}
+                (Some(schema), PublicInvocationResult::Value { graph, value }) => {
+                    assert_eq!(graph.root, schema);
+                    assert_eq!(
+                        value,
+                        serde_json::json!({ "kind": "tuple", "value": { "elements": [] } })
+                    );
+                }
+                other => panic!("method result did not match its output schema: {other:?}"),
+            }
+        }
+
+        for value in [
+            SchemaValue::U8(7),
+            SchemaValue::Tuple {
+                elements: vec![SchemaValue::U8(7)],
+            },
+        ] {
+            let Err(error) = translate_result(
+                &mut AdapterState::new(),
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(
+                        value.try_into().unwrap(),
+                    )),
+                    ..Default::default()
+                },
+                &keyring(),
+            ) else {
+                panic!("unit method accepted a non-unit value")
+            };
+            assert_eq!(error.code, PublicErrorCode::ProtocolError);
+        }
     }
 
     #[test]
@@ -4457,7 +4868,7 @@ mod tests {
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
-                    idempotency_key: idempotency_key(),
+                    idempotency_key: request_idempotency_key(),
                     ..Default::default()
                 },
             )))
@@ -4683,16 +5094,24 @@ mod tests {
         assert_eq!(error.code, PublicErrorCode::StreamConflict);
 
         let output_error = InvocationResponse {
-            response: Some(invocation_response::Response::OutputError(
-                OutputStreamError {
-                    transport_stream_id: 8,
-                    producer_sequence: 3,
-                    details: "upstream failed".to_string(),
-                    durable_stream_id: Some(proto_uuid(108)),
-                    durable_offset: durable_offset(2),
-                    epoch: 1,
-                },
-            )),
+            response: Some(invocation_response::Response::StreamEnd(StreamEnd {
+                transport_stream_id: 8,
+                producer_sequence: 3,
+                direction: StreamDirection::Output as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(
+                    golem_common::model::durable_stream::StreamTerminal::Failed(
+                        golem_common::model::durable_stream::StreamError::Trapped(
+                            "upstream failed".to_string(),
+                        ),
+                    )
+                    .try_into()
+                    .unwrap(),
+                ),
+                durable_stream_id: Some(proto_uuid(108)),
+                durable_offset: durable_offset(2),
+                epoch: 1,
+            })),
         };
         let error_frames = translate_private_response(
             output_error,
@@ -4708,18 +5127,19 @@ mod tests {
         let Message::Text(error_text) = &error_frames[0].message else {
             panic!("output error was not text")
         };
-        assert!(!error_text.contains("upstream failed"));
+        assert!(error_text.contains("upstream failed"));
         assert!(matches!(
             golem_common::model::invocation_session_public::decode_server_text(
                 error_text.as_bytes()
             )
             .unwrap(),
-            PublicServerMessage::OutputStreamEnd {
+            PublicServerMessage::StreamEnd {
                 channel: 1,
+                direction: PublicStreamDirection::Output,
                 sequence: DecimalU64(3),
-                outcome: PublicOutputStreamOutcome::Error {
-                    code: PublicErrorCode::ProducerError,
-                    ..
+                outcome: PublicStreamOutcome::Failed {
+                    error:
+                        golem_common::model::invocation_session_public::PublicStreamError::Trapped { .. },
                 },
                 ..
             }
@@ -4744,7 +5164,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,
@@ -4825,7 +5245,7 @@ mod tests {
             application: "app".to_string(),
             environment: "env".to_string(),
             agent: encode_session_agent_identity(&identity).unwrap(),
-            idempotency_key: "session-key".to_string(),
+            idempotency_key: InvocationId(Uuid::from_u128(5)).to_string(),
             logical_invocation_id,
             attachment_id: Uuid::from_u128(1),
             expected_attachment_generation: 1,

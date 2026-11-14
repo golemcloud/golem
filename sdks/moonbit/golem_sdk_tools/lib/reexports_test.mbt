@@ -69,6 +69,7 @@ test "component exports select raw ABI independently for each capability" {
   let signatures = parse_mbt_source(
     (
       #|pub fn wasmExportDiscoverAgentTypes() -> Int { 0 }
+      #|pub fn wasmExportInvokeGolemAgentGuest(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int) -> Int { 0 }
       #|pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int { 0 }
       #|pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int { 0 }
       #|pub fn wasmExportAsyncInvokeToolMiddleware(p0 : Int, p1 : Int, p2 : Int) -> Int { 0 }
@@ -85,6 +86,10 @@ test "component exports select raw ABI independently for each capability" {
     )
     assert_eq(output.contains("@gen.wasmExportDiscoverAgentTypes()"), agent)
     assert_eq(output.contains("@minimalExports.discover()"), !agent)
+    assert_eq(
+      output.contains("@minimalExports.invoke_agent(p0, p1, p2, p3, p4)"),
+      !agent,
+    )
     assert_eq(output.contains("@gen.wasmExportGetTool(p0, p1)"), tool)
     assert_eq(output.contains("@minimalExports.get(p0, p1)"), !tool)
     assert_eq(

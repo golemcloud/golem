@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use crate::durable_host::blobstore::{
     BlobProviderOperation, await_blob_provider, classify_blob_store_error,
 };
@@ -33,7 +37,7 @@ use golem_common::model::entity::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
-use golem_common::model::{AgentId, IdempotencyKey, OplogIndex, OwnedAgentId};
+use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
@@ -2041,9 +2045,9 @@ fn registered_blob_entity(
         activation,
         principal,
         InvocationExecutionMode::Live,
-        IdempotencyKey::fresh(),
+        InvocationId(Uuid::new_v4()),
         false,
-        IdempotencyKey::fresh(),
+        InvocationId(Uuid::new_v4()),
     )
     .unwrap();
     let registration = slot.register(&scope, Default::default()).unwrap();
