@@ -524,7 +524,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if worker.agent_mode() != AgentMode::Ephemeral
                 && worker.pending_startup_attempt().is_none()
             {
-                let status = worker.get_last_known_status().await;
+                let status = worker
+                    .deleted_incarnation_as_not_found(
+                        Some(expected),
+                        worker.try_get_last_known_status().await,
+                    )
+                    .await?;
                 self.ensure_not_failed(&owned_agent_id, worker.agent_mode(), &status)
                     .await?;
             }

@@ -414,11 +414,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &InvocationId) -> LookupResult {
-        // Kept as an `Arc` rather than cloned out of. The ordered actor read ensures a preceding
-        // completion fold is published first. The record owns
-        // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
-        // one key made each lookup cost more than the last.
         let status = self.state_actor.status().await;
+        self.lookup_invocation_result_in(status, key).await
+    }
+
+    /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
+    /// actor a deletion has stopped: that read fails instead of panicking.
+    pub(crate) async fn try_lookup_invocation_result(
+        &self,
+        key: &InvocationId,
+    ) -> Result<LookupResult, WorkerExecutorError> {
+        let status = self.state_actor.try_status().await?;
+        Ok(self.lookup_invocation_result_in(status, key).await)
+    }
+
+    /// The lookup in a status read from the state actor with `status` or `try_status`, which are
+    /// ordered after a preceding completion fold; `last_known_status` can lag behind it.
+    async fn lookup_invocation_result_in(
+        &self,
+        // Kept as an `Arc` rather than cloned out of. The record owns `invocation_results`,
+        // which gains an entry per invocation, so deep-copying it to read one key made each
+        // lookup cost more than the last.
+        status: Arc<AgentStatusRecord>,
+        key: &InvocationId,
+    ) -> LookupResult {
         let cached = self
             .hydrated_invocation_results
             .read()

@@ -82,6 +82,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
         self.state_actor.status().await
     }
+    /// [`Self::get_last_known_status`] for a caller that has not bound its task scope to this
+    /// generation, whose status actor a deletion may already have stopped. That read fails
+    /// instead of panicking: with the deletion's refusal when a deletion retired the generation,
+    /// as a failed deletion leaves it resident.
+    pub(crate) async fn try_get_last_known_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        match self.state_actor.try_status().await {
+            Err(_) if self.deletion_owns_retirement().await => Err(
+                WorkerExecutorError::invalid_request("Worker is being deleted"),
+            ),
+            result => result,
+        }
+    }
+    /// [`Self::get_latest_worker_metadata`] that reads the status as
+    /// [`Self::try_get_last_known_status`] does.
+    pub(crate) async fn try_get_latest_worker_metadata(
+        &self,
+    ) -> Result<AgentMetadata, WorkerExecutorError> {
+        let updated_status = self.try_get_last_known_status().await?.as_ref().clone();
+        Ok(AgentMetadata {
+            last_known_status: updated_status,
+            ..self.get_initial_worker_metadata()
+        })
+    }
     /// The projection as [`Self::get_last_known_status`] gives it, rebuilt first when a failed
     /// rebuild left it detached. A rebuild that fails again gives the refusal, reported as in
     /// [`Self::commit_oplog_and_update_state`].

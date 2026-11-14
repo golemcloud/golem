@@ -12080,6 +12080,51 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
     Ok(())
 }
 
+// Sends an `increment` that names the incarnation by `fingerprint` in `mode`, scheduled an hour
+// ahead when `delayed`, and describes how it was answered.
+async fn fingerprinted_increment(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    worker_id: &AgentId,
+    fingerprint: AgentFingerprint,
+    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
+    delayed: bool,
+) -> anyhow::Result<String> {
+    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+        agent_id: Some(worker_id.clone().into()),
+        method_name: Some("increment".to_string()),
+        input: Some(
+            SchemaValue::Record { fields: vec![] }
+                .try_into()
+                .map_err(anyhow::Error::msg)?,
+        ),
+        mode: mode as i32,
+        schedule_at: delayed.then(|| prost_types::Timestamp {
+            seconds: chrono::Utc::now().timestamp() + 3600,
+            nanos: 0,
+        }),
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        expected_callee_fingerprint: Some(fingerprint.0.into()),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        ..Default::default()
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_agent_session(start),
+    )
+    .await;
+    Ok(match result {
+        Err(_) => format!("{mode:?} delayed={delayed}: timed out"),
+        Ok(Ok(_)) => format!("{mode:?} delayed={delayed}: admitted"),
+        Ok(Err(error)) => format!("{mode:?} delayed={delayed}: {error:#}"),
+    })
+}
+
 // Sends an `increment` with the incarnation's expected fingerprint while a deletion of that
 // incarnation is held before `stage`, and returns how each mode was answered.
 async fn fingerprinted_calls_during_deletion(
@@ -12113,42 +12158,16 @@ async fn fingerprinted_calls_during_deletion(
             async move { executor.delete_worker(&worker_id).await }
         });
         hook.wait_until_gated().await;
-        let start = golem_api_grpc::proto::golem::worker::InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
-            method_name: Some("increment".to_string()),
-            input: Some(
-                SchemaValue::Record { fields: vec![] }
-                    .try_into()
-                    .map_err(anyhow::Error::msg)?,
-            ),
-            mode: mode as i32,
-            schedule_at: delayed.then(|| prost_types::Timestamp {
-                seconds: chrono::Utc::now().timestamp() + 3600,
-                nanos: 0,
-            }),
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            expected_callee_fingerprint: Some(fingerprint.0.into()),
-            request_key: Some(
-                golem_common::model::InvocationRequestKey::external(None, None).into(),
-            ),
-            ..Default::default()
-        };
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            executor.invoke_agent_session(start),
+        let answer = fingerprinted_increment(
+            &executor,
+            &component,
+            &worker_id,
+            fingerprint,
+            mode,
+            delayed,
         )
-        .await;
-        report.push(match result {
-            Err(_) => format!("{stage:?} {mode:?} delayed={delayed}: timed out"),
-            Ok(Ok(_)) => format!("{stage:?} {mode:?} delayed={delayed}: admitted"),
-            Ok(Err(error)) => format!("{stage:?} {mode:?} delayed={delayed}: {error:#}"),
-        });
+        .await?;
+        report.push(format!("{stage:?} {answer}"));
         hook.release();
         let _ = tokio::time::timeout(Duration::from_secs(20), deleting).await;
         drop(executor);
@@ -12183,6 +12202,116 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
         );
     }
     assert!(failures.is_empty(), "{failures:#?}");
+    Ok(())
+}
+
+// A deletion that fails after stopping the incarnation's runtime leaves the agent in place, with
+// the stopped generation still resident. A caller that names that incarnation by its fingerprint
+// gets the deletion's refusal, as reads do, and the executor keeps serving: the retried
+// deletion succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("Counter", "fingerprinted-failed-delete"),
+        )
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // Armed once the delete reaches the durable state, so the failure lands after the runtime
+    // and its status actor stopped and before the oplog is deleted.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned,
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_some()
+    );
+
+    let mut failures = Vec::new();
+    for (mode, delayed) in [
+        (Mode::Await, false),
+        (Mode::Schedule, false),
+        (Mode::Schedule, true),
+    ] {
+        let answer = fingerprinted_increment(
+            &executor,
+            &component,
+            &worker_id,
+            fingerprint,
+            mode,
+            delayed,
+        )
+        .await?;
+        if !answer.contains("being deleted") {
+            failures.push(answer);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none()
+    );
     Ok(())
 }
 
