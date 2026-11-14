@@ -1,0 +1,5 @@
+members = [
+  ".",
+  "../../sdks/moonbit/golem_sdk",
+  "../../sdks/moonbit/golem_sdk_tools",
+]

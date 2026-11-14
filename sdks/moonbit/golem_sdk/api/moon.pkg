@@ -1,4 +1,5 @@
 import {
+  "golemcloud/golem_sdk/async-core" @async_core,
   "golemcloud/golem_sdk/interface/golem/api/host" @raw,
   "golemcloud/golem_sdk/interface/golem/api/oplog",
   "golemcloud/golem_sdk/interface/golem/api/retry",

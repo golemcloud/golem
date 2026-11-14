@@ -361,13 +361,16 @@ response, and returns that response without evaluating the body during replay. I
 unfinished, recovery retries the whole custom operation, so repeated attempts must be safe through
 the correct operation type, an external idempotency key, or a transaction.
 
-**Custom durability is sequential-only.** Both combinators support properly nested calls. An async
-body may await host calls when no unrelated guest work runs during the wait. Do not overlap it with
-other tasks, including ordinary host calls: sibling effects can acquire the wrong scope and cause
-incorrect replay or invocation failure. Misuse is not reliably detected. Await each nested
-operation; do not detach tasks. Stop and join outstanding work before the body exits, including on
-failure or cancellation. Joining at the end does not make concurrent custom scopes supported.
-Ordinary built-in durability is not subject to this restriction when no custom operation is active.
+**Custom durability scopes follow the task that runs the body.** Both combinators support nested
+calls, and `durable_async` bodies may run concurrently with other tasks of the same invocation:
+while a body waits, sibling tasks, their ordinary host calls, and other custom operations with the
+same name and request are not attributed to it. A task spawned inside a body, including a stream or
+future producer, runs in that body's scope. Join every task spawned in a body before it returns,
+for example with a `@async_core.with_task_group` opened inside the body. A task spawned in a body
+that is still running when the body exits aborts the invocation. `durable_async` waits for the
+stream and future producers its body started, and cancels them when the body fails. `@api.durable`
+runs a synchronous body, and a task spawned in it aborts the invocation when the body returns.
+Agent invocations themselves still run one at a time.
 
 ## Environments and Build Presets
 
