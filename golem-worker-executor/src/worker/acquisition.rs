@@ -19,6 +19,65 @@ use golem_common::model::InvocationId;
 
 use crate::worker::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CreateDecision {
+    Created,
+    Joined,
+    IdempotentRetry,
+    AlreadyExists,
+    IdempotencyKeyConflict,
+}
+
+pub(super) struct CreateIdentity<'a> {
+    pub request: &'a CreateRequest,
+    pub canonical_key: Option<&'a str>,
+    pub env: &'a [(String, String)],
+    pub config: &'a [AgentConfigEntryDto],
+}
+
+pub(super) fn decide_create(
+    stored: Option<CreateIdentity<'_>>,
+    incoming: CreateIdentity<'_>,
+    exclusive: bool,
+) -> CreateDecision {
+    let Some(stored) = stored else {
+        return CreateDecision::Created;
+    };
+    if !exclusive {
+        return CreateDecision::Joined;
+    }
+    let Some(key) = incoming.request.idempotency_key.as_ref() else {
+        return CreateDecision::AlreadyExists;
+    };
+    if stored.request.idempotency_key.as_ref() != Some(key) {
+        return CreateDecision::AlreadyExists;
+    }
+
+    let env = |entries: &[(String, String)]| entries.iter().cloned().collect::<HashMap<_, _>>();
+    let config = |entries: &[AgentConfigEntryDto]| {
+        entries
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.value.clone()))
+            .collect::<HashMap<_, _>>()
+    };
+    if stored.request.kind == incoming.request.kind
+        && stored.request.principal == incoming.request.principal
+        && stored.canonical_key == incoming.canonical_key
+        && env(stored.env) == env(incoming.env)
+        && config(stored.config) == config(incoming.config)
+    {
+        CreateDecision::IdempotentRetry
+    } else {
+        CreateDecision::IdempotencyKeyConflict
+    }
+}
+
+pub(in crate::worker) struct ConstructedWorker<Ctx: WorkerCtx> {
+    data: ResolvedWorkerData<Ctx>,
+    reconstructed_ephemeral: bool,
+    newly_created: bool,
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
         deps: &T,
@@ -517,58 +576,169 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         create_intent: CreateIntent,
     ) -> Result<(), WorkerExecutorError> {
         loop {
-            let worker = self.clone();
-            let create_intent = create_intent.clone();
-            let worker_env = worker_env.clone();
-            let worker_agent_config = worker_agent_config.clone();
-            let parent = parent.clone();
-            let invocation_context_stack = invocation_context_stack.clone();
-            let principal = principal.clone();
-            let build = async move {
-                let start = std::time::Instant::now();
-                let mut lifecycle = worker
-                    .deps
-                    .oplog_service()
-                    .lock_lifecycle(&worker.owned_agent_id.agent_id)
+            let build = {
+                let worker = self.clone();
+                let create_intent = create_intent.clone();
+                let worker_env = worker_env.clone();
+                let worker_agent_config = worker_agent_config.clone();
+                let parent = parent.clone();
+                let invocation_context_stack = invocation_context_stack.clone();
+                let principal = principal.clone();
+                async move {
+                    let start = std::time::Instant::now();
+                    let mut lifecycle = worker
+                        .deps
+                        .oplog_service()
+                        .lock_lifecycle(&worker.owned_agent_id.agent_id)
+                        .await;
+                    let freshness_disposition = if worker.unpublished_create.load(Ordering::Acquire)
+                    {
+                        // A failed attempt committed Create. Even a KnownFresh request must reload
+                        // that incarnation rather than create another one.
+                        InvocationFreshnessDisposition::MayExist
+                    } else {
+                        freshness_disposition
+                    };
+                    let metadata = Self::get_or_create_worker_metadata(
+                        &worker.deps,
+                        &mut lifecycle,
+                        &worker.owned_agent_id,
+                        component_revision,
+                        worker_env,
+                        worker_agent_config,
+                        parent,
+                        &principal,
+                        &invocation_context_stack,
+                        freshness_disposition,
+                        creation_mode,
+                        &create_intent,
+                    )
                     .await;
-                let freshness_disposition = if worker.unpublished_create.load(Ordering::Acquire) {
-                    // A failed attempt committed Create. Even a KnownFresh request must reload
-                    // that incarnation rather than create another one.
-                    InvocationFreshnessDisposition::MayExist
-                } else {
-                    freshness_disposition
-                };
-                let metadata = Self::get_or_create_worker_metadata(
-                    &worker.deps,
-                    &mut lifecycle,
-                    &worker.owned_agent_id,
-                    component_revision,
-                    worker_env,
-                    worker_agent_config,
-                    parent,
-                    &principal,
-                    &invocation_context_stack,
-                    freshness_disposition,
-                    creation_mode,
-                    &create_intent,
-                )
-                .await;
-                worker.finish_construction(start, metadata).await
-            }
-            .boxed();
-            let (started, result) = self.initialize_with(build).await;
-            match result {
-                Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
-                result => {
-                    result?;
-                    if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
-                        return Err(WorkerExecutorError::invalid_request(
-                            "execution owner kind does not match the requested creation mode",
-                        ));
-                    }
-                    return Ok(());
+                    worker.finish_construction(start, metadata).await
                 }
+                .boxed()
+            };
+            let (started, result) = self.initialize_with(build).await;
+            let newly_created = match result {
+                Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
+                result => result?,
+            };
+            if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "execution owner kind does not match the requested creation mode",
+                ));
             }
+            // Construction success belongs to all waiters. Only the task's originating caller
+            // may treat a newly written Create as its own, rather than an existing incarnation.
+            let exclusive = matches!(
+                create_intent,
+                CreateIntent::Create {
+                    exclusive: true,
+                    ..
+                }
+            );
+            if (started && newly_created) || !exclusive {
+                return Ok(());
+            }
+            // Never hold this guard while joining construction: the constructing task needs it.
+            let _lifecycle = self
+                .deps
+                .oplog_service()
+                .lock_lifecycle(&self.owned_agent_id.agent_id)
+                .await;
+            owned_shard_epoch(&self.deps, &self.owned_agent_id.agent_id)?;
+            if self.answers_as_deleted().await {
+                // Deletion won admission. Retry after its cached generation has been removed
+                // rather than returning a missing-agent result from an exclusive create.
+                return Err(WorkerExecutorError::ShardingNotReady);
+            }
+            let incoming_request = create_intent.request(
+                self.parsed_agent_id.as_ref().and_then(|id| id.phantom_id),
+                principal.clone(),
+                &invocation_context_stack,
+            );
+            let canonical_key = self
+                .parsed_agent_id
+                .as_ref()
+                .filter(|id| self.agent_mode() == AgentMode::Durable && id.phantom_id.is_none())
+                .map(ToString::to_string);
+            let stored_config: Vec<_> = self
+                .initial_worker_metadata
+                .config
+                .iter()
+                .cloned()
+                .map(AgentConfigEntryDto::from)
+                .collect();
+            let incoming_config = if exclusive
+                && incoming_request.idempotency_key.is_some()
+                && incoming_request.idempotency_key
+                    == self.initial_worker_metadata.create_request.idempotency_key
+            {
+                worker_agent_config
+                    .iter()
+                    .map(|entry| {
+                        let Some(stored) = self
+                            .initial_worker_metadata
+                            .config
+                            .iter()
+                            .find(|stored| stored.path == entry.path)
+                        else {
+                            return Ok(entry.clone());
+                        };
+                        // Use the original override's projected schema, never current defaults or
+                        // deployment metadata. Decoding/rendering canonicalizes records and flags.
+                        let conflict = || WorkerExecutorError::CreateIdempotencyKeyConflict {
+                            agent_id: self.agent_id(),
+                        };
+                        let value = golem_schema::schema::render::from_untrusted_json_value(
+                            stored.value.graph(),
+                            stored.value.root_type(),
+                            &entry.value.0,
+                        )
+                        .map_err(|_| conflict())?;
+                        let value = golem_schema::schema::render::to_json_value(
+                            stored.value.graph(),
+                            stored.value.root_type(),
+                            &value,
+                        )
+                        .map_err(|_| conflict())?;
+                        Ok(AgentConfigEntryDto {
+                            path: entry.path.clone(),
+                            value: value.into(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, WorkerExecutorError>>()?
+            } else {
+                worker_agent_config.clone()
+            };
+            let decision = decide_create(
+                Some(CreateIdentity {
+                    request: &self.initial_worker_metadata.create_request,
+                    canonical_key: self.initial_worker_metadata.canonical_key.as_deref(),
+                    env: &self.initial_worker_metadata.env,
+                    config: &stored_config,
+                }),
+                CreateIdentity {
+                    request: &incoming_request,
+                    canonical_key: canonical_key.as_deref(),
+                    env: worker_env.as_deref().unwrap_or_default(),
+                    config: &incoming_config,
+                },
+                exclusive,
+            );
+            return match decision {
+                CreateDecision::Created
+                | CreateDecision::Joined
+                | CreateDecision::IdempotentRetry => Ok(()),
+                CreateDecision::AlreadyExists => {
+                    Err(WorkerExecutorError::worker_already_exists(self.agent_id()))
+                }
+                CreateDecision::IdempotencyKeyConflict => {
+                    Err(WorkerExecutorError::CreateIdempotencyKeyConflict {
+                        agent_id: self.agent_id(),
+                    })
+                }
+            };
         }
     }
     pub(crate) async fn ensure_existing_with_fingerprint(
@@ -613,12 +783,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker.finish_construction(start, metadata).await
         }
         .boxed();
-        self.initialize_with(build).await.1
+        self.initialize_with(build).await.1.map(|_| ())
     }
+    /// Shared completion reports whether construction wrote Create. Only its initiating caller
+    /// can use that provenance to admit a newly created agent; followers still see an existing one.
     pub(in crate::worker) async fn initialize_with(
         self: &Arc<Self>,
-        build: BoxFuture<'static, Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError>>,
-    ) -> (bool, Result<(), WorkerExecutorError>) {
+        build: BoxFuture<'static, Result<ConstructedWorker<Ctx>, WorkerExecutorError>>,
+    ) -> (bool, Result<bool, WorkerExecutorError>) {
         let (started, completion) = {
             let mut instance = self.instance.lock().await;
             match instance.transition() {
@@ -641,7 +813,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let mut instance = worker.instance.lock().await;
                         let published = match instance.transition() {
                             LifecycleTransition::Initializing(initializing) => match result {
-                                Ok((data, reconstructed_ephemeral)) => {
+                                Ok(ConstructedWorker {
+                                    data,
+                                    reconstructed_ephemeral,
+                                    newly_created,
+                                }) => {
                                     worker.unpublished_create.store(false, Ordering::Release);
                                     if reconstructed_ephemeral {
                                         initializing
@@ -651,9 +827,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     }
                                     // Publish immutable data last: cache readers use this cell as
                                     // their lock-free initialization-completion boundary.
-                                    worker.resolved.set(data).map_err(|_| {
-                                        WorkerExecutorError::runtime("Worker initialized twice")
-                                    })
+                                    worker.resolved.set(data).map(|()| newly_created).map_err(
+                                        |_| {
+                                            WorkerExecutorError::runtime("Worker initialized twice")
+                                        },
+                                    )
                                 }
                                 Err(error) => {
                                     initializing.construction_failed();
@@ -692,7 +870,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     (false, initializing.completion())
                 }
                 LifecycleTransition::CleanupFailed(error) => return (false, Err(error.clone())),
-                _ if self.resolved.get().is_some() => return (false, Ok(())),
+                _ if self.resolved.get().is_some() => return (false, Ok(false)),
                 _ => {
                     return (
                         false,
@@ -727,7 +905,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         start: std::time::Instant,
         metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
-    ) -> Result<(ResolvedWorkerData<Ctx>, bool), WorkerExecutorError> {
+    ) -> Result<ConstructedWorker<Ctx>, WorkerExecutorError> {
         let mut metadata = match metadata {
             Ok(result) => result,
             Err(err) => {
@@ -740,6 +918,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             metadata.oplog,
             self.deps.extra_deps(),
         );
+        let newly_created = metadata.newly_created;
         let construction_oplog = metadata.oplog.clone();
         let (worker, reconstructed_ephemeral) = match self.prepare_worker_data(metadata).await {
             Ok(prepared) => prepared,
@@ -758,7 +937,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         crate::metrics::wasm::record_create_worker(start.elapsed());
 
-        Ok((worker, reconstructed_ephemeral))
+        Ok(ConstructedWorker {
+            data: worker,
+            reconstructed_ephemeral,
+            newly_created,
+        })
     }
     pub(in crate::worker) async fn prepare_worker_data(
         self: &Arc<Self>,

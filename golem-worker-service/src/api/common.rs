@@ -86,6 +86,11 @@ impl ApiErrorDetails for ApiEndpointError {
             {
                 "InvocationIdentityConflict"
             }
+            Self::UnprocessableEntity(body)
+                if body.code == api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT =>
+            {
+                "CreateIdempotencyKeyConflict"
+            }
             Self::UnprocessableEntity(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
@@ -185,7 +190,7 @@ impl ApiEndpointError {
         }))
     }
 
-    pub fn limit_exceeded<T: SafeDisplay>(code: &str, error: T) -> Self {
+    pub fn unprocessable_entity<T: SafeDisplay>(code: &str, error: T) -> Self {
         Self::UnprocessableEntity(Json(ErrorBody {
             error: error.to_safe_string(),
             code: code.to_string(),
@@ -256,7 +261,7 @@ impl From<LimitServiceError> for ApiEndpointError {
     fn from(error: LimitServiceError) -> Self {
         match error {
             LimitServiceError::LimitExceeded(_) => {
-                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
+                Self::unprocessable_entity(api::error_code::LIMIT_EXCEEDED, error)
             }
             LimitServiceError::InternalError(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
@@ -311,6 +316,12 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             }
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
+            }
+            WorkerExecutorError::AgentAlreadyExists { .. } => {
+                Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
+            }
+            WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
+                Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
             }
             WorkerExecutorError::InvocationFailed { error, stderr } => Self::internal_worker(
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
@@ -404,7 +415,7 @@ impl From<RegistryServiceError> for ApiEndpointError {
                 Self::unauthorized(api::error_code::AUTH_UNAUTHORIZED, value)
             }
             RegistryServiceError::LimitExceeded(_) => {
-                Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, value)
+                Self::unprocessable_entity(api::error_code::LIMIT_EXCEEDED, value)
             }
             RegistryServiceError::NotFound(_) => {
                 Self::not_found(api::error_code::RESOURCE_NOT_FOUND, value)
@@ -537,6 +548,62 @@ mod tests {
     use poem::IntoResponse;
     use test_r::test;
     use tonic::{Code, Status};
+
+    #[test]
+    async fn create_conflicts_preserve_their_codes_through_grpc_and_http() {
+        use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
+        use golem_common::model::AgentId;
+        use golem_common::model::component::ComponentId;
+        use poem::IntoResponse;
+        use poem::http::StatusCode;
+        use prost::Message;
+
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "Counter(\"create-conflicts\")".into(),
+        };
+        for (error, status, code) in [
+            (
+                WorkerExecutorError::AgentAlreadyExists {
+                    agent_id: agent_id.clone(),
+                },
+                StatusCode::CONFLICT,
+                api::error_code::AGENT_ALREADY_EXISTS,
+            ),
+            (
+                WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT,
+            ),
+        ] {
+            let encoded = WorkerExecutionError::from(error).encode_to_vec();
+            let transported = WorkerExecutorError::try_from(
+                WorkerExecutionError::decode(encoded.as_slice()).unwrap(),
+            )
+            .expect("the executor error survives the create response");
+            let api_error = ApiEndpointError::from(transported);
+            if code == api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT {
+                assert_eq!(api_error.trace_error_kind(), "CreateIdempotencyKeyConflict");
+            }
+            let response = api_error.into_response();
+            assert_eq!(response.status(), status);
+            let body = response
+                .into_body()
+                .into_json::<serde_json::Value>()
+                .await
+                .unwrap();
+            assert_eq!(body["code"], code);
+        }
+        let limit: ApiEndpointError = LimitServiceError::LimitExceeded("quota".into()).into();
+        let response = limit.into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response
+            .into_body()
+            .into_json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(body["code"], api::error_code::LIMIT_EXCEEDED);
+    }
 
     #[test]
     async fn invocation_identity_conflict_maps_to_422_at_public_error_boundaries() {

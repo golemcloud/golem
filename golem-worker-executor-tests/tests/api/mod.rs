@@ -815,6 +815,7 @@ impl WorkerDeletionHook for DeletionStageHook {
 test_r::tag_suite!(fenced_outcome, group5);
 test_r::tag_suite!(p2_ready, group5);
 
+mod create_deletion_admission;
 mod fenced_outcome;
 mod interruption;
 mod p2_ready;
@@ -4882,12 +4883,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    assert_eq!(
-        executor
-            .start_agent(&component.id, counter_id.clone())
-            .await?,
-        worker_id
-    );
+    executor.resume(&worker_id, false).await?;
 
     let oldest_key = oldest_key.unwrap();
     let scope = executor.auth_ctx().idempotency_scope().unwrap();
@@ -8901,7 +8897,13 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
     };
     for round in 0..2 {
         let executor = start(deps, &context).await?;
-        executor.start_agent(&component.id, agent.clone()).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &agent, "get_global_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            if round == 0 { 0 } else { 23 }
+        );
         let worker = executor.active_agent(&owned).await.unwrap().primary();
         let (left, right) = tokio::join!(
             worker.schedule_invocation(request(&raced_key, 31u64, None), deadline),

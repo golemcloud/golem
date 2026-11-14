@@ -1057,6 +1057,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let AgentTarget::Current(agent_id) = target;
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
+        let idempotency_key = IdempotencyKey::fresh();
         let fingerprint = self
             .call_worker_executor(
                 target.clone(),
@@ -1080,7 +1081,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             auth_ctx: Some(auth_ctx.clone().into()),
                             principal: principal.clone(),
                             invocation_context: invocation_context.clone(),
-                            idempotency_key: None,
+                            idempotency_key: Some(idempotency_key.clone().into()),
                             freshness_disposition: 0,
                         }),
                     )
@@ -3597,6 +3598,8 @@ mod rejection_mapping_tests {
     #[derive(Clone, Default)]
     struct RejectingExecutor {
         routing_misses: Arc<AtomicUsize>,
+        create_request: Arc<std::sync::Mutex<Option<CreateWorkerRequest>>>,
+        create_sharding_error: bool,
         accept: bool,
         calls: Arc<AtomicUsize>,
         /// The opening frame's freshness disposition, one per call in call order.
@@ -3667,7 +3670,41 @@ mod rejection_mapping_tests {
             golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
         );
 
-        unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        async fn create_worker(
+            &self,
+            request: Request<CreateWorkerRequest>,
+        ) -> Result<Response<CreateWorkerResponse>, Status> {
+            use create_worker_response::Result as Reply;
+
+            let request = request.into_inner();
+            let mut stored = self.create_request.lock().unwrap();
+            let result = if let Some(original) = stored.as_ref() {
+                if request.idempotency_key.is_some()
+                    && request.idempotency_key == original.idempotency_key
+                {
+                    Reply::Success(CreateWorkerSuccessResponse {
+                        instance_id: Some(uuid::Uuid::from_u128(17).into()),
+                    })
+                } else {
+                    Reply::Failure(
+                        WorkerExecutorError::worker_already_exists(
+                            request.agent_id.unwrap().try_into().unwrap(),
+                        )
+                        .into(),
+                    )
+                }
+            } else {
+                // The first attempt persisted Create, but its caller did not receive success.
+                *stored = Some(request);
+                if !self.create_sharding_error {
+                    return Err(Status::unavailable("response lost after Create"));
+                }
+                Reply::Failure(WorkerExecutorError::ShardingNotReady.into())
+            };
+            Ok(Response::new(CreateWorkerResponse {
+                result: Some(result),
+            }))
+        }
         unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
         unimplemented_unary!(
@@ -3983,6 +4020,44 @@ mod rejection_mapping_tests {
             )
             .await
             .unwrap_err()
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn exclusive_create_retries_the_same_identity_after_a_lost_response() {
+        for create_sharding_error in [false, true] {
+            let executor = RejectingExecutor {
+                create_sharding_error,
+                ..Default::default()
+            };
+            let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
+            let account_id = AccountId::new();
+            let environment_id = EnvironmentId::new();
+            let target = AgentTarget::Current(agent_id.clone());
+            let create = || {
+                client.create(
+                    &target,
+                    Default::default(),
+                    vec![],
+                    false,
+                    account_id,
+                    environment_id,
+                    AuthCtx::System,
+                    None,
+                    None,
+                )
+            };
+
+            let (created_id, fingerprint) = create().await.unwrap();
+            assert_eq!(created_id, agent_id);
+            assert_eq!(fingerprint.0, uuid::Uuid::from_u128(17));
+            assert!(matches!(
+                create().await,
+                Err(WorkerServiceError::GolemError(
+                    WorkerExecutorError::AgentAlreadyExists { agent_id: existing }
+                )) if existing == agent_id
+            ));
+        }
     }
 
     #[test]
