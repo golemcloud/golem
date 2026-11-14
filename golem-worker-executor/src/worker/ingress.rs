@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 use chrono::{DateTime, Utc};
-use golem_common::model::{ScheduleId, ScheduledAction};
+use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
@@ -49,6 +53,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
+
+        // Recorded requests take precedence over a newer read-only cache entry.
+        let subscription = self.events().subscribe();
+        match self.lookup_matching_invocation(&invocation).await? {
+            LookupResult::Complete(output) => return Ok(ResultOrSubscription::Finished(output)),
+            LookupResult::Pending => return Ok(ResultOrSubscription::Pending(subscription)),
+            LookupResult::Interrupted => {
+                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+            }
+            LookupResult::New => {}
+        }
 
         // Classification uses the in-memory component snapshot - no metadata
         // fetch on the hot path.
@@ -88,6 +103,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Some(err) = instance_guard.startup_failure() {
                             return Err(err.clone());
                         }
+                        match self.lookup_matching_invocation(&invocation).await? {
+                            LookupResult::Complete(output) => {
+                                return Ok(ResultOrSubscription::Finished(output));
+                            }
+                            LookupResult::Pending => {
+                                return Ok(ResultOrSubscription::Pending(subscription));
+                            }
+                            LookupResult::Interrupted => {
+                                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                            }
+                            LookupResult::New => {}
+                        }
                         drop(instance_guard);
                         return Ok(ResultOrSubscription::Finished(Ok(entry.output.clone())));
                     } else {
@@ -114,14 +141,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None
         };
 
-        let output = async { self.lookup_invocation_result(&idempotency_key).await }
+        let output = async { self.lookup_matching_invocation(&invocation).await }
             .instrument(span!(
                 Level::INFO,
                 "lookup_invocation_result",
                 agent_id = %self.owned_agent_id.agent_id,
                 idempotency_key = %idempotency_key,
             ))
-            .await;
+            .await?;
         let (result, enqueue_epoch) = match output {
             LookupResult::Complete(output) => (ResultOrSubscription::Finished(output), None),
             LookupResult::Interrupted => {
@@ -162,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // (`populate_read_only_cache`), so it needs the live atomic.
             let read_only_cache_epoch = self.read_only_cache_epoch.clone();
             let agent_id = self.owned_agent_id.agent_id.clone();
-            let idem = idempotency_key.clone();
+            let idem = idempotency_key;
             tokio::spawn(async move {
                 let wait_result = obs_sub
                     .wait_for(|event| match event {
@@ -197,7 +224,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke_external_tool(
         self: Arc<Self>,
         expected_fingerprint: AgentFingerprint,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
@@ -214,12 +241,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(WorkerExecutorError::invalid_request(
                 "external tool invocation owner fingerprint does not match",
             ));
-        }
-
-        // A retry attaches to the already accepted payload/result. In particular it must not
-        // resolve the tool against a newer environment deployment.
-        if self.lookup_invocation_result(&idempotency_key).await != LookupResult::New {
-            return self.await_enqueued_invocation(idempotency_key).await;
         }
 
         let invocation = self
@@ -241,7 +262,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn prepare_external_tool_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         tool_name: ToolName,
         command_path: Vec<String>,
         input: TypedSchemaValue,
@@ -253,17 +274,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
-        if let Some(scope_card) = &scope_card {
-            crate::services::card::validate_scope_card(self.card_service().as_ref(), scope_card)
-                .await?;
-        }
         let accepted_index = self
             .durable_stream_session_status(&idempotency_key)
             .await?
             .and_then(|status| status.initial_pending_invocation_oplog_index);
-        let activation = if let Some(index) = accepted_index {
+        let accepted_payload = self.accepted_invocation_payload(&idempotency_key).await?;
+        let already_accepted = accepted_payload.is_some() || accepted_index.is_some();
+        let activation = if let Some(payload) = accepted_payload {
+            let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
+                return Err(WorkerExecutorError::invalid_request(
+                    "IdempotencyConflict: invocation key is already bound to an agent method",
+                ));
+            };
+            activation
+        } else if let Some(index) = accepted_index {
             let OplogEntry::PendingAgentInvocation {
-                idempotency_key: accepted_key,
+                invocation_id: accepted_key,
                 payload,
                 ..
             } = self.oplog.read(index).await?
@@ -334,11 +360,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         };
-        require_expected_tool_deployment_revision(
-            expected_deployment_revision,
-            activation.registered_tool.deployment_revision,
-        )?;
-        Ok(AgentInvocation::ExternalTool {
+        if !already_accepted {
+            require_expected_tool_deployment_revision(
+                expected_deployment_revision,
+                activation.registered_tool.deployment_revision,
+            )?;
+            if let Some(scope_card) = &scope_card {
+                crate::services::card::validate_scope_card(
+                    self.card_service().as_ref(),
+                    scope_card,
+                )
+                .await?;
+            }
+        }
+        let invocation = AgentInvocation::ExternalTool {
             idempotency_key,
             tool_name,
             command_path,
@@ -350,7 +385,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_context,
             principal,
             scope_card,
-        })
+        };
+        if already_accepted {
+            self.ensure_matching_invocation_payload(
+                &Self::require_idempotency_key(&invocation)?,
+                &invocation.clone().into_parts().1,
+            )
+            .await?;
+        }
+        Ok(invocation)
     }
     /// Invokes the worker and awaits for a result.
     ///
@@ -391,25 +434,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // for completing the invocation, so we just await the existing
         // result instead of enqueueing a duplicate or caching here.
         //
-        // For non-`New` results we MUST NOT fall through to
-        // `Worker::invoke`: that path checks the read-only cache HIT before
-        // looking up the idempotency key, which would let a warm
-        // current-epoch entry shadow the recorded idempotency result.
-        // Instead we handle non-`New` results inline below.
+        // Handle existing identities before consulting the current cache epoch.
         let lookup_for_coalesce = if let Some(ro) = self.read_only_context_for(&invocation)
             && ro.cacheable
             && !is_no_cache(&ro.cfg.cache_policy)
         {
             Some((
                 ro,
-                async { self.lookup_invocation_result(&idempotency_key).await }
+                async { self.lookup_matching_invocation(&invocation).await }
                     .instrument(span!(
                         Level::INFO,
                         "lookup_invocation_result",
                         agent_id = %self.owned_agent_id.agent_id,
                         idempotency_key = %idempotency_key,
                     ))
-                    .await,
+                    .await?,
             ))
         } else {
             None
@@ -498,7 +537,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     if let Some(err) = instance_guard.startup_failure() {
                         return Err(err.clone());
                     }
+                    let recorded = self.lookup_matching_invocation(&invocation).await?;
                     drop(instance_guard);
+                    match recorded {
+                        LookupResult::Complete(result) => {
+                            if let Some(tx) = admission.take() {
+                                let signal = match &result {
+                                    Ok(_) => read_only_cache::AdmissionSignal::Immediate,
+                                    Err(error) => {
+                                        read_only_cache::AdmissionSignal::Failure(error.clone())
+                                    }
+                                };
+                                let _ = tx.send(signal);
+                            }
+                            return result;
+                        }
+                        LookupResult::Pending => {
+                            Worker::start_if_needed(self.clone()).await?;
+                            if let Some(tx) = admission.take() {
+                                let _ = tx.send(read_only_cache::AdmissionSignal::Queued);
+                            }
+                            return self.await_enqueued_invocation(idempotency_key).await;
+                        }
+                        LookupResult::Interrupted => {
+                            return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                        }
+                        LookupResult::New => {}
+                    }
                     if let Some(tx) = admission.take() {
                         let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
                     }
@@ -530,8 +595,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // resolves the entry one way or the other.
             let ro_for_closure = ro.clone();
             let worker = self.clone();
-            let invocation_for_closure = invocation;
-            let idem_for_closure = idempotency_key.clone();
+            let invocation_for_closure = invocation.clone();
+            let idem_for_closure = idempotency_key;
 
             // The owner future is spawned and deliberately survives this caller, so
             // it cannot run inside the caller's span - that would hold the gRPC span
@@ -545,7 +610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // execution is the honest originator.
             let origin = TraceOrigin::capture_current();
             let owner_agent_id = self.owned_agent_id.agent_id.clone();
-            let owner_idempotency_key = idempotency_key.clone();
+            let owner_idempotency_key = idempotency_key;
 
             let pending_or_final = async {
                 self.read_only_cache
@@ -601,6 +666,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let entry_result = match pending_or_final {
                 Ok(entry) => match entry {
                     PendingOrFinal::Final(entry) => {
+                        self.ensure_matching_invocation_payload(
+                            &idempotency_key,
+                            &invocation.clone().into_parts().1,
+                        )
+                        .await?;
                         if let Some(tx) = admission.take() {
                             let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
                         }
@@ -617,6 +687,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             Some(value) => value.admission().await,
                             None => read_only_cache::AdmissionSignal::Immediate,
                         };
+                        self.ensure_matching_invocation_payload(
+                            &idempotency_key,
+                            &invocation.clone().into_parts().1,
+                        )
+                        .await?;
                         if let Some(tx) = admission.take() {
                             let _ = tx.send(signal.clone());
                         }
@@ -652,6 +727,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await;
             }
 
+            // A follower owns no persisted identity. If this identity was accepted while
+            // joining the cache owner, its recorded request and output still take precedence.
+            match self.lookup_matching_invocation(&invocation).await? {
+                LookupResult::Complete(result) => return result,
+                LookupResult::Pending => {
+                    return self.await_enqueued_invocation(idempotency_key).await;
+                }
+                LookupResult::Interrupted => {
+                    return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                }
+                LookupResult::New => {}
+            }
             return entry_result.map(|entry| entry.output.clone());
         }
 
@@ -726,7 +813,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn invoke_and_await_uncoalesced_admitted(
         self: Arc<Self>,
         invocation: AgentInvocation,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         admission: Option<read_only_cache::PendingReadOnlyInvocation>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let result = self
@@ -737,7 +824,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(crate) async fn await_enqueued_invocation(
         self: Arc<Self>,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let subscription = self.events().subscribe();
         let result = match self.lookup_invocation_result(&idempotency_key).await {
@@ -756,10 +843,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     pub(in crate::worker) fn require_idempotency_key(
         invocation: &AgentInvocation,
-    ) -> Result<IdempotencyKey, WorkerExecutorError> {
+    ) -> Result<InvocationId, WorkerExecutorError> {
         invocation.idempotency_key().cloned().ok_or_else(|| {
             WorkerExecutorError::invalid_request("Invocation has no idempotency key")
         })
+    }
+    async fn lookup_matching_invocation(
+        &self,
+        invocation: &AgentInvocation,
+    ) -> Result<LookupResult, WorkerExecutorError> {
+        let key = Self::require_idempotency_key(invocation)?;
+        let result = self.lookup_invocation_result(&key).await;
+        if result != LookupResult::New {
+            self.ensure_matching_invocation_payload(&key, &invocation.clone().into_parts().1)
+                .await?;
+        }
+        Ok(result)
+    }
+
+    async fn ensure_matching_invocation_payload(
+        &self,
+        key: &InvocationId,
+        request: &AgentInvocationPayload,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some(accepted) = self.accepted_invocation_payload(key).await?
+            && !accepted.same_caller_request(request)
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "IdempotencyConflict: invocation identity was already accepted with a different request",
+            ));
+        }
+        Ok(())
     }
     pub(crate) fn ensure_component_agent_ingress(
         &self,
@@ -810,8 +924,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Reserved constructor key, also used to recognize initialization before inspecting files.
-    pub(in crate::worker) fn initialization_idempotency_key(&self) -> IdempotencyKey {
-        IdempotencyKey::new(format!("init-{}", self.agent_id()))
+    /// Uses the request-key root namespace so constructor-derived child keys keep their identity.
+    pub(in crate::worker) fn initialization_idempotency_key(&self) -> InvocationId {
+        InvocationId(Uuid::new_v5(
+            &uuid::uuid!("9c19b15a-c83d-46f7-9bc3-ead7923733f4"),
+            format!("init-{}", self.agent_id()).as_bytes(),
+        ))
     }
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
     /// full invocation, downloading its payload from external storage if needed. The status record
@@ -827,7 +945,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingAgentInvocation {
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
@@ -898,7 +1016,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         oplog: &Arc<dyn Oplog>,
         invocation: AgentInvocation,
         not_before: Option<Timestamp>,
-    ) -> Result<(Option<IdempotencyKey>, OplogEntry), WorkerExecutorError> {
+    ) -> Result<(Option<InvocationId>, OplogEntry), WorkerExecutorError> {
         let (semantic_key, idempotency_key, invocation_payload, invocation_context) =
             into_pending_invocation_parts(invocation);
         let invocation_context = invocation_context
@@ -989,9 +1107,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if let Some(idempotency_key) = invocation.idempotency_key()
                 && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
             {
+                self.ensure_matching_invocation_payload(
+                    idempotency_key,
+                    &invocation.clone().into_parts().1,
+                )
+                .await?;
                 return Ok((None, None));
             }
 
+            let caller_payload = invocation.clone().into_parts().1;
             let (semantic_idempotency_key, entry) = self
                 .pending_invocation_entry(&self.oplog, invocation, not_before)
                 .await?;
@@ -1017,6 +1141,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 loop {
                     let status = self.state_actor.status().await;
                     if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
+                        self.ensure_matching_invocation_payload(idempotency_key, &caller_payload)
+                            .await?;
                         return Ok((None, None));
                     }
                     let current = self.last_known_status.load();
@@ -1041,7 +1167,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .state_actor
                         .append_invocation_if_version(
                             entry.clone(),
-                            idempotency_key.clone(),
+                            *idempotency_key,
                             status.invocation_results.change_generation(),
                             status.invocation_results.revert_generation(),
                             instance_guard,
@@ -1117,7 +1243,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
         // A same-key retry returns the original receipt, also from an ephemeral agent that has
         // already begun its execution and accepts nothing new.
-        if self.lookup_invocation_result(&key).await == LookupResult::New {
+        if self.lookup_matching_invocation(&invocation).await? == LookupResult::New {
             self.enqueue_worker_invocation_with_effect(
                 invocation,
                 read_only_cache::InvocationEffect::UnknownAssumeMutating,
@@ -1153,14 +1279,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let scheduled = status
             .pending_invocations
             .iter()
-            .filter_map(|pending| Some((pending.idempotency_key()?.clone(), pending.not_before?)))
+            .filter_map(|pending| Some((*pending.idempotency_key()?, pending.not_before?)))
             .collect::<Vec<_>>();
         for (key, deadline) in scheduled {
             self.register_invocation_wake(key, deadline).await;
         }
     }
 
-    async fn register_invocation_wake(&self, key: IdempotencyKey, deadline: Timestamp) {
+    async fn register_invocation_wake(&self, key: InvocationId, deadline: Timestamp) {
         let fingerprint = self.initial_worker_metadata.fingerprint;
         let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
             .expect("persisted invocation deadline is in the chrono range");
@@ -1398,8 +1524,8 @@ pub(crate) fn require_expected_tool_deployment_revision(
 pub(in crate::worker) fn into_pending_invocation_parts(
     invocation: AgentInvocation,
 ) -> (
-    Option<IdempotencyKey>,
-    IdempotencyKey,
+    Option<InvocationId>,
+    InvocationId,
     AgentInvocationPayload,
     InvocationContextStack,
 ) {
@@ -1466,11 +1592,11 @@ pub(in crate::worker) fn validate_resolved_invocation_identity(
 impl EphemeralInvocationState {
     pub(in crate::worker) fn accept(
         &mut self,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         match self {
             Self::Available => {
-                *self = Self::Accepted(Some(idempotency_key.clone()));
+                *self = Self::Accepted(Some(*idempotency_key));
                 Ok(())
             }
             Self::Accepted(Some(accepted_key)) if accepted_key == idempotency_key => Ok(()),

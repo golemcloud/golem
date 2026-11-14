@@ -12,8 +12,9 @@ workloads; they are not a production storage or retention design.
 ## Tested contract
 
 Each middleware invocation durably records a UUID and an owner-scoped Golem promise. Registration
-includes the owner, promise oplog index, policy, tool, command path, and principal kind. Repeating
-the same registration is idempotent; changing its data under the same request ID conflicts.
+includes the owner, the promise oplog index and fingerprint, the policy, tool, command path, and
+principal kind. Repeating the same registration is idempotent; changing its data under the same
+request ID conflicts.
 
 Requests transition from pending to approved, denied, cancelled, or abandoned. Only approval lets
 the middleware dispatch the next layer. A terminal decision is persisted before promise completion.

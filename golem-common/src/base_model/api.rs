@@ -77,6 +77,7 @@ pub mod error_code {
     pub const TOOL_RELEASE_NOT_FOUND: &str = "TOOL_RELEASE_NOT_FOUND";
 
     // --- Already exists / conflicts ---
+    pub const IDEMPOTENCY_CONFLICT: &str = "IDEMPOTENCY_CONFLICT";
     pub const ACCOUNT_EMAIL_ALREADY_IN_USE: &str = "ACCOUNT_EMAIL_ALREADY_IN_USE";
     pub const AGENT_ALREADY_EXISTS: &str = "AGENT_ALREADY_EXISTS";
     pub const CREATE_IDEMPOTENCY_KEY_CONFLICT: &str = "CREATE_IDEMPOTENCY_KEY_CONFLICT";

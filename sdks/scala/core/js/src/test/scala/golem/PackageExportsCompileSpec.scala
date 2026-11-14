@@ -53,8 +53,11 @@ object PackageExportsCompileSpec extends ZIOSpecDefault {
       )
     },
     test("InvocationResult exposes its payload as value") {
-      val metadata = golem.runtime.rpc.InvocationMetadata("agent", "idempotency-key")
-      val result   = golem.runtime.rpc.InvocationResult(metadata, 42)
+      val metadata = golem.runtime.rpc.InvocationMetadata(
+        "agent",
+        golem.InvocationId("agent", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+      )
+      val result = golem.runtime.rpc.InvocationResult(metadata, 42)
       assertTrue(result.value == 42)
     }
   )

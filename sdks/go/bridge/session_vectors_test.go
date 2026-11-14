@@ -274,17 +274,9 @@ func readClientMessage(data []byte) error {
 		return err
 	}
 	switch kind {
-	case "inputStreamEnd":
-		if err := m.members(kind, []string{"channel", "sequence"}); err != nil {
-			return err
-		}
-		if _, err := m.channel(); err != nil {
-			return err
-		}
-		_, err := m.u64("sequence")
+	case "stream-end":
+		_, _, err := m.streamEnd(false)
 		return err
-	case "streamCancel":
-		return m.members(kind, []string{"channel", "reason"})
 	case "resumeAttach":
 		return m.members(kind, []string{"attemptId", "operation", "outputCursors", "sessionToken"})
 	}
@@ -297,6 +289,11 @@ func TestClientMessagesAreCanonical(t *testing.T) {
 			continue
 		}
 		canonical := vector["canonical"].(string)
+		if vector["type"] == "stream-end" {
+			if err := readClientMessage([]byte(canonical)); err != nil {
+				t.Fatalf("%s: %v", vector["name"], err)
+			}
+		}
 		var members map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(canonical), &members); err != nil {
 			t.Fatal(err)
@@ -328,6 +325,11 @@ func TestServerMessagesParse(t *testing.T) {
 		kind, m, err := parseMessage([]byte(vector["canonical"].(string)))
 		if err != nil || kind != vector["type"] {
 			t.Fatalf("%s: %v", vector["name"], err)
+		}
+		if kind == "stream-end" {
+			if _, _, err := m.streamEnd(true); err != nil {
+				t.Fatalf("%s: %v", vector["name"], err)
+			}
 		}
 		if m.has("mappings") {
 			if _, err := m.mappings(); err != nil {

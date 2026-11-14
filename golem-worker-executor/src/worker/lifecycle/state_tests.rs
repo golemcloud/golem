@@ -270,6 +270,99 @@ fn deletion_claims_nothing_before_initialization_completes() {
 }
 
 #[test]
+fn ephemeral_startup_failure_stays_inactive_while_durable_failure_retries() {
+    for (agent_mode, retries) in [(AgentMode::Durable, true), (AgentMode::Ephemeral, false)] {
+        let mut lifecycle = WorkerLifecycle {
+            phase: WorkerInstance::Unloaded {
+                startup_failure: None,
+            },
+        };
+        let LifecycleTransition::Unloaded(unloaded) = lifecycle.transition() else {
+            panic!("expected unloaded fixture");
+        };
+        unloaded.startup_failed(StartupFailure::new(
+            agent_mode,
+            WorkerExecutorError::runtime("start failed"),
+        ));
+        assert!(
+            lifecycle
+                .startup_failure()
+                .is_some_and(|error| error.to_string().contains("start failed"))
+        );
+        assert_eq!(
+            matches!(lifecycle.transition(), LifecycleTransition::Unloaded(_)),
+            retries
+        );
+
+        // An ordinary stop clears the failure of a durable agent but never makes an
+        // ephemeral agent startable again, even when the stop is cancelled.
+        let unloaded = FinalWorkerState::Unloaded {
+            startup_failure: None,
+        };
+        drop(lifecycle.begin_stop(StopOrigin::External, &unloaded));
+        assert_eq!(lifecycle.startup_failure().is_none(), retries);
+        match lifecycle.begin_stop(StopOrigin::External, &unloaded) {
+            Some(StopPhase::Unloaded(stop)) if retries => {
+                stop.complete(unloaded);
+            }
+            Some(StopPhase::Inactive(stop)) if !retries => {
+                stop.complete(unloaded);
+            }
+            _ => panic!("unexpected stop phase for {agent_mode:?}"),
+        }
+        assert_eq!(
+            matches!(lifecycle.transition(), LifecycleTransition::Inactive(_)),
+            !retries
+        );
+    }
+}
+
+#[test]
+fn deletion_retains_inactivity_until_its_stop_and_cleanup_failure_replaces_it() {
+    let inactive = || WorkerInstance::Inactive(WorkerExecutorError::runtime("inactive"));
+    let unloaded = FinalWorkerState::Unloaded {
+        startup_failure: None,
+    };
+
+    let mut lifecycle = WorkerLifecycle { phase: inactive() };
+    assert!(matches!(
+        lifecycle.claim_deletion(),
+        Some((DeleteOutcome::Started(_), Some(_)))
+    ));
+    drop(lifecycle.begin_stop(StopOrigin::External, &unloaded));
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::Inactive(_))
+    ));
+    let Some(StopPhase::Inactive(stop)) =
+        lifecycle.begin_stop(StopOrigin::External, &FinalWorkerState::Deleting)
+    else {
+        panic!("expected the retained inactive runtime to stop");
+    };
+    assert!(matches!(
+        stop.complete(FinalWorkerState::Deleting),
+        FinalWorkerState::Deleting
+    ));
+    assert!(matches!(
+        lifecycle.stop_outcome(),
+        Some(FinalWorkerState::Deleting)
+    ));
+
+    let mut lifecycle = WorkerLifecycle { phase: inactive() };
+    let failure = FinalWorkerState::CleanupFailed(WorkerExecutorError::runtime("cleanup failed"));
+    let Some(StopPhase::Inactive(stop)) = lifecycle.begin_stop(StopOrigin::External, &failure)
+    else {
+        panic!("expected inactive stop");
+    };
+    stop.complete(failure);
+    assert!(
+        lifecycle
+            .cleanup_failure()
+            .is_some_and(|error| error.to_string().contains("cleanup failed"))
+    );
+}
+
+#[test]
 #[timeout("5s")]
 async fn deletion_retains_waiting_admission_until_its_stop_completes() {
     let (exited, mut exit) = oneshot::channel::<()>();

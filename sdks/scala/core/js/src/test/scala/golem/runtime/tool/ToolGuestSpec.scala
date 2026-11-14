@@ -42,7 +42,11 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private def guest: js.Dynamic = Guest.golemTool010Guest
 
-  private val anonymousPrincipal: js.Dynamic = js.Dynamic.literal("tag" -> "anonymous")
+  private val accountId                      = java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
+  private val golemUserPrincipal: js.Dynamic = js.Dynamic.literal(
+    "tag" -> "golem-user",
+    "val" -> js.Dynamic.literal("accountId" -> js.Dynamic.literal("uuid" -> golem.host.js.JsUuid.fromUuid(accountId)))
+  )
 
   /** An absent `stdin` parameter, pre-typed for `js.Dynamic` application. */
   private val noStdin: js.Any  = js.undefined.asInstanceOf[js.Any]
@@ -329,8 +333,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
         input,
         stdin.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
         stdout.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
-        stderr.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
-        anonymousPrincipal
+        stderr.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any])
       )
       .asInstanceOf[js.Promise[JsInvocationResult]]
 
@@ -450,15 +453,17 @@ object ToolGuestSpec extends ZIOSpecDefault {
       val input    = SchemaWireInterop.typedToJs(typed("hello"))
       for {
         res <- fromPromise(
-                 guest
-                   .invoke("guest-echo", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
-                   .asInstanceOf[js.Promise[JsInvocationResult]]
+                 withImmediateCaller(golemUserPrincipal) {
+                   guest
+                     .invoke("guest-echo", js.Array[String](), input, noStdin, noStdout, noStderr)
+                     .asInstanceOf[js.Promise[JsInvocationResult]]
+                 }
                )
         result = res.result.toOption.map(SchemaWireInterop.typedFromJs)
       } yield assertTrue(
         result.contains(typed("hello")),
         captured.commandPath == Nil,
-        captured.principal == Principal.Anonymous,
+        captured.principal == Principal.GolemUser(accountId),
         !captured.stdinPresent
       )
     },
@@ -477,7 +482,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         _ <- fromPromise(
                guest
-                 .invoke("guest-nested", js.Array("l"), input, noStdin, noStdout, noStderr, anonymousPrincipal)
+                 .invoke("guest-nested", js.Array("l"), input, noStdin, noStdout, noStderr)
                  .asInstanceOf[js.Promise[JsInvocationResult]]
              )
       } yield assertTrue(captured == List("l"))
@@ -487,7 +492,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke("guest-nope", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
+                   .invoke("guest-nope", js.Array[String](), input, noStdin, noStdout, noStderr)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
       } yield assertTrue(
@@ -566,15 +571,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke(
-                     "guest-definition-only",
-                     js.Array[String](),
-                     input,
-                     noStdin,
-                     noStdout,
-                     noStderr,
-                     anonymousPrincipal
-                   )
+                   .invoke("guest-definition-only", js.Array[String](), input, noStdin, noStdout, noStderr)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
       } yield assertTrue(err.tag.asInstanceOf[String] == "invalid-tool-name")
@@ -585,7 +582,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke("guest-failing", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
+                   .invoke("guest-failing", js.Array[String](), input, noStdin, noStdout, noStderr)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
         custom  = err.selectDynamic("val")
@@ -1037,8 +1034,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
                      js.Dynamic.literal("graph" -> js.Dynamic.literal()),
                      js.undefined,
                      js.undefined,
-                     js.undefined,
-                     anonymousPrincipal
+                     js.undefined
                    )
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )

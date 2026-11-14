@@ -64,6 +64,7 @@ pub enum ApiEndpointError {
     PayloadTooLarge(Json<ErrorBody>),
     #[oai(status = 415)]
     UnsupportedMediaType(Json<ErrorBody>),
+    /// A limit was exceeded, or the idempotency key was already used for a different request.
     #[oai(status = 422)]
     UnprocessableEntity(Json<ErrorBody>),
     #[oai(status = 500)]
@@ -80,7 +81,17 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Conflict(_) => "Conflict",
             Self::PayloadTooLarge(_) => "PayloadTooLarge",
             Self::UnsupportedMediaType(_) => "UnsupportedMediaType",
-            Self::UnprocessableEntity(_) => "UnprocessableEntity",
+            Self::UnprocessableEntity(body)
+                if body.code == api::error_code::IDEMPOTENCY_CONFLICT =>
+            {
+                "InvocationIdentityConflict"
+            }
+            Self::UnprocessableEntity(body)
+                if body.code == api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT =>
+            {
+                "CreateIdempotencyKeyConflict"
+            }
+            Self::UnprocessableEntity(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
     }
@@ -291,6 +302,15 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
 impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
+            WorkerExecutorError::InvalidRequest { ref details }
+                if details.starts_with("IdempotencyConflict:") =>
+            {
+                Self::UnprocessableEntity(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::IDEMPOTENCY_CONFLICT.to_string(),
+                    cause: None,
+                }))
+            }
             WorkerExecutorError::InvalidRequest { .. } => {
                 Self::bad_request(api::error_code::VALIDATION_ERROR, error)
             }
@@ -491,6 +511,11 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
                 CallWorkerExecutorError::MessageTooLarge(_),
             )) => Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value),
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::InvalidRequest { .. },
+            )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
+                error.into()
+            }
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -520,6 +545,7 @@ impl From<RequestHandlerError> for ApiEndpointError {
 mod tests {
     use super::*;
     use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
+    use poem::IntoResponse;
     use test_r::test;
     use tonic::{Code, Status};
 
@@ -555,7 +581,11 @@ mod tests {
                 WorkerExecutionError::decode(encoded.as_slice()).unwrap(),
             )
             .expect("the executor error survives the create response");
-            let response = ApiEndpointError::from(transported).into_response();
+            let api_error = ApiEndpointError::from(transported);
+            if code == api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT {
+                assert_eq!(api_error.trace_error_kind(), "CreateIdempotencyKeyConflict");
+            }
+            let response = api_error.into_response();
             assert_eq!(response.status(), status);
             let body = response
                 .into_body()
@@ -573,6 +603,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body["code"], api::error_code::LIMIT_EXCEEDED);
+    }
+
+    #[test]
+    async fn invocation_identity_conflict_maps_to_422_at_public_error_boundaries() {
+        for details in [
+            "IdempotencyConflict: invocation identity was already accepted with a different request",
+            "IdempotencyConflict: runtime card changed",
+        ] {
+            for custom_api in [false, true] {
+                let error =
+                    WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(details));
+                let api_error = if custom_api {
+                    ApiEndpointError::from(RequestHandlerError::AgentInvocationFailed(error))
+                } else {
+                    ApiEndpointError::from(error)
+                };
+                assert!(api_error.is_expected());
+                assert_eq!(api_error.trace_error_kind(), "InvocationIdentityConflict");
+                let response = api_error.into_response();
+                assert_eq!(response.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+                let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert_eq!(body["code"], api::error_code::IDEMPOTENCY_CONFLICT);
+                assert_eq!(body["error"], format!("Invalid request: {details}"));
+            }
+        }
+    }
+
+    #[test]
+    fn unrelated_invalid_requests_keep_public_error_statuses() {
+        for details in [
+            "invalid scan cursor",
+            "StaleEpoch: attachment is stale",
+            "InvalidAttachmentState: attachment is active",
+            "InputConflict: input frame changed",
+            "invalid IdempotencyConflict: not an identity conflict prefix",
+        ] {
+            let error =
+                WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(details));
+            let response = ApiEndpointError::from(error).into_response();
+            assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+
+            let error =
+                WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(details));
+            let response =
+                ApiEndpointError::from(RequestHandlerError::AgentInvocationFailed(error))
+                    .into_response();
+            assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        }
     }
 
     fn message_too_large_status() -> Status {

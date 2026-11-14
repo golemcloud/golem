@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Principal as HostPrincipal } from 'golem:agent/common@2.0.0';
+import { caller } from 'golem:agent/invocation-context@2.0.0';
 import type {
   InvocationResult,
   Tool,
@@ -52,7 +52,6 @@ async function invokeToolMiddleware(
   stdin: AsyncIterable<ByteStreamItem> | undefined,
   stdout: ToolOutputWriter | undefined,
   stderr: ToolOutputWriter | undefined,
-  principal: HostPrincipal,
   wrapped: Pick<UnderlyingTool, 'invoke'>,
 ): Promise<InvocationResult> {
   throwRegistrationError();
@@ -68,7 +67,7 @@ async function invokeToolMiddleware(
     stdin: stdin === undefined ? undefined : decodeByteStream(stdin),
     stdout,
     stderr,
-    principal: sdkPrincipalFromHost(principal),
+    principal: sdkPrincipalFromHost(caller().immediate),
     wrapped,
   });
 }

@@ -857,9 +857,6 @@ describe('tool guest exports', () => {
       undefined,
       undefined,
       undefined,
-      {
-        tag: 'anonymous',
-      },
     );
 
     expect(received).toEqual({ input: { message: 'hello' }, principalTag: 'anonymous' });
@@ -914,9 +911,6 @@ describe('tool guest exports', () => {
           undefined,
           undefined,
           undefined,
-          {
-            tag: 'anonymous',
-          },
         ),
       ).rejects.toMatchObject({ tag: 'invalid-input' });
       expect(handler).not.toHaveBeenCalled();
@@ -934,12 +928,10 @@ describe('tool guest exports', () => {
     const validInput = typedSchemaValueToWit(inputModel.encodeTyped({ message: 'hello' }));
 
     await expect(
-      tool.invoke('missing', [], validInput, undefined, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('missing', [], validInput, undefined, undefined, undefined),
     ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'missing' });
     await expect(
-      tool.invoke('echo', ['missing'], validInput, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      }),
+      tool.invoke('echo', ['missing'], validInput, undefined, undefined, undefined),
     ).rejects.toEqual({ tag: 'invalid-command-path', val: ['missing'] });
 
     const invalidValue = typedSchemaValueToWit({
@@ -947,7 +939,7 @@ describe('tool guest exports', () => {
       value: v.record([v.bool(true)]),
     });
     await expect(
-      tool.invoke('echo', [], invalidValue, undefined, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', [], invalidValue, undefined, undefined, undefined),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
   });
 
@@ -971,7 +963,7 @@ describe('tool guest exports', () => {
     );
 
     const customError = await tool
-      .invoke('fallible', [], fallibleInput, undefined, undefined, undefined, { tag: 'anonymous' })
+      .invoke('fallible', [], fallibleInput, undefined, undefined, undefined)
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -998,9 +990,7 @@ describe('tool guest exports', () => {
     );
 
     const payloadlessError = await tool
-      .invoke('payloadless', [], payloadlessInput, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      })
+      .invoke('payloadless', [], payloadlessInput, undefined, undefined, undefined)
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -1077,9 +1067,7 @@ describe('tool guest exports', () => {
       const input = typedSchemaValueToWit(
         registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
       );
-      return await tool.invoke(name, [], input, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      });
+      return await tool.invoke(name, [], input, undefined, undefined, undefined);
     };
 
     await expect(invoke('invalid-success-type')).rejects.toEqual({
@@ -1131,9 +1119,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('invalid-result', [], invalidInput, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      }),
+      tool.invoke('invalid-result', [], invalidInput, undefined, undefined, undefined),
     ).rejects.toEqual({
       tag: 'invalid-result',
       val: 'tool result: is not canonical for its declared schema',
@@ -1160,7 +1146,6 @@ describe('tool guest exports', () => {
       undefined,
       undefined,
       undefined,
-      { tag: 'anonymous' },
     );
 
     expect(result.result).toBeDefined();
@@ -1189,7 +1174,6 @@ describe('tool guest exports', () => {
       undefined,
       undefined,
       undefined,
-      { tag: 'anonymous' },
     );
 
     expect(result.result).toBeDefined();
@@ -1224,7 +1208,6 @@ describe('tool guest exports', () => {
       undefined,
       undefined,
       undefined,
-      { tag: 'anonymous' },
     );
     const output = commandNode.body!.result!.codec.fromValue(
       typedSchemaValueFromWit(result.result!).value,
@@ -1267,7 +1250,6 @@ describe('tool guest exports', () => {
       undefined,
       undefined,
       undefined,
-      { tag: 'anonymous' },
     );
     expect(pulls).toBe(0);
     const output = commandNode.body!.result!.codec.fromValue(
@@ -1302,7 +1284,6 @@ describe('tool guest exports', () => {
         undefined,
         undefined,
         undefined,
-        { tag: 'anonymous' },
       );
 
     await expect(invoke()).rejects.toEqual({
@@ -1432,9 +1413,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('permission-card-input', [], input, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      }),
+      tool.invoke('permission-card-input', [], input, undefined, undefined, undefined),
     ).resolves.toMatchObject({ result: undefined });
     expect(handler).toHaveBeenCalledOnce();
   });
@@ -1477,7 +1456,6 @@ describe('tool guest exports', () => {
         undefined,
         undefined,
         undefined,
-        { tag: 'anonymous' },
       ),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
     expect(handler).not.toHaveBeenCalled();
@@ -1511,7 +1489,6 @@ describe('tool guest exports', () => {
           undefined,
           undefined,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).rejects.toEqual({
         tag: 'invalid-input',
@@ -1550,9 +1527,7 @@ describe('tool guest exports', () => {
         });
 
       await expect(
-        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, undefined, undefined, {
-          tag: 'anonymous',
-        }),
+        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, undefined, undefined),
       ).resolves.toEqual({ result: undefined });
       expect(received).toEqual([104, 105]);
       expect(iteratorReturn).toHaveBeenCalledOnce();
@@ -1584,7 +1559,6 @@ describe('tool guest exports', () => {
           failedInput(),
           undefined,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).resolves.toEqual({ result: undefined });
       expect(received).toBeInstanceOf(ToolStreamError);
@@ -1612,7 +1586,6 @@ describe('tool guest exports', () => {
         undefined,
         output,
         undefined,
-        { tag: 'anonymous' },
       );
       expect(result).toEqual({ result: undefined });
       expect(output.write).toHaveBeenCalledTimes(2);
@@ -1645,7 +1618,6 @@ describe('tool guest exports', () => {
           undefined,
           output,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).rejects.toMatchObject({ tag: 'custom-error' });
       expect(output.write).toHaveBeenCalledWith(Uint8Array.of(1, 2, 3));
@@ -1676,7 +1648,6 @@ describe('tool guest exports', () => {
         undefined,
         output,
         undefined,
-        { tag: 'anonymous' },
       );
       if (expected === 'success') {
         await expect(invocation).resolves.toEqual({ result: undefined });
@@ -1716,7 +1687,6 @@ describe('tool guest exports', () => {
           stdin,
           output,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).rejects.toBe(finishFailure);
       expect(output.finish).toHaveBeenCalledOnce();
@@ -1745,9 +1715,6 @@ describe('tool guest exports', () => {
           invalidInput(),
           undefined,
           undefined,
-          {
-            tag: 'anonymous',
-          },
         ),
       ).rejects.toThrow('tool stdin yielded an empty chunk');
     });
@@ -1775,7 +1742,6 @@ describe('tool guest exports', () => {
         undefined,
         output,
         undefined,
-        { tag: 'anonymous' },
       );
       await expect(writerClosed).rejects.toThrow('tool invocation completed');
       await expect(writer!.write(new Uint8Array([2]))).rejects.toThrow('tool invocation completed');
@@ -1803,7 +1769,6 @@ describe('tool guest exports', () => {
           undefined,
           output,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).resolves.toEqual({ result: undefined });
       expect(output.fail).toHaveBeenCalledOnce();
@@ -1832,7 +1797,6 @@ describe('tool guest exports', () => {
             undefined,
             output,
             undefined,
-            { tag: 'anonymous' },
           ),
         ).resolves.toEqual({ result: undefined });
         expect(output.fail).toHaveBeenCalledOnce();
@@ -1869,7 +1833,6 @@ describe('tool guest exports', () => {
           stdin,
           output,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).resolves.toEqual({ result: undefined });
       expect(output.fail).toHaveBeenCalledWith(failure);
@@ -1902,7 +1865,6 @@ describe('tool guest exports', () => {
           undefined,
           output,
           undefined,
-          { tag: 'anonymous' },
         ),
       ).rejects.toMatchObject({ tag: 'custom-error' });
       expect(output.fail).toHaveBeenCalledOnce();
@@ -1923,9 +1885,7 @@ describe('tool guest exports', () => {
         .implement({ 'no-streams': async () => ok(undefined) });
 
       await expect(
-        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, undefined, undefined, {
-          tag: 'anonymous',
-        }),
+        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, undefined, undefined),
       ).resolves.toEqual({ result: undefined });
       expect(iteratorReturn).toHaveBeenCalledOnce();
     });
@@ -1953,9 +1913,7 @@ describe('tool guest exports', () => {
         });
 
         await expect(
-          tool.invoke('stdout-validate', [], invalidInput, undefined, undefined, undefined, {
-            tag: 'anonymous',
-          }),
+          tool.invoke('stdout-validate', [], invalidInput, undefined, undefined, undefined),
         ).rejects.toMatchObject({ tag: 'invalid-input' });
         expect(handler).not.toHaveBeenCalled();
         expect(writableStreamConstructor).not.toHaveBeenCalled();
@@ -1981,9 +1939,9 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    await expect(
-      tool.invoke('traps', [], input, undefined, undefined, undefined, { tag: 'anonymous' }),
-    ).rejects.toBe(failure);
+    await expect(tool.invoke('traps', [], input, undefined, undefined, undefined)).rejects.toBe(
+      failure,
+    );
   });
 
   it('resolves a missing grafted child before enforcing its required stdin', async () => {
@@ -2000,7 +1958,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('git', ['remote'], input, undefined, undefined, undefined, { tag: 'anonymous' }),
+      tool.invoke('git', ['remote'], input, undefined, undefined, undefined),
     ).rejects.toEqual({
       tag: 'invalid-tool-name',
       val: 'remote',
@@ -2026,9 +1984,7 @@ describe('tool guest exports', () => {
     };
 
     await expect(
-      tool.invoke('echo', ['missing'], malformedInput, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      }),
+      tool.invoke('echo', ['missing'], malformedInput, undefined, undefined, undefined),
     ).rejects.toEqual({
       tag: 'invalid-command-path',
       val: ['missing'],

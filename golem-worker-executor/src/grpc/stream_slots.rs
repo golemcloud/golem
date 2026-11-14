@@ -101,6 +101,7 @@ impl TryFrom<proto::ReadStreamSlotRequest> for worker::ReadStreamSlotRequest {
         };
         Ok(Self {
             session: request.session,
+            route_scope: request.route_scope,
             slot: request.slot,
             from_offset,
             max_items: request.max_items,
@@ -118,11 +119,14 @@ impl TryFrom<proto::ReadStreamSlotRequest> for worker::ReadStreamSlotRequest {
                 }
                 Ok(proto::StreamSlotReadAdmission::Continuation) => {
                     worker::StreamSlotReadAdmission::Continuation(
-                        request.invocation_key.map(Into::into).ok_or_else(|| {
-                            WorkerExecutorError::invalid_request(
-                                "stream read continuation requires an invocation key",
-                            )
-                        })?,
+                        request
+                            .invocation_key
+                            .ok_or_else(|| {
+                                WorkerExecutorError::invalid_request(
+                                    "stream read continuation requires an invocation key",
+                                )
+                            })?
+                            .into(),
                     )
                 }
                 _ => {
@@ -182,6 +186,7 @@ impl From<proto::AppendToStreamSlotRequest> for worker::AppendToStreamSlotReques
     fn from(request: proto::AppendToStreamSlotRequest) -> Self {
         Self {
             session: request.session,
+            route_scope: request.route_scope,
             slot: request.slot,
             payload: request.payload.map(|payload| match payload {
                 proto::append_to_stream_slot_request::Payload::Values(values) => {
@@ -246,6 +251,7 @@ impl From<proto::ExportStreamControl> for worker::ExportStreamControlRequest {
     fn from(request: proto::ExportStreamControl) -> Self {
         Self {
             session: request.session,
+            route_scope: request.route_scope,
             slot: request.slot,
             expected_method: request.expected_method,
         }
@@ -295,6 +301,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::CreateStreamSessionRequest,
     ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
         let public_session_id = request.public_session_id;
+        let route_scope = request.route_scope;
+        golem_common::model::durable_stream::validate_durable_stream_route_scope(&route_scope)
+            .map_err(WorkerExecutorError::invalid_request)?;
         golem_common::model::invocation_session_public::validate_durable_stream_session_id(
             &public_session_id,
         )
@@ -325,11 +334,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
+        let operation = request
+            .method_name
+            .as_deref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
         let admission = worker
-            .begin_stream_session_creation(public_session_id, expiry_policy, creation_intent)
+            .begin_stream_session_creation(
+                public_session_id,
+                route_scope,
+                operation,
+                expiry_policy,
+                creation_intent,
+            )
             .await?;
-        let key = admission.invocation_key().clone();
-        request.idempotency_key = Some(key.clone().into());
+        let key = *admission.invocation_key();
+        request.idempotency_key =
+            Some(golem_common::model::IdempotencyKey::from_uuid(key.0).into());
         let revision = worker.stream_session_revision(&key).await?;
         let component = worker
             .component_service()
@@ -364,7 +384,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: key.clone(),
+            idempotency_key: key,
             method_name,
             input,
             invocation_context: from_proto_invocation_context(&request.context)
@@ -418,7 +438,7 @@ mod tests {
             fork_offset: first.0.to_vec(),
             sub_offset: 2,
             oplog_index: 23,
-            invocation_key: Some(golem_common::model::IdempotencyKey::new("fork".into()).into()),
+            invocation_key: Some(uuid::Uuid::from_u128(906).into()),
         };
         let result = proto::ReadStreamSlotSuccess::from(worker::ReadStreamSlotResult {
             items: vec![
@@ -443,7 +463,7 @@ mod tests {
             tombstoned: false,
             writable: true,
             fork: Some(fork.clone()),
-            invocation_key: golem_common::model::IdempotencyKey::new("invocation".into()),
+            invocation_key: uuid::Uuid::from_u128(905).into(),
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
             expiry_deadline_millis: Some(40_000),
         });
@@ -479,6 +499,7 @@ mod tests {
         let offset = StreamOffset::new(OplogIndex::from_u64(257), 3);
         let request = proto::ReadStreamSlotRequest {
             session: "session-1".into(),
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             slot: "input".into(),
             expected_method: "run".into(),
             from_offset: offset.0.to_vec(),
@@ -491,6 +512,7 @@ mod tests {
         let domain = worker::ReadStreamSlotRequest::try_from(request.clone()).unwrap();
         assert_eq!(domain.from_offset, Some(offset));
         assert_eq!(domain.session, "session-1");
+        assert_eq!(domain.route_scope, request.route_scope);
         assert_eq!(domain.slot, "input");
         assert_eq!(domain.expected_method, "run");
         assert_eq!(
@@ -522,6 +544,7 @@ mod tests {
         use proto::append_to_stream_slot_request::Payload;
         let request = proto::AppendToStreamSlotRequest {
             session: "session-2".into(),
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             slot: "bytes".into(),
             expected_method: "write".into(),
             close: true,
@@ -532,6 +555,7 @@ mod tests {
         assert!(plain.producer.is_none());
         assert!(plain.close);
         assert_eq!(plain.session, "session-2");
+        assert_eq!(plain.route_scope, request.route_scope);
         assert_eq!(plain.slot, "bytes");
         assert_eq!(plain.expected_method, "write");
         let empty = worker::AppendToStreamSlotRequest::from(proto::AppendToStreamSlotRequest {

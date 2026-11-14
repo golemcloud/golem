@@ -307,7 +307,7 @@ func init() {
 		if err != nil {
 			return "wait: " + err.Error()
 		}
-		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.ID.AgentID == c.AgentID())
+		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.Metadata.AgentID == c.AgentID())
 	})
 
 	// A failed production must not reach the reader as a clean end.

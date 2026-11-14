@@ -182,9 +182,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 let invocation_context = encode_public_span_data(init.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentInitialization(
                     AgentInitializationParameters {
-                        idempotency_key: init
-                            .idempotency_key
-                            .ok_or("Missing idempotency_key field")?
+                        invocation_id: init
+                            .invocation_id
+                            .ok_or("Missing invocation_id field")?
                             .into(),
                         constructor_parameters,
                         trace_id: TraceId::from_string(init.trace_id)?,
@@ -201,9 +201,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 let invocation_context = encode_public_span_data(method.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentMethodInvocation(
                     AgentMethodInvocationParameters {
-                        idempotency_key: method
-                            .idempotency_key
-                            .ok_or("Missing idempotency_key field")?
+                        invocation_id: method
+                            .invocation_id
+                            .ok_or("Missing invocation_id field")?
                             .into(),
                         method_name: method.method_name,
                         function_input,
@@ -218,9 +218,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 let invocation_context = encode_public_span_data(tool.invocation_context)?;
                 Ok(PublicAgentInvocation::ExternalTool(
                     ExternalToolInvocationParameters {
-                        idempotency_key: tool
-                            .idempotency_key
-                            .ok_or("Missing idempotency_key field")?
+                        invocation_id: tool
+                            .invocation_id
+                            .ok_or("Missing invocation_id field")?
                             .into(),
                         tool_name: tool.tool_name,
                         command_path: tool.command_path,
@@ -282,9 +282,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
             }
             Invocation::ProcessOplogEntries(process) => Ok(
                 PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-                    idempotency_key: process
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
+                    invocation_id: process
+                        .invocation_id
+                        .ok_or("Missing invocation_id field")?
                         .into(),
                 }),
             ),
@@ -309,7 +309,7 @@ impl TryFrom<PublicAgentInvocation>
                 let invocation_context = decode_public_span_data(&init.invocation_context, 0);
                 Invocation::AgentInitialization(
                     golem_api_grpc::proto::golem::worker::PublicAgentInitializationInvocation {
-                        idempotency_key: Some(init.idempotency_key.into()),
+                        invocation_id: Some(init.invocation_id.into()),
                         constructor_parameters: Some(init.constructor_parameters.try_into()?),
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
@@ -321,7 +321,7 @@ impl TryFrom<PublicAgentInvocation>
                 let invocation_context = decode_public_span_data(&method.invocation_context, 0);
                 Invocation::AgentMethod(
                     golem_api_grpc::proto::golem::worker::PublicAgentMethodInvocation {
-                        idempotency_key: Some(method.idempotency_key.into()),
+                        invocation_id: Some(method.invocation_id.into()),
                         method_name: method.method_name,
                         function_input: Some(method.function_input.try_into()?),
                         trace_id: method.trace_id.to_string(),
@@ -334,7 +334,7 @@ impl TryFrom<PublicAgentInvocation>
                 let invocation_context = decode_public_span_data(&tool.invocation_context, 0);
                 Invocation::ExternalTool(
                     golem_api_grpc::proto::golem::worker::PublicExternalToolInvocation {
-                        idempotency_key: Some(tool.idempotency_key.into()),
+                        invocation_id: Some(tool.invocation_id.into()),
                         tool_name: tool.tool_name,
                         command_path: tool.command_path,
                         input: Some(tool.input.try_into()?),
@@ -420,7 +420,7 @@ impl TryFrom<PublicAgentInvocation>
             }
             PublicAgentInvocation::ProcessOplogEntries(process) => Invocation::ProcessOplogEntries(
                 golem_api_grpc::proto::golem::worker::ProcessOplogEntriesInvocationParameters {
-                    idempotency_key: Some(process.idempotency_key.into()),
+                    invocation_id: Some(process.invocation_id.into()),
                 },
             ),
             PublicAgentInvocation::ManualUpdate(manual) => Invocation::ManualUpdate(

@@ -38,6 +38,7 @@ pub struct ApprovalRequest {
     pub request_id: Uuid,
     pub owner: ApprovalOwner,
     pub promise_oplog_idx: u64,
+    pub promise_fingerprint: Uuid,
     pub policy: String,
     pub tool_name: String,
     pub command_path: Vec<String>,
@@ -584,6 +585,7 @@ async fn deliver_callback(
         .bearer_auth(&state.config.golem_api_token)
         .json(&serde_json::json!({
             "oplogIdx": record.request.promise_oplog_idx,
+            "fingerprint": record.request.promise_fingerprint,
             "data": callback,
         }))
         .send()
@@ -631,6 +633,7 @@ mod tests {
                 agent_name: "agent/owner".to_string(),
             },
             promise_oplog_idx: 42,
+            promise_fingerprint: Uuid::from_u128(3),
             policy: "production-change".to_string(),
             tool_name: "deploy".to_string(),
             command_path: vec!["apply".to_string()],

@@ -61,6 +61,8 @@ var (
 	TypedValueWit func(any) types.TypedSchemaValue
 	// Principal converts a host principal into a golem.Principal.
 	Principal func(common.Principal) any
+	// ImmediateCaller reads the principal that made the running invocation.
+	ImmediateCaller func() common.Principal
 	// AgentError converts a host agent-error into a *golem.AgentError.
 	AgentError func(common.AgentError) error
 	// RemoteCallError converts a host rpc-error into a *golem.RemoteCallError.
@@ -68,8 +70,11 @@ var (
 	// LocalAgentTypes derives the agent types this component defines, as
 	// discovery publishes them.
 	LocalAgentTypes func() ([]common.AgentType, error)
+	// InvocationMetadata converts host invocation metadata into a
+	// golem.InvocationMetadata.
+	InvocationMetadata func(host.InvocationMetadata) any
 	// ScheduledInvocation builds a *golem.ScheduledInvocation.
-	ScheduledInvocation func(agentID, idempotencyKey string, token *host.CancellationToken) any
+	ScheduledInvocation func(metadata host.InvocationMetadata, token *host.CancellationToken) any
 	// ScopeCardHandle borrows the handle of a golem.ScopeCard attached to an
 	// awaited call; nil and the zero ScopeCard are no scope card. It panics
 	// with golem.ErrPermissionCardMoved on a released card.

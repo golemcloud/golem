@@ -203,11 +203,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::StreamEnd {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::StreamCancel {
+            | OplogEntry::StreamTerminal {
                 entity_parent_start_index,
                 ..
             }

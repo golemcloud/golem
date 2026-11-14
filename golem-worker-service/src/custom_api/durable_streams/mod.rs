@@ -42,6 +42,27 @@ use uuid::Uuid;
 const MAX_ITEMS: u32 = 4096;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+fn route_family_id(route: &ResolvedRouteEntry) -> golem_service_base::custom_api::RouteId {
+    match &route.route.behavior {
+        super::RichRouteBehaviour::CallAgent(behaviour) => {
+            behaviour
+                .durable_streams
+                .as_ref()
+                .expect("Durable Streams handler requires a resolved policy")
+                .family_id
+        }
+        _ => unreachable!("Durable Streams handler requires an agent route"),
+    }
+}
+
+fn route_scope(route: &ResolvedRouteEntry) -> String {
+    golem_common::model::durable_stream::durable_stream_route_scope(
+        &route.route.environment_id.to_string(),
+        &route.route.deployment_revision.to_string(),
+        &route_family_id(route).to_string(),
+    )
+}
+
 fn route_stream_load_key(
     environment_id: EnvironmentId,
     deployment_revision: DeploymentRevision,
@@ -159,17 +180,25 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let root_phantom =
-            resolve_phantom_id(request, route, &behaviour.phantom_selection, |phantom| {
+        let root_phantom = resolve_phantom_id(
+            request,
+            route,
+            &behaviour.phantom_selection,
+            |phantom| {
                 phantom.then(|| {
                     let session = suffix.session.as_deref().unwrap_or_default();
                     if behaviour.agent_mode == AgentMode::Ephemeral {
-                        ephemeral_invocation_phantom_id(&IdempotencyKey::new(session.to_owned()))
+                        let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+                            scope: route_scope(route),
+                            key: IdempotencyKey::new(session.to_owned()),
+                        };
+                        ephemeral_invocation_phantom_id(&prepared.owner_key(&behaviour.method_name))
                     } else {
                         stable_phantom(session)
                     }
                 })
-            })?;
+            },
+        )?;
         let root_agent_id = CallAgentHandler::build_agent_id(
             route,
             behaviour.component_id,
@@ -185,7 +214,11 @@ impl DurableStreamsHandler {
                 &behaviour.agent_type,
                 &behaviour.constructor_input,
                 &behaviour.constructor_parameters,
-                Some(fork::fork_phantom_id(&root_agent_id, fork)),
+                Some(fork::fork_phantom_id(
+                    &root_agent_id,
+                    &route_scope(route),
+                    fork,
+                )),
             )?,
             None => root_agent_id.clone(),
         };
@@ -299,7 +332,7 @@ impl DurableStreamsHandler {
         max_items: u32,
         wait_millis: u64,
         admission: golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission,
-        invocation_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+        invocation_key: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> Result<Option<ReadStreamSlotSuccess>, RequestHandlerError> {
         let result = self
             .worker_service
@@ -309,6 +342,7 @@ impl DurableStreamsHandler {
                     agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
+                    route_scope: route_scope(route),
                     session: session.into(),
                     slot: slot.into(),
                     from_offset,
@@ -338,7 +372,7 @@ pub(super) fn error_response(
     let status = match &error {
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::InvalidRequest { details },
-        )) if details.starts_with("IdempotencyConflict:") => StatusCode::CONFLICT,
+        )) if details.starts_with("IdempotencyConflict:") => StatusCode::UNPROCESSABLE_ENTITY,
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::InvalidRequest { details },
         )) if details.starts_with("NotFound:") => StatusCode::NOT_FOUND,
@@ -597,6 +631,164 @@ mod tests {
     use test_r::test;
 
     #[test]
+    async fn session_and_fork_addressing_uses_family_scope_not_endpoint_identity() {
+        use crate::custom_api::model::RichCompiledRoute;
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_common::model::invocation_id::InvocationRequestKey;
+        use golem_service_base::custom_api::{AgentRouteMode, RouteBehaviour};
+
+        let endpoints = [
+            ("PUT", "/run"),
+            ("PUT", "/run/invocations/session"),
+            ("HEAD", "/run/invocations/session"),
+            ("GET", "/run/invocations/session"),
+            ("DELETE", "/run/invocations/session"),
+            ("PUT", "/run/invocations/session/streams/input"),
+            ("HEAD", "/run/invocations/session/streams/input"),
+            ("GET", "/run/invocations/session/streams/input"),
+            ("DELETE", "/run/invocations/session/streams/input"),
+            ("POST", "/run/invocations/session/streams/input"),
+            ("HEAD", "/run/forks/fork/invocations/session"),
+            ("GET", "/run/forks/fork/invocations/session"),
+            ("HEAD", "/run/forks/fork/invocations/session/streams/input"),
+            ("GET", "/run/forks/fork/invocations/session/streams/input"),
+            ("PUT", "/run/forks/fork/invocations/session/streams/input"),
+            ("POST", "/run/forks/fork/invocations/session/streams/input"),
+            (
+                "DELETE",
+                "/run/forks/fork/invocations/session/streams/input",
+            ),
+        ];
+        let routes = endpoints
+            .iter()
+            .enumerate()
+            .map(|(index, (method, path))| {
+                let mut route = test_route(37 + index as i32, path, Some(method), "typed");
+                let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                    unreachable!()
+                };
+                call.route_mode = AgentRouteMode::DurableStreams;
+                call.durable_streams = Some(DurableStreamRoutePolicy {
+                    family_id: 37,
+                    slots: vec![],
+                    allow_external_writes: true,
+                    allow_stream_delete: true,
+                    allow_invocation_delete: true,
+                    load: None,
+                });
+                route
+            })
+            .collect();
+        let resolver = test_resolver(routes);
+        let root = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "StreamAgent()".into(),
+        };
+        let owner = |scope| {
+            InvocationRequestKey::RouteSession {
+                scope,
+                key: IdempotencyKey::new("session".into()),
+            }
+            .owner_key("run")
+        };
+        let expected_scope = golem_common::model::durable_stream::durable_stream_route_scope(
+            &EnvironmentId(Uuid::nil()).to_string(),
+            &DeploymentRevision::INITIAL.to_string(),
+            "37",
+        );
+        for (index, (method, path)) in endpoints.iter().enumerate() {
+            let request = poem::Request::builder()
+                .method(method.parse().unwrap())
+                .uri(path.parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let mut resolved = resolver.resolve_matching_route(&request).await.unwrap();
+            assert_eq!(resolved.route.route_id, 37 + index as i32);
+            let scope = route_scope(&resolved);
+            assert_eq!(scope, expected_scope);
+            assert_eq!(owner(scope.clone()), owner(expected_scope.clone()));
+            assert_eq!(
+                ephemeral_invocation_phantom_id(&owner(scope.clone())),
+                ephemeral_invocation_phantom_id(&owner(expected_scope.clone()))
+            );
+            let fork = fork::fork_phantom_id(&root, &scope, "fork");
+            assert_eq!(fork, fork::fork_phantom_id(&root, &expected_scope, "fork"));
+
+            for dimension in ["environment", "revision", "family"] {
+                let route = &resolved.route;
+                let super::super::RichRouteBehaviour::CallAgent(call) = &route.behavior else {
+                    unreachable!()
+                };
+                let mut call = call.clone();
+                if dimension == "family" {
+                    call.durable_streams.as_mut().unwrap().family_id += 1;
+                }
+                let isolated = RichCompiledRoute {
+                    account_id: route.account_id,
+                    account_email: route.account_email.clone(),
+                    environment_id: if dimension == "environment" {
+                        EnvironmentId::new()
+                    } else {
+                        EnvironmentId(Uuid::nil())
+                    },
+                    deployment_revision: if dimension == "revision" {
+                        DeploymentRevision::INITIAL.next().unwrap()
+                    } else {
+                        DeploymentRevision::INITIAL
+                    },
+                    route_id: route.route_id,
+                    route_match: route.route_match.clone(),
+                    path: route.path.clone(),
+                    behavior: super::super::RichRouteBehaviour::CallAgent(call),
+                    security: route.security.clone(),
+                    cors: route.cors.clone(),
+                };
+                resolved.route = Arc::new(isolated);
+                let isolated_scope = route_scope(&resolved);
+                assert_ne!(isolated_scope, expected_scope, "{dimension}");
+                assert_ne!(owner(isolated_scope.clone()), owner(expected_scope.clone()));
+                assert_ne!(
+                    fork::fork_phantom_id(&root, &isolated_scope, "fork"),
+                    fork,
+                    "{dimension}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invocation_identity_conflict_is_unprocessable_but_other_stream_errors_are_unchanged() {
+        for (details, expected) in [
+            (
+                "IdempotencyConflict: invocation identity was already accepted with a different request",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "IdempotencyConflict: runtime card changed",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            ("NotFound: session is unavailable", StatusCode::NOT_FOUND),
+            ("StaleEpoch: stale attachment", StatusCode::BAD_REQUEST),
+            (
+                "InvalidAttachmentState: active attachment",
+                StatusCode::BAD_REQUEST,
+            ),
+            ("InputConflict: input changed", StatusCode::BAD_REQUEST),
+            (
+                "invalid IdempotencyConflict: other validation",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let error = RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                WorkerExecutorError::invalid_request(details),
+            ));
+            let response = error_response(error).unwrap();
+            assert_eq!(response.status, expected, "{details}");
+            assert!(!response.headers.contains_key(http::header::RETRY_AFTER));
+        }
+    }
+
+    #[test]
     async fn selector_resource_urls_canonicalize_identity_and_omit_other_queries() {
         use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
         use golem_service_base::custom_api::RouteBehaviour;
@@ -846,6 +1038,7 @@ mod tests {
     #[test]
     fn allow_is_derived_from_resource_direction_and_route_policy() {
         let mut policy = DurableStreamRoutePolicy {
+            family_id: 0,
             slots: vec![
                 DurableStreamSlot {
                     canonical_name: "input".into(),

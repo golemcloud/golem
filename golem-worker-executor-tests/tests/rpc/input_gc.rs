@@ -356,6 +356,7 @@ struct TsInputGcReport {
 #[schema(rename_all = "camelCase")]
 struct TsInputGcPromise {
     agent_id: TsInputGcAgentId,
+    fingerprint: TsInputGcUuid,
     oplog_idx: u64,
 }
 
@@ -524,6 +525,10 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
             .complete_promise(
                 &PromiseId {
                     agent_id: agent.clone(),
+                    fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u64_pair(
+                        gate.fingerprint.high_bits,
+                        gate.fingerprint.low_bits,
+                    )),
                     oplog_idx: OplogIndex::from_u64(gate.oplog_idx),
                 },
                 vec![],

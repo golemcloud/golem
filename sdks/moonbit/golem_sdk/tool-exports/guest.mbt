@@ -21,9 +21,9 @@ pub async fn invoke(
   ]?,
   stdout : @streams.ToolOutputWriter?,
   stderr : @streams.ToolOutputWriter?,
-  principal : @common0.Principal,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
+  let principal = @invocationContext.caller().immediate
   let stdin = stdin.map(source => @tool.byte_stream(source))
   match
     @tool.validate_tool_outputs(

@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationId;
+
 use crate::worker::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -618,6 +623,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
                 result => result?,
             };
+            if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "execution owner kind does not match the requested creation mode",
+                ));
+            }
+            // Construction success belongs to all waiters. Only the task's originating caller
+            // may treat a newly written Create as its own, rather than an existing incarnation.
+            let exclusive = matches!(
+                create_intent,
+                CreateIntent::Create {
+                    exclusive: true,
+                    ..
+                }
+            );
+            if (started && newly_created) || !exclusive {
+                return Ok(());
+            }
             // Never hold this guard while joining construction: the constructing task needs it.
             let _lifecycle = self
                 .deps
@@ -626,17 +648,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             owned_shard_epoch(&self.deps, &self.owned_agent_id.agent_id)?;
             if self.answers_as_deleted().await {
-                return Err(WorkerExecutorError::worker_not_found(self.agent_id()));
-            }
-            if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
-                return Err(WorkerExecutorError::invalid_request(
-                    "execution owner kind does not match the requested creation mode",
-                ));
-            }
-            // Construction success belongs to all waiters. Only the task's originating caller
-            // may treat a newly written Create as its own, rather than an existing incarnation.
-            if started && newly_created {
-                return Ok(());
+                // Deletion won admission. Retry after its cached generation has been removed
+                // rather than returning a missing-agent result from an exclusive create.
+                return Err(WorkerExecutorError::ShardingNotReady);
             }
             let incoming_request = create_intent.request(
                 self.parsed_agent_id.as_ref().and_then(|id| id.phantom_id),
@@ -655,13 +669,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .cloned()
                 .map(AgentConfigEntryDto::from)
                 .collect();
-            let exclusive = matches!(
-                create_intent,
-                CreateIntent::Create {
-                    exclusive: true,
-                    ..
-                }
-            );
             let incoming_config = if exclusive
                 && incoming_request.idempotency_key.is_some()
                 && incoming_request.idempotency_key
@@ -812,10 +819,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     newly_created,
                                 }) => {
                                     worker.unpublished_create.store(false, Ordering::Release);
-                                    initializing.complete_initialization(
-                                        reconstructed_ephemeral
-                                            .then(inactive_ephemeral_agent_error),
-                                    );
+                                    if reconstructed_ephemeral {
+                                        initializing
+                                            .complete_inactive(inactive_ephemeral_agent_error());
+                                    } else {
+                                        initializing.complete_initialization();
+                                    }
                                     // Publish immutable data last: cache readers use this cell as
                                     // their lock-free initialization-completion boundary.
                                     worker.resolved.set(data).map(|()| newly_created).map_err(
@@ -1201,7 +1210,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocation_entry(
                     &worker.oplog,
                     AgentInvocation::AgentInitialization {
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
                         principal,
@@ -1762,8 +1771,8 @@ pub fn merge_agent_env_with_default_env(
 /// runs.
 pub fn never_started_ephemeral_admission(
     status: &AgentStatusRecord,
-    initialization_key: Option<&IdempotencyKey>,
-) -> Option<Option<IdempotencyKey>> {
+    initialization_key: Option<&InvocationId>,
+) -> Option<Option<InvocationId>> {
     let is_initialization = |pending: &golem_common::model::agent::PendingInvocationRef| {
         initialization_key.is_some_and(|key| pending.has_idempotency_key(key))
     };

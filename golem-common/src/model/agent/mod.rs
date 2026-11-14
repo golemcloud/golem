@@ -36,8 +36,9 @@ pub use status::{
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
     DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
     ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    OpenEntityReplayScope, OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind,
-    PendingUpdateRef, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    InvocationResultPosition, OpenEntityReplayScope, OplogProcessorCheckpointState,
+    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
+    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]
@@ -57,9 +58,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::base_model::IdempotencyKey;
 pub use crate::base_model::agent::*;
 pub use crate::base_model::worker::*;
+use crate::base_model::{IdempotencyKey, InvocationId};
 use crate::model::account::AccountId;
 use crate::model::component::ComponentId;
 use crate::model::component_metadata::{self, ComponentMetadata};
@@ -600,7 +601,7 @@ pub enum ScheduledAction {
     /// A missing agent or a fingerprint mismatch drops the action without creating an agent.
     WakeInvocation {
         owned_agent_id: OwnedAgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
@@ -613,7 +614,7 @@ pub enum ScheduledAction {
         owned_agent_id: OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     },
 }
@@ -672,9 +673,9 @@ impl ScheduleId {
         Self { id: Uuid::now_v7() }
     }
 
-    pub fn for_invocation(fingerprint: AgentFingerprint, key: &IdempotencyKey) -> Self {
+    pub fn for_invocation(fingerprint: AgentFingerprint, key: &InvocationId) -> Self {
         Self {
-            id: Uuid::new_v5(&fingerprint.0, key.value.as_bytes()),
+            id: Uuid::new_v5(&fingerprint.0, key.to_string().as_bytes()),
         }
     }
 }
@@ -712,29 +713,34 @@ impl Display for LogLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentEvent {
+    /// `invocation_id` is the unique part of the invocation that wrote the output, or none when
+    /// no invocation runs, such as during initialization or a snapshot.
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<InvocationId>,
     },
     StdErr {
         timestamp: Timestamp,
         bytes: Vec<u8>,
+        invocation_id: Option<InvocationId>,
     },
     Log {
         timestamp: Timestamp,
         level: LogLevel,
         context: String,
         message: String,
+        invocation_id: Option<InvocationId>,
     },
     InvocationStart {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: InvocationId,
     },
     InvocationFinished {
         timestamp: Timestamp,
         function: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: InvocationId,
     },
     PluginError {
         timestamp: Timestamp,
@@ -782,17 +788,17 @@ impl Display for AgentEvent {
             }
             AgentEvent::InvocationStart {
                 function,
-                idempotency_key,
+                invocation_id,
                 ..
             } => {
-                write!(f, "<invocation-start> {function} {idempotency_key}")
+                write!(f, "<invocation-start> {function} {invocation_id}")
             }
             AgentEvent::InvocationFinished {
                 function,
-                idempotency_key,
+                invocation_id,
                 ..
             } => {
-                write!(f, "<invocation-finished> {function} {idempotency_key}")
+                write!(f, "<invocation-finished> {function} {invocation_id}")
             }
             AgentEvent::PluginError {
                 plugin_name,

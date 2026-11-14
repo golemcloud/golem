@@ -84,7 +84,7 @@ impl Rpc for HoldResponseRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -111,6 +111,7 @@ impl Rpc for HoldResponseRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -119,6 +120,7 @@ impl Rpc for HoldResponseRpc {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,
@@ -268,6 +270,7 @@ async fn durable_rpc_after_activation_redispatches_with_the_same_key_after_resta
         data_value!("held-response-target"),
         0,
         1,
+        false,
     )
     .await
 }
@@ -290,6 +293,32 @@ async fn durable_rpc_without_hint_redispatches_with_the_same_key_after_restart(
         data_value!("held-response-target"),
         0,
         1,
+        false,
+    )
+    .await
+}
+
+/// A root with no idempotency scope gets a random invocation ID, but the child key derives from
+/// the ID recorded in the caller's oplog: the recovered root redispatches with the lost key. The
+/// repeated root request is a new invocation, so its own call uses another key.
+#[test]
+#[timeout("3m")]
+async fn durable_rpc_of_an_anonymous_root_redispatches_with_the_same_key_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    held_response_restart_case(
+        last_unique_id,
+        deps,
+        fixture,
+        agent_id!("RpcAuthTester", "held-response-caller"),
+        "try_call_counter",
+        data_value!("held-response-target"),
+        0,
+        2,
+        true,
     )
     .await
 }
@@ -314,6 +343,7 @@ async fn durable_rpc_after_uncommitted_hint_redispatches_with_the_same_key_after
         data_value!("held-response-target", "async-rpc"),
         1,
         8,
+        false,
     )
     .await
 }
@@ -327,6 +357,7 @@ async fn held_response_restart_case(
     input: TypedSchemaValue,
     held: usize,
     expected_count: u64,
+    anonymous_root: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -358,9 +389,16 @@ async fn held_response_restart_case(
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
+    let root = |executor: &TestWorkerExecutor| {
+        if anonymous_root {
+            executor.as_caller(AuthCtx::System)
+        } else {
+            executor.clone()
+        }
+    };
     let key = IdempotencyKey::fresh();
     let invocation = {
-        let executor = executor.clone();
+        let executor = root(&executor);
         let component = component.clone();
         let caller_id = caller_id.clone();
         let key = key.clone();
@@ -393,7 +431,8 @@ async fn held_response_restart_case(
     let executor = start_with_overrides(deps, &context, overrides).await?;
     tokio::time::timeout(
         Duration::from_secs(30),
-        executor.invoke_and_await_agent_with_key(&component, &caller_id, &key, method, input),
+        root(&executor)
+            .invoke_and_await_agent_with_key(&component, &caller_id, &key, method, input),
     )
     .await??;
 
@@ -420,12 +459,23 @@ async fn held_response_restart_case(
         rpc_starts(&recovered),
     );
 
-    assert_eq!(attempts.len(), held + 2, "{context}");
+    let repeated_root_dispatches = if anonymous_root { held + 1 } else { 0 };
+    assert_eq!(
+        attempts.len(),
+        held + 2 + repeated_root_dispatches,
+        "{context}"
+    );
     assert!(attempts[held].is_some(), "{context}");
     assert_eq!(
         attempts[held + 1],
         attempts[held],
         "the redispatch must reuse the key of the dispatch whose response was lost; {context}"
+    );
+    assert!(
+        attempts[held + 2..]
+            .iter()
+            .all(|attempt| attempt.is_some() && attempt != &attempts[held]),
+        "the repeated root request must dispatch with keys of its own; {context}"
     );
     assert_eq!(
         count, expected_count,
@@ -581,8 +631,8 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
 /// `try_call_counter` activates a durable `RpcCounter` target and calls it. The activation creates
 /// the target, but the executor stops before the caller receives the activation result, so the
 /// caller's activation has no committed `End`. After a restart the caller repeats the activation with
-/// the same idempotency key, which is the key the target's `Create` entry records, and the target
-/// runs its constructor once.
+/// the same idempotency key. The target's `Create` entry records its normalized owner key, and the
+/// target runs its constructor once.
 #[test]
 #[timeout("3m")]
 async fn durable_rpc_activation_repeats_its_key_after_restart(
@@ -683,7 +733,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         create_requests[0].kind,
         golem_common::model::oplog::CreateRequestKind::GetOrCreate
     );
-    assert_eq!(create_requests[0].idempotency_key, activations[0]);
+    assert_eq!(create_requests[0].idempotency_key, activations[0].clone());
     assert_eq!(
         create_requests[0].principal,
         Principal::Agent(AgentPrincipal {
