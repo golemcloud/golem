@@ -1,6 +1,12 @@
 import { Effect, Schema, Stream } from "effect"
 import { Socket } from "effect/socket"
-import { defineAgent, method, Websocket, WitTypes } from "@golemcloud/effect-golem"
+import {
+  defineAgent,
+  method,
+  Schema as GolemSchema,
+  Websocket,
+  WitTypes,
+} from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "ConcurrentStreamProbe",
@@ -42,7 +48,10 @@ defineAgent({
           }),
         )
         const context = yield* Effect.context<Stream.Services<typeof stream>>()
-        return stream.pipe(Stream.provideContext(context))
+        return stream.pipe(
+          Stream.mapError(GolemSchema.StreamError.from),
+          Stream.provideContext(context),
+        )
       }),
   }),
 })
