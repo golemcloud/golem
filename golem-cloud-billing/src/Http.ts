@@ -5,6 +5,7 @@ import { Auth } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
 import {
+  canCheckOut,
   cliBootstrapCommand,
   type OverageNotice,
   type PlanState,
@@ -219,6 +220,34 @@ export const routes = HttpRouter.use((router) =>
               return HttpServerResponse.redirect("/", { status: 303 })
             }
             const user = signedIn.value
+            // The route accepts only a checkout that the page offers. When the registry or the
+            // database fails, the plan is not known, so the route refuses the checkout.
+            const offered = yield* Effect.gen(function* () {
+              const account = yield* registry.getAccount(user.golemToken, user.golemAccountId)
+              const subscription = yield* subscriptions.latest(user.golemAccountId, config.polar.productId)
+              const plan = planOf(account)
+              if (!canCheckOut(plan, subscription)) {
+                yield* Effect.logWarning("Refused a checkout that the page does not offer").pipe(
+                  Effect.annotateLogs({
+                    golemAccountId: user.golemAccountId,
+                    plan,
+                    subscriptionStatus: subscription?.status
+                  })
+                )
+                return false
+              }
+              return true
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the plan for the checkout").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                  Effect.as(false)
+                )
+              )
+            )
+            if (!offered) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
             const url = yield* polar.createCheckout({
               productId: config.polar.productId,
               externalCustomerId: user.golemAccountId,

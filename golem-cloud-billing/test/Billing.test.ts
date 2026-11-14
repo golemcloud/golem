@@ -196,6 +196,59 @@ describe("Polar billing", () => {
       expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
     })
 
+    const postCheckout = (jar: CookieJar) => request(app.handler, jar, "POST", "/billing/checkout", { origin: baseUrl })
+
+    /** The route sends a refused checkout back to the page, and Polar gets no request. */
+    const expectRefused = (response: Response) => {
+      expect(response.status).toBe(303)
+      expect(response.headers.get("location")).toBe("/")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toEqual([])
+    }
+
+    it.each([
+      ["the paid plan", paidPlanId],
+      ["the suspended plan", suspendedPlanId],
+      ["a custom plan", internalPlanId]
+    ])("refuses a checkout on %s, and the page does not offer one", async (_, planId) => {
+      const { jar, accountId } = await signedIn()
+      upstreams.planOf(accountId).planId = planId
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("refuses a checkout on the free plan while the subscription is past due", async () => {
+      const { jar, accountId } = await signedIn()
+      const failedAt = new Date(Date.now() - config.pastDueGraceMs - MINUTE)
+      await deliver(
+        "subscription.past_due",
+        subscription(accountId, { status: "past_due", past_due_at: failedAt.toISOString() })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+    })
+
+    it("refuses a checkout when the registry does not send the account", async () => {
+      const { jar } = await signedIn()
+      upstreams.accountReadStatus = 503
+
+      expectRefused(await postCheckout(jar))
+      expect(await page(jar)).toContain("Golem did not send the plan of the account.")
+    })
+
+    it("refuses a checkout when the database cannot read the subscription", async () => {
+      const { jar } = await signedIn()
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}".polar_subscriptions RENAME TO polar_subscriptions_hidden`)
+      try {
+        expectRefused(await postCheckout(jar))
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".polar_subscriptions_hidden RENAME TO polar_subscriptions`)
+      }
+    })
+
     it("opens the customer portal of the Golem account", async () => {
       const { jar, accountId } = await signedIn()
 
@@ -348,7 +401,9 @@ describe("Polar billing", () => {
       const html = await page(jar)
 
       expect(html).toContain("Monthly usage")
-      expect(html).toContain("This month (UTC), against the monthly allowance of the plan.")
+      expect(html).toContain(
+        "This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC)."
+      )
       expect(html).toContain("2.5M of 100M GCU included · 3%")
       expect(html).toContain("250 of 912.5 GB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)

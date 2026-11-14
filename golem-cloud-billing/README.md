@@ -114,7 +114,10 @@ plan.
   redirects to it: the paid product, the Golem account ID as `external_customer_id`, the email and
   the name of the user, and the IP address of the browser for the local currency. After the
   payment Polar redirects to `/?checkout_id=...`, and the page shows that the plan is activating
-  until the webhook changes it.
+  until the webhook changes it. The page offers the checkout, and the route accepts it, only for
+  an account on the free plan whose latest subscription is not `past_due` (`canCheckOut` in
+  `src/Page.ts`). The route redirects any other request to `/`, also when the registry or the
+  database fails.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`

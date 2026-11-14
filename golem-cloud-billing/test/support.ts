@@ -155,6 +155,8 @@ export class FakeUpstreams {
   github: GitHubIdentity = newGitHubIdentity(4242)
   readonly registryAccounts = new Map<string, RegistryAccount>()
   registryLoginStatus = 200
+  /** The status of `GET /v1/accounts/{account_id}`; with another status than 200, the read fails. */
+  accountReadStatus = 200
   /** The plan of each account ID; an account starts on the free plan. */
   readonly registryPlans = new Map<string, RegistryPlan>()
   /** Whether the permission share of the billing account exists; without it the registry answers 404. */
@@ -338,6 +340,9 @@ export class FakeUpstreams {
           }
         }
         if (match[2] === undefined && request.method === "GET") {
+          if (this.accountReadStatus !== 200) {
+            return Response.json({ error: "unavailable" }, { status: this.accountReadStatus })
+          }
           // The billing token sees every account, also one that never signed in to the app.
           return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
         }
