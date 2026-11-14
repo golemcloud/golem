@@ -32,15 +32,15 @@ use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::oplog::{
     self, AgentResourceId, FilesystemSnapshotName, OplogEntry, OplogIndex, QueuedCardEvent,
 };
-use crate::model::regions::DeletedRegions;
+use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
     AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
-    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, IdempotencyKey,
+    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, InvocationId,
     RetryConfig, RetryPolicyState, Timestamp,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
@@ -58,6 +58,7 @@ pub struct AgentMetadata {
     pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
+    pub create_request: oplog::CreateRequest,
 }
 
 impl AgentMetadata {
@@ -69,7 +70,7 @@ impl AgentMetadata {
     pub fn parse_agent_id(
         &self,
         metadata: &crate::model::component_metadata::ComponentMetadata,
-    ) -> Result<super::ParsedAgentId, String> {
+    ) -> Result<super::ParsedAgentKey, String> {
         let name = self
             .agent_type_name
             .as_ref()
@@ -77,7 +78,7 @@ impl AgentMetadata {
         let agent_type = metadata
             .find_agent_type_by_name_ref(name)
             .ok_or_else(|| format!("Agent type not found: {name}"))?;
-        super::ParsedAgentId::parse(&self.agent_id.agent_id, agent_type)
+        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
     }
 }
 
@@ -143,17 +144,7 @@ impl AgentFilter {
                 result
             }
             AgentFilter::Or(AgentOrFilter { filters }) => {
-                let mut result = true;
-                if !filters.is_empty() {
-                    result = false;
-                    for filter in filters {
-                        if filter.matches(metadata) {
-                            result = true;
-                            break;
-                        }
-                    }
-                }
-                result
+                filters.iter().any(|filter| filter.matches(metadata))
             }
         }
     }
@@ -191,7 +182,7 @@ impl InvocationResultBloom {
         }
     }
 
-    pub fn insert(&mut self, key: &IdempotencyKey) {
+    pub fn insert(&mut self, key: &InvocationId) {
         for bit in self.bit_indexes(key) {
             let word_index = bit / u64::BITS as usize;
             let bit_index = bit % u64::BITS as usize;
@@ -200,7 +191,7 @@ impl InvocationResultBloom {
         }
     }
 
-    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+    pub fn might_contain(&self, key: &InvocationId) -> bool {
         self.bit_indexes(key).all(|bit| {
             let word_index = bit / u64::BITS as usize;
             let bit_index = bit % u64::BITS as usize;
@@ -208,8 +199,8 @@ impl InvocationResultBloom {
         })
     }
 
-    fn bit_indexes(&self, key: &IdempotencyKey) -> impl Iterator<Item = usize> + use<> {
-        let digest = blake3::hash(key.value.as_bytes());
+    fn bit_indexes(&self, key: &InvocationId) -> impl Iterator<Item = usize> + use<> {
+        let digest = blake3::hash(key.0.as_bytes());
         let bytes = digest.as_bytes();
         let first = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let second = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) | 1;
@@ -233,19 +224,30 @@ impl Default for InvocationResultBloom {
 }
 
 // A deterministic approximation of the persistent tree node, pointers, and scalar value. Dynamic
-// idempotency-key bytes are accounted for separately. This only controls when the representation
+// UUID bytes are accounted for separately. This only controls when the representation
 // switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
 const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
+
+/// Where an invocation result lies in the oplog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct InvocationResultPosition {
+    /// The entry that holds the result.
+    pub terminal: OplogIndex,
+    /// The `AgentInvocationStarted` or `PendingAgentInvocation` entry that holds the accepted
+    /// request, so a duplicate request is compared with it without searching the oplog. `None`
+    /// when the fold that found the result did not see the request.
+    pub request: Option<OplogIndex>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 enum InvocationResultMembershipState {
     Exact {
-        by_key: OrdMap<IdempotencyKey, OplogIndex>,
+        by_key: OrdMap<InvocationId, InvocationResultPosition>,
         key_bytes: usize,
     },
     Indexed {
-        recent_by_key: OrdMap<IdempotencyKey, OplogIndex>,
-        recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
+        recent_by_key: OrdMap<InvocationId, InvocationResultPosition>,
+        recent_by_index: OrdMap<OplogIndex, InvocationId>,
         bloom: InvocationResultBloom,
     },
 }
@@ -279,7 +281,11 @@ impl InvocationResultMembership {
         }
     }
 
-    pub fn get(&self, key: &IdempotencyKey) -> Option<&OplogIndex> {
+    pub fn get(&self, key: &InvocationId) -> Option<&OplogIndex> {
+        self.position(key).map(|position| &position.terminal)
+    }
+
+    pub fn position(&self, key: &InvocationId) -> Option<&InvocationResultPosition> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.get(key),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => {
@@ -288,18 +294,18 @@ impl InvocationResultMembership {
         }
     }
 
-    pub fn contains_key(&self, key: &IdempotencyKey) -> bool {
+    pub fn contains_key(&self, key: &InvocationId) -> bool {
         self.get(key).is_some()
     }
 
-    pub fn insert(&mut self, key: IdempotencyKey, result_index: OplogIndex) {
+    pub fn insert(&mut self, key: InvocationId, position: InvocationResultPosition) {
         self.change_generation = self.change_generation.wrapping_add(1);
         match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
                 if !by_key.contains_key(&key) {
-                    *key_bytes = key_bytes.saturating_add(key.value.len());
+                    *key_bytes = key_bytes.saturating_add(size_of::<InvocationId>());
                 }
-                by_key.insert(key, result_index);
+                by_key.insert(key, position);
                 self.promote_if_needed();
             }
             InvocationResultMembershipState::Indexed {
@@ -308,17 +314,17 @@ impl InvocationResultMembership {
                 bloom,
             } => {
                 bloom.insert(&key);
-                if let Some(previous_index) = recent_by_key.remove(&key) {
-                    recent_by_index.remove(&previous_index);
+                if let Some(previous) = recent_by_key.remove(&key) {
+                    recent_by_index.remove(&previous.terminal);
                 }
-                recent_by_key.insert(key.clone(), result_index);
-                recent_by_index.insert(result_index, key);
+                recent_by_key.insert(key, position);
+                recent_by_index.insert(position.terminal, key);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
         }
     }
 
-    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+    pub fn might_contain(&self, key: &InvocationId) -> bool {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.contains_key(key),
             InvocationResultMembershipState::Indexed { bloom, .. } => bloom.might_contain(key),
@@ -331,7 +337,9 @@ impl InvocationResultMembership {
 
     pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
         match &self.state {
-            InvocationResultMembershipState::Exact { by_key, .. } => by_key.values().copied().min(),
+            InvocationResultMembershipState::Exact { by_key, .. } => {
+                by_key.values().map(|position| position.terminal).min()
+            }
             InvocationResultMembershipState::Indexed {
                 recent_by_index, ..
             } => recent_by_index.get_min().map(|(index, _)| *index),
@@ -355,14 +363,14 @@ impl InvocationResultMembership {
         self.revert_generation = generation;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &OplogIndex)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&InvocationId, &InvocationResultPosition)> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.iter(),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.iter(),
         }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &IdempotencyKey> {
+    pub fn keys(&self) -> impl Iterator<Item = &InvocationId> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => by_key.keys(),
             InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.keys(),
@@ -380,25 +388,25 @@ impl InvocationResultMembership {
         self.len() == 0
     }
 
-    pub fn remove(&mut self, key: &IdempotencyKey) -> Option<OplogIndex> {
-        let index = match &mut self.state {
+    pub fn remove(&mut self, key: &InvocationId) -> Option<InvocationResultPosition> {
+        let position = match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
-                let index = by_key.remove(key)?;
-                *key_bytes = key_bytes.saturating_sub(key.value.len());
-                index
+                let position = by_key.remove(key)?;
+                *key_bytes = key_bytes.saturating_sub(size_of::<InvocationId>());
+                position
             }
             InvocationResultMembershipState::Indexed {
                 recent_by_key,
                 recent_by_index,
                 ..
             } => {
-                let index = recent_by_key.remove(key)?;
-                recent_by_index.remove(&index);
-                index
+                let position = recent_by_key.remove(key)?;
+                recent_by_index.remove(&position.terminal);
+                position
             }
         };
         self.change_generation = self.change_generation.wrapping_add(1);
-        Some(index)
+        Some(position)
     }
 
     fn promote_if_needed(&mut self) {
@@ -426,17 +434,17 @@ impl InvocationResultMembership {
         let mut bloom = InvocationResultBloom::new(self.bloom_bits, self.bloom_hashes);
         let mut by_index: Vec<_> = by_key
             .iter()
-            .map(|(key, index)| {
+            .map(|(key, position)| {
                 bloom.insert(key);
-                (*index, key.clone())
+                (*position, *key)
             })
             .collect();
-        by_index.sort_unstable_by_key(|(index, _)| *index);
+        by_index.sort_unstable_by_key(|(position, _)| position.terminal);
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
-        for (index, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_key.insert(key.clone(), index);
-            recent_by_index.insert(index, key);
+        for (position, key) in by_index.into_iter().rev().take(self.capacity) {
+            recent_by_key.insert(key, position);
+            recent_by_index.insert(position.terminal, key);
         }
         self.state = InvocationResultMembershipState::Indexed {
             recent_by_key,
@@ -447,13 +455,12 @@ impl InvocationResultMembership {
 
     fn truncate_recent(
         capacity: usize,
-        recent_by_key: &mut OrdMap<IdempotencyKey, OplogIndex>,
-        recent_by_index: &mut OrdMap<OplogIndex, IdempotencyKey>,
+        recent_by_key: &mut OrdMap<InvocationId, InvocationResultPosition>,
+        recent_by_index: &mut OrdMap<OplogIndex, InvocationId>,
     ) {
         while recent_by_key.len() > capacity {
-            let Some((oldest_index, oldest_key)) = recent_by_index
-                .get_min()
-                .map(|(index, key)| (*index, key.clone()))
+            let Some((oldest_index, oldest_key)) =
+                recent_by_index.get_min().map(|(index, key)| (*index, *key))
             else {
                 break;
             };
@@ -486,6 +493,8 @@ pub struct AutomaticSnapshot {
     pub component_revision: ComponentRevision,
     /// The filesystem snapshot that the entry names, with its confirmation.
     pub files: SnapshotFiles,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
@@ -537,6 +546,7 @@ impl AutomaticSnapshot {
             index: self.index,
             component_revision: self.component_revision,
             filesystem_snapshot,
+            bootstrap: self.bootstrap,
         })
     }
 }
@@ -553,6 +563,8 @@ pub struct UsableAutomaticSnapshot {
     /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
     /// `None` when the entry has no filesystem snapshot name.
     pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// Contains status information about a worker according to a given oplog index.
@@ -583,10 +595,13 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
-    pub pending_durable_stream_cancellations:
-        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
-    pub current_idempotency_key: Option<IdempotencyKey>,
-    pub cancelled_idempotency_key: Option<IdempotencyKey>,
+    pub pending_durable_stream_cancellations: HashMap<
+        (crate::model::durable_stream::StreamRecordReference, u64),
+        Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    >,
+    pub current_idempotency_key: Option<InvocationId>,
+    /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
+    pub current_invocation_started_at: Option<OplogIndex>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -652,9 +667,9 @@ impl Default for AgentStatusRecord {
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
-            pending_durable_stream_cancellations: HashSet::new(),
+            pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
-            cancelled_idempotency_key: None,
+            current_invocation_started_at: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
@@ -774,7 +789,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<IdempotencyKey>,
+    pub session_key: Option<InvocationId>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -788,6 +803,7 @@ pub struct DurableStreamSessionStatus {
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
     pub public_session_id: Option<String>,
+    pub route_scope: Option<String>,
     pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub expired: bool,
@@ -827,7 +843,7 @@ impl DurableStreamSessionStatus {
     pub fn apply_pending_invocation(
         &mut self,
         oplog_idx: OplogIndex,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) {
         if self.lifecycle_error.is_some()
             || self
@@ -862,6 +878,7 @@ impl DurableStreamSessionStatus {
                 // ordinary fork. A target-only export identity is replaced on initialization.
                 if self.first_prepared.is_none() {
                     self.public_session_id = None;
+                    self.route_scope = None;
                 }
                 self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
                 self.expiry_deadline_millis = None;
@@ -896,7 +913,7 @@ impl DurableStreamSessionStatus {
             {
                 return;
             }
-            self.session_key.get_or_insert_with(|| record_key.clone());
+            self.session_key.get_or_insert(*record_key);
         } else if let Some(record_key) = relative_record_key {
             let Some(key) = self.session_key.as_ref() else {
                 return;
@@ -928,12 +945,14 @@ impl DurableStreamSessionStatus {
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
                     self.public_session_id = Some(v.public_session_id.clone());
+                    self.route_scope = v.route_scope.clone();
                     self.expiry_policy = v.expiry_policy;
                     self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
             }
             StreamSessionRecord::ExpiryRefreshed(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && matches!(
                         self.expiry_policy,
@@ -945,6 +964,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::Expired(v)
                 if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.route_scope.as_deref() == Some(&v.route_scope)
                     && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
                     && !self.expired =>
             {
@@ -952,6 +972,7 @@ impl DurableStreamSessionStatus {
             }
             StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
                 self.public_session_id = Some(v.public_session_id.clone());
+                self.route_scope = Some(v.route_scope.clone());
                 self.expiry_policy = v.expiry_policy;
                 self.expiry_deadline_millis = v.expiry_deadline_millis;
                 self.expired = false;
@@ -1030,12 +1051,12 @@ pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum DurableStreamPublicBinding {
     Live {
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
         expiry_deadline_millis: Option<u64>,
     },
     Retired {
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
     },
 }
 
@@ -1049,13 +1070,13 @@ impl DurableStreamPublicBinding {
         match record {
             StreamSessionRecord::Prepared(record) => match current {
                 None => Some(Self::Live {
-                    session_key: record.session_key.clone(),
+                    session_key: record.session_key,
                     expiry_policy: record.expiry_policy,
                     expiry_deadline_millis: record.expiry_deadline_millis,
                 }),
                 Some(Self::Retired { session_key }) if session_key != &record.session_key => {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: record.expiry_policy,
                         expiry_deadline_millis: record.expiry_deadline_millis,
                     })
@@ -1064,13 +1085,13 @@ impl DurableStreamPublicBinding {
             },
             StreamSessionRecord::ExportForkInitialized(record) => match current {
                 None => Some(Self::Live {
-                    session_key: record.session_key.clone(),
+                    session_key: record.session_key,
                     expiry_policy: record.expiry_policy,
                     expiry_deadline_millis: record.expiry_deadline_millis,
                 }),
                 Some(Self::Retired { session_key }) if session_key != &record.session_key => {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: record.expiry_policy,
                         expiry_deadline_millis: record.expiry_deadline_millis,
                     })
@@ -1090,7 +1111,7 @@ impl DurableStreamPublicBinding {
                     ) =>
                 {
                     Some(Self::Live {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                         expiry_policy: *expiry_policy,
                         expiry_deadline_millis: Some(record.deadline_millis),
                     })
@@ -1106,7 +1127,7 @@ impl DurableStreamPublicBinding {
                     && *deadline == record.expected_deadline_millis =>
                 {
                     Some(Self::Retired {
-                        session_key: record.session_key.clone(),
+                        session_key: record.session_key,
                     })
                 }
                 _ => current.cloned(),
@@ -1120,15 +1141,15 @@ impl DurableStreamPublicBinding {
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DurableStreamSessionIndex {
-    sessions: OrdMap<String, Arc<DurableStreamSessionStatus>>,
+    sessions: OrdMap<InvocationId, Arc<DurableStreamSessionStatus>>,
     /// True once this status has observed local session lifecycle history. A cache miss is therefore
     /// not evidence that an older, completed session never existed.
     has_history: bool,
 }
 
 impl DurableStreamSessionIndex {
-    pub fn get(&self, key: &IdempotencyKey) -> Option<&DurableStreamSessionStatus> {
-        self.sessions.get(&key.value).map(Arc::as_ref)
+    pub fn get(&self, key: &InvocationId) -> Option<&DurableStreamSessionStatus> {
+        self.sessions.get(key).map(Arc::as_ref)
     }
 
     pub fn apply_oplog_entry(
@@ -1138,14 +1159,11 @@ impl DurableStreamSessionIndex {
     ) -> Result<(), String> {
         use crate::model::oplog::OplogPayload;
 
-        if let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
-        } = entry
-        {
-            if let Some(status) = self.get(idempotency_key).cloned() {
+        if let OplogEntry::PendingAgentInvocation { invocation_id, .. } = entry {
+            if let Some(status) = self.get(invocation_id).cloned() {
                 let mut status = status;
-                status.apply_pending_invocation(index, idempotency_key);
-                self.insert(idempotency_key.clone(), status);
+                status.apply_pending_invocation(index, invocation_id);
+                self.insert(*invocation_id, status);
             }
             return Ok(());
         }
@@ -1220,13 +1238,13 @@ impl DurableStreamSessionIndex {
             None => return,
         };
         status.apply_record(index, record);
-        self.insert(key.clone(), status);
+        self.insert(*key, status);
     }
 
-    pub fn insert(&mut self, key: IdempotencyKey, status: DurableStreamSessionStatus) {
+    pub fn insert(&mut self, key: InvocationId, status: DurableStreamSessionStatus) {
         self.has_history = true;
         let finished = status.finished.is_some();
-        self.sessions.insert(key.value, Arc::new(status));
+        self.sessions.insert(key, Arc::new(status));
         if finished {
             self.trim_completed();
         }
@@ -1240,7 +1258,7 @@ impl DurableStreamSessionIndex {
         let mut completed: Vec<_> = self
             .sessions
             .iter()
-            .filter_map(|(key, status)| status.finished.map(|finished| (finished, key.clone())))
+            .filter_map(|(key, status)| status.finished.map(|finished| (finished, *key)))
             .collect();
         if completed.len() > DURABLE_STREAM_SESSION_RECENT_CAPACITY {
             completed.sort_unstable();
@@ -1251,10 +1269,10 @@ impl DurableStreamSessionIndex {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (IdempotencyKey, &DurableStreamSessionStatus)> {
+    pub fn iter(&self) -> impl Iterator<Item = (InvocationId, &DurableStreamSessionStatus)> {
         self.sessions
             .iter()
-            .map(|(key, status)| (IdempotencyKey::new(key.clone()), status.as_ref()))
+            .map(|(key, status)| (*key, status.as_ref()))
     }
 }
 
@@ -1271,10 +1289,12 @@ impl BinarySerializer for DurableStreamSessionIndex {
 impl BinaryDeserializer for DurableStreamSessionIndex {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
         let has_history = <bool as BinaryDeserializer>::deserialize(context)?;
-        let entries =
-            desert_rust::deserialize_iterator::<(String, Arc<DurableStreamSessionStatus>)>(context)
-                .0
-                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        let entries = desert_rust::deserialize_iterator::<(
+            InvocationId,
+            Arc<DurableStreamSessionStatus>,
+        )>(context)
+        .0
+        .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
         Ok(Self {
             sessions: entries,
             has_history,
@@ -1327,6 +1347,11 @@ pub struct AuthoritativeSnapshot {
     /// snapshot-assisted automatic update selected.
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
+    /// The bootstrap range that the successful update names: the entries of the durable calls
+    /// that the target revision's core initializer claimed while the update instantiated it, its
+    /// own block for a snapshot-based update and the selected record's block for a
+    /// snapshot-assisted one.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1346,6 +1371,7 @@ pub struct OplogProcessorCheckpointState {
     pub confirmed_up_to: OplogIndex,
     pub sending_up_to: OplogIndex,
     pub last_batch_start: OplogIndex,
+    pub delivery: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1406,6 +1432,7 @@ impl PendingUpdateKind {
                 snapshot_index,
                 snapshot_revision,
                 filesystem_snapshot,
+                snapshot_bootstrap,
                 ..
             } => Self::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index: *source_revision_start_index,
@@ -1413,6 +1440,7 @@ impl PendingUpdateKind {
                     index: *snapshot_index,
                     component_revision: *snapshot_revision,
                     filesystem_snapshot: filesystem_snapshot.clone(),
+                    bootstrap: snapshot_bootstrap.clone(),
                 },
             })),
             oplog::UpdateDescription::SnapshotBased {

@@ -13,8 +13,9 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionRequest, ResumeWorkerRequest, StreamSessionCreationIntent,
-    resume_worker_response, worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, CreateWorkerRequest, ResumeWorkerRequest,
+    StreamSessionCreationIntent, create_worker_response, resume_worker_response,
+    worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -146,6 +147,7 @@ pub(crate) async fn start_with_remote_streaming_rpc(
                         evidence: Some(evidence.clone()),
                         lose_response: Arc::new(AtomicBool::new(false)),
                         checkpoint: Arc::new(Mutex::new(None)),
+                        prepare_on_executor: false,
                     });
                     let _ = proxy.set(wrapped.clone());
                     wrapped
@@ -193,6 +195,7 @@ async fn start_with_resume_checkpoint(
                     evidence: None,
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
+                    prepare_on_executor: false,
                 })
             })),
             ..overrides
@@ -213,7 +216,7 @@ impl Rpc for StreamingRemoteRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -227,6 +230,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -235,6 +239,7 @@ impl Rpc for StreamingRemoteRpc {
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
+                request_key,
                 invocation,
                 scheduled_at,
                 auth_ctx,
@@ -411,6 +416,32 @@ struct LocalResumeProxy {
     evidence: Option<Arc<RemoteRpcEvidence>>,
     lose_response: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// Sends preparations to the test executor the way worker-service forwards them.
+    prepare_on_executor: bool,
+}
+
+/// Remote RPC whose target preparation reaches the test executor's `prepare_worker`, as it does
+/// through worker-service when the target lives on another executor.
+pub(crate) fn remote_rpc_preparing_on(
+    executor: &TestWorkerExecutor,
+    environment_id: EnvironmentId,
+    component_owner_account_id: AccountId,
+    inner: Arc<dyn WorkerProxy>,
+    shard_service: Arc<dyn ShardService>,
+) -> RemoteInvocationRpc {
+    RemoteInvocationRpc::new(
+        Arc::new(LocalResumeProxy {
+            inner,
+            client: Arc::new(Mutex::new(Some(executor.client.clone()))),
+            environment_id,
+            component_owner_account_id: Some(component_owner_account_id),
+            evidence: None,
+            lose_response: Arc::new(AtomicBool::new(false)),
+            checkpoint: Arc::new(Mutex::new(None)),
+            prepare_on_executor: true,
+        }),
+        shard_service,
+    )
 }
 
 #[async_trait]
@@ -428,6 +459,64 @@ impl WorkerProxy for LocalResumeProxy {
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
+        if self.prepare_on_executor {
+            let mut client = self
+                .client
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("test executor connected");
+            let response = client
+                .prepare_worker(CreateWorkerRequest {
+                    agent_id: Some(agent.agent_id().into()),
+                    env,
+                    config: config.into_iter().map(Into::into).collect(),
+                    component_owner_account_id: self.component_owner_account_id.map(Into::into),
+                    environment_id: Some(agent.environment_id.into()),
+                    ignore_already_existing: true,
+                    auth_ctx: Some(auth.clone().into()),
+                    principal: Some(principal.into()),
+                    invocation_context: Some(
+                        golem_api_grpc::proto::golem::worker::InvocationContext {
+                            parent: Some(caller.clone().into()),
+                            env: HashMap::new(),
+                            tracing: Some(stack.into()),
+                        },
+                    ),
+                    idempotency_key: key.map(Into::into),
+                    freshness_disposition: match freshness {
+                        InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                        InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                    },
+                })
+                .await
+                .map_err(|status| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        status.to_string(),
+                    ))
+                })?
+                .into_inner();
+            return match response.result {
+                Some(create_worker_response::Result::Success(success)) => Ok(AgentFingerprint(
+                    success
+                        .instance_id
+                        .ok_or_else(|| {
+                            WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                                "prepare_worker returned no fingerprint",
+                            ))
+                        })?
+                        .into(),
+                )),
+                Some(create_worker_response::Result::Failure(error)) => {
+                    Err(WorkerProxyError::InternalError(
+                        WorkerExecutorError::unknown(format!("{error:?}")),
+                    ))
+                }
+                None => Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::unknown("prepare_worker returned no result"),
+                )),
+            };
+        }
         self.inner
             .prepare(
                 agent, method, caller, env, stack, config, principal, auth, key, freshness,
@@ -662,9 +751,12 @@ impl WorkerProxy for LocalResumeProxy {
         source: &AgentId,
         target: &AgentId,
         cut: &OplogIndex,
+        principal: Principal,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner.fork_worker(source, target, cut, auth).await
+        self.inner
+            .fork_worker(source, target, cut, principal, auth)
+            .await
     }
 
     async fn revert(
@@ -689,7 +781,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn cancel_invocation(
         &self,
         agent: &AgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner.cancel_invocation(agent, key, auth).await
@@ -698,7 +790,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -711,7 +803,7 @@ impl WorkerProxy for LocalResumeProxy {
     async fn lookup_invocation_status(
         &self,
         agent: &AgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         env: Option<EnvironmentId>,
         auth: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError> {
@@ -725,7 +817,7 @@ impl WorkerProxy for LocalResumeProxy {
         agent: &AgentId,
         env: EnvironmentId,
         revision: ComponentRevision,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         account: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -808,6 +900,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     )
     .map_err(anyhow::Error::msg)?;
     let create_request = CreateStreamSessionRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         public_session_id: session.clone(),
         expiry_policy: Some(StreamSessionExpiryPolicy {
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
@@ -836,11 +929,12 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     };
     assert_eq!(created.session, session);
     assert_ne!(
-        created
-            .invocation_key
-            .as_ref()
-            .expect("creation returns the internal invocation key")
-            .value,
+        golem_common::model::InvocationId::from(
+            created
+                .invocation_key
+                .expect("creation returns the internal invocation key")
+        )
+        .to_string(),
         session,
         "durable public session IDs must not become invocation idempotency keys"
     );
@@ -864,6 +958,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .expiry_deadline_millis
         .expect("sliding session has a deadline");
     let read_metadata = |admission, invocation_key| ReadStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -889,6 +984,29 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         anyhow::bail!("{head:?}");
     };
     assert_eq!(head.expiry_deadline_millis, Some(initial_deadline));
+    for (admission, invocation_key) in [
+        (StreamSlotReadAdmission::Head, None),
+        (
+            StreamSlotReadAdmission::Continuation,
+            created.invocation_key,
+        ),
+    ] {
+        let mut other_route = read_metadata(admission as i32, invocation_key);
+        other_route.route_scope = "[\"environment\",\"1\",\"other-route\"]".into();
+        let read = executor
+            .client
+            .clone()
+            .read_stream_slot(other_route)
+            .await?
+            .into_inner()
+            .message()
+            .await?
+            .unwrap();
+        assert!(matches!(
+            read.result,
+            Some(read_stream_slot_response::Result::NotFound(_))
+        ));
+    }
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let touched = executor
         .client
@@ -913,7 +1031,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .clone()
         .read_stream_slot(read_metadata(
             StreamSlotReadAdmission::Continuation as i32,
-            touched.invocation_key.clone(),
+            touched.invocation_key,
         ))
         .await?
         .into_inner()
@@ -925,6 +1043,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     };
     assert_eq!(continuation.expiry_deadline_millis, Some(touched_deadline));
     let append = |agent: &AgentId, value: &str| AppendToStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(agent.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -989,6 +1108,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     ));
     assert_eq!(gap.expiry_deadline_millis, Some(duplicate_deadline));
     let request = ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.clone().into()),
         environment_id: Some(component.environment_id.into()),
@@ -1117,6 +1237,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             .client
             .clone()
             .read_stream_slot(ReadStreamSlotRequest {
+                route_scope: "[\"environment\",\"1\",\"route\"]".into(),
                 agent_id: Some(agent.clone().into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
@@ -1420,6 +1541,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 .client
                 .clone()
                 .read_stream_slot(ReadStreamSlotRequest {
+                    route_scope: "[\"environment\",\"1\",\"route\"]".into(),
                     agent_id: Some(expiring_target.clone().into()),
                     environment_id: Some(component.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
@@ -1470,6 +1592,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: concurrent_session.clone(),
             expiry_policy: None,
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
@@ -1503,6 +1626,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         Some(append_to_stream_slot_response::Result::Accepted(_))
     ));
     let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
@@ -1567,6 +1691,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     )
     .map_err(anyhow::Error::msg)?;
     let expired_request = CreateStreamSessionRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         public_session_id: expired_session.clone(),
         expiry_policy: Some(StreamSessionExpiryPolicy {
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
@@ -1592,7 +1717,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     let Some(create_stream_session_response::Result::Success(first)) = first.result else {
         anyhow::bail!("{first:?}");
     };
-    let first_key: IdempotencyKey = first.invocation_key.clone().unwrap().into();
+    let first_key: golem_common::model::InvocationId = first.invocation_key.unwrap().into();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let expired = executor
@@ -1638,6 +1763,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .read_stream_slot(ReadStreamSlotRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             agent_id: Some(source.clone().into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
@@ -1681,6 +1807,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: restart_session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(1)),
@@ -1719,8 +1846,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     if matches!(
                         StreamSessionRecord::from_value(session.record.value()).unwrap(),
                         StreamSessionRecord::Expired(ref record)
-                            if Some(record.session_key.clone())
-                                == created_before_restart.invocation_key.clone().map(Into::into)
+                            if Some(record.session_key)
+                                == created_before_restart.invocation_key.map(Into::into)
                     ))
                 });
             if expired {
@@ -1780,6 +1907,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(30)),
@@ -1802,8 +1930,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
         anyhow::bail!("{created:?}");
     };
     let initial_deadline = created.expiry_deadline_millis.unwrap();
-    let session_key: IdempotencyKey = created.invocation_key.clone().unwrap().into();
+    let session_key: golem_common::model::InvocationId = created.invocation_key.unwrap().into();
     let read = |admission, invocation_key| ReadStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -1822,7 +1951,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
         read(StreamSlotReadAdmission::Head as i32, None),
         read(
             StreamSlotReadAdmission::Continuation as i32,
-            created.invocation_key.clone(),
+            created.invocation_key,
         ),
     ] {
         let response = executor
@@ -1875,6 +2004,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
     assert_eq!(suppressed.expiry_deadline_millis, Some(touched_deadline));
 
     let append = AppendToStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         agent_id: Some(source.clone().into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -2023,6 +2153,30 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     assert!(cursor.is_none());
     assert_eq!(after.len(), 2, "recovery must not create a second child");
     assert!(after.iter().any(|agent| agent.agent_id == child));
+    let child_requests = executor
+        .stored_oplog(&child)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    assert_eq!(
+        child_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::Fork
+    );
+    assert_eq!(child_requests[0].idempotency_key, None);
+    assert_eq!(
+        child_requests[0].principal,
+        Principal::Agent(golem_common::model::agent::AgentPrincipal {
+            agent_id: source_id.clone(),
+        }),
+        "the child records the forking agent, not the request that created the source"
+    );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())
         .await?
@@ -2150,6 +2304,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         .client
         .clone()
         .create_stream_session(CreateStreamSessionRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
             public_session_id: session.clone(),
             expiry_policy: Some(StreamSessionExpiryPolicy {
                 kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
@@ -2172,6 +2327,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         anyhow::bail!("{created:?}");
     };
     let request = ForkStreamSlotRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.clone().into()),
         environment_id: Some(component.environment_id.into()),

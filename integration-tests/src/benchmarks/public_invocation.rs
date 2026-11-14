@@ -18,14 +18,14 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
     ServerFrame, SessionTransportError, encode_generated_streamless_value,
 };
-use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicInvocationOutcome,
-    PublicInvocationResult, PublicOutputStreamOutcome, PublicResumeOperation, PublicServerMessage,
-    PublicStreamDirection, PublicStreamMapping,
+    PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
+    PublicStreamMapping, PublicStreamOutcome,
 };
+use golem_common::model::{IdempotencyKey, InvocationId};
 use golem_common::schema::SchemaValue;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use std::collections::BTreeMap;
@@ -54,7 +54,7 @@ pub fn public_u32(value: u32) -> serde_json::Value {
 #[derive(Clone, Debug, Default)]
 pub struct OutputObservation {
     pub items: Vec<(u64, serde_json::Value)>,
-    pub terminal: Option<(u64, PublicOutputStreamOutcome)>,
+    pub terminal: Option<(u64, PublicStreamOutcome)>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,7 +69,7 @@ pub struct SessionEvents {
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionCheckpoint {
-    pub idempotency_key: Option<IdempotencyKey>,
+    pub idempotency_key: Option<InvocationId>,
     pub result: Option<PublicInvocationResult>,
     pub outputs: BTreeMap<StreamId, OutputObservation>,
     pub attempts: Vec<SessionEvents>,
@@ -86,7 +86,7 @@ impl SessionCheckpoint {
         ensure!(
             self.outputs
                 .values()
-                .all(|output| matches!(output.terminal, Some((_, PublicOutputStreamOutcome::Ok)))),
+                .all(|output| matches!(output.terminal, Some((_, PublicStreamOutcome::Finished)))),
             "an output stream did not end successfully"
         );
         ensure!(
@@ -130,7 +130,7 @@ impl SessionCheckpoint {
             } => {
                 self.channels.clear();
                 self.install_mappings(mappings)?;
-                let key = IdempotencyKey::new(idempotency_key.clone());
+                let key = *idempotency_key;
                 if let Some(previous) = &self.idempotency_key {
                     ensure!(previous == &key, "reattachment changed invocation identity");
                 }
@@ -179,12 +179,17 @@ impl SessionCheckpoint {
                 attempt.first_item.get_or_insert(now);
                 attempt.first_items.entry(stream).or_insert(now);
             }
-            PublicServerMessage::OutputStreamEnd {
+            PublicServerMessage::StreamEnd {
                 channel,
+                direction,
                 sequence,
                 outcome,
                 ..
             } => {
+                ensure!(
+                    *direction == PublicStreamDirection::Output,
+                    "unexpected input terminal"
+                );
                 let stream = self
                     .channels
                     .get(channel)
@@ -212,8 +217,7 @@ impl SessionCheckpoint {
             PublicServerMessage::AttachmentRevoked { reason, .. } => {
                 anyhow::bail!("attachment revoked: {reason:?}")
             }
-            PublicServerMessage::InputStreamAck { .. }
-            | PublicServerMessage::StreamCancel { .. } => {
+            PublicServerMessage::InputStreamAck { .. } => {
                 anyhow::bail!("unexpected input or cancellation response")
             }
         }
@@ -267,7 +271,7 @@ impl PublicInvocationSession {
         token: &TokenSecret,
         application: &str,
         environment: &str,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         method: &str,
         method_parameters: serde_json::Value,
         timeout: Duration,
@@ -306,11 +310,9 @@ impl PublicInvocationSession {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
+                accepted_invocation: None,
             },
-            SessionCheckpoint {
-                idempotency_key: Some(key),
-                ..Default::default()
-            },
+            SessionCheckpoint::default(),
             timeout,
         )
         .await
@@ -465,7 +467,11 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
-            idempotency_key: "invocation".to_string(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
+                agent_id: "counter()".to_string(),
+            },
+            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),
             version: INVOCATION_SESSION_VERSION,
@@ -484,7 +490,7 @@ mod tests {
             completed: None,
         };
         let mut checkpoint = SessionCheckpoint {
-            idempotency_key: Some(IdempotencyKey::new("invocation".to_string())),
+            idempotency_key: Some(InvocationId(uuid::Uuid::from_u128(1))),
             attempts: vec![event()],
             ..Default::default()
         };

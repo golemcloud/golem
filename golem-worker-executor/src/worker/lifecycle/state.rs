@@ -31,8 +31,53 @@ pub enum StopOrigin {
     External,
 }
 
+/// What a failed start leaves on an unloaded worker. The agent mode decides it: an ephemeral
+/// agent is fail-stop, so a failed start leaves it inactive, while a durable agent runs again at
+/// its next start.
+#[derive(Debug)]
+pub enum StartupFailure {
+    /// The last start of a durable agent failed. Admission returns the error until the next
+    /// start, which runs the agent again.
+    Retryable(WorkerExecutorError),
+    /// The ephemeral agent never starts again. Every start and admission returns the error;
+    /// recorded results stay observable.
+    Inactive(WorkerExecutorError),
+}
+
+impl StartupFailure {
+    pub fn new(agent_mode: AgentMode, error: WorkerExecutorError) -> Self {
+        match agent_mode {
+            AgentMode::Durable => Self::Retryable(error),
+            AgentMode::Ephemeral => Self::Inactive(error),
+        }
+    }
+}
+
+impl From<StartupFailure> for FinalWorkerState {
+    fn from(failure: StartupFailure) -> Self {
+        match failure {
+            StartupFailure::Retryable(error) => Self::Unloaded {
+                startup_failure: Some(error),
+            },
+            StartupFailure::Inactive(error) => Self::Inactive(error),
+        }
+    }
+}
+
+impl From<StartupFailure> for WorkerRuntime {
+    fn from(failure: StartupFailure) -> Self {
+        match failure {
+            StartupFailure::Retryable(error) => Self::Unloaded {
+                startup_failure: Some(error),
+            },
+            StartupFailure::Inactive(error) => Self::Inactive(error),
+        }
+    }
+}
+
 pub enum StopPhase<'a> {
     Unloaded(UnloadedStop<'a>),
+    Inactive(InactiveStop<'a>),
     CleanupFailed(CleanupFailedStop<'a>),
     WaitingForPermit(WaitingStop<'a>),
     Running(RunningStop<'a>),
@@ -53,6 +98,7 @@ pub enum LifecycleTransition<'a> {
     Unresolved(UnresolvedPhase<'a>),
     Initializing(InitializingPhase<'a>),
     Unloaded(UnloadedPhase<'a>),
+    Inactive(&'a WorkerExecutorError),
     WaitingForPermit(WaitingPhase<'a>),
     Running(&'a RunningWorker),
     Stopping,
@@ -100,8 +146,16 @@ impl InitializingPhase<'_> {
         self.lifecycle.phase = WorkerInstance::Unresolved;
     }
 
-    pub fn complete_initialization(self, startup_failure: Option<WorkerExecutorError>) {
-        self.lifecycle.phase = WorkerInstance::Unloaded { startup_failure };
+    pub fn complete_initialization(self) {
+        self.lifecycle.phase = WorkerInstance::Unloaded {
+            startup_failure: None,
+        };
+    }
+
+    /// Completes the initialization of an ephemeral agent that is reconstructed only for
+    /// observation and invocation result lookup.
+    pub fn complete_inactive(self, error: WorkerExecutorError) {
+        self.lifecycle.phase = WorkerInstance::Inactive(error);
     }
 }
 
@@ -110,10 +164,8 @@ impl UnloadedPhase<'_> {
         self.lifecycle
     }
 
-    pub fn startup_failed(self, error: WorkerExecutorError) {
-        self.lifecycle.phase = WorkerInstance::Unloaded {
-            startup_failure: Some(error),
-        };
+    pub fn startup_failed(self, failure: StartupFailure) {
+        self.lifecycle.phase = WorkerRuntime::from(failure).into();
     }
 
     pub fn wait_for_permit(self, waiting: WaitingWorker) {
@@ -126,10 +178,8 @@ impl WaitingPhase<'_> {
         self.start_attempt
     }
 
-    pub fn startup_failed(self, error: WorkerExecutorError) {
-        self.lifecycle.phase = WorkerInstance::Unloaded {
-            startup_failure: Some(error),
-        };
+    pub fn startup_failed(self, failure: StartupFailure) {
+        self.lifecycle.phase = WorkerRuntime::from(failure).into();
     }
 
     pub fn install_running(self, running: RunningWorker) {
@@ -148,6 +198,8 @@ impl WorkerLifecycle {
         &self.phase
     }
 
+    /// The error that refuses admission: a retryable startup failure, inactivity or a cleanup
+    /// failure.
     pub fn startup_failure(&self) -> Option<&WorkerExecutorError> {
         self.phase.startup_failure()
     }
@@ -167,6 +219,7 @@ impl WorkerLifecycle {
             WorkerInstance::Unloaded { .. } => {
                 LifecycleTransition::Unloaded(UnloadedPhase { lifecycle: self })
             }
+            WorkerInstance::Inactive(ref error) => LifecycleTransition::Inactive(error),
             WorkerInstance::WaitingForPermit(ref waiting) => {
                 let start_attempt = waiting.start_attempt;
                 LifecycleTransition::WaitingForPermit(WaitingPhase {
@@ -177,38 +230,45 @@ impl WorkerLifecycle {
             WorkerInstance::Running(ref running) => LifecycleTransition::Running(running),
             WorkerInstance::Stopping(_) => LifecycleTransition::Stopping,
             WorkerInstance::CleanupFailed(ref error) => LifecycleTransition::CleanupFailed(error),
-            WorkerInstance::Deleting(_) | WorkerInstance::StoppedForDeletion => {
-                LifecycleTransition::Deleting
-            }
+            WorkerInstance::Deleting(_) => LifecycleTransition::Deleting,
         }
     }
 
     pub fn begin_store_attempt(&mut self) -> bool {
-        match self.runtime_mut() {
-            WorkerInstance::Running(running) => {
-                std::mem::take(&mut running.owner_generation_started)
-            }
-            _ => false,
-        }
+        self.phase
+            .running_mut()
+            .is_some_and(|running| std::mem::take(&mut running.owner_generation_started))
     }
 
     pub fn owner_generation_started(&mut self, start_attempt: Uuid) {
-        if let WorkerInstance::Running(running) = self.runtime_mut()
+        if let Some(running) = self.phase.running_mut()
             && running.start_attempt == start_attempt
         {
             running.owner_generation_started = true;
         }
     }
 
-    pub fn deletion_runtime(&self) -> &WorkerInstance {
-        self.phase.deletion_runtime()
+    /// The running worker, also while a deletion retains it.
+    pub fn running_runtime(&self) -> Option<&RunningWorker> {
+        self.phase.running_runtime()
     }
 
-    fn runtime_mut(&mut self) -> &mut WorkerInstance {
-        match &mut self.phase {
-            WorkerInstance::Deleting(deleting) => &mut deleting.runtime,
-            phase => phase,
-        }
+    /// The cleanup failure that the runtime reports, also while a deletion retains it.
+    pub fn cleanup_failure(&self) -> Option<&WorkerExecutorError> {
+        self.phase.cleanup_failure()
+    }
+
+    /// Whether the runtime, also while a deletion retains it, still waits for a permit, runs or
+    /// stops.
+    pub fn runtime_active(&self) -> bool {
+        self.phase.runtime_active()
+    }
+
+    /// The state that the last completed stop of the runtime left, also while a deletion retains
+    /// it. `None` while the runtime waits for a permit, runs or stops, and before initialization
+    /// completes.
+    pub fn stop_outcome(&self) -> Option<FinalWorkerState> {
+        self.phase.stop_outcome()
     }
 
     pub fn complete_deletion_stage(&mut self, stage: WorkerDeletionStage) {
@@ -217,14 +277,11 @@ impl WorkerLifecycle {
         }
     }
 
-    pub fn claim_deletion(
-        &mut self,
-    ) -> (
-        DeleteOutcome,
-        Option<oneshot::Sender<Result<(), WorkerExecutorError>>>,
-    ) {
-        match &mut self.phase {
-            WorkerInstance::Deleting(deleting) => match deleting.handle.result() {
+    /// Claims deletion and retains the runtime of the worker. A worker that has not completed
+    /// initialization has no runtime to retain, so nothing is claimed.
+    pub fn claim_deletion(&mut self) -> Option<(DeleteOutcome, Option<DeletionSender>)> {
+        if let WorkerInstance::Deleting(deleting) = &mut self.phase {
+            return Some(match deleting.handle.result() {
                 None | Some(Ok(())) => (
                     DeleteOutcome::AlreadyDeleting(deleting.handle.clone()),
                     None,
@@ -234,27 +291,31 @@ impl WorkerLifecycle {
                     deleting.handle = handle.clone();
                     (DeleteOutcome::Started(handle), Some(sender))
                 }
-            },
-            _ => {
+            });
+        }
+        let phase = std::mem::replace(&mut self.phase, WorkerInstance::Unresolved);
+        match WorkerRuntime::try_from(phase) {
+            Ok(runtime) => {
                 let (handle, sender) = DeletionHandle::new();
-                let runtime = std::mem::replace(
-                    &mut self.phase,
-                    WorkerInstance::Unloaded {
-                        startup_failure: None,
-                    },
-                );
                 self.phase = WorkerInstance::Deleting(DeletingWorker {
-                    runtime: Box::new(runtime),
+                    runtime: DeletionRuntime::Retained(runtime),
                     handle: handle.clone(),
                     completed_stage: WorkerDeletionStage::Claimed,
                 });
-                (DeleteOutcome::Started(handle), Some(sender))
+                Some((DeleteOutcome::Started(handle), Some(sender)))
+            }
+            Err(phase) => {
+                self.phase = phase;
+                None
             }
         }
     }
 
+    /// Records that a deletion's cleanup retry joined the physical cleanup of its stopped runtime.
     pub fn deletion_cleanup_completed(&mut self) {
-        *self.runtime_mut() = WorkerInstance::StoppedForDeletion;
+        if let WorkerInstance::Deleting(deleting) = &mut self.phase {
+            deleting.runtime = DeletionRuntime::Stopped;
+        }
     }
 
     pub fn retained_cleanup_failure(&self) -> Option<&WorkerExecutorError> {
@@ -274,37 +335,39 @@ impl WorkerLifecycle {
         origin: StopOrigin,
         final_state: &FinalWorkerState,
     ) -> Option<StopPhase<'_>> {
-        let runtime = self.runtime_mut();
         // A cancelled or unwound stop retains cleanup health. Physical ownership stays with
         // the invocation loop or the continuation that already owns its join handle.
-        let fallback = match (&*runtime, final_state) {
-            (WorkerInstance::CleanupFailed(error), _)
-            | (
-                WorkerInstance::Stopping(StoppingWorker {
-                    final_state: FinalWorkerState::CleanupFailed(error),
-                    ..
-                }),
-                _,
-            ) => WorkerInstance::CleanupFailed(error.clone()),
-            (_, FinalWorkerState::CleanupFailed(error)) if origin == StopOrigin::InvocationLoop => {
-                WorkerInstance::CleanupFailed(error.clone())
+        let fallback = match (self.phase.retained_cleanup_failure(), final_state) {
+            (Some(error), _) => WorkerRuntime::CleanupFailed(error.clone()),
+            (None, FinalWorkerState::CleanupFailed(error))
+                if origin == StopOrigin::InvocationLoop =>
+            {
+                WorkerRuntime::CleanupFailed(error.clone())
             }
-            _ => WorkerInstance::Unloaded {
-                startup_failure: None,
+            _ => match self.phase.inactivity() {
+                Some(error) => WorkerRuntime::Inactive(error.clone()),
+                None => WorkerRuntime::Unloaded {
+                    startup_failure: None,
+                },
             },
         };
-        let previous = std::mem::replace(runtime, fallback);
-        let transition = StopTransition { runtime };
+        let previous = self.phase.replace_runtime(fallback)?;
+        let transition = StopTransition {
+            phase: &mut self.phase,
+        };
         let previous = match previous {
-            WorkerInstance::Unloaded { .. } => StopPhase::Unloaded(UnloadedStop { transition }),
-            WorkerInstance::CleanupFailed(error) => {
+            WorkerRuntime::Unloaded { .. } => StopPhase::Unloaded(UnloadedStop { transition }),
+            WorkerRuntime::Inactive(error) => {
+                StopPhase::Inactive(InactiveStop { transition, error })
+            }
+            WorkerRuntime::CleanupFailed(error) => {
                 StopPhase::CleanupFailed(CleanupFailedStop { transition, error })
             }
-            WorkerInstance::WaitingForPermit(waiting) => StopPhase::WaitingForPermit(WaitingStop {
+            WorkerRuntime::WaitingForPermit(waiting) => StopPhase::WaitingForPermit(WaitingStop {
                 transition,
                 waiting,
             }),
-            WorkerInstance::Running(running) => StopPhase::Running(match origin {
+            WorkerRuntime::Running(running) => StopPhase::Running(match origin {
                 StopOrigin::InvocationLoop => RunningStop::InvocationLoop(RunningLoopStop {
                     transition,
                     running,
@@ -314,7 +377,7 @@ impl WorkerLifecycle {
                     running,
                 }),
             }),
-            WorkerInstance::Stopping(stopping) => StopPhase::Stopping(match origin {
+            WorkerRuntime::Stopping(stopping) => StopPhase::Stopping(match origin {
                 StopOrigin::InvocationLoop => StoppingStop::InvocationLoop(StoppingLoopStop {
                     transition,
                     stopping,
@@ -324,49 +387,239 @@ impl WorkerLifecycle {
                     stopping,
                 }),
             }),
-            inactive => {
-                *transition.runtime = inactive;
-                return None;
-            }
         };
         Some(previous)
     }
 
     pub fn record_loop_failure(&mut self, error: WorkerExecutorError) {
-        super::stop::merge_run_loop_failure(self.runtime_mut(), error);
+        super::stop::merge_run_loop_failure(&mut self.phase, error);
     }
 
     pub fn finish_external_stop(&mut self) -> Option<PendingLiveInvocationDisposition> {
-        let runtime = self.runtime_mut();
-        match std::mem::replace(
-            runtime,
-            WorkerInstance::Unloaded {
+        let stopping = self.phase.stopping_mut()?;
+        let pending = stopping.pending_live_invocations;
+        let final_state = std::mem::replace(
+            &mut stopping.final_state,
+            FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
-        ) {
-            WorkerInstance::Stopping(stopping) => {
-                let pending = stopping.pending_live_invocations;
-                *runtime = stopping.final_state.into_instance();
-                Some(pending)
+        );
+        self.phase.complete_runtime_stop(final_state);
+        Some(pending)
+    }
+}
+
+/// Reads and replaces the runtime that a phase holds. A deletion retains the runtime of the
+/// worker it claimed, so each method looks through `Deleting` to that runtime.
+impl WorkerInstance {
+    /// Installs `next` in place of the runtime and returns the previous runtime. A phase without
+    /// a runtime stays unchanged.
+    fn replace_runtime(&mut self, next: WorkerRuntime) -> Option<WorkerRuntime> {
+        match self {
+            Self::Deleting(deleting) => match &mut deleting.runtime {
+                DeletionRuntime::Retained(runtime) => Some(std::mem::replace(runtime, next)),
+                DeletionRuntime::Stopped => None,
+            },
+            phase => match WorkerRuntime::try_from(std::mem::replace(phase, next.into())) {
+                Ok(previous) => Some(previous),
+                Err(without_runtime) => {
+                    *phase = without_runtime;
+                    None
+                }
+            },
+        }
+    }
+
+    pub(in crate::worker) fn install_runtime(&mut self, runtime: WorkerRuntime) {
+        match self {
+            Self::Deleting(deleting) => deleting.runtime = DeletionRuntime::Retained(runtime),
+            phase => *phase = runtime.into(),
+        }
+    }
+
+    /// Installs the state that a completed stop leaves. `FinalWorkerState::Deleting` is requested
+    /// only by the stop of a claimed deletion, which then retains a stopped runtime.
+    fn complete_runtime_stop(&mut self, final_state: FinalWorkerState) {
+        let runtime = match final_state {
+            FinalWorkerState::Unloaded { startup_failure } => {
+                WorkerRuntime::Unloaded { startup_failure }
             }
-            previous => {
-                *runtime = previous;
-                None
+            FinalWorkerState::Inactive(error) => WorkerRuntime::Inactive(error),
+            FinalWorkerState::CleanupFailed(error) => WorkerRuntime::CleanupFailed(error),
+            FinalWorkerState::Deleting => {
+                if let Self::Deleting(deleting) = self {
+                    deleting.runtime = DeletionRuntime::Stopped;
+                    return;
+                }
+                WorkerRuntime::Unloaded {
+                    startup_failure: None,
+                }
             }
+        };
+        self.install_runtime(runtime);
+    }
+
+    fn running_mut(&mut self) -> Option<&mut RunningWorker> {
+        match self {
+            Self::Running(running)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Running(running)),
+                ..
+            }) => Some(running),
+            _ => None,
+        }
+    }
+
+    pub(in crate::worker) fn stopping_mut(&mut self) -> Option<&mut StoppingWorker> {
+        match self {
+            Self::Stopping(stopping)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Stopping(stopping)),
+                ..
+            }) => Some(stopping),
+            _ => None,
+        }
+    }
+
+    fn running_runtime(&self) -> Option<&RunningWorker> {
+        match self {
+            Self::Running(running)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Running(running)),
+                ..
+            }) => Some(running),
+            _ => None,
+        }
+    }
+
+    pub(in crate::worker) fn cleanup_failure(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::CleanupFailed(error)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::CleanupFailed(error)),
+                ..
+            }) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// The error of an inactive ephemeral runtime, also while a deletion retains it.
+    fn inactivity(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::Inactive(error)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Inactive(error)),
+                ..
+            }) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// A cleanup failure that a stopped runtime reports, or that a stop in progress will leave.
+    pub(in crate::worker) fn retained_cleanup_failure(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::Stopping(StoppingWorker {
+                final_state: FinalWorkerState::CleanupFailed(error),
+                ..
+            })
+            | Self::Deleting(DeletingWorker {
+                runtime:
+                    DeletionRuntime::Retained(WorkerRuntime::Stopping(StoppingWorker {
+                        final_state: FinalWorkerState::CleanupFailed(error),
+                        ..
+                    })),
+                ..
+            }) => Some(error),
+            phase => phase.cleanup_failure(),
+        }
+    }
+
+    fn runtime_active(&self) -> bool {
+        matches!(
+            self,
+            Self::WaitingForPermit(_)
+                | Self::Running(_)
+                | Self::Stopping(_)
+                | Self::Deleting(DeletingWorker {
+                    runtime: DeletionRuntime::Retained(
+                        WorkerRuntime::WaitingForPermit(_)
+                            | WorkerRuntime::Running(_)
+                            | WorkerRuntime::Stopping(_)
+                    ),
+                    ..
+                })
+        )
+    }
+
+    fn stop_outcome(&self) -> Option<FinalWorkerState> {
+        match self {
+            Self::Unloaded { startup_failure }
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Unloaded { startup_failure }),
+                ..
+            }) => Some(FinalWorkerState::Unloaded {
+                startup_failure: startup_failure.clone(),
+            }),
+            Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Stopped,
+                ..
+            }) => Some(FinalWorkerState::Deleting),
+            Self::Inactive(error)
+            | Self::Deleting(DeletingWorker {
+                runtime: DeletionRuntime::Retained(WorkerRuntime::Inactive(error)),
+                ..
+            }) => Some(FinalWorkerState::Inactive(error.clone())),
+            phase => phase
+                .cleanup_failure()
+                .map(|error| FinalWorkerState::CleanupFailed(error.clone())),
         }
     }
 }
 
-/// Holds the lifecycle lock's runtime slot while stop effects await. Dropping it before
-/// completion leaves the fallback installed by `begin_stop`; completion consumes the handle.
-struct StopTransition<'a> {
-    runtime: &'a mut WorkerInstance,
+impl From<WorkerRuntime> for WorkerInstance {
+    fn from(runtime: WorkerRuntime) -> Self {
+        match runtime {
+            WorkerRuntime::Unloaded { startup_failure } => Self::Unloaded { startup_failure },
+            WorkerRuntime::CleanupFailed(error) => Self::CleanupFailed(error),
+            WorkerRuntime::Inactive(error) => Self::Inactive(error),
+            WorkerRuntime::WaitingForPermit(waiting) => Self::WaitingForPermit(waiting),
+            WorkerRuntime::Running(running) => Self::Running(running),
+            WorkerRuntime::Stopping(stopping) => Self::Stopping(stopping),
+        }
+    }
 }
 
-impl<'a> StopTransition<'a> {
-    fn complete(self, final_state: FinalWorkerState) -> &'a WorkerInstance {
-        *self.runtime = final_state.into_instance();
-        self.runtime
+/// Returns the phase unchanged when it holds no runtime: before initialization completes, and
+/// while a deletion retains the runtime.
+impl TryFrom<WorkerInstance> for WorkerRuntime {
+    type Error = WorkerInstance;
+
+    fn try_from(phase: WorkerInstance) -> Result<Self, Self::Error> {
+        match phase {
+            WorkerInstance::Unloaded { startup_failure } => Ok(Self::Unloaded { startup_failure }),
+            WorkerInstance::CleanupFailed(error) => Ok(Self::CleanupFailed(error)),
+            WorkerInstance::Inactive(error) => Ok(Self::Inactive(error)),
+            WorkerInstance::WaitingForPermit(waiting) => Ok(Self::WaitingForPermit(waiting)),
+            WorkerInstance::Running(running) => Ok(Self::Running(running)),
+            WorkerInstance::Stopping(stopping) => Ok(Self::Stopping(stopping)),
+            phase @ (WorkerInstance::Unresolved
+            | WorkerInstance::Initializing(_)
+            | WorkerInstance::Deleting(_)) => Err(phase),
+        }
+    }
+}
+
+/// Holds the lifecycle lock's phase while stop effects await. Dropping it before completion
+/// leaves the fallback installed by `begin_stop`; completion consumes the handle.
+struct StopTransition<'a> {
+    phase: &'a mut WorkerInstance,
+}
+
+impl StopTransition<'_> {
+    /// Installs the final state in the runtime and returns it.
+    fn complete(self, final_state: FinalWorkerState) -> FinalWorkerState {
+        self.phase.complete_runtime_stop(final_state.clone());
+        final_state
     }
 }
 
@@ -374,9 +627,25 @@ pub struct UnloadedStop<'a> {
     transition: StopTransition<'a>,
 }
 
-impl<'a> UnloadedStop<'a> {
-    pub fn complete(self, final_state: FinalWorkerState) -> &'a WorkerInstance {
+impl UnloadedStop<'_> {
+    pub fn complete(self, final_state: FinalWorkerState) -> FinalWorkerState {
         self.transition.complete(final_state)
+    }
+}
+
+pub struct InactiveStop<'a> {
+    transition: StopTransition<'a>,
+    error: WorkerExecutorError,
+}
+
+impl InactiveStop<'_> {
+    /// The agent stays inactive unless the stop requests deletion or reports a cleanup failure.
+    pub fn complete(self, final_state: FinalWorkerState) -> FinalWorkerState {
+        self.transition
+            .complete(super::stop::merge_final_worker_state(
+                FinalWorkerState::Inactive(self.error),
+                final_state,
+            ))
     }
 }
 
@@ -387,7 +656,9 @@ pub struct CleanupFailedStop<'a> {
 
 impl CleanupFailedStop<'_> {
     pub fn retain(self) {
-        *self.transition.runtime = WorkerInstance::CleanupFailed(self.error);
+        self.transition
+            .phase
+            .install_runtime(WorkerRuntime::CleanupFailed(self.error));
     }
 }
 
@@ -396,10 +667,10 @@ pub struct WaitingStop<'a> {
     waiting: WaitingWorker,
 }
 
-impl<'a> WaitingStop<'a> {
-    pub fn complete(self, final_state: FinalWorkerState) -> StopCompletion<'a, WaitingWorker> {
+impl WaitingStop<'_> {
+    pub fn complete(self, final_state: FinalWorkerState) -> StopCompletion<WaitingWorker> {
         StopCompletion {
-            phase: self.transition.complete(final_state),
+            final_state: self.transition.complete(final_state),
             _retained: self.waiting,
         }
     }
@@ -410,10 +681,10 @@ pub struct RunningLoopStop<'a> {
     running: RunningWorker,
 }
 
-impl<'a> RunningLoopStop<'a> {
-    pub fn complete(self, final_state: FinalWorkerState) -> StopCompletion<'a, RunningWorker> {
+impl RunningLoopStop<'_> {
+    pub fn complete(self, final_state: FinalWorkerState) -> StopCompletion<RunningWorker> {
         StopCompletion {
-            phase: self.transition.complete(final_state),
+            final_state: self.transition.complete(final_state),
             _retained: self.running,
         }
     }
@@ -421,14 +692,14 @@ impl<'a> RunningLoopStop<'a> {
 
 /// Retains the extracted task resources through resident waiter resolution after completion.
 #[must_use = "retain the completion until resident waiter resolution finishes"]
-pub struct StopCompletion<'a, T> {
-    phase: &'a WorkerInstance,
+pub struct StopCompletion<T> {
+    final_state: FinalWorkerState,
     _retained: T,
 }
 
-impl<T> StopCompletion<'_, T> {
-    pub fn state(&self) -> &WorkerInstance {
-        self.phase
+impl<T> StopCompletion<T> {
+    pub fn final_state(&self) -> &FinalWorkerState {
+        &self.final_state
     }
 }
 
@@ -437,19 +708,23 @@ pub struct StoppingLoopStop<'a> {
     stopping: StoppingWorker,
 }
 
-impl<'a> StoppingLoopStop<'a> {
+impl StoppingLoopStop<'_> {
     pub fn complete(
         self,
         final_state: FinalWorkerState,
     ) -> (
-        &'a WorkerInstance,
+        FinalWorkerState,
         OneShotEvent,
         PendingLiveInvocationDisposition,
     ) {
         let pending_live_invocations = self.stopping.pending_live_invocations;
-        let (instance, notify) = super::stop::complete_stopping_worker(self.stopping, final_state);
-        *self.transition.runtime = instance;
-        (self.transition.runtime, notify, pending_live_invocations)
+        let (final_state, notify) =
+            super::stop::complete_stopping_worker(self.stopping, final_state);
+        (
+            self.transition.complete(final_state),
+            notify,
+            pending_live_invocations,
+        )
     }
 }
 
@@ -470,7 +745,9 @@ impl StoppingExternalStop<'_> {
 
     pub fn join(self) -> StopResult {
         let notify = self.stopping.notify.clone();
-        *self.transition.runtime = WorkerInstance::Stopping(self.stopping);
+        self.transition
+            .phase
+            .install_runtime(WorkerRuntime::Stopping(self.stopping));
         StopResult::AlreadyStopping { notify }
     }
 }
@@ -490,11 +767,13 @@ impl RunningExternalStop<'_> {
         let run_loop_handle = self.running.stop(unload_request);
         let notify = OneShotEvent::new();
         crate::metrics::workers::dec_worker_memory_resident();
-        *self.transition.runtime = WorkerInstance::Stopping(StoppingWorker {
-            notify: notify.clone(),
-            final_state,
-            pending_live_invocations,
-        });
+        self.transition
+            .phase
+            .install_runtime(WorkerRuntime::Stopping(StoppingWorker {
+                notify: notify.clone(),
+                final_state,
+                pending_live_invocations,
+            }));
         StopResult::NeedsWaitForLoopExit {
             run_loop_handle,
             notify,

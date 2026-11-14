@@ -54,6 +54,12 @@ async fn selected_writer_fence(
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
     let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
     let key = IdempotencyKey::fresh();
+    let stored_key = golem_common::model::InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&key),
+    )
+    .finalize(id.clone(), fingerprint, "add")
+    .id();
     let caller = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -81,7 +87,7 @@ async fn selected_writer_fence(
         .oplog()
         .read_exact(OplogIndex::INITIAL, entries)
         .await?;
-    assert_eq!(prefix.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+    assert_eq!(prefix.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
     let finished = prefix
         .values()
         .filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
@@ -201,7 +207,7 @@ async fn selected_writer_fence(
             replacement.oplog().current_oplog_index().await.as_u64(),
         )
         .await?;
-    assert_eq!(history.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1, "retry must continue the original durable invocation");
+    assert_eq!(history.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1, "retry must continue the original durable invocation");
     assert_eq!(
         history
             .values()

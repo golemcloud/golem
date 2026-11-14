@@ -64,14 +64,14 @@ complete_promise_json(&promise_id, MyResponse { status: "approved".into() }).unw
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agent_id` and an `oplog_idx`. To let an external system complete the promise via the Golem REST API, the agent must expose both fields. The external caller then sends:
+A `PromiseId` contains an `agent_id`, a `fingerprint` and an `oplog_idx`. The `fingerprint` is a UUID that identifies the agent incarnation that created the promise: after the agent is deleted and created again, the old ID no longer completes anything. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. The external caller then sends:
 
 ```
 POST /v1/components/{component_id}/workers/{agent_name}/complete
 Authorization: Bearer <GOLEM_TOKEN>
 Content-Type: application/json
 
-{"oplogIdx": <oplog_idx>, "data": [<bytes>]}
+{"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint>", "data": [<bytes>]}
 ```
 
 ## Full Example: Human-in-the-Loop Approval
@@ -147,7 +147,7 @@ The external service completes the promise through the authenticated REST API, f
 curl -X POST "$GOLEM_BASE_URL/v1/components/$COMPONENT_ID/workers/$AGENT_NAME_ENCODED/complete" \
   -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data "{\"oplogIdx\":$OPLOG_IDX,\"data\":[34,65,112,112,114,111,118,101,100,34]}"
+  --data "{\"oplogIdx\":$OPLOG_IDX,\"fingerprint\":\"$FINGERPRINT\",\"data\":[34,65,112,112,114,111,118,101,100,34]}"
 ```
 
 The bytes encode the JSON string `"Approved"`. URL-encode the agent name in the path. Malformed

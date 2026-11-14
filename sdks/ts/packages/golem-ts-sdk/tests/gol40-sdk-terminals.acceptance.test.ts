@@ -98,9 +98,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       const raw = createToolClientTransport('mapping-owner').start(
         [],
         emptyInput(),
@@ -176,9 +176,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       vi.mocked(createOutput).mockReturnValueOnce([
         {},
         {
@@ -250,9 +250,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       for (const channel of ['stdout', 'stderr']) {
         vi.mocked(createOutput).mockReturnValueOnce([
           {},
@@ -342,9 +342,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       const command = new ToolType(
         {
           lookupName: 'json-stream-result',
@@ -419,7 +419,6 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         undefined,
         stdout,
         stderr,
-        { tag: 'anonymous' },
       );
       if (kind === 'success' || kind === 'cancelled-success') {
         const terminal = await invocation;
@@ -486,9 +485,7 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         },
       });
     const outcome = tool
-      .invoke('blocked-sibling', [], emptyInput(), undefined, stdout, stderr, {
-        tag: 'anonymous',
-      })
+      .invoke('blocked-sibling', [], emptyInput(), undefined, stdout, stderr)
       .then(
         (value) => ({ status: 'fulfilled', value }),
         (reason) => ({ status: 'rejected', reason }),
@@ -558,9 +555,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       const runtime = createToolClientRuntime('observer-owner');
       const raw = runtime.start([], typedSchemaValueFromWit(emptyInput()), undefined, false, false);
       // This is the existing generated Promise client's mapping and cancel-closure seam.
@@ -653,9 +650,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
         cancel: vi.fn(),
         [Symbol.dispose]: vi.fn(),
       };
-      vi.mocked(ToolRpc).mockImplementationOnce(
-        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-      );
+      vi.mocked(ToolRpc).mockImplementationOnce(function () {
+        return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+      });
       const raw = createToolClientTransport('card-owner').start(
         [],
         emptyInput(),
@@ -713,9 +710,9 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
   it('forwards detach across deferred admission without cancelling the admitted invocation', async () => {
     const admission = gate<ReturnType<typeof startedToolInvocation<string>>>();
     const future = { get: vi.fn(async () => ({})), cancel: vi.fn(), [Symbol.dispose]: vi.fn() };
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return { asyncInvokeAndAwait: () => future } as unknown as ToolRpc;
+    });
     const deferred = deferredStartedToolInvocation(admission.promise, false, false);
     const pending = expect(deferred.result).rejects.toThrow('observer is detached');
     deferred.detachResult();
@@ -815,9 +812,7 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
 
     let ownerOutcome = 'pending';
     const terminal = await tool
-      .invoke('gol40-terminal-provider-acceptance', [], input, stdin, stdout, stderr, {
-        tag: 'anonymous',
-      })
+      .invoke('gol40-terminal-provider-acceptance', [], input, stdin, stdout, stderr)
       .then((result) => {
         ownerOutcome = 'completed';
         return result;

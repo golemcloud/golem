@@ -46,6 +46,7 @@ pub(super) fn validate_route(
     mount: &HttpMountDetails,
     endpoint: &HttpEndpointDetails,
     limits: &DurableStreamRouteLimits,
+    family_id: golem_service_base::custom_api::RouteId,
 ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
     validate_path(mount, endpoint)?;
     if let Some(PhantomIdBinding::Query(details)) = &mount.phantom_id_binding
@@ -142,7 +143,7 @@ pub(super) fn validate_route(
         },
     }
 
-    let policy = resolve_policy(slots, endpoint.durable_streams.as_ref(), limits)?;
+    let policy = resolve_policy(slots, endpoint.durable_streams.as_ref(), limits, family_id)?;
     Ok((InputSchema::parameters(non_stream_fields), policy))
 }
 
@@ -251,6 +252,7 @@ fn resolve_policy(
     discovered: Vec<DiscoveredSlot>,
     options: Option<&DurableStreamRouteOptions>,
     limits: &DurableStreamRouteLimits,
+    family_id: golem_service_base::custom_api::RouteId,
 ) -> Result<DurableStreamRoutePolicy, String> {
     let mut overrides = HashMap::new();
     if let Some(options) = options {
@@ -333,6 +335,7 @@ fn resolve_policy(
     }
 
     Ok(DurableStreamRoutePolicy {
+        family_id,
         slots,
         allow_external_writes: true,
         allow_stream_delete: true,
@@ -586,7 +589,7 @@ mod tests {
         mount: &HttpMountDetails,
         endpoint: &HttpEndpointDetails,
     ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
-        super::validate_route(agent, method, mount, endpoint, &Default::default())
+        super::validate_route(agent, method, mount, endpoint, &Default::default(), 0)
     }
 
     fn field(name: &str, schema: SchemaType) -> NamedField {
@@ -1073,7 +1076,7 @@ mod tests {
             max_append_requests_per_second_per_stream: 50,
         };
         let (_, policy) =
-            super::validate_route(&agent, &method, &mount, &endpoint, &limits).unwrap();
+            super::validate_route(&agent, &method, &mount, &endpoint, &limits, 0).unwrap();
         assert_eq!(
             policy
                 .load
@@ -1105,7 +1108,7 @@ mod tests {
                 max_append_requests_per_second_per_stream: appends,
             });
             endpoint.durable_streams = Some(route_options);
-            let result = super::validate_route(&agent, &method, &mount, &endpoint, &limits);
+            let result = super::validate_route(&agent, &method, &mount, &endpoint, &limits, 0);
             assert_eq!(
                 result.is_ok(),
                 accepted,

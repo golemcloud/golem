@@ -20,6 +20,7 @@ use super::{
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::IdempotencyKeyPosition;
+use crate::durable_host::InternalRetryResult;
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
@@ -40,13 +41,15 @@ use futures::future::Either;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::OwnedInvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
@@ -60,8 +63,10 @@ use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::HostRequest;
 use golem_common::model::oplog::HostRequestGolemRpcActivate;
+use golem_common::model::oplog::HostRequestGolemRpcPrepareInvocation;
 use golem_common::model::oplog::HostResponseGolemRpcActivate;
 use golem_common::model::oplog::HostResponseGolemRpcCreate;
+use golem_common::model::oplog::HostResponseGolemRpcPrepareInvocation;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::oplog::SpanFinished;
 use golem_common::model::oplog::SpanKind;
@@ -69,6 +74,7 @@ use golem_common::model::oplog::SpanOutcome;
 use golem_common::model::oplog::SpanStarted;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcActivate;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
+use golem_common::model::oplog::host_functions::GolemRpcWasmRpcPrepareInvocation;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::schema::agent::AgentTypeSchema;
@@ -82,7 +88,7 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentId,
+    logical_agent_id: ParsedAgentKey,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
@@ -107,15 +113,18 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
 
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
     idempotency_key: &IdempotencyKey,
+    method_name: &str,
 ) -> anyhow::Result<OwnedAgentId> {
     let Some(logical_agent_id) = ephemeral_logical_agent_id else {
         return Ok(logical_remote_agent_id.clone());
     };
 
     let invocation_agent_id = logical_agent_id
-        .with_ephemeral_invocation_phantom(idempotency_key)
+        .with_ephemeral_invocation_phantom(
+            &InvocationRequestKey::Internal(idempotency_key.clone()).owner_key(method_name),
+        )
         .map_err(|err| anyhow::anyhow!(err))?;
     let invocation_agent_id =
         AgentId::from_agent_id(logical_remote_agent_id.component_id(), &invocation_agent_id)
@@ -133,19 +142,22 @@ pub(super) fn invocation_target_agent_id(
 pub(super) struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentId>,
+    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
+    method_name: String,
 }
 
 impl RpcCallTarget {
     pub(super) fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
-        ephemeral_logical_agent_id: Option<&ParsedAgentId>,
+        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
+        method_name: &str,
     ) -> Self {
         Self {
             key_position,
             logical_remote_agent_id: logical_remote_agent_id.clone(),
             ephemeral_logical_agent_id: ephemeral_logical_agent_id.cloned(),
+            method_name: method_name.to_string(),
         }
     }
 
@@ -158,10 +170,125 @@ impl RpcCallTarget {
             &self.logical_remote_agent_id,
             self.ephemeral_logical_agent_id.as_ref(),
             &idempotency_key,
+            &self.method_name,
         )
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         Ok((idempotency_key, remote_agent_id))
     }
+}
+
+pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource: &Resource<WasmRpcEntry>,
+    invocation_start_index: OplogIndex,
+    remote_agent_id: &OwnedAgentId,
+    child_key: &IdempotencyKey,
+    method_name: &str,
+    freshness: InvocationFreshnessDisposition,
+) -> anyhow::Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>> {
+    let request_key = InvocationRequestKey::Internal(child_key.clone());
+    let (fingerprint, creation_data) = {
+        let payload = ctx
+            .table()
+            .get(resource)?
+            .payload
+            .downcast_ref::<WasmRpcEntryPayload>()
+            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+        (
+            payload.target_activation.target_fingerprint(),
+            (
+                payload.target_activation.target_creation_data(),
+                payload.span_id.clone(),
+            ),
+        )
+    };
+    let fingerprint = if let Some(fingerprint) = fingerprint {
+        fingerprint
+    } else {
+        let mut preparation =
+            DurableCallSession::<GolemRpcWasmRpcPrepareInvocation, NotCancellable>::start_with_agent_authority(
+                ctx,
+                HostRequestGolemRpcPrepareInvocation {
+                    invocation_start_index,
+                    remote_agent_id: remote_agent_id.agent_id(),
+                    method_name: method_name.to_string(),
+                    request_key: request_key.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
+        let mut freshness = freshness;
+        if !preparation.is_live() {
+            match preparation.replay(ctx).await? {
+                CallReplayOutcome::Replayed(response) => {
+                    return Ok(response
+                        .result
+                        .map(|fingerprint| {
+                            (
+                                request_key.finalize(
+                                    remote_agent_id.agent_id(),
+                                    fingerprint,
+                                    method_name,
+                                ),
+                                fingerprint,
+                            )
+                        })
+                        .map_err(Into::into));
+                }
+                CallReplayOutcome::Incomplete(live) => {
+                    preparation = live;
+                    freshness = InvocationFreshnessDisposition::MayExist;
+                }
+            }
+        }
+        let ((env, config), span_id) = creation_data;
+        let auth_ctx = preparation.agent_auth_ctx().clone();
+        let result = loop {
+            let rpc = ctx.rpc();
+            let interrupt = ctx.create_interrupt_signal().map(Error::from);
+            let demand = rpc.create_demand(
+                AgentTarget::Current(remote_agent_id.agent_id()),
+                remote_agent_id.environment_id,
+                method_name,
+                ctx.created_by(),
+                ctx.agent_id(),
+                &env,
+                ctx.clone_as_inherited_stack(&span_id),
+                config.clone(),
+                &auth_ctx,
+                Some(child_key.clone()),
+                freshness,
+            );
+            let result = match futures::future::select(Box::pin(demand), interrupt).await {
+                Either::Left((result, _)) => result.map(|demand| demand.fingerprint()),
+                Either::Right((error, _)) => return Err(preparation.trap(error)),
+            };
+            freshness = InvocationFreshnessDisposition::MayExist;
+            match preparation
+                .try_trigger_retry_or_loop(ctx, &result, classify_rpc_error)
+                .await?
+            {
+                InternalRetryResult::Persist => break result,
+                InternalRetryResult::RetryInternally => continue,
+            }
+        };
+        let response = preparation
+            .complete(
+                ctx,
+                HostResponseGolemRpcPrepareInvocation {
+                    result: result.map_err(Into::into),
+                },
+            )
+            .await?;
+        match response.result {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => return Ok(Err(error.into())),
+        }
+    };
+    Ok(Ok((
+        request_key.finalize(remote_agent_id.agent_id(), fingerprint, method_name),
+        fingerprint,
+    )))
 }
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
@@ -275,7 +402,8 @@ fn set_rpc_target_replay_pending<Ctx: WorkerCtx>(
 /// fingerprint matches the one persisted at construction time. Failures are returned as
 /// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
 /// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
-/// a fingerprint change is always permanent.
+/// a fingerprint change is always permanent. `idempotency_key` identifies the create the
+/// activation may perform; only the recorded activation call passes one.
 pub(super) async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
@@ -287,6 +415,7 @@ pub(super) async fn activate_rpc_target(
     config: Vec<AgentConfigEntryDto>,
     auth_ctx: &AuthCtx,
     expected_fingerprint: Option<AgentFingerprint>,
+    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<Box<dyn RpcDemand>, Error> {
     let demand = rpc
         .create_demand(
@@ -299,7 +428,7 @@ pub(super) async fn activate_rpc_target(
             stack,
             config,
             auth_ctx,
-            None,
+            idempotency_key,
             InvocationFreshnessDisposition::MayExist,
         )
         .await
@@ -372,6 +501,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             config.clone(),
             auth_ctx,
             expected_fingerprint,
+            None,
         );
         tokio::pin!(activation);
         match futures::future::select(activation, interrupt_signal).await {
@@ -788,6 +918,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (env.clone(), config.clone(), payload.span_id.clone())
         };
         let stack = self.clone_as_inherited_stack(&span_id);
+        // A repaired activation keeps its Start, so it sends the key of the original attempt.
+        let idempotency_key = key_position.derive(handle.start_index());
         let demand = {
             let rpc = self.rpc();
             let created_by = self.created_by();
@@ -804,6 +936,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config.clone(),
                 handle.agent_auth_ctx(),
                 None,
+                Some(idempotency_key),
             );
             tokio::pin!(activation);
             match futures::future::select(activation, interrupt_signal).await {

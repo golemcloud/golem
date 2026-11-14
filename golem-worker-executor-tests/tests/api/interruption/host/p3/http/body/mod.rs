@@ -135,7 +135,11 @@ async fn pending_response_body(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &key,
+                "get_for_quota_wait",
+            ))
             .unwrap()
     };
     let id = AgentId::from_agent_id(component.id, &physical).unwrap();
@@ -151,6 +155,9 @@ async fn pending_response_body(
         Principal::anonymous(),
     )
     .await?;
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "get_for_quota_wait")
+        .await?;
     let admitted_revision = registry.current_limits().monthly_policy_revision;
     let mut peer = Peer::start().await?;
     let mut invocation = tokio::spawn({
@@ -179,7 +186,7 @@ async fn pending_response_body(
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Some(pending) = pending_body(&entries, &key)? {
+                if let Some(pending) = pending_body(&entries, &stored_key)? {
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     info!(?entries, ?pending, "Committed first chunk delivered; next child and consume-body parent open");
                     return Ok::<_, anyhow::Error>(pending);
@@ -243,8 +250,8 @@ async fn pending_response_body(
         }
         drop(first.finish_body);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        assert_invocation(&stopped, &key, 0)?;
-        ensure!(pending_body(&stopped, &key)? == Some(original), "stop changed the retained body prefix: {stopped:#?}");
+        assert_invocation(&stopped, &stored_key, 0)?;
+        ensure!(pending_body(&stopped, &stored_key)? == Some(original), "stop changed the retained body prefix: {stopped:#?}");
         peer.assert_counts(1, 0, 1)?;
         let entries = worker
             .oplog()
@@ -354,7 +361,7 @@ async fn pending_response_body(
                 loop {
                     executor.commit_oplog(&id).await?;
                     let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                    if let Some(pending) = history::retained_pending(&entries, &key, original)? {
+                    if let Some(pending) = history::retained_pending(&entries, &stored_key, original)? {
                         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                         info!(?entries, ?pending, "Body repair retains the original parent and chunk Starts");
                         return Ok::<_, anyhow::Error>(pending);
@@ -372,8 +379,8 @@ async fn pending_response_body(
             ensure!(raw_recovered.len() >= committed_prefix.len());
             ensure!(&raw_recovered[..committed_prefix.len()] == committed_prefix.as_slice(), "complete committed prefix must survive body repair");
             info!(?recovered, "HTTP body recovery oplog after mandatory finalization");
-            recovered_body(&recovered, &key, original, repaired_pending)?;
-            assert_invocation(&recovered, &key, 1)?;
+            recovered_body(&recovered, &stored_key, original, repaired_pending)?;
+            assert_invocation(&recovered, &stored_key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
             ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
@@ -393,10 +400,11 @@ async fn pending_response_body(
             ensure!(stored.into_typed::<String>()? == "none");
             peer.assert_counts(2, 1, 1)?;
             let completed_history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            recovered_body(&completed_history, &key, original, repaired_pending)?;
+            recovered_body(&completed_history, &stored_key, original, repaired_pending)?;
             ensure!(count_agent_invocation_pair_since(&completed_history, OplogIndex::INITIAL) == (3, 3));
 
             let fresh_key = IdempotencyKey::fresh();
+            let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, "get_for_quota_wait").await?;
             let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let third = peer.request().await?;
@@ -412,8 +420,8 @@ async fn pending_response_body(
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (4, 4));
             history::assert_settled_history(&history, original)?;
-            assert_invocation(&history, &key, 1)?;
-            assert_invocation(&history, &fresh_key, 1)?;
+            assert_invocation(&history, &stored_key, 1)?;
+            assert_invocation(&history, &stored_fresh_key, 1)?;
             ensure!(history::starts(&history, history::SEND).len() == 2);
             info!(?resource, %key, ?original, requests = 3, "Completed body history replayed offline; fresh HTTP invocation completed");
         } else {
@@ -439,8 +447,8 @@ async fn pending_response_body(
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(pending_body(&failed, &key)? == Some(original));
-            assert_invocation(&failed, &key, 0)?;
+            ensure!(pending_body(&failed, &stored_key)? == Some(original));
+            assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!failed.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))));

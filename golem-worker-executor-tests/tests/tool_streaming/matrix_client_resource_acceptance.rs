@@ -997,7 +997,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
                 agent_id: worker.clone(),
-                invocation_key: IdempotencyKey::fresh(),
+                invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
         )
@@ -1114,13 +1114,13 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     assert!(!issuer[0].1.authority_wallet.contains(&card));
     assert!(!issuer[1].1.authority_wallet.contains(&card));
     assert!(issuer[2].1.authority_wallet.contains(&card));
-    let primary = |key: &IdempotencyKey| {
+    let primary = |key: &golem_common::model::InvocationId| {
         recorded
             .iter()
             .enumerate()
             .find_map(|(offset, entry)| match entry {
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                     wallet_pin,
                     ..
                 } if idempotency_key == key => Some((
@@ -1131,8 +1131,16 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             })
             .unwrap()
     };
-    let p1 = primary(&first);
-    let p2 = primary(&second);
+    let p1 = primary(
+        &executor
+            .external_invocation_key(&worker, &first, "matrix_parallel_permission_issuance")
+            .await?,
+    );
+    let p2 = primary(
+        &executor
+            .external_invocation_key(&worker, &second, "matrix_permission_observation")
+            .await?,
+    );
     assert!(!p1.1.pinned_card_ids.contains(&id));
     assert!(p2.1.pinned_card_ids.contains(&id));
     assert_eq!(p2.1.wallet_token.generation, 1);
@@ -1392,7 +1400,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                     CardManagedByRuntimeDerived {
                         environment_id: context.default_environment_id,
                         agent_id: worker.clone(),
-                        invocation_key: IdempotencyKey::fresh(),
+                        invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                         oplog_index: OplogIndex::INITIAL,
                     },
                 )

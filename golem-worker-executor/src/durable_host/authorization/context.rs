@@ -18,7 +18,7 @@ use golem_common::model::card::RdbmsVerb;
 /// The ID of the runtime card that the durable call at `oplog_index` derives.
 pub(crate) fn derived_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -32,7 +32,7 @@ pub(crate) fn derived_card_id(
 /// The ID of the card transfer that the durable call at `oplog_index` performs.
 pub(crate) fn transfer_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid(
@@ -46,7 +46,7 @@ pub(crate) fn transfer_id(
 /// The ID of the child card that the durable call at `oplog_index` installs.
 pub(crate) fn installed_child_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -60,7 +60,7 @@ pub(crate) fn installed_child_card_id(
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn derive_scope_card_id(
         &self,
-        invocation_key: &IdempotencyKey,
+        invocation_key: &golem_common::model::InvocationId,
         ordinal: u64,
     ) -> CardId {
         CardId(derive_permission_uuid_for_sequence(
@@ -968,7 +968,7 @@ impl InheritedInvocationScope {
 pub(crate) fn agent_effective_surface_from_component_metadata(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
     let context = agent_monomorphization_context(component, owned_agent_id, agent_id);
     let card = agent_initial_card_from_component_metadata(component, agent_id)?;
@@ -1004,7 +1004,7 @@ pub(crate) fn owner_effective_surface_from_component_metadata(
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
     golem_common::model::card::AgentPermissionMonomorphizationContext {
         account: component.account_email.clone(),
@@ -1059,7 +1059,7 @@ pub(in crate::durable_host) fn component_baseline_effective_surface_from_wallet<
 
 pub(crate) fn agent_initial_card_from_component_metadata(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> Result<StoredCard, WorkerExecutorError> {
     let card = component
         .metadata
@@ -1071,7 +1071,7 @@ pub(crate) fn agent_initial_card_from_component_metadata(
 
 fn missing_agent_initial_card_error(
     component: &Component,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
 ) -> WorkerExecutorError {
     WorkerExecutorError::invalid_request(format!(
         "Missing initial permission card for agent type {} in component {} revision {}",
@@ -1082,7 +1082,7 @@ fn missing_agent_initial_card_error(
 pub(in crate::durable_host) fn derive_permission_uuid(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid_for_sequence(
@@ -1096,11 +1096,12 @@ pub(in crate::durable_host) fn derive_permission_uuid(
 pub(in crate::durable_host) fn derive_permission_uuid_for_sequence(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     sequence: u64,
 ) -> Uuid {
     let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
-    let invocation_key = invocation_key.value.as_bytes();
+    let invocation_key = invocation_key.to_string();
+    let invocation_key = invocation_key.as_bytes();
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(owned_agent_id.environment_id.0.as_bytes());
     hasher.update(owned_agent_id.agent_id.component_id.0.as_bytes());

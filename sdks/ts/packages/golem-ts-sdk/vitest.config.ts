@@ -22,6 +22,10 @@ export default defineConfig({
       'golem:core/types@2.0.0': path.resolve(__dirname, 'types/golem_core_2_0_0_types.d.ts'),
       'golem:agent/common@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_common.d.ts'),
       'golem:agent/host@2.0.0': path.resolve(__dirname, 'types/golem_agent_2_0_0_host.d.ts'),
+      'golem:agent/invocation-context@2.0.0': path.resolve(
+        __dirname,
+        'types/golem_agent_2_0_0_invocation_context.d.ts',
+      ),
       'golem:agent/durable-streams@2.0.0': path.resolve(
         __dirname,
         'types/golem_agent_2_0_0_durable_streams.d.ts',

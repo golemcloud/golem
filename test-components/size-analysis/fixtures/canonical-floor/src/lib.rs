@@ -135,6 +135,9 @@ macro_rules! export {
 unsafe fn trap(_: *mut u8) -> i32 {
     core::arch::wasm32::unreachable()
 }
+unsafe fn trap_agent_call(_: *mut u8, _: usize, _: *mut u8, _: usize, _: i32) -> i32 {
+    core::arch::wasm32::unreachable()
+}
 unsafe fn callback(_: u32, _: u32, _: u32) -> u32 {
     core::arch::wasm32::unreachable()
 }
@@ -162,9 +165,9 @@ unsafe fn load(payload: *mut u8, len: usize, mime: *mut u8, mime_len: usize) -> 
     0
 }
 
-export!(agent_initialize(p: *mut u8) -> i32, "[async-lift]golem:agent/guest@2.0.0#initialize", trap);
+export!(agent_initialize(a: *mut u8, b: usize, c: *mut u8, d: usize, e: i32) -> i32, "[async-lift]golem:agent/guest@2.0.0#initialize", trap_agent_call);
 export!(agent_initialize_callback(a: u32, b: u32, c: u32) -> u32, "[callback][async-lift]golem:agent/guest@2.0.0#initialize", callback);
-export!(agent_invoke(p: *mut u8) -> i32, "[async-lift]golem:agent/guest@2.0.0#invoke", trap);
+export!(agent_invoke(a: *mut u8, b: usize, c: *mut u8, d: usize, e: i32) -> i32, "[async-lift]golem:agent/guest@2.0.0#invoke", trap_agent_call);
 export!(agent_invoke_callback(a: u32, b: u32, c: u32) -> u32, "[callback][async-lift]golem:agent/guest@2.0.0#invoke", callback);
 export!(agent_definition() -> *mut u8, "golem:agent/guest@2.0.0#get-definition", trap_result);
 export!(agent_definition_post(p: *mut u8) -> (), "cabi_post_golem:agent/guest@2.0.0#get-definition", post_empty);

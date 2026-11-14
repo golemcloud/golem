@@ -32,7 +32,7 @@ use golem_common::schema::schema_value::ResultValuePayload;
 #[cfg(target_os = "linux")]
 use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::{
-    TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
+    TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events,
 };
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::services::golem_config::{FilesystemStorageMode, SnapshotPolicy};
@@ -128,7 +128,7 @@ fn schema_u64_list(result: SchemaValue) -> Vec<u64> {
 async fn assert_reconstructed_writable_file(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<()> {
     let result = executor
         .invoke_and_await_agent(
@@ -231,25 +231,59 @@ async fn write_stdout(
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "write_stdout", data_value!())
-        .await?;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "write_stdout", data_value!())
+            .await?;
+    }
 
-    let mut events = vec![];
+    let mut stdout = vec![];
     let start_time = Instant::now();
-    while events.len() < 4 && start_time.elapsed() < Duration::from_secs(5) {
-        if let Some(event) = rx.recv().await {
-            events.push(event);
-        } else {
-            break;
+    while stdout.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+        use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+            Ok(Some(LogEvent {
+                event: Some(log_event::Event::Stdout(event)),
+            })) => stdout.push(event),
+            Ok(Some(_)) => {}
+            _ => break,
         }
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    // Each output event names the invocation that wrote it.
+    let started = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            golem_common::model::oplog::PublicOplogEntry::AgentInvocationStarted(params) => {
+                match params.invocation {
+                    golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(
+                        call,
+                    ) if call.method_name == "write_stdout" => Some(call.invocation_id.0),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(started.len(), 2);
+    assert_ne!(started[0], started[1]);
     assert_eq!(
-        stdout_events(events.into_iter()),
-        vec!["Sample text written to the output\n"]
+        stdout
+            .iter()
+            .map(|event| event.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Sample text written to the output\n"; 2]
+    );
+    assert_eq!(
+        stdout
+            .iter()
+            .map(|event| event.invocation_id.map(uuid::Uuid::from))
+            .collect::<Vec<_>>(),
+        started.into_iter().map(Some).collect::<Vec<_>>()
     );
     Ok(())
 }
@@ -1654,7 +1688,7 @@ async fn initial_file_p3_parity_impl(
 async fn filesystem_tree_apply(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
     operation: &str,
     path: &str,
     argument: &str,
@@ -1680,7 +1714,7 @@ async fn filesystem_tree_apply(
 async fn filesystem_tree_describe(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
-    agent: &golem_common::model::agent::ParsedAgentId,
+    agent: &golem_common::model::agent::ParsedAgentKey,
 ) -> anyhow::Result<Vec<String>> {
     use golem_common::data_value;
 
@@ -3959,7 +3993,7 @@ async fn wait_for_timer_owner_unload(
 async fn assert_short_p3_timer_wins_without_suspension(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
-    agent_id: &golem_common::model::agent::ParsedAgentId,
+    agent_id: &golem_common::model::agent::ParsedAgentKey,
     worker_id: &golem_common::model::AgentId,
     timers: Vec<u64>,
 ) -> anyhow::Result<()> {
@@ -4656,6 +4690,9 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 
     let key = IdempotencyKey::fresh();
     let invocation_key = key.clone();
+    let stored_key = executor
+        .external_invocation_key(&worker_id, &key, "tcp_collect_p3")
+        .await?;
     let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
         let mut current_is_method = false;
         let mut admitted = 0;
@@ -4668,7 +4705,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
                 PublicOplogEntry::AgentInvocationStarted(start) => {
                     current_is_method = matches!(&start.invocation,
                         PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.idempotency_key == key && method.method_name == "tcp_collect_p3");
+                        if method.invocation_id == stored_key && method.method_name == "tcp_collect_p3");
                     admitted += usize::from(current_is_method);
                 }
                 PublicOplogEntry::AgentInvocationFinished(_) if current_is_method => {

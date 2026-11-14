@@ -64,7 +64,11 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
         let key = IdempotencyKey::fresh();
         let physical = if ephemeral {
             name.clone()
-                .with_ephemeral_invocation_phantom(&key)
+                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                    &executor,
+                    &key,
+                    "tcp_collect_p3",
+                ))
                 .unwrap()
         } else {
             name.clone()

@@ -15,20 +15,21 @@
 use super::{
     AgentId, AgentInvocation, Arc, AttachmentId, AttemptId, ComponentRevision,
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
-    HashMap, HashSet, IdempotencyKey, InputStreamAck, IntoTypedSchemaValue, InvocationRequest,
-    InvocationResponse, InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentId,
+    HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
+    InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
+    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
     PersistedInvocationTarget, PersistedStreamInvocationDescriptor, Principal,
     ProducerRegistrationRequest, ResumeAttach, ResumeAttemptDescriptor, ResumeOperation,
     SchemaGraph, SchemaType, SchemaValue, SchemaValueStream, SessionError, SessionStreamRole,
-    StartAttemptDescriptor, StreamCancelReason, StreamCancelRole, StreamInvocationId,
+    StartAttemptDescriptor, StreamCancellationRequest, StreamEndpointSide, StreamInvocationId,
     StreamItemsPayload, StreamRegistrationCoordinate, StreamRegistrationInvocation,
     StreamResumeCursor, StreamResumeOperation, StreamRootKind, StreamSession, StreamSessionMapping,
-    StreamSourceKind, StreamValuePathStep, ToolByteStreamRole, ToolInvocationInput,
-    ToolInvocationOutput, TransportStreamId, WorkerExecutorError, decode_recursive_stream_value,
-    decode_recursive_stream_value_with_schema, durable_stream_mapping_from_proto,
-    durable_stream_mapping_to_proto, encode_recursive_stream_value_with_schema, invocation_request,
-    invocation_response, mpsc, schema_fingerprint_v1,
+    StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamValuePathStep,
+    ToolByteStreamRole, ToolInvocationInput, ToolInvocationOutput, TransportStreamId,
+    WorkerExecutorError, decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
+    schema_fingerprint_v1,
 };
 
 pub(crate) fn decode_invocation_input(
@@ -62,15 +63,12 @@ pub(crate) fn build_durable_streaming_request(
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
-    let idempotency_key: IdempotencyKey = request
-        .idempotency_key
-        .clone()
-        .ok_or_else(|| {
+    let idempotency_key: golem_common::model::InvocationId =
+        invocation.idempotency_key().cloned().ok_or_else(|| {
             WorkerExecutorError::invalid_request(
-                "durable streaming invocations require an idempotency key",
+                "durable streaming invocations require an admitted invocation key",
             )
-        })?
-        .into();
+        })?;
     let attempt_id = AttemptId(
         request
             .attempt_id
@@ -102,7 +100,7 @@ pub(crate) fn build_durable_streaming_request(
         AgentInvocation::AgentMethod {
             method_name, input, ..
         } => {
-            let parsed = ParsedAgentId::parse(&callee.agent_id, component_metadata)
+            let parsed = ParsedAgentKey::parse(&callee.agent_id, component_metadata)
                 .map_err(WorkerExecutorError::invalid_request)?;
             let agent_type = component_metadata
                 .find_agent_type_by_name_ref(&parsed.agent_type)
@@ -168,7 +166,7 @@ pub(crate) fn build_durable_streaming_request(
         callee_environment_id: environment_id,
         callee: callee.clone(),
         callee_fingerprint,
-        idempotency_key: idempotency_key.clone(),
+        idempotency_key,
     };
     let attachment_id = AttachmentId::primary(environment_id, &callee, &idempotency_key)
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
@@ -243,7 +241,7 @@ pub(crate) fn build_durable_streaming_request(
                         },
                         source_kind: StreamSourceKind::ExternalInlineInput,
                         source_invocation: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         component_revision,
                         element_schema_fingerprint,
@@ -331,10 +329,7 @@ pub(crate) fn build_durable_streaming_request(
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         if fingerprint.is_nil()
-            || origin
-                .idempotency_key
-                .as_ref()
-                .is_none_or(|key| key.value.is_empty())
+            || origin.idempotency_key.is_none()
             || !matches!(principal, Principal::Agent(agent) if agent.agent_id == parent)
         {
             return Err(invalid());
@@ -383,7 +378,7 @@ pub(crate) fn build_durable_streaming_request(
                         },
                         source_kind: StreamSourceKind::InvocationOutput,
                         source_invocation: StreamRegistrationInvocation::Local(
-                            session_key.idempotency_key.clone(),
+                            session_key.idempotency_key,
                         ),
                         component_revision,
                         element_schema_fingerprint: schema_fingerprint_v1(
@@ -479,7 +474,7 @@ pub(crate) fn build_durable_streaming_request(
         })?,
     };
     Ok(DurableStreamingInvocationRequest {
-        public_session_id: idempotency_key.value.clone(),
+        public_session_id: idempotency_key.to_string(),
         expiry_policy: golem_common::base_model::durable_stream::StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt,
@@ -558,9 +553,8 @@ pub(super) fn build_resume_attempt(
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
-    let idempotency_key: IdempotencyKey = request
+    let idempotency_key: golem_common::model::InvocationId = request
         .idempotency_key
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume requires an idempotency key"))?
         .into();
     let expected_callee_fingerprint = golem_common::model::AgentFingerprint(
@@ -897,10 +891,21 @@ fn erase_streams(value: SchemaValue) -> SchemaValue {
 
 pub(super) fn request_idempotency_key(
     request: &InvocationRequest,
-) -> Option<golem_api_grpc::proto::golem::worker::IdempotencyKey> {
+) -> Option<golem_schema::proto::golem::common::Uuid> {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => start.idempotency_key.clone(),
-        Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key.clone(),
+        Some(invocation_request::Request::Start(start))
+            if start.mode
+                == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32 =>
+        {
+            start
+                .idempotency_key
+                .as_ref()?
+                .value
+                .parse::<golem_common::model::InvocationId>()
+                .ok()
+                .map(Into::into)
+        }
+        Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key,
         _ => None,
     }
 }
@@ -973,108 +978,78 @@ pub(super) async fn route_durable_request(
                     )
                 })?
         }
-        invocation_request::Request::InputEnd(end) => {
+        invocation_request::Request::StreamEnd(end) => {
+            use golem_api_grpc::proto::golem::worker::StreamDirection;
+            let terminal: StreamTerminal = end
+                .outcome
+                .ok_or_else(|| "stream-end has no outcome".to_string())?
+                .try_into()?;
+            let authored_by: StreamTerminalAuthor =
+                golem_api_grpc::proto::golem::worker::StreamTerminalAuthor::try_from(
+                    end.authored_by,
+                )
+                .map_err(|_| "stream-end has an unknown author".to_string())?
+                .try_into()?;
+            let direction = StreamDirection::try_from(end.direction)
+                .map_err(|_| "stream-end has an unknown direction".to_string())?;
+            let stream_role = match direction {
+                StreamDirection::Input => SessionStreamRole::Input,
+                StreamDirection::Output => SessionStreamRole::Output,
+                StreamDirection::Unspecified => {
+                    return Err("stream-end direction is unspecified".to_string().into());
+                }
+            };
             let handle = streams
                 .validate_frame(
                     end.transport_stream_id,
                     end.durable_stream_id,
                     end.epoch,
-                    SessionStreamRole::Input,
-                )
-                .await?;
-            let resulting_offset = streams
-                .end_input(end.transport_stream_id, end.sequence)
-                .await?;
-            resulting_offset.map(|resulting_offset| InputStreamAck {
-                transport_stream_id: end.transport_stream_id,
-                highest_contiguous_sequence: end.sequence,
-                logical_item_count: 1,
-                durable_stream_id: Some(handle.stream_id.0.into()),
-                resulting_offset: resulting_offset.0.to_vec(),
-                epoch: streams.attachment_epoch(),
-                new_stream_mappings: Vec::new(),
-            })
-        }
-        invocation_request::Request::StreamCancel(cancel) => {
-            let (role, stream_role) = match cancel.role() {
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputProducer => {
-                    (StreamCancelRole::InputProducer, SessionStreamRole::Input)
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer => {
-                    (StreamCancelRole::InputConsumer, SessionStreamRole::Input)
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer => {
-                    (StreamCancelRole::OutputProducer, SessionStreamRole::Output)
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputConsumer => {
-                    (StreamCancelRole::OutputConsumer, SessionStreamRole::Output)
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::System => {
-                    return Err("system-authored durable stream cancellation is internal"
-                        .to_string()
-                        .into());
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::Unspecified => {
-                    return Err("durable stream cancel role is unspecified"
-                        .to_string()
-                        .into());
-                }
-            };
-            streams
-                .validate_frame(
-                    cancel.transport_stream_id,
-                    cancel.durable_stream_id,
-                    cancel.epoch,
                     stream_role,
                 )
                 .await?;
-            let reason = match cancel.reason() {
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::Cancelled => {
-                    StreamCancelReason::Cancelled
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol => {
-                    StreamCancelReason::Protocol
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop => {
-                    StreamCancelReason::GuestDrop
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::Transport => {
-                    return Err(
-                        "transport loss detaches a durable session and cannot cancel a stream"
-                            .to_string()
-                            .into(),
-                    );
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-                    if role == StreamCancelRole::InputProducer =>
-                {
-                    StreamCancelReason::SourceUnavailable
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-                | golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
-                | golem_api_grpc::proto::golem::worker::StreamCancelReason::InvocationFailed => {
-                    return Err(
-                        "system-authored durable stream cancellation reason is internal"
-                            .to_string()
-                            .into(),
-                    );
-                }
-                golem_api_grpc::proto::golem::worker::StreamCancelReason::Unspecified => {
-                    return Err("durable stream cancel reason is unspecified"
+            if stream_role == SessionStreamRole::Input {
+                if matches!(terminal, StreamTerminal::ConsumerCancelled { .. }) {
+                    return Err("input producer cannot select consumer cancellation"
                         .to_string()
                         .into());
                 }
-            };
-            streams
-                .cancel_stream(
-                    cancel.transport_stream_id,
-                    role,
-                    reason,
-                    cancel.details,
-                    Some(cancel.epoch),
-                )
-                .await?;
-            None
+                let resulting_offset = streams
+                    .end_input(
+                        end.transport_stream_id,
+                        end.producer_sequence,
+                        authored_by,
+                        terminal,
+                    )
+                    .await?;
+                resulting_offset.map(|resulting_offset| InputStreamAck {
+                    transport_stream_id: end.transport_stream_id,
+                    highest_contiguous_sequence: end.producer_sequence,
+                    logical_item_count: 1,
+                    durable_stream_id: Some(handle.stream_id.0.into()),
+                    resulting_offset: resulting_offset.0.to_vec(),
+                    epoch: streams.attachment_epoch(),
+                    new_stream_mappings: Vec::new(),
+                })
+            } else {
+                if !matches!(terminal, StreamTerminal::ConsumerCancelled { .. }) {
+                    return Err("output consumer may only select consumer cancellation"
+                        .to_string()
+                        .into());
+                }
+                streams
+                    .cancel_stream(
+                        end.transport_stream_id,
+                        StreamCancellationRequest {
+                            direction: stream_role,
+                            side: StreamEndpointSide::Consumer,
+                            authored_by,
+                            terminal,
+                        },
+                        Some(end.epoch),
+                    )
+                    .await?;
+                None
+            }
         }
         invocation_request::Request::Start(_) | invocation_request::Request::ResumeAttach(_) => {
             return Err("unexpected message on durable invocation request stream"

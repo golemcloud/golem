@@ -63,7 +63,7 @@ type History = Arc<Mutex<Vec<String>>>;
 struct Fixture {
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    agent_id: golem_common::model::agent::ParsedAgentId,
+    agent_id: golem_common::model::agent::ParsedAgentKey,
     worker_id: AgentId,
     server: tokio::task::JoinHandle<()>,
 }

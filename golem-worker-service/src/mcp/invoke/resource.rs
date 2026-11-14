@@ -20,7 +20,7 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::{AgentTarget, ParsedAgentId};
+use golem_common::model::agent::{AgentTarget, ParsedAgentKey};
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
@@ -74,7 +74,7 @@ pub async fn invoke_resource(
     );
 
     let parsed_agent_id =
-        ParsedAgentId::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
+        ParsedAgentKey::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
             |e| {
                 tracing::error!("Failed to parse agent id: {}", e);
                 ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
@@ -106,7 +106,7 @@ pub async fn invoke_resource(
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
-            idempotency_key,
+            golem_common::model::InvocationRequestKey::external(None, idempotency_key.as_ref()),
             None,
             false,
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
@@ -645,6 +645,15 @@ mod tests {
                     &resource,
                     TEST_URI,
                     None,
+                    Some(key.clone()),
+                )
+                .await
+                .unwrap();
+                invoke_resource(
+                    &harness.worker_service,
+                    &resource,
+                    TEST_URI,
+                    None,
                     Some(key),
                 )
                 .await
@@ -655,8 +664,14 @@ mod tests {
 
         let durable = read_with_key(AgentMode::Durable).await;
         {
-            let recorded = &durable.contexts.lock().unwrap()[0];
-            assert_eq!(recorded.idempotency_key, key);
+            let contexts = durable.contexts.lock().unwrap();
+            let recorded = &contexts[0];
+            assert_ne!(contexts[0].request_key, contexts[1].request_key);
+            assert!(matches!(
+                recorded.request_key,
+                golem_common::model::InvocationRequestKey::Unkeyed(_)
+            ));
+            assert_ne!(recorded.idempotency_key, key);
             assert_eq!(
                 recorded.freshness,
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist
@@ -667,10 +682,13 @@ mod tests {
         assert_eq!(
             phantom_id(&ephemeral.recorded_agent_id()),
             Some(golem_common::model::agent::ephemeral_invocation_phantom_id(
-                &key
+                &ephemeral.contexts.lock().unwrap()[0].idempotency_key
             )),
-            "the ephemeral agent is the one the key derives"
+            "the ephemeral owner uses the prepared unkeyed seed"
         );
-        assert_eq!(ephemeral.contexts.lock().unwrap()[0].idempotency_key, key);
+        assert!(matches!(
+            ephemeral.contexts.lock().unwrap()[0].request_key,
+            golem_common::model::InvocationRequestKey::Unkeyed(_)
+        ));
     }
 }

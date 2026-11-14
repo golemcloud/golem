@@ -63,7 +63,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::AccountUsagePeriod;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -73,8 +73,9 @@ use golem_common::model::oplog::{
     AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
     SnapshotAssistedUpdateDetails,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OwnedAgentId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -649,11 +650,11 @@ impl CallCountManagement for Context {
 
 #[async_trait]
 impl InvocationManagement for Context {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<InvocationId> {
         self.durable_ctx.get_current_idempotency_key().await
     }
 
@@ -883,6 +884,7 @@ impl UpdateManagement for Context {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
@@ -890,6 +892,7 @@ impl UpdateManagement for Context {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await
     }
@@ -1259,7 +1262,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.durable_ctx.parsed_agent_id()
     }
 

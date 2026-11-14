@@ -38,14 +38,30 @@ class ExactOutcomeTests(unittest.TestCase):
             HARNESS.outcomes_match((0, b"out\n", b""), HARNESS.outcome(result))
         )
 
-    def test_wasm_report_preserves_nonzero_shell_status(self):
+    def test_wasm_exit_with_failure_instead_of_the_shell_status_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             status = pathlib.Path(directory) / "status"
             status.write_text("2", encoding="ascii")
-            result = self.completed(stderr=b"refused\n", returncode=1)
+            with self.assertRaises(ValueError):
+                HARNESS.wasm_outcome(
+                    self.completed(stderr=b"refused\n", returncode=1), status
+                )
+
+    def test_wasm_exit_with_the_shell_status_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status = pathlib.Path(directory) / "status"
+            status.write_text("127", encoding="ascii")
+            result = self.completed(stderr=b"missing\n", returncode=127)
             self.assertEqual(
-                (2, b"", b"refused\n"), HARNESS.wasm_outcome(result, status)
+                (127, b"", b"missing\n"), HARNESS.wasm_outcome(result, status)
             )
+
+    def test_wasm_exit_with_another_failure_status_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status = pathlib.Path(directory) / "status"
+            status.write_text("2", encoding="ascii")
+            with self.assertRaises(ValueError):
+                HARNESS.wasm_outcome(self.completed(returncode=3), status)
 
     def test_wrong_shell_status_fails_even_when_wasi_status_matches(self):
         with tempfile.TemporaryDirectory() as directory:

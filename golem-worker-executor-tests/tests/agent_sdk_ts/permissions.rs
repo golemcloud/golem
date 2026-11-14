@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentInvocationMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard, parse_polymorphic_permission,
@@ -331,6 +331,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -338,6 +339,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -369,7 +371,7 @@ impl WorkerProxy for LocalCardTransferProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -380,7 +382,7 @@ impl WorkerProxy for LocalCardTransferProxy {
     async fn cancel_scheduled_invocation(
         &self,
         target: &golem_common::model::OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -393,7 +395,7 @@ impl WorkerProxy for LocalCardTransferProxy {
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::InvocationStatus, WorkerProxyError> {
@@ -407,7 +409,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
@@ -483,7 +485,7 @@ fn connect_local_card_transfer_delivery(
 struct Scenario {
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    caller: ParsedAgentId,
+    caller: ParsedAgentKey,
 }
 
 async fn start_scenario(

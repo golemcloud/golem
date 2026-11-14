@@ -26,7 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -34,6 +34,7 @@ use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
+use golem_common::model::{InvocationRequestKey, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
 use golem_schema::schema::wit::PermissionCardHandleRep;
@@ -142,7 +143,7 @@ async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery(
     let streams = StreamSession::open(
         producer.clone(),
         oplog.clone(),
-        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         vec![binding],
     )
     .await
@@ -330,7 +331,7 @@ impl Rpc for FingerprintMismatchRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -344,6 +345,7 @@ impl Rpc for FingerprintMismatchRpc {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _expected_fingerprint: AgentFingerprint,
+        _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
         _auth_ctx: &AuthCtx,
@@ -416,7 +418,7 @@ impl Rpc for ActivationFailureRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -430,6 +432,7 @@ impl Rpc for ActivationFailureRpc {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _expected_fingerprint: AgentFingerprint,
+        _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
         _auth_ctx: &AuthCtx,
@@ -502,7 +505,7 @@ impl Rpc for RecordingEnvRpc {
     async fn cancel_scheduled_invocation(
         &self,
         _target: &OwnedAgentId,
-        _key: IdempotencyKey,
+        _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
         _owner: &AgentId,
         _auth: &AuthCtx,
@@ -516,6 +519,7 @@ impl Rpc for RecordingEnvRpc {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _expected_fingerprint: AgentFingerprint,
+        _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
         _auth_ctx: &AuthCtx,
@@ -594,10 +598,10 @@ fn agent_id(name: &str) -> AgentId {
 fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> CancellationTokenEntry {
     CancellationTokenEntry {
         schedule_id: vec![],
-        metadata: invocation_metadata(
-            &recipient,
-            &IdempotencyKey::new("scheduled-invocation".to_string()),
-        ),
+        metadata: invocation_metadata(&OwnedInvocationId::new(
+            recipient.agent_id(),
+            Uuid::from_u128(42).into(),
+        )),
         owner,
         recipient,
     }
@@ -1011,7 +1015,7 @@ fn rejected_rpc_creation_drains_every_config_handle() {
 fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId(Uuid::from_u128(1));
-    let logical_agent_id = ParsedAgentId::try_new(
+    let logical_agent_id = ParsedAgentKey::try_new(
         golem_common::model::agent::AgentTypeName("ephemeral-target".to_string()),
         data_value!("constructor"),
         None,
@@ -1021,19 +1025,25 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let logical_owned_agent = OwnedAgentId::new(environment_id, &logical_agent);
     let first_key = IdempotencyKey::new("first-call".to_string());
 
-    let first =
-        invocation_target_agent_id(&logical_owned_agent, Some(&logical_agent_id), &first_key)
-            .unwrap();
+    let first = invocation_target_agent_id(
+        &logical_owned_agent,
+        Some(&logical_agent_id),
+        &first_key,
+        "run",
+    )
+    .unwrap();
     let first_retry = invocation_target_agent_id(
         &logical_owned_agent,
         Some(&logical_agent_id),
         &IdempotencyKey::new("first-call".to_string()),
+        "run",
     )
     .unwrap();
     let second = invocation_target_agent_id(
         &logical_owned_agent,
         Some(&logical_agent_id),
         &IdempotencyKey::new("second-call".to_string()),
+        "run",
     )
     .unwrap();
 
@@ -1041,9 +1051,116 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     assert_ne!(first, second);
     assert_eq!(first.environment_id, environment_id);
     assert_eq!(first.component_id(), component_id);
-    let metadata = invocation_metadata(&first, &first_key);
+    let expected_owner = logical_agent_id
+        .with_ephemeral_invocation_phantom(
+            &InvocationRequestKey::Internal(first_key.clone()).owner_key("run"),
+        )
+        .unwrap();
+    assert_eq!(
+        first.agent_id(),
+        AgentId::from_agent_id(component_id, &expected_owner).unwrap()
+    );
+    assert_ne!(
+        first,
+        invocation_target_agent_id(
+            &logical_owned_agent,
+            Some(&logical_agent_id),
+            &first_key,
+            "other"
+        )
+        .unwrap()
+    );
+    let invocation_id = InvocationRequestKey::Internal(first_key.clone()).finalize(
+        first.agent_id(),
+        AgentFingerprint(Uuid::from_u128(42)),
+        "run",
+    );
+    let metadata = invocation_metadata(&invocation_id);
     assert_eq!(metadata.agent_id, first.agent_id.agent_id);
-    assert_eq!(metadata.idempotency_key, first_key.value);
+    let golem_schema::schema::wit::wire::InvocationOwner::Agent(owner) =
+        metadata.invocation_id.owner
+    else {
+        panic!("RPC invocation metadata must name the target agent as the owner");
+    };
+    assert_eq!(AgentId::from(owner), first.agent_id());
+    let id = Uuid::from(metadata.invocation_id.id);
+    assert_eq!(id, invocation_id.uuid());
+    assert_ne!(id.to_string(), first_key.value);
+}
+
+#[test]
+fn asynchronous_rejections_have_no_identity_and_keep_the_error_in_the_future() {
+    for error in [
+        ServiceRpcError::Denied {
+            details: "denied".to_string(),
+        },
+        ServiceRpcError::ProtocolError {
+            details: "invalid input".to_string(),
+        },
+    ] {
+        let mut table = ResourceTable::new();
+        let invocation = super::denial::bake_closed_async_error(&mut table, error.clone()).unwrap();
+        assert!(invocation.metadata.is_none());
+        let entry = table.get(&invocation.future).unwrap();
+        let state = entry
+            .payload
+            .as_any()
+            .downcast_ref::<FutureInvokeResultState>()
+            .unwrap();
+        match state {
+            FutureInvokeResultState::Baked {
+                result: Ok(Err(recorded)),
+            } => {
+                assert_eq!(format!("{recorded:?}"), format!("{error:?}"));
+            }
+            _ => panic!("a rejected asynchronous invocation must expose a baked error"),
+        }
+    }
+}
+
+#[test]
+fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
+    use golem_common::model::oplog::types::SerializableScheduleId;
+    use golem_common::model::oplog::{
+        HostResponseGolemRpcPrepareInvocation, HostResponseGolemRpcScheduledInvocation,
+    };
+
+    let target = agent_id("ephemeral-target");
+    let key = InvocationRequestKey::Internal(IdempotencyKey::from("child"));
+    let preparation = HostResponseGolemRpcPrepareInvocation {
+        result: Ok(AgentFingerprint(Uuid::from_u128(42))),
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&preparation).unwrap();
+    let replayed: HostResponseGolemRpcPrepareInvocation = desert_rust::deserialize(&bytes).unwrap();
+    let final_id = key.finalize(target.clone(), preparation.result.unwrap(), "run");
+    let replayed_id = key.finalize(target.clone(), replayed.result.unwrap(), "run");
+    assert_eq!(
+        Uuid::from(invocation_metadata(&final_id).invocation_id.id),
+        Uuid::from(invocation_metadata(&replayed_id).invocation_id.id)
+    );
+    assert_ne!(
+        final_id,
+        key.finalize(target, AgentFingerprint(Uuid::from_u128(43)), "run")
+    );
+
+    let receipt = HostResponseGolemRpcScheduledInvocation {
+        schedule_id: SerializableScheduleId {
+            id: Uuid::from_u128(44),
+        },
+        invocation_id: final_id.clone(),
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&receipt).unwrap();
+    let replayed: HostResponseGolemRpcScheduledInvocation =
+        desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(replayed.invocation_id, final_id);
+    assert_eq!(
+        Uuid::from(
+            invocation_metadata(&replayed.invocation_id)
+                .invocation_id
+                .id
+        ),
+        final_id.uuid()
+    );
 }
 
 #[test]

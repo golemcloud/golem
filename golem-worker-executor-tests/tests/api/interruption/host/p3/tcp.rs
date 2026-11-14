@@ -93,7 +93,11 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
     } else {
         let finalized_agent_id = agent_id
             .clone()
-            .with_ephemeral_invocation_phantom(&invocation_key)
+            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+                &executor,
+                &invocation_key,
+                "tcp_collect_p3",
+            ))
             .map_err(|error| anyhow!("invalid ephemeral invocation identity: {error}"))?;
         (
             AgentId::from_agent_id(component.id, &finalized_agent_id)

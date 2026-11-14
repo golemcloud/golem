@@ -14,11 +14,12 @@
 
 use super::{
     AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, HasComponentService, Instrument,
-    InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentId, UsesAllDeps, Worker, WorkerCtx,
+    InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentKey, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorImpl, info_span,
 };
-use golem_common::base_model::AgentId;
+use crate::worker::CreateIntent;
 use golem_common::base_model::agent::Principal;
+use golem_common::base_model::{AgentId, IdempotencyKey};
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -37,6 +38,9 @@ pub trait CanStartWorker {
     fn principal(&self) -> Principal {
         Principal::anonymous()
     }
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
+    }
 }
 
 trait ProtobufInvocationDetails {
@@ -50,6 +54,9 @@ trait ProtobufInvocationDetails {
     }
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
         &[]
+    }
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        Ok(None)
     }
 }
 
@@ -110,6 +117,10 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
                 result.ok()
             })
             .unwrap_or_else(Principal::anonymous)
+    }
+
+    fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        self.proto_idempotency_key()
     }
 }
 
@@ -201,6 +212,20 @@ impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::Invocat
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
         &self.config
     }
+
+    fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
+        let request_key: golem_common::model::InvocationRequestKey = self
+            .request_key
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("request_key is required"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let method_name = self
+            .method_name
+            .as_deref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name is required"))?;
+        Ok(Some(request_key.owner_key(method_name)))
+    }
 }
 
 impl ProtobufInvocationDetails
@@ -263,36 +288,107 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::ensure_not_failed(self, owned_agent_id, agent_mode, status).await
     }
 
-    /// Acquires and starts the agent for an inspection (filesystem or wallet).
-    pub(super) async fn get_or_create<Req: CanStartWorker>(
+    /// Gives `AgentNotFound` when a delete is running on the agent's cached generation or has
+    /// removed its durable state, so the read and management paths answer it like a missing
+    /// agent. A failed delete that left the agent in place keeps its deletion error.
+    pub(super) async fn ensure_not_being_deleted(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<Arc<Worker<Ctx>>>, WorkerExecutorError> {
+        match self.active_agents().try_get(owned_agent_id).await {
+            Some(worker) if worker.answers_as_deleted().await => Err(
+                WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()),
+            ),
+            resident => Ok(resident),
+        }
+    }
+
+    /// Gives `AgentNotFound` instead of the failure of an operation on a worker that a delete
+    /// claimed after [`Self::ensure_not_being_deleted`] passed, under the same rule.
+    pub(super) async fn not_found_if_deleting<T>(
+        worker: &Worker<Ctx>,
+        result: Result<T, WorkerExecutorError>,
+    ) -> Result<T, WorkerExecutorError> {
+        match result {
+            Err(_) if worker.answers_as_deleted().await => Err(
+                WorkerExecutorError::worker_not_found(worker.owned_agent_id().agent_id()),
+            ),
+            result => result,
+        }
+    }
+
+    /// Resolves an existing component agent for `operation` without starting it. A missing agent,
+    /// or one that a running delete has claimed, gives `AgentNotFound`.
+    pub(super) async fn get_existing_for_management(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+        operation: &str,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress(operation)?;
+        if worker.answers_as_deleted().await {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        }
+        Ok(worker)
+    }
+
+    /// Resolves an agent that already exists and starts it. This never creates an agent: a
+    /// missing agent, or one that a running delete has claimed, gives `AgentNotFound`. It also
+    /// refuses to make an inspection the first start of an ephemeral agent.
+    pub(super) async fn get_existing_running<Req: CanStartWorker>(
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let target = request.agent_target()?;
-        let AgentTarget::Current(agent_id) = &target;
-        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            self.ensure_worker_belongs_to_this_executor(agent_id)?;
-            let worker = Worker::get_exact_existing_suspended(
-                self,
-                &OwnedAgentId::new(request.environment_id()?, agent_id),
-                request.principal(),
-            )
-            .await?;
-            Worker::start_if_needed(worker.clone()).await?;
-            return Ok(worker);
-        }
         async {
-            let (worker, _response_lease) = self
-                .get_or_create_pending_with_freshness(
-                    request,
-                    InvocationFreshnessDisposition::MayExist,
-                )
+            let target = request.agent_target()?;
+            let AgentTarget::Current(agent_id) = &target;
+            let reserved = golem_common::model::agent::OwnerKind::is_reserved_instance_name(
+                &agent_id.agent_id,
+            );
+            let owned_agent_id = if reserved {
+                OwnedAgentId::new(request.environment_id()?, agent_id)
+            } else {
+                self.canonicalize_agent_target(request.environment_id()?, &target)
+                    .await?
+            };
+            self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+            // The status comes from `get_latest_metadata`, which stays safe when a delete has
+            // already stopped the resident worker's actors, and which rejects a failed agent
+            // without loading it.
+            let pending_startup = match self.ensure_not_being_deleted(&owned_agent_id).await? {
+                Some(worker) => worker.pending_startup_attempt().is_some(),
+                None => false,
+            };
+            if !reserved && !pending_startup {
+                let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::worker_not_found(owned_agent_id.agent_id())
+                    })?;
+                if metadata.agent_mode != AgentMode::Ephemeral {
+                    self.ensure_not_failed(
+                        &owned_agent_id,
+                        metadata.agent_mode,
+                        &metadata.last_known_status,
+                    )
+                    .await?;
+                }
+            }
+            let worker =
+                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
+                    .await?;
+            if !reserved {
+                Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
+                    .await?;
+            }
+            Self::not_found_if_deleting(&worker, Worker::start_if_needed(worker.clone()).await)
                 .await?;
-            worker.ensure_inspection_may_start().await?;
-            Worker::start_if_needed(worker.clone()).await?;
             Ok(worker)
         }
-        .instrument(info_span!("get_or_create_worker"))
+        .instrument(info_span!("get_existing_worker"))
         .await
     }
 
@@ -337,7 +433,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get_metadata(agent_id.component_id, None)
             .await?;
         let is_ephemeral =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+            ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
                 .ok()
                 .and_then(|parsed_agent_id| {
                     component
@@ -370,6 +466,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.principal(),
             InvocationFreshnessDisposition::MayExist,
+            CreateIntent::UNKEYED_INVOCATION,
         )
         .await
         .map(Some)
@@ -433,6 +530,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.principal(),
             freshness_disposition,
+            CreateIntent::Invocation {
+                idempotency_key: request.idempotency_key()?,
+            },
         )
         .await
     }

@@ -35,12 +35,13 @@ struct CallbackProbe {
     calls: AtomicUsize,
     hold: AtomicBool,
     release: Notify,
+    completions: std::sync::Mutex<Vec<serde_json::Value>>,
 }
 
 async fn complete_promise(
     State(probe): State<Arc<CallbackProbe>>,
     headers: HeaderMap,
-    Json(_completion): Json<serde_json::Value>,
+    Json(completion): Json<serde_json::Value>,
 ) -> StatusCode {
     if headers
         .get("authorization")
@@ -49,6 +50,7 @@ async fn complete_promise(
     {
         return StatusCode::UNAUTHORIZED;
     }
+    probe.completions.lock().unwrap().push(completion);
     probe.calls.fetch_add(1, Ordering::SeqCst);
     if probe.hold.load(Ordering::SeqCst) {
         probe.release.notified().await;
@@ -212,6 +214,7 @@ fn request(request_id: u128, promise_oplog_idx: u64) -> ApprovalRequest {
             agent_name: format!("k4-owner-{request_id}"),
         },
         promise_oplog_idx,
+        promise_fingerprint: Uuid::from_u128(0x4b35),
         policy: "production-change".to_string(),
         tool_name: "matrix-core".to_string(),
         command_path: vec!["artifact".to_string(), "inspect".to_string()],
@@ -273,6 +276,12 @@ async fn approval_1_request_identity_auth_state_and_late_decision_contract() {
     assert_eq!(approved.decided_by.as_deref(), Some("operator-first"));
     assert_eq!(approved.callback, CallbackState::Delivered);
     assert_eq!(harness.callback.calls.load(Ordering::SeqCst), 1);
+    let completion = harness.callback.completions.lock().unwrap()[0].clone();
+    assert_eq!(completion["oplogIdx"], json!(request.promise_oplog_idx));
+    assert_eq!(
+        completion["fingerprint"],
+        json!(request.promise_fingerprint.to_string())
+    );
 
     let duplicate = record(
         harness

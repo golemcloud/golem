@@ -20,19 +20,21 @@ use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use futures_util::future::Either;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
+use futures_util::{SinkExt, StreamExt, future};
+use golem_common::model::InvocationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{AgentEvent, AgentId, IdempotencyKey, LogLevel, Timestamp};
+use golem_common::model::{AgentEvent, AgentId, LogLevel, Timestamp};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio::{task, time};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -40,6 +42,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config, tungstenite,
 };
+use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
 use url::Url;
 use uuid::Uuid;
@@ -97,13 +100,144 @@ pub(crate) fn insecure_connector() -> anyhow::Result<Connector> {
     Ok(Connector::Rustls(Arc::new(tls_config)))
 }
 
+/// The invocation that a connection shows and whose `InvocationFinished` ends it. The caller sets
+/// the target when the server returns the accepted invocation ID, which can be after the
+/// invocation finished. The target's `InvocationFinished` is shown only after the caller has
+/// written its own output of the invocation, such as streamed result values.
+#[derive(Clone)]
+pub struct InvocationGoal {
+    target: watch::Sender<Option<InvocationId>>,
+    output_written: watch::Sender<bool>,
+    reached: Arc<AtomicBool>,
+}
+
+impl InvocationGoal {
+    fn new() -> Self {
+        Self {
+            target: watch::Sender::new(None),
+            output_written: watch::Sender::new(false),
+            reached: Arc::default(),
+        }
+    }
+
+    pub fn set_target(&self, invocation_id: InvocationId) {
+        self.target.send_replace(Some(invocation_id));
+    }
+
+    pub fn set_output_written(&self) {
+        self.output_written.send_replace(true);
+    }
+
+    fn is_reached(&self) -> bool {
+        self.reached.load(Ordering::Acquire)
+    }
+}
+
+/// The most bytes of events the filter holds while the target is unknown. Past it the oldest
+/// held events are dropped.
+const HELD_EVENT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Selects the events of one invocation. A new connection first receives the agent's recent
+/// event history, and the target is known only when the server has accepted the invocation, so
+/// until then the filter holds events, at most `HELD_EVENT_BYTES` of them. When the target
+/// loses held events to that bound, a `ClientLagged` notice stands in for them.
+#[derive(Default)]
+struct TargetFilter {
+    target: Option<InvocationId>,
+    held: VecDeque<(InvocationId, AgentEvent, usize)>,
+    held_bytes: usize,
+    dropped: HashMap<InvocationId, u64>,
+}
+
+impl TargetFilter {
+    /// Returns the events to show now.
+    fn accept(&mut self, event: AgentEvent) -> Vec<AgentEvent> {
+        if let AgentEvent::ClientLagged { .. } = event {
+            return vec![event];
+        }
+        let Some(invocation_id) = event_invocation_id(&event) else {
+            return Vec::new();
+        };
+        match self.target {
+            Some(target) if target == invocation_id => vec![event],
+            Some(_) => Vec::new(),
+            None => {
+                let size = held_size(&event);
+                self.held.push_back((invocation_id, event, size));
+                self.held_bytes += size;
+                while self.held_bytes > HELD_EVENT_BYTES
+                    && let Some((dropped, _, size)) = self.held.pop_front()
+                {
+                    self.held_bytes -= size;
+                    *self.dropped.entry(dropped).or_default() += 1;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    /// Sets the target and returns its held events.
+    fn set_target(&mut self, target: InvocationId) -> Vec<AgentEvent> {
+        self.target = Some(target);
+        let lagged = self
+            .dropped
+            .remove(&target)
+            .map(|number_of_missed_messages| AgentEvent::ClientLagged {
+                number_of_missed_messages,
+            });
+        let events = lagged
+            .into_iter()
+            .chain(
+                self.held
+                    .drain(..)
+                    .filter(|(invocation_id, _, _)| *invocation_id == target)
+                    .map(|(_, event, _)| event),
+            )
+            .collect();
+        self.held_bytes = 0;
+        self.dropped.clear();
+        events
+    }
+}
+
+/// The bytes a held event counts against `HELD_EVENT_BYTES`: its text and a fixed share, so
+/// many small events are bounded as well.
+fn held_size(event: &AgentEvent) -> usize {
+    let text = match event {
+        AgentEvent::StdOut { bytes, .. } | AgentEvent::StdErr { bytes, .. } => bytes.len(),
+        AgentEvent::Log {
+            context, message, ..
+        } => context.len() + message.len(),
+        AgentEvent::InvocationStart { function, .. }
+        | AgentEvent::InvocationFinished { function, .. } => function.len(),
+        AgentEvent::PluginError { .. }
+        | AgentEvent::SnapshotRecoverySucceeded { .. }
+        | AgentEvent::SnapshotRecoveryFailed { .. }
+        | AgentEvent::ClientLagged { .. } => 0,
+    };
+    std::mem::size_of::<AgentEvent>() + text
+}
+
+fn event_invocation_id(event: &AgentEvent) -> Option<InvocationId> {
+    match event {
+        AgentEvent::StdOut { invocation_id, .. }
+        | AgentEvent::StdErr { invocation_id, .. }
+        | AgentEvent::Log { invocation_id, .. } => *invocation_id,
+        AgentEvent::InvocationStart { invocation_id, .. }
+        | AgentEvent::InvocationFinished { invocation_id, .. } => Some(*invocation_id),
+        AgentEvent::PluginError { .. }
+        | AgentEvent::SnapshotRecoverySucceeded { .. }
+        | AgentEvent::SnapshotRecoveryFailed { .. }
+        | AgentEvent::ClientLagged { .. } => None,
+    }
+}
+
 pub struct AgentConnection {
     request: Request,
     connector: Option<Connector>,
     output: AgentStreamOutput,
-    idempotency_key: Option<IdempotencyKey>,
-    active_target_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
-    goal_reached: Arc<AtomicBool>,
+    agent_name: String,
+    goal: Option<InvocationGoal>,
     ping_interval: Duration,
 }
 
@@ -118,36 +252,36 @@ impl AgentConnection {
         allow_insecure: bool,
         format: Format,
         ping_interval: Duration,
-        idempotency_key: Option<IdempotencyKey>,
+        wait_for_invocation: bool,
     ) -> anyhow::Result<AgentConnection> {
         let (request, connector) = Self::create_request(
             worker_service_url,
             auth_token.secret().to_string(),
             component_id.0,
-            agent_id,
+            agent_id.clone(),
             allow_insecure,
         )?;
         let output = AgentStreamOutput::new(connect_options, format);
-
-        let active_target_idempotency_key = Arc::new(Mutex::new(None));
-        let goal_reached = Arc::new(AtomicBool::new(false));
 
         Ok(Self {
             request,
             connector,
             output,
-            idempotency_key,
-            active_target_idempotency_key,
-            goal_reached,
+            agent_name: agent_id,
+            goal: wait_for_invocation.then(InvocationGoal::new),
             ping_interval,
         })
     }
 
+    /// The goal of a connection created with `wait_for_invocation`.
+    pub fn invocation_goal(&self) -> Option<InvocationGoal> {
+        self.goal.clone()
+    }
+
     /// Creates a new worker connection and every time the connection is dropped tries to
-    /// reconnect. If there was an idempotency_key goal, and it has been reached, the loop
-    /// exits.
+    /// reconnect. The loop exits when the invocation goal is reached.
     pub async fn run_forever(self) -> anyhow::Result<()> {
-        while !self.goal_reached.load(Ordering::Acquire) {
+        while !self.goal.as_ref().is_some_and(InvocationGoal::is_reached) {
             if let Err(error) = self.run().await
                 && error
                     .downcast_ref::<crate::error::service::ServiceError>()
@@ -185,29 +319,144 @@ impl AgentConnection {
         let (write, read) = ws_stream.split();
 
         let ping_interval = self.ping_interval;
-        let pings = task::spawn(async move { Self::ping_loop(write, ping_interval).await });
+        let pings = AbortOnDropHandle::new(task::spawn(async move {
+            Self::ping_loop(write, ping_interval).await
+        }));
 
         let output = self.output.clone();
-        let active_target_idempotency_key = self.active_target_idempotency_key.clone();
-        let idempotency_key = self.idempotency_key.clone();
-        let goal_reached = self.goal_reached.clone();
-        let read_messages = task::spawn(async move {
-            Self::read_loop(
-                read,
-                output,
-                active_target_idempotency_key,
-                idempotency_key,
-                goal_reached,
-            )
-            .await;
-        });
+        let agent_name = self.agent_name.clone();
+        let goal = self.goal.clone();
+        let read_messages = AbortOnDropHandle::new(task::spawn(async move {
+            Self::read_loop(read, output, agent_name, goal).await;
+        }));
 
-        pin_mut!(pings, read_messages);
+        // Both tasks end with this connection, also when the caller drops it: a detached read
+        // loop of a dropped connection would show events again after the reconnect.
         match future::select(pings, read_messages).await {
             Either::Left((Ok(result), _)) => Err(result),
             Either::Left((Err(err), _)) => Err(anyhow!(err)),
             Either::Right((Ok(_), _)) => Ok(()),
             Either::Right((Err(err), _)) => Err(anyhow!(err)),
+        }
+    }
+
+    async fn emit(output: &AgentStreamOutput, agent_name: &str, event: AgentEvent) {
+        let display_id = |invocation_id: InvocationId| format!("{agent_name}.{invocation_id}");
+        match event {
+            AgentEvent::StdOut {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => {
+                output
+                    .emit_stdout(
+                        timestamp,
+                        String::from_utf8_lossy(&bytes).to_string(),
+                        invocation_id.map(display_id),
+                    )
+                    .await;
+            }
+            AgentEvent::StdErr {
+                timestamp,
+                bytes,
+                invocation_id,
+            } => {
+                output
+                    .emit_stderr(
+                        timestamp,
+                        String::from_utf8_lossy(&bytes).to_string(),
+                        invocation_id.map(display_id),
+                    )
+                    .await;
+            }
+            AgentEvent::Log {
+                timestamp,
+                level,
+                context,
+                message,
+                invocation_id,
+            } => {
+                output
+                    .emit_log(
+                        timestamp,
+                        level,
+                        context,
+                        message,
+                        invocation_id.map(display_id),
+                    )
+                    .await;
+            }
+            AgentEvent::InvocationStart {
+                timestamp,
+                function,
+                invocation_id,
+            } => {
+                output
+                    .emit_invocation_start(timestamp, function, display_id(invocation_id))
+                    .await;
+            }
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function,
+                invocation_id,
+            } => {
+                output
+                    .emit_invocation_finished(timestamp, function, display_id(invocation_id))
+                    .await;
+            }
+            AgentEvent::PluginError {
+                timestamp,
+                plugin_name,
+                message,
+            } => {
+                output
+                    .emit_log(
+                        timestamp,
+                        LogLevel::Error,
+                        format!("plugin:{plugin_name}"),
+                        message,
+                        None,
+                    )
+                    .await;
+            }
+            AgentEvent::SnapshotRecoverySucceeded {
+                timestamp,
+                snapshot_index,
+            } => {
+                output
+                    .emit_log(
+                        timestamp,
+                        LogLevel::Info,
+                        "snapshot-recovery".to_string(),
+                        format!("loaded snapshot from oplog index {snapshot_index}"),
+                        None,
+                    )
+                    .await;
+            }
+            AgentEvent::SnapshotRecoveryFailed {
+                timestamp,
+                snapshot_index,
+                error,
+            } => {
+                output
+                    .emit_log(
+                        timestamp,
+                        LogLevel::Error,
+                        "snapshot-recovery".to_string(),
+                        format!(
+                            "failed to load snapshot from oplog index {snapshot_index}: {error}"
+                        ),
+                        None,
+                    )
+                    .await;
+            }
+            AgentEvent::ClientLagged {
+                number_of_missed_messages,
+            } => {
+                output
+                    .emit_missed_messages(Timestamp::now_utc(), number_of_missed_messages)
+                    .await;
+            }
         }
     }
 
@@ -281,173 +530,64 @@ impl AgentConnection {
     }
 
     async fn read_loop(
-        read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        mut read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         output: AgentStreamOutput,
-        active_target_idempotency_key: Arc<Mutex<Option<IdempotencyKey>>>,
-        idempotency_key_to_look_for: Option<IdempotencyKey>,
-        goal_reached: Arc<AtomicBool>,
+        agent_name: String,
+        goal: Option<InvocationGoal>,
     ) {
-        let result = read
-            .try_for_each(|message| {
-                let output = output.clone();
-                let idempotency_key_to_look_for = idempotency_key_to_look_for.clone();
-                let active_target_idempotency_key = active_target_idempotency_key.clone();
-                let goal_reached = goal_reached.clone();
-                async move {
-                    let mut active_target_idempotency_key = active_target_idempotency_key.lock().await;
-                    let matching = match &idempotency_key_to_look_for {
-                        Some(idempotency_key_to_look_for) => {
-                            if let Some(active_target_idempotency_key) = &*active_target_idempotency_key {
-                                idempotency_key_to_look_for == active_target_idempotency_key
-                            } else {
-                                false
+        let mut filter = TargetFilter::default();
+        let mut target = goal.as_ref().map(|goal| goal.target.subscribe());
+        let result = loop {
+            let events = if let Some(target_rx) = target.as_mut()
+                && filter.target.is_none()
+                && let Some(invocation_id) = *target_rx.borrow_and_update()
+            {
+                filter.set_target(invocation_id)
+            } else {
+                let message = tokio::select! {
+                    message = read.next() => message,
+                    _ = async {
+                        match target.as_mut() {
+                            Some(target_rx) if filter.target.is_none() => {
+                                let _ = target_rx.changed().await;
                             }
+                            _ => future::pending::<()>().await,
                         }
-                        None => true,
-                    };
-
-                    let worker_event = Self::parse_websocket_message(message);
-                    match worker_event {
-                        None => {}
-                        Some(msg) => match msg {
-                            AgentEvent::StdOut { timestamp, bytes } => {
-                                if matching {
-                                    output
-                                        .emit_stdout(
-                                            timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
-                                        .await;
-                                }
-                            }
-                            AgentEvent::StdErr { timestamp, bytes } => {
-                                if matching {
-                                    output
-                                        .emit_stderr(
-                                            timestamp,
-                                            String::from_utf8_lossy(&bytes).to_string(),
-                                        )
-                                        .await;
-                                }
-                            }
-                            AgentEvent::Log {
-                                timestamp,
-                                level,
-                                context,
-                                message,
-                            } => {
-                                if matching {
-                                    output.emit_log(timestamp, level, context, message).await;
-                                }
-                            }
-                            AgentEvent::InvocationStart {
-                                timestamp,
-                                function,
-                                idempotency_key,
-                            } => {
-                                if matching
-                                    || idempotency_key_to_look_for.as_ref()
-                                        == Some(&idempotency_key)
-                                {
-                                    if idempotency_key_to_look_for.as_ref() == Some(&idempotency_key) {
-                                        *active_target_idempotency_key = Some(idempotency_key.clone());
-                                    }
-                                    output
-                                        .emit_invocation_start(timestamp, function, idempotency_key)
-                                        .await;
-                                }
-                            }
-                            AgentEvent::InvocationFinished {
-                                timestamp,
-                                function,
-                                idempotency_key,
-                            } => {
-                                if matching {
-                                    output
-                                        .emit_invocation_finished(
-                                            timestamp,
-                                            function,
-                                            idempotency_key.clone(),
-                                        )
-                                        .await;
-
-                                    if idempotency_key_to_look_for == Some(idempotency_key) {
-                                        active_target_idempotency_key.take();
-                                        goal_reached.store(true, Ordering::Release);
-                                    }
-                                }
-                            }
-                            AgentEvent::PluginError {
-                                timestamp,
-                                plugin_name,
-                                message,
-                            } => {
-                                if matching {
-                                    output
-                                        .emit_log(
-                                            timestamp,
-                                            LogLevel::Error,
-                                            format!("plugin:{plugin_name}"),
-                                            message,
-                                        )
-                                        .await;
-                                }
-                            }
-                            AgentEvent::SnapshotRecoverySucceeded {
-                                timestamp,
-                                snapshot_index,
-                            } => {
-                                if matching {
-                                    output
-                                        .emit_log(
-                                            timestamp,
-                                            LogLevel::Info,
-                                            "snapshot-recovery".to_string(),
-                                            format!("loaded snapshot from oplog index {snapshot_index}"),
-                                        )
-                                        .await;
-                                }
-                            }
-                            AgentEvent::SnapshotRecoveryFailed {
-                                timestamp,
-                                snapshot_index,
-                                error,
-                            } => {
-                                if matching {
-                                    output
-                                        .emit_log(
-                                            timestamp,
-                                            LogLevel::Error,
-                                            "snapshot-recovery".to_string(),
-                                            format!(
-                                                "failed to load snapshot from oplog index {snapshot_index}: {error}"
-                                            ),
-                                        )
-                                        .await;
-                                }
-                            }
-                            AgentEvent::ClientLagged {
-                                number_of_missed_messages,
-                            } => {
-                                output
-                                    .emit_missed_messages(
-                                        Timestamp::now_utc(),
-                                        number_of_missed_messages,
-                                    )
-                                    .await;
-                            }
-                        },
-                    }
-
-                    if goal_reached.load(Ordering::Acquire) {
-                        // Early return from the stream as the goal of observing a given idempotency key has been reached
-                        Err(tungstenite::error::Error::ConnectionClosed)
-                    } else {
-                        Ok(())
-                    }
+                    } => continue,
+                };
+                let message = match message {
+                    None => break Ok(()),
+                    Some(Err(error)) => break Err(error),
+                    Some(Ok(message)) => message,
+                };
+                match Self::parse_websocket_message(message) {
+                    None => continue,
+                    Some(event) if goal.is_some() => filter.accept(event),
+                    Some(event) => vec![event],
                 }
-            })
-            .await;
+            };
+            let mut target_finished = false;
+            for event in events {
+                let is_target_finish = matches!(
+                    &event,
+                    AgentEvent::InvocationFinished { invocation_id, .. }
+                        if filter.target == Some(*invocation_id)
+                );
+                if is_target_finish && let Some(goal) = &goal {
+                    let _ = goal
+                        .output_written
+                        .subscribe()
+                        .wait_for(|written| *written)
+                        .await;
+                }
+                target_finished |= is_target_finish;
+                Self::emit(&output, &agent_name, event).await;
+            }
+            if target_finished && let Some(goal) = &goal {
+                goal.reached.store(true, Ordering::Release);
+                break Ok(());
+            }
+        };
 
         match result {
             Ok(()) | Err(tungstenite::error::Error::ConnectionClosed) => {
@@ -517,83 +657,8 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 
-    #[test]
-    async fn invocation_stream_waits_for_target_finish_after_nested_calls() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
-        let target = IdempotencyKey::fresh();
-        let child = IdempotencyKey::fresh();
-        let grandchild = IdempotencyKey::fresh();
-        let unrelated = IdempotencyKey::fresh();
-        let timestamp = Timestamp::now_utc();
-        let events = [
-            AgentEvent::InvocationStart {
-                timestamp,
-                function: "unrelated".into(),
-                idempotency_key: unrelated.clone(),
-            },
-            AgentEvent::StdOut {
-                timestamp,
-                bytes: b"unrelated output must be filtered\n".to_vec(),
-            },
-            AgentEvent::InvocationFinished {
-                timestamp,
-                function: "unrelated".into(),
-                idempotency_key: unrelated,
-            },
-            AgentEvent::InvocationStart {
-                timestamp,
-                function: "hello".into(),
-                idempotency_key: target.clone(),
-            },
-            AgentEvent::InvocationStart {
-                timestamp,
-                function: "child".into(),
-                idempotency_key: child.clone(),
-            },
-            AgentEvent::InvocationStart {
-                timestamp,
-                function: "grandchild".into(),
-                idempotency_key: grandchild,
-            },
-            AgentEvent::StdOut {
-                timestamp,
-                bytes: b"nested stdout\n".to_vec(),
-            },
-            AgentEvent::StdErr {
-                timestamp,
-                bytes: b"nested stderr\n".to_vec(),
-            },
-            AgentEvent::InvocationFinished {
-                timestamp,
-                function: "child".into(),
-                idempotency_key: child,
-            },
-            AgentEvent::Log {
-                timestamp,
-                level: LogLevel::Info,
-                context: "hello".into(),
-                message: "summary after nested calls".into(),
-            },
-            // Terminal events can use a different function name from the start.
-            AgentEvent::InvocationFinished {
-                timestamp,
-                function: "interrupted during retry".into(),
-                idempotency_key: target.clone(),
-            },
-        ];
-        let server = async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let mut websocket = accept_async(socket).await.unwrap();
-            for event in events {
-                websocket
-                    .send(Message::Text(serde_json::to_string(&event).unwrap().into()))
-                    .await
-                    .unwrap();
-            }
-            websocket.close(None).await.unwrap();
-        };
-        let connection = AgentConnection::new(
+    async fn connection(url: Url) -> anyhow::Result<AgentConnection> {
+        AgentConnection::new(
             url,
             TokenSecret::new(),
             &ComponentId(Uuid::new_v4()),
@@ -607,16 +672,210 @@ mod tests {
             false,
             Format::Json,
             Duration::from_secs(60),
-            Some(target),
+            true,
         )
         .await
-        .unwrap();
+    }
+
+    /// An unrelated invocation finishes before the target, and nested calls of the target
+    /// never finish.
+    fn events(target: InvocationId) -> Vec<AgentEvent> {
+        let child = InvocationId(Uuid::new_v4());
+        let unrelated = InvocationId(Uuid::new_v4());
+        let timestamp = Timestamp::now_utc();
+        vec![
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "unrelated".into(),
+                invocation_id: unrelated,
+            },
+            AgentEvent::StdOut {
+                timestamp,
+                bytes: b"unrelated output\n".to_vec(),
+                invocation_id: Some(unrelated),
+            },
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "unrelated".into(),
+                invocation_id: unrelated,
+            },
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "hello".into(),
+                invocation_id: target,
+            },
+            AgentEvent::InvocationStart {
+                timestamp,
+                function: "child".into(),
+                invocation_id: child,
+            },
+            AgentEvent::StdOut {
+                timestamp,
+                bytes: b"nested stdout\n".to_vec(),
+                invocation_id: Some(child),
+            },
+            AgentEvent::Log {
+                timestamp,
+                level: LogLevel::Info,
+                context: "hello".into(),
+                message: "summary after nested calls".into(),
+                invocation_id: Some(target),
+            },
+            // Terminal events can use a different function name from the start.
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "interrupted during retry".into(),
+                invocation_id: target,
+            },
+        ]
+    }
+
+    async fn send_events(listener: TcpListener, events: Vec<AgentEvent>, close: bool) {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut websocket = accept_async(socket).await.unwrap();
+        for event in events {
+            websocket
+                .send(Message::Text(serde_json::to_string(&event).unwrap().into()))
+                .await
+                .unwrap();
+        }
+        if close {
+            websocket.close(None).await.unwrap();
+        } else {
+            future::pending::<()>().await;
+        }
+    }
+
+    #[test]
+    fn target_filter_shows_only_the_target_after_replayed_history() {
+        let target = InvocationId(Uuid::new_v4());
+        let earlier = InvocationId(Uuid::new_v4());
+        let timestamp = Timestamp::now_utc();
+        let stdout = |text: &str, invocation_id| AgentEvent::StdOut {
+            timestamp,
+            bytes: text.as_bytes().to_vec(),
+            invocation_id,
+        };
+        let mut filter = TargetFilter::default();
+
+        let lagged = AgentEvent::ClientLagged {
+            number_of_missed_messages: 3,
+        };
+        assert_eq!(filter.accept(lagged.clone()), vec![lagged]);
+
+        // Replayed history and early target output are held until the target is known.
+        for event in [
+            stdout("initialization", None),
+            stdout("earlier", Some(earlier)),
+            AgentEvent::InvocationFinished {
+                timestamp,
+                function: "run".into(),
+                invocation_id: earlier,
+            },
+            stdout("target 1", Some(target)),
+        ] {
+            assert_eq!(filter.accept(event), vec![]);
+        }
+        assert_eq!(
+            filter.set_target(target),
+            vec![stdout("target 1", Some(target))]
+        );
+
+        assert_eq!(filter.accept(stdout("later", Some(earlier))), vec![]);
+        assert_eq!(filter.accept(stdout("no invocation", None)), vec![]);
+        assert_eq!(
+            filter.accept(stdout("target 2", Some(target))),
+            vec![stdout("target 2", Some(target))]
+        );
+    }
+
+    #[test]
+    fn target_filter_drops_the_oldest_held_events_past_its_bound() {
+        let target = InvocationId(Uuid::new_v4());
+        let earlier = InvocationId(Uuid::new_v4());
+        let timestamp = Timestamp::now_utc();
+        let mebibyte = |byte: u8, invocation_id| AgentEvent::StdOut {
+            timestamp,
+            bytes: vec![byte; 1024 * 1024],
+            invocation_id: Some(invocation_id),
+        };
+        let mut filter = TargetFilter::default();
+
+        // The target's first output is the oldest held event, so the bound drops it before the
+        // newer output of the earlier invocation.
+        for event in [
+            mebibyte(1, target),
+            mebibyte(2, earlier),
+            mebibyte(3, earlier),
+            mebibyte(4, earlier),
+            mebibyte(5, earlier),
+            mebibyte(6, target),
+        ] {
+            assert_eq!(filter.accept(event), vec![]);
+            assert!(filter.held_bytes <= HELD_EVENT_BYTES);
+        }
+        assert_eq!(
+            filter.set_target(target),
+            vec![
+                AgentEvent::ClientLagged {
+                    number_of_missed_messages: 1,
+                },
+                mebibyte(6, target),
+            ]
+        );
+        assert_eq!(filter.held_bytes, 0);
+    }
+
+    #[test]
+    async fn invocation_stream_waits_for_target_finish_after_nested_calls() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let target = InvocationId(Uuid::new_v4());
+        let connection = connection(url).await.unwrap();
+        let goal = connection.invocation_goal().unwrap();
+        goal.set_target(target);
+        goal.set_output_written();
 
         time::timeout(Duration::from_secs(5), async {
-            let (result, ()) = tokio::join!(connection.run_forever(), server);
+            let (result, ()) = tokio::join!(
+                connection.run_forever(),
+                send_events(listener, events(target), true)
+            );
             result.unwrap();
         })
         .await
         .expect("the stream must exit after the target finish, even with unfinished nested calls");
+    }
+
+    #[test]
+    async fn invocation_stream_ends_after_the_target_finish_and_the_callers_output() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let target = InvocationId(Uuid::new_v4());
+        let connection = connection(url).await.unwrap();
+        let goal = connection.invocation_goal().unwrap();
+        // The socket stays open, so only the goal can end the connection.
+        let server = tokio::spawn(send_events(listener, events(target), false));
+        let run = tokio::spawn(connection.run_forever());
+
+        time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !run.is_finished(),
+            "an unrelated finish must not end the stream"
+        );
+        goal.set_target(target);
+        time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !run.is_finished(),
+            "the target finish must wait for the caller's own output"
+        );
+        goal.set_output_written();
+
+        time::timeout(Duration::from_secs(5), run)
+            .await
+            .expect("setting an already finished target must end the stream")
+            .unwrap()
+            .unwrap();
+        server.abort();
     }
 }

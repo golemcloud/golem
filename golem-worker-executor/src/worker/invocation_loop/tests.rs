@@ -25,6 +25,8 @@ use crate::services::agent_filesystem::{
 use crate::services::resource_limits::{
     AtomicResourceEntry, MonthlyResourceCapacityError, MonthlyResourceExhaustion,
 };
+use golem_common::model::InvocationId;
+use uuid::Uuid;
 
 #[test]
 fn unavailable_monthly_policy_is_not_quota_suspension_or_ephemeral_resource_exhaustion() {
@@ -45,7 +47,7 @@ use crate::worker::invocation::InvokeResult;
 use crate::worker::{
     CreateWorkerInstanceError, EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
     PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker, UnloadReason,
-    WorkerCommand, WorkerInstance, complete_stopping_worker,
+    WorkerCommand, complete_stopping_worker,
 };
 use crate::workerctx::default::Context;
 use golem_common::model::AgentInvocationKind;
@@ -360,8 +362,8 @@ fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {
 #[test]
 fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
     use super::{
-        AgentStatusRecord, CanonicalFilePath, FileByteSelection, IdempotencyKey,
-        PendingInvocationRef, QueuedWorkerInvocation, SelectedWork,
+        AgentStatusRecord, CanonicalFilePath, FileByteSelection, PendingInvocationRef,
+        QueuedWorkerInvocation, SelectedWork,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::{PendingUpdateKind, PendingUpdateRef};
@@ -371,7 +373,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(4),
-            idempotency_key: Some(IdempotencyKey::new("method".into())),
+            idempotency_key: Some(InvocationId(Uuid::from_u128(1))),
             manual_update_target_revision: None,
         };
         let mut status = AgentStatusRecord {
@@ -426,16 +428,16 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
 #[test]
 fn filesystem_turns_preserve_initialization_and_control_priority() {
     use super::{
-        AgentStatusRecord, CanonicalFilePath, IdempotencyKey, PendingInvocationRef,
-        QueuedWorkerInvocation, SelectedWork,
+        AgentStatusRecord, CanonicalFilePath, PendingInvocationRef, QueuedWorkerInvocation,
+        SelectedWork,
     };
-    let constructor = IdempotencyKey::new("init-agent".into());
+    let constructor = InvocationId(Uuid::from_u128(2));
     let status = Arc::new(AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(constructor.clone()),
+            idempotency_key: Some(constructor),
             manual_update_target_revision: None,
         }],
         ..Default::default()
@@ -496,19 +498,19 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
 
 #[test]
 fn future_invocations_do_not_block_ready_work_or_idle() {
-    use super::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, SelectedWork};
+    use super::{AgentStatusRecord, PendingInvocationRef, SelectedWork};
     let deadline = Timestamp::from(2000);
     let future = PendingInvocationRef {
         timestamp: Timestamp::from(1000),
         not_before: Some(deadline),
         oplog_index: OplogIndex::from_u64(3),
-        idempotency_key: Some(IdempotencyKey::new("future".into())),
+        idempotency_key: Some(InvocationId(Uuid::from_u128(3))),
         manual_update_target_revision: None,
     };
     let ready = PendingInvocationRef {
         not_before: None,
         oplog_index: OplogIndex::from_u64(4),
-        idempotency_key: Some(IdempotencyKey::new("ready".into())),
+        idempotency_key: Some(InvocationId(Uuid::from_u128(4))),
         ..future.clone()
     };
     let mut queue = VecDeque::new();
@@ -832,8 +834,8 @@ async fn idle_over_limit_update_publishes_suspend_only_after_cleanup() {
     assert_eq!(*events.lock().unwrap(), ["cleanup", "suspend"]);
 }
 
-fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
-    let (instance, notify) = complete_stopping_worker(
+fn complete_stopping(final_state: FinalWorkerState) -> FinalWorkerState {
+    let (final_state, notify) = complete_stopping_worker(
         StoppingWorker {
             notify: golem_common::one_shot::OneShotEvent::new(),
             final_state: FinalWorkerState::Unloaded {
@@ -844,7 +846,7 @@ fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
         final_state,
     );
     notify.set();
-    instance
+    final_state
 }
 
 #[test]
@@ -1156,8 +1158,8 @@ async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() 
     );
     metrics.advance(4000);
     deletion.release();
-    let instance = publication.await.unwrap();
-    assert!(matches!(instance, WorkerInstance::Unloaded { .. }));
+    let final_state = publication.await.unwrap();
+    assert!(matches!(final_state, FinalWorkerState::Unloaded { .. }));
     assert!(!held.load(Ordering::Acquire));
     assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
     assert_eq!(
@@ -1249,7 +1251,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
     assert!(!held.load(Ordering::Acquire));
     assert_eq!(cleanup.wait().await.unwrap_err(), cleanup_error);
 
-    let instance = publish_unload_outcome(
+    let final_state = publish_unload_outcome(
         Some(cleanup_error),
         None,
         |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
@@ -1258,7 +1260,7 @@ async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
         },
     )
     .await;
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+    assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
     metrics.assert_finished("unload", "released_with_failure");
     assert_eq!(
         metrics.value(
@@ -1937,7 +1939,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         1.0
     );
 
-    let instance = publish_unload_outcome(
+    let final_state = publish_unload_outcome(
         Some(cleanup_error.clone()),
         None,
         |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
@@ -1946,8 +1948,7 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         },
     )
     .await;
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
-    assert!(!matches!(instance, WorkerInstance::Stopping(_)));
+    assert!(matches!(final_state, FinalWorkerState::CleanupFailed(_)));
     assert!(
         !control
             .calls()
@@ -1981,7 +1982,9 @@ async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues
         ),
         1.0
     );
-    assert!(matches!(instance, WorkerInstance::CleanupFailed(error) if error == cleanup_error));
+    assert!(
+        matches!(final_state, FinalWorkerState::CleanupFailed(error) if error == cleanup_error)
+    );
     assert_eq!(
         control
             .calls()

@@ -20,10 +20,11 @@
 use super::{ConsumerAttachmentStatus, qualify_local_stream};
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, LocalStreamReaderId, SessionStreamRole,
-    StreamAttachmentKey, StreamBindingRecord, StreamCancelReason, StreamCancelRole,
-    StreamConsumerCancelIntentRecord, StreamForkCutRecord, StreamReaderForwardIntentRecord,
-    StreamRecordReference, StreamRegistrationInvocation, StreamSessionCancelRequestedRecord,
-    StreamSessionKey, StreamSessionMappingRecord, StreamSessionRecord,
+    StreamAttachmentKey, StreamBindingRecord, StreamCancellationRequest,
+    StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamForkCutRecord,
+    StreamReaderForwardIntentRecord, StreamRecordReference, StreamRegistrationInvocation,
+    StreamSessionCancelRequestedRecord, StreamSessionKey, StreamSessionMappingRecord,
+    StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
@@ -40,7 +41,7 @@ pub struct RecoveryTopology {
 }
 
 /// Pure cancellation work selected from the folded session journal.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CancellationWork {
     /// Exact persisted mapping whose stream must be cancelled.
     pub binding: StreamBindingRecord,
@@ -107,7 +108,8 @@ pub struct SessionControlMetadata {
         HashMap<LocalStreamReaderId, (OplogIndex, StreamReaderForwardIntentRecord)>,
     incoming_reader_forwards: BTreeMap<OplogIndex, StreamReaderForwardIntentRecord>,
     cancel_intents: HashMap<StreamRecordReference, StreamConsumerCancelIntentRecord>,
-    applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecord>,
+    applied_cancel_intents:
+        HashMap<(StreamRecordReference, u64), Vec<StreamConsumerCancelIntentRecord>>,
     tombstoned_slots: HashMap<String, SessionStreamRole>,
     cancellation_requested: bool,
     consumer_record_counts: HashMap<LocalStreamReaderId, u64>,
@@ -307,7 +309,9 @@ impl SessionControlMetadata {
     }
     /// Returns whether the exact cancellation intent has an applied receipt.
     pub fn is_cancellation_applied(&self, intent: &StreamConsumerCancelIntentRecord) -> bool {
-        self.applied_cancel_intents.contains(intent)
+        self.applied_cancel_intents
+            .get(&(intent.source.clone(), intent.epoch))
+            .is_some_and(|bucket| bucket.contains(intent))
     }
     /// Returns whether this session has durable Prepared authority.
     pub fn is_prepared(&self) -> bool {
@@ -366,18 +370,21 @@ impl SessionControlMetadata {
                     StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         session_key: session_reference.clone(),
-                        consumer_invocation: session_reference.idempotency_key().clone(),
+                        consumer_invocation: *session_reference.idempotency_key(),
                         source: binding.source.clone(),
                         epoch,
-                        role: match binding.role.direction() {
-                            SessionStreamRole::Input => StreamCancelRole::InputProducer,
-                            SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
-                            SessionStreamRole::ToolStdin
-                            | SessionStreamRole::ToolStdout
-                            | SessionStreamRole::ToolStderr => unreachable!(),
+                        cancellation: StreamCancellationRequest {
+                            direction: binding.role.direction(),
+                            side: match binding.role.direction() {
+                                SessionStreamRole::Input => StreamEndpointSide::Producer,
+                                SessionStreamRole::Output => StreamEndpointSide::Consumer,
+                                _ => unreachable!(),
+                            },
+                            authored_by: StreamTerminalAuthor::Host,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                                "session deleted".into(),
+                            )),
                         },
-                        reason: StreamCancelReason::Cancelled,
-                        details: None,
                     },
                 ));
             }
@@ -476,7 +483,7 @@ impl SessionControlMetadata {
     /// Counts exact cancellation receipts retained by the projection.
     #[cfg(test)]
     pub(crate) fn applied_cancellation_count(&self) -> usize {
-        self.applied_cancel_intents.len()
+        self.applied_cancel_intents.values().map(Vec::len).sum()
     }
 
     /// Constructs an epoch mismatch without rewriting persisted topology records.
@@ -503,7 +510,7 @@ impl SessionControlMetadata {
     ) -> impl Iterator<Item = Result<CancellationWork, String>> + '_ {
         self.cancel_intents
             .values()
-            .filter(|intent| !self.applied_cancel_intents.contains(*intent))
+            .filter(|intent| !self.is_cancellation_applied(intent))
             .map(|intent| {
                 let binding = self
                     .persisted_mappings
@@ -542,7 +549,7 @@ impl SessionControlMetadata {
             return Err(error.clone());
         }
         let consumer_matches = key.consumer_invocation
-            == StreamRegistrationInvocation::Local(intent.consumer_invocation.clone()).qualify(
+            == StreamRegistrationInvocation::Local(intent.consumer_invocation).qualify(
                 key.consumer_environment_id,
                 &key.consumer,
                 key.expected_consumer_fingerprint,
@@ -584,9 +591,7 @@ impl SessionControlMetadata {
                         && persisted.format_version == intent.format_version
                         && persisted.consumer_invocation == intent.consumer_invocation
                         && persisted.epoch == intent.epoch
-                        && persisted.role == intent.role
-                        && persisted.reason == intent.reason
-                        && persisted.details == intent.details
+                        && persisted.cancellation == intent.cancellation
                 })
             && self.persisted_mappings.contains(&StreamBindingRecord {
                 transport_stream_id: mapping.transport_stream_id,
@@ -605,14 +610,14 @@ impl SessionControlMetadata {
             || self
                 .cancel_intents
                 .values()
-                .any(|intent| !self.applied_cancel_intents.contains(intent))
+                .any(|intent| !self.is_cancellation_applied(intent))
     }
 
     /// Returns whether any committed cancellation intent lacks its applied marker.
     pub fn has_cancellation_intents(&self) -> bool {
         self.cancel_intents
             .values()
-            .any(|intent| !self.applied_cancel_intents.contains(intent))
+            .any(|intent| !self.is_cancellation_applied(intent))
     }
 
     /// Returns whether attachments must be reconstructed or finalized from the journal.
@@ -781,7 +786,13 @@ impl SessionControlMetadata {
             && record_matches
             && self.cancel_intents.get(&record.intent.source) == Some(&record.intent)
         {
-            self.applied_cancel_intents.insert(record.intent.clone());
+            let bucket = self
+                .applied_cancel_intents
+                .entry((record.intent.source.clone(), record.intent.epoch))
+                .or_default();
+            if !bucket.contains(&record.intent) {
+                bucket.push(record.intent.clone());
+            }
         }
         if let StreamSessionRecord::Tombstoned(record) = record
             && record_matches
@@ -1171,7 +1182,7 @@ mod tests {
         let mut second = first.clone();
         second.transport_stream_id += 1;
         let third = binding(&mapping_for(&key, 18));
-        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
+        let reference = StreamRegistrationInvocation::Local(key.idempotency_key);
         let mut state = SessionControlMetadata::default();
         let records = [
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
@@ -1232,7 +1243,7 @@ mod tests {
     fn forwarding_intent_is_exact_reader_history_not_terminal_or_attachment_authority() {
         let owner = identity();
         let key = owner.invocation.clone();
-        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
+        let reference = StreamRegistrationInvocation::Local(key.idempotency_key);
         let source = binding(&mapping());
         let mut destination = source.clone();
         destination.transport_stream_id += 1;
@@ -1319,7 +1330,7 @@ mod tests {
     #[test]
     fn forwarding_control_routing_deduplicates_local_remote_session_aliases() {
         let owner = identity();
-        let source = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+        let source = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key);
         let destination = StreamRegistrationInvocation::Remote(owner.invocation.clone());
         let binding = binding(&mapping());
         let reader = LocalStreamReaderId {
@@ -1380,8 +1391,8 @@ mod tests {
     #[test]
     fn forwarding_intent_requires_one_unobserved_exact_reader() {
         use golem_common::base_model::durable_stream::{
-            StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-            StreamEndResult, StreamOffset, StreamSourceUnavailableRecord,
+            StreamConsumerItemValueRecord, StreamConsumerTerminalRecord, StreamOffset,
+            StreamSourceUnavailableRecord,
         };
         let owner = identity();
         let reference = StreamRegistrationInvocation::Remote(owner.invocation.clone());
@@ -1423,9 +1434,7 @@ mod tests {
             session_key: reference.clone(),
             reader_id: reader,
             destination: StreamReaderForwardDestination::SessionBinding {
-                session_key: StreamRegistrationInvocation::Local(
-                    golem_common::model::IdempotencyKey::new("destination".into()),
-                ),
+                session_key: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(301).into()),
                 binding: sibling,
                 publication: StreamReaderForwardPublication::InvocationResult { handle_index: 0 },
             },
@@ -1478,7 +1487,8 @@ mod tests {
                     reader_id: observed,
                     source_offset: offset,
                     consumer_read_ordinal: 0,
-                    terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: StreamTerminal::Finished,
                 }),
                 StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -1541,7 +1551,7 @@ mod tests {
         let key = real_owner.invocation.clone();
         let local = StreamSessionRecord::CallerAttempt(StreamCallerAttemptRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+            session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
             attempt_id: AttemptId::fresh(),
         });
         let mut matching = SessionControlMetadata::default();
@@ -1630,17 +1640,21 @@ mod tests {
             .insert("$result".into(), SessionStreamRole::Output);
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(source.idempotency_key.clone()),
-            consumer_invocation: source.idempotency_key.clone(),
+            session_key: StreamRegistrationInvocation::Local(source.idempotency_key),
+            consumer_invocation: source.idempotency_key,
             source: binding(&first).source,
             epoch: 3,
-            role: StreamCancelRole::OutputConsumer,
-            reason: StreamCancelReason::GuestDrop,
-            details: None,
+            cancellation: StreamCancellationRequest {
+                direction: SessionStreamRole::Output,
+                side: StreamEndpointSide::Consumer,
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::ConsumerCancelled { details: None },
+            },
         };
         old.cancel_intents
             .insert(intent.source.clone(), intent.clone());
-        old.applied_cancel_intents.insert(intent);
+        old.applied_cancel_intents
+            .insert((intent.source.clone(), intent.epoch), vec![intent]);
         let new = old.for_fork(&cut).unwrap();
         assert_eq!(new.prepared, old.prepared);
         assert_eq!(new.initial_attached, old.initial_attached);
@@ -1679,17 +1693,19 @@ mod tests {
         )
         .unwrap();
         attachment.epoch = 3;
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("consumer-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(302).into();
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: StreamRegistrationInvocation::Remote(source.clone()),
-            consumer_invocation: attachment.consumer_invocation.idempotency_key.clone(),
+            consumer_invocation: attachment.consumer_invocation.idempotency_key,
             source: binding(&mapping).source,
             epoch: 3,
-            role: StreamCancelRole::OutputConsumer,
-            reason: StreamCancelReason::GuestDrop,
-            details: None,
+            cancellation: StreamCancellationRequest {
+                direction: SessionStreamRole::Output,
+                side: StreamEndpointSide::Consumer,
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::ConsumerCancelled { details: None },
+            },
         };
         let mut old = SessionControlMetadata::default();
         old.persisted_mappings.insert(binding(&mapping));
@@ -1722,7 +1738,7 @@ mod tests {
         attachment.consumer.agent_id = "forked-consumer".into();
         attachment.expected_consumer_fingerprint = AgentFingerprint::new();
         attachment.consumer_invocation =
-            StreamRegistrationInvocation::Local(intent.consumer_invocation.clone()).qualify(
+            StreamRegistrationInvocation::Local(intent.consumer_invocation).qualify(
                 attachment.consumer_environment_id,
                 &attachment.consumer,
                 attachment.expected_consumer_fingerprint,
@@ -1732,8 +1748,7 @@ mod tests {
                 .has_committed_cancellation(&attachment, &mapping, &intent)
                 .unwrap()
         );
-        attachment.consumer_invocation.idempotency_key =
-            golem_common::model::IdempotencyKey::new("other-call".into());
+        attachment.consumer_invocation.idempotency_key = uuid::Uuid::from_u128(303).into();
         assert!(
             !forked
                 .has_committed_cancellation(&attachment, &mapping, &intent)
@@ -1814,13 +1829,18 @@ mod tests {
         let key = identity().invocation;
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
-            consumer_invocation: key.idempotency_key.clone(),
+            session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
+            consumer_invocation: key.idempotency_key,
             source: StreamRecordReference::Foreign(mapping.handle.clone()),
             epoch: 3,
-            role: StreamCancelRole::OutputConsumer,
-            reason: StreamCancelReason::GuestDrop,
-            details: Some("closed by consumer".into()),
+            cancellation: StreamCancellationRequest {
+                direction: SessionStreamRole::Output,
+                side: StreamEndpointSide::Consumer,
+                authored_by: StreamTerminalAuthor::Host,
+                terminal: StreamTerminal::ConsumerCancelled {
+                    details: Some("closed by consumer".into()),
+                },
+            },
         };
         let mut state = SessionControlMetadata::default();
         state.apply(
@@ -1837,7 +1857,7 @@ mod tests {
             &key,
             &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+                session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
                 mapping: binding(&mapping),
             }),
             owner.environment_id,
@@ -1855,28 +1875,54 @@ mod tests {
                 .unwrap(),
             expected
         );
+        let mut variants = Vec::new();
         let mut stale = intent.clone();
         stale.epoch = 2;
+        variants.push(stale);
+        let mut stale = intent.clone();
+        stale.cancellation.direction = SessionStreamRole::Input;
+        variants.push(stale);
+        let mut stale = intent.clone();
+        stale.cancellation.side = StreamEndpointSide::Producer;
+        variants.push(stale);
+        let mut stale = intent.clone();
+        stale.cancellation.authored_by = StreamTerminalAuthor::Guest;
+        variants.push(stale);
+        let mut stale = intent.clone();
+        stale.cancellation.terminal = StreamTerminal::ConsumerCancelled { details: None };
+        variants.push(stale);
+        let mut stale = intent.clone();
+        stale.cancellation.terminal =
+            StreamTerminal::Failed(StreamError::Interrupted("closed by consumer".into()));
+        variants.push(stale);
+        for (position, stale) in variants.into_iter().enumerate() {
+            for record in [
+                StreamSessionRecord::ConsumerCancelIntent(stale.clone()),
+                StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    intent: stale,
+                }),
+            ] {
+                state.apply(
+                    OplogIndex::from_u64(3 + position as u64 * 2),
+                    &key,
+                    &record,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    owner.fingerprint,
+                );
+                assert_eq!(state.cancellation_intent(&intent.source), Some(&intent));
+                assert_eq!(
+                    state
+                        .pending_cancellations()
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
         state.apply(
-            OplogIndex::from_u64(3),
-            &key,
-            &StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                intent: stale,
-            }),
-            owner.environment_id,
-            &owner.agent_id,
-            owner.fingerprint,
-        );
-        assert_eq!(
-            state
-                .pending_cancellations()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap(),
-            expected
-        );
-        state.apply(
-            OplogIndex::from_u64(4),
+            OplogIndex::from_u64(20),
             &key,
             &StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -1887,6 +1933,83 @@ mod tests {
             owner.fingerprint,
         );
         assert!(state.pending_cancellations().next().is_none());
+    }
+
+    #[test]
+    fn applied_receipt_compares_typed_failure_values_within_identity_bucket() {
+        use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        for (schema, selected, other) in [
+            (SchemaType::u64(), SchemaValue::U64(7), SchemaValue::U64(8)),
+            (
+                SchemaType::f64(),
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0001)),
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0002)),
+            ),
+        ] {
+            let owner = identity();
+            let mapping = mapping();
+            let graph = SchemaGraph::anonymous(schema);
+            golem_schema::schema::validation::validate_value(&graph, &graph.root, &selected)
+                .unwrap();
+            let typed = |value| {
+                StreamTerminal::Failed(StreamError::Failed(Box::new(TypedSchemaValue::new(
+                    graph.clone(),
+                    value,
+                ))))
+            };
+            let intent = StreamConsumerCancelIntentRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: StreamRegistrationInvocation::Local(owner.invocation.idempotency_key),
+                consumer_invocation: owner.invocation.idempotency_key,
+                source: binding(&mapping).source,
+                epoch: 3,
+                cancellation: StreamCancellationRequest {
+                    direction: SessionStreamRole::Output,
+                    side: StreamEndpointSide::Producer,
+                    authored_by: StreamTerminalAuthor::Guest,
+                    terminal: typed(selected.clone()),
+                },
+            };
+            let mut state = SessionControlMetadata::default();
+            state
+                .cancel_intents
+                .insert(intent.source.clone(), intent.clone());
+            state.persisted_mappings.insert(binding(&mapping));
+            for (position, value) in [other, selected.clone(), selected].into_iter().enumerate() {
+                let mut receipt = intent.clone();
+                receipt.cancellation.terminal = typed(value);
+                let receipt = deserialize(&serialize(&receipt).unwrap()).unwrap();
+                state.apply(
+                    OplogIndex::from_u64(10 + position as u64),
+                    &owner.invocation,
+                    &StreamSessionRecord::ConsumerCancelApplied(
+                        StreamConsumerCancelAppliedRecord {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            intent: receipt,
+                        },
+                    ),
+                    owner.environment_id,
+                    &owner.agent_id,
+                    owner.fingerprint,
+                );
+                for projected in [
+                    state.clone(),
+                    deserialize(&serialize(&state).unwrap()).unwrap(),
+                    state.for_fork(&cut()).unwrap(),
+                ] {
+                    assert_eq!(projected.is_cancellation_applied(&intent), position > 0);
+                    assert_eq!(
+                        projected.applied_cancellation_count(),
+                        usize::from(position > 0)
+                    );
+                    assert_eq!(
+                        projected.pending_cancellations().count(),
+                        usize::from(position == 0)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1903,7 +2026,7 @@ mod tests {
                 &key,
                 &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: StreamRegistrationInvocation::Local(key.idempotency_key.clone()),
+                    session_key: StreamRegistrationInvocation::Local(key.idempotency_key),
                     mapping: binding(&mapping),
                 }),
                 owner.environment_id,

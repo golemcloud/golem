@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -46,7 +45,6 @@ func TestToolExportsAnswerWithNoToolsRegistered(t *testing.T) {
 	invoked := toolExports.Invoke(
 		"absent", nil, types.TypedSchemaValue{},
 		toolExports.Stdin{}, toolExports.Stdout{}, toolExports.Stderr{},
-		common.MakePrincipalAnonymous(),
 	)
 	if invoked.Tag() != witTypes.ResultErr {
 		t.Fatalf("invoke succeeded for an unregistered tool")
