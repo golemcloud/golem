@@ -1,6 +1,7 @@
 use crate::raw_http;
 use crate::raw_http::Method;
 use futures_concurrency::future::Join;
+use golem_rust::agentic::AgentStream;
 use golem_rust::bindings::golem::agent::host::{Datetime, WasmRpc};
 use golem_rust::bindings::golem::api::oplog::{GetOplog, OplogReadError, SearchOplog};
 use golem_rust::bindings::golem::tool::host as tool_host;
@@ -182,6 +183,11 @@ pub trait GolemHostApi {
         method: String,
     ) -> Result<(), String>;
     fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String>;
+    /// Calls a method returning `AgentStream<u64>` through the kept handle and drains the stream.
+    async fn kept_agent_rpc_invoke_and_await_u64_stream_result(
+        &self,
+        method: String,
+    ) -> Result<Vec<u64>, String>;
     fn read_own_oplog_result(&self) -> Result<(), String>;
     fn search_own_oplog_result(&self, query: String) -> Result<(), String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
@@ -786,6 +792,24 @@ impl GolemHostApi for GolemHostApiImpl {
             .invoke(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn kept_agent_rpc_invoke_and_await_u64_stream_result(
+        &self,
+        method: String,
+    ) -> Result<Vec<u64>, String> {
+        let result = self
+            .kept_rpc()
+            .invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map_err(|error| format!("{error:?}"))?
+            .result
+            .ok_or_else(|| format!("{method} returned no value"))?;
+        let value =
+            golem_rust::decode_schema_value(result).map_err(|error| format!("{error:?}"))?;
+        AgentStream::<u64>::from_value(&value)
+            .map_err(|error| format!("{error:?}"))?
+            .collect()
+            .await
     }
 
     fn read_own_oplog_result(&self) -> Result<(), String> {

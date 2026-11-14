@@ -1341,10 +1341,11 @@ an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends 
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
 target records `Fork`, no key and the forker's principal. A self fork also records the forking
-agent's current invocation context; a fork through the worker service records a fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
-`AgentInitialization` with the recorded principal and context, not with the loading request's. The
-resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
-not published yet; it carries no principal or context. Tests:
+agent's current invocation context; a fork through the worker service records a fresh context.
+When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
+recorded principal and context, not with the loading request's. The resident `unpublished_create`
+flag only records that an attempt committed `Create` and the worker is not published yet; it
+carries no principal or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
 `grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in

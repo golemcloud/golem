@@ -882,7 +882,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 details: error.to_string(),
             })?;
         let result = acceptance.streams.wait_persisted_result();
-        let completion = worker.await_enqueued_invocation(idempotency_key);
+        let completion = async {
+            let output = worker
+                .clone()
+                .await_enqueued_invocation(idempotency_key)
+                .await;
+            worker
+                .deleted_incarnation_as_not_found(Some(expected_callee_fingerprint), output)
+                .await
+        };
         tokio::pin!(result);
         tokio::pin!(completion);
         let result = tokio::select! {

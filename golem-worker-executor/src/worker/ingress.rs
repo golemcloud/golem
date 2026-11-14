@@ -854,7 +854,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: InvocationId,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let subscription = self.events().subscribe();
-        let result = match self.lookup_invocation_result(&idempotency_key).await {
+        // A local RPC caller holds no task-scope bind, so a deletion may already have stopped the
+        // state actor.
+        let result = match self.try_lookup_invocation_result(&idempotency_key).await? {
             LookupResult::Complete(result) => ResultOrSubscription::Finished(result),
             LookupResult::Pending => ResultOrSubscription::Pending(subscription),
             LookupResult::Interrupted => {
