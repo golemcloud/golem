@@ -395,24 +395,29 @@ async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
                 _ => continue,
             };
             match invocation {
-                PublicAgentInvocation::AgentInitialization(init) => {
-                    keys.push(init.idempotency_key.clone())
-                }
+                PublicAgentInvocation::AgentInitialization(init) => keys.push(init.invocation_id),
                 other => anyhow::bail!("child must execute only its constructor: {other:?}"),
             }
         }
-        assert_eq!(
-            started,
-            vec![IdempotencyKey::new(format!("init-{child_id}"))]
-        );
+        assert_eq!(started.len(), 1, "the child must run its constructor once");
         assert_eq!(pending, started);
+        let parent_invocation_id = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(*user.account_id())),
+            Some(&invocation_key),
+        )
+        .finalize(
+            parent_id.clone(),
+            parent_metadata.fingerprint,
+            "create_child",
+        )
+        .id();
         let parent_history = user.get_oplog(&parent_id, OplogIndex::INITIAL).await?;
         assert_eq!(
             parent_history.iter().filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::AgentInvocationStarted(start)
                     if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.idempotency_key == invocation_key && method.method_name == "create_child")
+                        if method.invocation_id == parent_invocation_id && method.method_name == "create_child")
             )).count(),
             1
         );
