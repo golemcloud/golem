@@ -257,8 +257,8 @@ Polar). An ended subscription creates no more orders when:
   No order bills anything after it, so it settles every sent event, also one whose `sent_at` the
   app recorded after that order.
 
-An unpaid order holds the account as `unpaidOverage`, also after an early end, because the
-customer can still pay it.
+A `pending` order with an amount for a metered price holds the account as `unpaidOverage`, also
+when it is the only reason, because the customer can still pay it.
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
 overage needs the paid plan, and the paid plan needs a billable subscription, so the account has a
