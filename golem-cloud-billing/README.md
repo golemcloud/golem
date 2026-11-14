@@ -274,8 +274,8 @@ the holds that the app placed. The sweep reconciles every account with a billabl
 no row there: a subscription from before the app placed holds, or one whose last placement failed.
 It also reconciles the accounts without a billable subscription whose usage events changed, and the
 accounts with a new usage settlement, because no webhook comes for either. And it reconciles each
-account whose row is older than an hour (`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
-sweep tries the removal again with no time limit.
+account whose row is older than an hour (`HOLD_RECHECK_MS`). A placement refreshes the row, and a
+removal that failed keeps it, so the sweep tries the removal again with no time limit.
 
 An `unsettledUsage` hold clears by itself within minutes: the push sends or holds an unsent event
 at its next run, and Polar creates the last order soon after the period end. When it stays, for
