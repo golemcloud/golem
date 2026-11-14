@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { Effect, Option } from "effect"
 import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { Auth } from "./Auth.ts"
+import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
 import {
@@ -214,13 +214,21 @@ export const routes = HttpRouter.use((router) =>
     yield* router.add("POST", "/billing/checkout", (request) =>
       isSameOrigin(request)
         ? Effect.gen(function* () {
-            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            // The route accepts only a checkout that the page offers. When the registry or the
+            // database fails, the session or the plan is not known, so the route refuses the
+            // checkout, as it refuses a request without a sign-in.
+            const signedIn = yield* getSignedIn(toWebHeaders(request)).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the session for the checkout").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.as(Option.none<SignedIn>())
+                )
+              )
+            )
             if (Option.isNone(signedIn)) {
               return HttpServerResponse.redirect("/", { status: 303 })
             }
             const user = signedIn.value
-            // The route accepts only a checkout that the page offers. When the registry or the
-            // database fails, the plan is not known, so the route refuses the checkout.
             const offered = yield* Effect.gen(function* () {
               const account = yield* registry.getAccount(user.golemToken, user.golemAccountId)
               const subscription = yield* subscriptions.latest(user.golemAccountId, config.polar.productId)

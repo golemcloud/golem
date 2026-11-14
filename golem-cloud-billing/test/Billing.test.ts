@@ -249,6 +249,17 @@ describe("Polar billing", () => {
       }
     })
 
+    it("refuses a checkout when the database cannot read the session", async () => {
+      const { jar } = await signedIn()
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}"."session" RENAME TO session_hidden`)
+      try {
+        expectRefused(await postCheckout(jar))
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".session_hidden RENAME TO "session"`)
+      }
+    })
+
     it("opens the customer portal of the Golem account", async () => {
       const { jar, accountId } = await signedIn()
 
