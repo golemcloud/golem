@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs"
-import { Effect, Option } from "effect"
-import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { ByteSize, Effect, Option } from "effect"
+import {
+  Cookies,
+  HttpEffect,
+  HttpIncomingMessage,
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerError,
+  HttpServerRequest,
+  HttpServerResponse
+} from "effect/http"
 import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
@@ -57,6 +66,20 @@ const toWebHeaders = (request: HttpServerRequest.HttpServerRequest): Headers =>
 
 const crossOrigin = () => HttpServerResponse.text("Cross-origin request", { status: 403 })
 
+/** The Standard Webhooks headers that Polar sends with every delivery. */
+const webhookSignatureHeaders = ["webhook-id", "webhook-timestamp", "webhook-signature"] as const
+
+/**
+ * The largest webhook body that the app reads. A delivery of Polar is a few kilobytes: one
+ * subscription or order with its product and customer.
+ */
+export const webhookBodyLimit = ByteSize.mebibytes(1)
+
+const isBodyTooLarge = (error: unknown): boolean =>
+  error instanceof HttpServerError.HttpServerError &&
+  error.reason._tag === "RequestParseError" &&
+  error.reason.reason === "BodyTooLarge"
+
 const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
   value === "on" || value === "off" || value === "not-eligible" ? value : undefined
 
@@ -108,13 +131,27 @@ export const routes = HttpRouter.use((router) =>
     yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
 
     // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
-    // the path is the one that the Polar organization has configured.
+    // the path is the one that the Polar organization has configured. Polar signs every
+    // delivery, so a request without the signature headers is rejected before the app reads its
+    // body, and the app reads at most `webhookBodyLimit` of a body.
     yield* router.add("POST", "/api/auth/polar/webhooks", (request) =>
-      request.text.pipe(
-        Effect.flatMap((body) => handleWebhook(body, request.headers)),
-        Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
-        Effect.catch(() => Effect.succeed(HttpServerResponse.text("cannot read the body", { status: 400 })))
-      )
+      webhookSignatureHeaders.every((name) => request.headers[name] !== undefined)
+        ? request.text.pipe(
+            Effect.provideService(HttpIncomingMessage.MaxBodySize, webhookBodyLimit),
+            Effect.flatMap((body) => handleWebhook(body, request.headers)),
+            Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
+            Effect.catch((error) =>
+              Effect.succeed(
+                isBodyTooLarge(error)
+                  ? HttpServerResponse.text("the body is too large", { status: 413 })
+                  : HttpServerResponse.text("cannot read the body", { status: 400 })
+              )
+            )
+          )
+        : Effect.logWarning("Rejected a webhook").pipe(
+            Effect.annotateLogs({ status: 403, reason: "no signature headers" }),
+            Effect.as(HttpServerResponse.text("rejected", { status: 403 }))
+          )
     )
 
     yield* router.add("GET", "/", (request) =>

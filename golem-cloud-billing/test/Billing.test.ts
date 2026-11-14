@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { webhookBodyLimit } from "../src/Http.ts"
 import * as Settlement from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
@@ -538,6 +539,44 @@ describe("Polar billing", () => {
 
       expect(response.status).toBe(403)
       expect(upstreams.planChanges()).toEqual([])
+    })
+
+    it("rejects a delivery without the signature headers before it reads the body", async () => {
+      let read = false
+      // With a high-water mark of 0, the stream calls `pull` only when a reader asks for data.
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => {
+            read = true
+            controller.enqueue(new TextEncoder().encode("{}"))
+            controller.close()
+          }
+        },
+        { highWaterMark: 0 }
+      )
+
+      const response = await app.handler(
+        new Request(new URL("/api/auth/polar/webhooks", baseUrl), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          duplex: "half"
+        } as RequestInit)
+      )
+
+      expect(response.status).toBe(403)
+      expect(read).toBe(false)
+    })
+
+    it("answers 413 to a signed delivery whose body is above the limit", async () => {
+      const accountId = randomUUID()
+      const padding = "x".repeat(Number(webhookBodyLimit))
+
+      const response = await deliver("subscription.active", subscription(accountId, { metadata: { padding } }))
+
+      expect(response.status).toBe(413)
+      expect(upstreams.planChanges()).toEqual([])
+      expect(upstreams.holdChanges()).toEqual([])
     })
 
     it("handles each webhook-id once", async () => {

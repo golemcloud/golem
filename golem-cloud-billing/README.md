@@ -121,15 +121,17 @@ plan.
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Webhooks.** Polar delivers `subscription.*`, `order.created`, `order.updated` and `order.paid`
-  events to `POST /api/auth/polar/webhooks`. The handler verifies the Standard Webhooks signature
-  with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a `webhook-id` that it handled
-  before, and stores the subscription in `polar_subscriptions` or the order in `polar_orders`. A
-  state never replaces a state with a later `modified_at`, so a late delivery cannot undo a newer
-  one. Then it sets the [deletion hold](#deletion-hold) and the plan from the table above. A failed
-  payment (`subscription.past_due`) also logs `payment_failed`. An account on any other plan, for
-  example an internal plan that an administrator gave it, keeps it, and gets the deletion hold all
-  the same. An event of an account that the registry deleted is stored and answers 200, without a
-  change of the plan or the hold, so that deleted accounts do not make Polar disable the endpoint.
+  events to `POST /api/auth/polar/webhooks`. A request without the Standard Webhooks headers gets
+  403 before the app reads its body, and a body above 1 MiB gets 413. The handler verifies the
+  Standard Webhooks signature with `POLAR_WEBHOOK_SECRET` (403 when it does not match), skips a
+  `webhook-id` that it handled before, and stores the subscription in `polar_subscriptions` or the
+  order in `polar_orders`. A state never replaces a state with a later `modified_at`, so a late
+  delivery cannot undo a newer one. Then it sets the [deletion hold](#deletion-hold) and the plan
+  from the table above. A failed payment (`subscription.past_due`) also logs `payment_failed`. An
+  account on any other plan, for example an internal plan that an administrator gave it, keeps it,
+  and gets the deletion hold all the same. An event of an account that the registry deleted is
+  stored and answers 200, without a change of the plan or the hold, so that deleted accounts do not
+  make Polar disable the endpoint.
 - **Metered prices.** An order item names its price. The subscription lists the prices of its
   product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
   the items of these prices as overage.
