@@ -49,7 +49,7 @@ impl DurableStreamsHandler {
         let route_key = route_stream_load_key(
             route.route.environment_id,
             route.route.deployment_revision,
-            route.route.route_id,
+            super::route_family_id(route),
             agent_id,
             session,
             slot,

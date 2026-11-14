@@ -5767,6 +5767,7 @@
         { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshotConfirmed" },
+        { "$ref": "#/definitions/PublicOplogEntrySpanClosed" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
         { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
@@ -5962,7 +5963,7 @@
     "PublicOplogEntrySuccessfulUpdate": {
       "type": "object",
       "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
-      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntryFailedUpdate": {
@@ -6086,7 +6087,7 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] }, "bootstrap": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntrySnapshotConfirmed": {
@@ -6095,10 +6096,16 @@
       "properties": { "type": { "const": "SnapshotConfirmed" }, "timestamp": { "type": "string" }, "filesystemSnapshot": { "type": "string" } },
       "additionalProperties": false
     },
+    "PublicOplogEntrySpanClosed": {
+      "type": "object",
+      "required": ["type", "timestamp", "resourceStartIndex", "spanFinished"],
+      "properties": { "type": { "const": "SpanClosed" }, "timestamp": { "type": "string" }, "resourceStartIndex": { "type": ["integer", "null"], "minimum": 0 }, "spanFinished": { "$ref": "#/definitions/PublicSpanFinished" } },
+      "additionalProperties": false
+    },
     "PublicOplogEntryOplogProcessorCheckpoint": {
       "type": "object",
-      "required": ["type", "timestamp", "plugin", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
-      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
+      "required": ["type", "timestamp", "plugin", "sourceComponentRevision", "targetAgentId", "confirmedUpTo", "sendingUpTo", "lastBatchStart"],
+      "properties": { "type": { "const": "OplogProcessorCheckpoint" }, "timestamp": { "type": "string" }, "plugin": { "$ref": "#/definitions/PluginInstallationDescription" }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "targetAgentId": { "$ref": "#/definitions/AgentId" }, "confirmedUpTo": { "type": "integer", "minimum": 0 }, "sendingUpTo": { "type": "integer", "minimum": 0 }, "lastBatchStart": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySetRetryPolicy": {

@@ -200,14 +200,14 @@ impl RustRuntimeConfig {
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationResult<T> {
                         pub agent_id: golem_client::model::AgentId,
-                        pub idempotency_key: String,
+                        pub idempotency_key: uuid::Uuid,
                         pub value: T,
                     }
 
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationReceipt {
                         pub agent_id: golem_client::model::AgentId,
-                        pub idempotency_key: String,
+                        pub idempotency_key: uuid::Uuid,
                     }
 
                     pub mod schema {
@@ -2344,7 +2344,7 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, uuid::Uuid, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                         let agent_id = response.agent_id;
@@ -2363,7 +2363,7 @@ impl RustBridgeGenerator {
                 })
             }
             None => Ok(quote! {
-                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, String, Option<()>), crate::__golem_bridge_runtime::ClientError> {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, uuid::Uuid, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                     Ok((response.agent_id, response.idempotency_key, response.result.map(|_| ())))

@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use super::{
-    AsContextMut, AttachmentCharge, AttachmentMode, AttachmentReservationOutcome,
-    AttachmentStreamBuffer, AttachmentStreamProducer, AttachmentStreamRead, AttachmentWriteBody,
-    BufferedChunk, ByteStreamCloseCause, ByteStreamFailure, Bytes, Context, Destination, Ordering,
-    OwnedSemaphorePermit, Pin, Poll, RawAttachmentStreamProducer, StreamProducer, StreamResult,
-    VecBuffer, WriteBuffer,
+    AsContextMut, AttachmentCharge, AttachmentReservationOutcome, AttachmentStreamBuffer,
+    AttachmentStreamProducer, AttachmentStreamRead, AttachmentWriteBody, BufferedChunk,
+    ByteStreamCloseCause, ByteStreamFailure, Context, Destination, Ordering, OwnedSemaphorePermit,
+    Pin, Poll, StreamProducer, StreamResult, VecBuffer, WriteBuffer,
 };
+#[cfg(test)]
+use super::{Bytes, RawAttachmentStreamProducer};
+use crate::durable_host::stream_bus::StreamTerminalError;
+use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
 
 impl AttachmentWriteBody {
     pub(super) fn len(&self) -> usize {
@@ -79,6 +82,25 @@ unsafe impl WriteBuffer<Result<Vec<u8>, ByteStreamFailure>> for AttachmentStream
 }
 
 impl AttachmentStreamProducer {
+    pub(in crate::durable_host::tool) fn failure_terminal(
+        failure: ByteStreamFailure,
+    ) -> StreamTerminalError {
+        let error = match failure {
+            ByteStreamFailure::Cancelled => {
+                StreamError::Interrupted("tool output cancelled".into())
+            }
+            ByteStreamFailure::Abandoned => StreamError::Abandoned,
+            ByteStreamFailure::ResourceExhausted => {
+                StreamError::ResourceExhausted("tool output attachment limit".into())
+            }
+            ByteStreamFailure::Failed(message) => StreamError::Interrupted(message),
+        };
+        StreamTerminalError {
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(error),
+        }
+    }
+
     /// Dequeues one item while retaining its memory charge until the next poll or drop.
     /// An adapter must finish using that item before polling for another one.
     pub(in crate::durable_host::tool) fn poll_read(
@@ -164,10 +186,8 @@ impl AttachmentStreamProducer {
 
         let produced = {
             let mut state = attachment.state.lock().unwrap();
-            let chunks_visible = matches!(state.mode, AttachmentMode::Live)
-                || matches!(state.mode, AttachmentMode::Completion { published: true });
-            let terminal_visible = !state.terminal_pending
-                && (chunks_visible || matches!(state.mode, AttachmentMode::TerminalOnly));
+            let chunks_visible = state.mode.chunks_visible();
+            let terminal_visible = state.terminal.is_available() && state.mode.terminal_visible();
             if state.owner_fenced {
                 Produced::OwnerFenced
             } else if state
@@ -188,27 +208,27 @@ impl AttachmentStreamProducer {
                 state.reader_waker = Some(cx.waker().clone());
                 Produced::Pending
             } else {
-                match state.terminal.clone() {
+                match state.terminal.available_cause() {
                     Some(ByteStreamCloseCause::Finished) => {
-                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                        Produced::Terminal(StreamResult::Dropped, state.terminal.recorded_end())
                     }
                     Some(ByteStreamCloseCause::Failed(failure))
-                        if !state.terminal_item_delivered =>
+                        if !state.terminal.failure_item_delivered() =>
                     {
-                        state.terminal_item_delivered = true;
+                        state.terminal.mark_failure_delivered();
                         Produced::Item(
                             AttachmentStreamRead::Failure {
                                 failure,
-                                terminal_index: state.terminal_end,
+                                terminal_index: state.terminal.recorded_end(),
                             },
                             None,
                         )
                     }
                     Some(ByteStreamCloseCause::Failed(_)) => {
-                        Produced::Terminal(StreamResult::Dropped, state.terminal_end)
+                        Produced::Terminal(StreamResult::Dropped, state.terminal.recorded_end())
                     }
                     Some(ByteStreamCloseCause::ConsumerCancelled) => {
-                        Produced::Terminal(StreamResult::Cancelled, state.terminal_end)
+                        Produced::Terminal(StreamResult::Cancelled, state.terminal.recorded_end())
                     }
                     None => {
                         state.reader_waker = Some(cx.waker().clone());
@@ -314,6 +334,7 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
     }
 }
 
+#[cfg(test)]
 impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
     type Item = u8;
     type Buffer = Bytes;
@@ -378,9 +399,9 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
             }
             AttachmentStreamRead::Failure { failure, .. } => {
                 self.finished = true;
-                Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "underlying tool stdout failed: {failure:?}"
-                ))))
+                Poll::Ready(Err(wasmtime::Error::from_anyhow(
+                    AttachmentStreamProducer::failure_terminal(failure).into_trap(),
+                )))
             }
         }
     }

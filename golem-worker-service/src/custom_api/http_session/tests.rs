@@ -7,13 +7,14 @@ use golem_api_grpc::proto::golem::worker::{
     AgentId as ProtoAgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey,
     InputStreamAck, InputStreamHighWater, InvocationAccepted, InvocationFailure,
     InvocationFailureKind, InvocationRejected, InvocationRejectionReason, InvocationRequest,
-    InvocationResponse, InvocationSessionCompletion, OutputStreamEnd, OutputStreamItem,
-    ResumeAttach, ResumeOperation, StreamCancelReason, StreamCancelRole, StreamInvocationIdentity,
-    StreamMappingRole, input_stream_item, invocation_request, invocation_response,
+    InvocationResponse, InvocationSessionCompletion, OutputStreamItem, ResumeAttach,
+    ResumeOperation, StreamDirection, StreamEnd, StreamInvocationIdentity, StreamMappingRole,
+    StreamTerminalAuthor, input_stream_item, invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
+use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use golem_common::model::{AgentId, InvocationId};
 use golem_schema::proto::golem::common::{Empty, Uuid};
 use golem_schema::proto::golem::schema::{
@@ -304,15 +305,19 @@ fn output_item(sequence: u64) -> InvocationResponse {
 }
 
 fn producer_cancel(sequence: u64) -> InvocationResponse {
-    response(invocation_response::Response::StreamCancel(StreamCancel {
+    response(invocation_response::Response::StreamEnd(StreamEnd {
         transport_stream_id: 9,
         producer_sequence: sequence,
-        role: StreamCancelRole::OutputProducer as i32,
-        reason: StreamCancelReason::Cancelled as i32,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(
+            StreamTerminal::ConsumerCancelled { details: None }
+                .try_into()
+                .unwrap(),
+        ),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(sequence),
         epoch: 1,
-        ..Default::default()
     }))
 }
 
@@ -475,9 +480,12 @@ fn output_bytes(sequence: u64, bytes: &[u8], epoch: u64) -> InvocationResponse {
 }
 
 fn output_end(sequence: u64, epoch: u64) -> InvocationResponse {
-    response(invocation_response::Response::OutputEnd(OutputStreamEnd {
+    response(invocation_response::Response::StreamEnd(StreamEnd {
         transport_stream_id: 9,
         producer_sequence: sequence,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(sequence),
         epoch,
@@ -557,10 +565,10 @@ async fn input_is_held_until_acceptance_and_empty_chunk_is_not_eof() {
             expected
         );
     }
-    let invocation_request::Request::InputEnd(end) = input(tail.next().await.unwrap()) else {
+    let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap()) else {
         panic!("expected EOF")
     };
-    assert_eq!(end.sequence, 2);
+    assert_eq!(end.producer_sequence, 2);
 }
 
 #[test]
@@ -662,8 +670,9 @@ async fn lost_resume_acceptance_replays_the_exact_attempt() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[0], ack(0, replayed.expected_epoch + 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -708,8 +717,9 @@ async fn definite_attached_rejection_switches_resume_to_takeover() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[1], ack(0, takeover.expected_epoch + 1)).await;
     send(&h.response_txs[1], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -764,8 +774,9 @@ async fn definite_takeover_rejection_switches_back_to_resume_without_changing_ep
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[2], ack(0, retry.expected_epoch + 1)).await;
     send(&h.response_txs[2], scalar_result()).await;
     assert!(matches!(
         event(&mut session).await,
@@ -916,8 +927,9 @@ async fn explicit_success_does_not_cleanup() {
     session.input.dispose().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
+    send(&h.response_txs[0], ack(0, 1)).await;
     let result = golem_api_grpc::proto::golem::worker::InvocationSessionResult {
         result: Some(invocation_session_result::Result::MethodResult(
             SchemaValue {
@@ -963,6 +975,7 @@ async fn finished_failure_does_not_cleanup() {
     let _ = event(&mut session).await;
     session.input.dispose().await.unwrap();
     let _ = tail.next().await.unwrap();
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     let _ = event(&mut session).await;
     send(&h.response_txs[0], failed()).await;
@@ -1131,9 +1144,12 @@ async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
     };
     send(&h.response_txs[0], accepted(1, None)).await;
     let _ = event(&mut session).await;
-    let end = OutputStreamEnd {
+    let end = StreamEnd {
         transport_stream_id: 9,
         producer_sequence: 0,
+        direction: StreamDirection::Output as i32,
+        authored_by: StreamTerminalAuthor::Guest as i32,
+        outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
         durable_stream_id: Some(uuid(109)),
         durable_offset: offset(0),
         epoch: 1,
@@ -1161,12 +1177,12 @@ async fn output_end_does_not_complete_session_and_it_remains_cancelable() {
     let _ = event(&mut session).await;
     send(
         &h.response_txs[0],
-        response(invocation_response::Response::OutputEnd(end)),
+        response(invocation_response::Response::StreamEnd(end)),
     )
     .await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     session.input.dispose_output(9).await.unwrap();
     assert!(
@@ -1233,14 +1249,16 @@ async fn disposing_delivered_output_uses_consumer_control_and_terminal_disposal_
     ));
 
     session.input.dispose_output(9).await.unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(tail.next().await.unwrap())
-    else {
+    let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap()) else {
         panic!()
     };
     assert_eq!(cancel.transport_stream_id, 9);
     assert_eq!(cancel.producer_sequence, 0);
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
-    assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap(),
+        StreamTerminal::ConsumerCancelled { details: None }
+    );
     assert_eq!(cancel.durable_stream_id, Some(uuid(109)));
     assert_eq!(cancel.epoch, 1);
     assert!(cancel.durable_offset.is_empty());
@@ -1248,7 +1266,7 @@ async fn disposing_delivered_output_uses_consumer_control_and_terminal_disposal_
     send(&h.response_txs[0], producer_cancel(1)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::StreamCancel(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     session.input.dispose_output(9).await.unwrap();
     assert!(
@@ -1272,7 +1290,7 @@ async fn observed_producer_cancel_is_a_terminal_resume_cursor_after_transport_lo
     session.input.finish().await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::InputEnd(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
@@ -1325,7 +1343,7 @@ async fn output_disposal_lost_before_confirmation_is_reissued_after_resume() {
     session.input.dispose_output(9).await.unwrap();
     assert!(matches!(
         input(tail.next().await.unwrap()),
-        invocation_request::Request::StreamCancel(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     drop(h.response_txs.remove(0));
 
@@ -1338,12 +1356,11 @@ async fn output_disposal_lost_before_confirmation_is_reissued_after_resume() {
     };
     accepted.stream_mappings.push(output_mapping());
     send(&h.response_txs[0], decision).await;
-    let invocation_request::Request::StreamCancel(cancel) =
-        input(resumed_tail.next().await.unwrap())
+    let invocation_request::Request::StreamEnd(cancel) = input(resumed_tail.next().await.unwrap())
     else {
         panic!()
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
     assert_eq!(cancel.durable_stream_id, Some(uuid(109)));
     assert_eq!(cancel.epoch, 2);
     assert!(cancel.durable_offset.is_empty());
@@ -1413,7 +1430,7 @@ async fn disposal_control_bypasses_a_full_output_event_queue() {
     .await
     .unwrap();
     session.input.dispose_output(9).await.unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(
+    let invocation_request::Request::StreamEnd(cancel) = input(
         timeout(Duration::from_secs(1), tail.next())
             .await
             .unwrap()
@@ -1421,7 +1438,7 @@ async fn disposal_control_bypasses_a_full_output_event_queue() {
     ) else {
         panic!()
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
 }
 
 #[test]
@@ -1521,8 +1538,9 @@ fn body_bytes_are_absent_from_session_trace_logs() {
             session.input.dispose().await.unwrap();
             assert!(matches!(
                 input(tail.next().await.unwrap()),
-                invocation_request::Request::StreamCancel(_)
+                invocation_request::Request::StreamEnd(_)
             ));
+            send(&h.response_txs[0], ack(1, 1)).await;
             send(&h.response_txs[0], stream_result()).await;
             let _ = event(&mut session).await;
             send(
@@ -1535,22 +1553,33 @@ fn body_bytes_are_absent_from_session_trace_logs() {
             assert_eq!(event_bytes(output).unwrap(), b"private-response-sentinel");
             send(
                 &h.response_txs[0],
-                response(invocation_response::Response::OutputError(
-                    golem_api_grpc::proto::golem::worker::OutputStreamError {
-                        transport_stream_id: 9,
-                        producer_sequence: 1,
-                        details: "value-node index out of range: 3".into(),
-                        durable_stream_id: Some(uuid(109)),
-                        durable_offset: offset(1),
-                        epoch: 1,
-                    },
-                )),
+                response(invocation_response::Response::StreamEnd(StreamEnd {
+                    transport_stream_id: 9,
+                    producer_sequence: 1,
+                    direction: StreamDirection::Output as i32,
+                    authored_by: StreamTerminalAuthor::Guest as i32,
+                    outcome: Some(
+                        StreamTerminal::Failed(StreamError::Trapped(
+                            "value-node index out of range: 3".into(),
+                        ))
+                        .try_into()
+                        .unwrap(),
+                    ),
+                    durable_stream_id: Some(uuid(109)),
+                    durable_offset: offset(1),
+                    epoch: 1,
+                })),
             )
             .await;
-            let HttpSessionEvent::OutputError(error) = event(&mut session).await else {
+            let HttpSessionEvent::StreamEnd(error) = event(&mut session).await else {
                 panic!("expected the producer error to reach the HTTP adapter");
             };
-            assert_eq!(error.details, "value-node index out of range: 3");
+            assert_eq!(
+                StreamTerminal::try_from(error.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Trapped(
+                    "value-node index out of range: 3".into()
+                ))
+            );
             let mut completion = failed();
             let Some(invocation_response::Response::Finished(finished)) = &mut completion.response
             else {
@@ -1676,12 +1705,15 @@ async fn lifecycle_early_response_is_independent_of_request_eof() {
         "early response disposal must wait for in-flight input ACKs"
     );
     send(&h.response_txs[0], ack(0, 1)).await;
-    let invocation_request::Request::StreamCancel(cancel) = input(tail.next().await.unwrap())
-    else {
+    let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap()) else {
         panic!()
     };
     assert_eq!(cancel.producer_sequence, 1);
-    assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+    );
+    send(&h.response_txs[0], ack(1, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
     let _ = event(&mut session).await;
     send(&h.response_txs[0], output_bytes(0, b"bc", 1)).await;
@@ -1689,7 +1721,7 @@ async fn lifecycle_early_response_is_independent_of_request_eof() {
     send(&h.response_txs[0], output_end(1, 1)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(
@@ -1753,14 +1785,16 @@ async fn input_disposal_is_reissued_only_when_resume_high_water_is_not_terminal(
                     .is_err()
             );
         } else {
-            let invocation_request::Request::StreamCancel(cancel) =
-                input(tail.next().await.unwrap())
+            let invocation_request::Request::StreamEnd(cancel) = input(tail.next().await.unwrap())
             else {
                 panic!()
             };
             assert_eq!(cancel.producer_sequence, 1);
             assert_eq!(cancel.epoch, 2);
-            assert_eq!(cancel.reason(), StreamCancelReason::ConsumerDrop);
+            assert_eq!(
+                StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            );
         }
         session.cancellation.cancel();
     }
@@ -1803,25 +1837,29 @@ async fn lifecycle_reattach_deduplicates_replayed_public_output() {
     send(&h.response_txs[0], output_end(2, 8)).await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::OutputEnd(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(
         &h.response_txs[0],
-        response(invocation_response::Response::StreamCancel(StreamCancel {
+        response(invocation_response::Response::StreamEnd(StreamEnd {
             transport_stream_id: INPUT_STREAM_ID,
             producer_sequence: 0,
-            role: StreamCancelRole::InputConsumer as i32,
-            reason: StreamCancelReason::ConsumerDrop as i32,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::ConsumerCancelled { details: None }
+                    .try_into()
+                    .unwrap(),
+            ),
             durable_stream_id: Some(uuid(101)),
             durable_offset: offset(0),
             epoch: 8,
-            ..Default::default()
         })),
     )
     .await;
     assert!(matches!(
         event(&mut session).await,
-        HttpSessionEvent::StreamCancel(_)
+        HttpSessionEvent::StreamEnd(_)
     ));
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(
@@ -1916,7 +1954,7 @@ async fn lifecycle_input_ack_lost_replays_actual_unacknowledged_request() {
     assert_eq!(next.sequence, first.sequence + 1);
     assert!(matches!(
         input(resumed_tail.next().await.unwrap()),
-        invocation_request::Request::InputEnd(_)
+        invocation_request::Request::StreamEnd(_)
     ));
     assert!(
         timeout(Duration::from_millis(30), h.calls.recv())
@@ -1996,10 +2034,10 @@ async fn lifecycle_input_eof_is_not_invocation_cancellation() {
     ));
 
     session.input.finish().await.unwrap();
-    let invocation_request::Request::InputEnd(end) = input(tail.next().await.unwrap()) else {
+    let invocation_request::Request::StreamEnd(end) = input(tail.next().await.unwrap()) else {
         panic!("input EOF was not forwarded")
     };
-    assert_eq!(end.sequence, 0);
+    assert_eq!(end.producer_sequence, 0);
     send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], scalar_result()).await;
     assert!(matches!(
@@ -2060,21 +2098,22 @@ async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_i
     session.cancellation.cancel();
 
     let mut cancelled_roles = Vec::new();
-    for expected in [
-        StreamCancelRole::OutputConsumer,
-        StreamCancelRole::InputProducer,
-    ] {
+    for expected in [StreamDirection::Output, StreamDirection::Input] {
         let request = timeout(Duration::from_secs(1), tail.next())
             .await
             .unwrap()
             .unwrap();
-        let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+        let invocation_request::Request::StreamEnd(cancel) = input(request) else {
             panic!("disconnect must cancel both stream directions");
         };
-        assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
         assert_eq!(cancel.epoch, 1);
-        assert_eq!(cancel.role(), expected);
-        if expected == StreamCancelRole::OutputConsumer {
+        assert_eq!(cancel.direction(), expected);
+        let terminal = StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap();
+        if expected == StreamDirection::Output {
+            assert_eq!(
+                terminal,
+                StreamTerminal::ConsumerCancelled { details: None }
+            );
             assert!(
                 timeout(Duration::from_millis(20), tail.next())
                     .await
@@ -2083,12 +2122,16 @@ async fn lifecycle_disconnect_active_compute_cancels_once_and_releases_blocked_i
             );
             send(&h.response_txs[0], ack(0, 1)).await;
         } else {
+            assert_eq!(
+                terminal,
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            );
             assert_eq!(cancel.producer_sequence, 1);
         }
-        cancelled_roles.push(cancel.role());
+        cancelled_roles.push(cancel.direction());
     }
-    assert!(cancelled_roles.contains(&StreamCancelRole::InputProducer));
-    assert!(cancelled_roles.contains(&StreamCancelRole::OutputConsumer));
+    assert!(cancelled_roles.contains(&StreamDirection::Input));
+    assert!(cancelled_roles.contains(&StreamDirection::Output));
 
     let result = timeout(Duration::from_secs(1), blocked_input)
         .await
@@ -2149,15 +2192,24 @@ async fn dropping_response_owner_sends_cancellation_before_closing_transport() {
                 .await
                 .expect("cancellation must not wait for the cleanup deadline")
                 .expect("owner drop must send cancellations before closing transport");
-            let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+            let invocation_request::Request::StreamEnd(cancel) = input(request) else {
                 panic!("expected stream cancellation")
             };
-            assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
             assert_eq!(cancel.epoch, 1);
-            roles.push(cancel.role());
+            let expected = if cancel.direction() == StreamDirection::Input {
+                StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+            } else {
+                StreamTerminal::ConsumerCancelled { details: None }
+            };
+            assert_eq!(
+                StreamTerminal::try_from(cancel.outcome.clone().unwrap()).unwrap(),
+                expected
+            );
+            roles.push(cancel.direction());
         }
-        assert!(roles.contains(&StreamCancelRole::InputProducer));
-        assert!(roles.contains(&StreamCancelRole::OutputConsumer));
+        assert!(roles.contains(&StreamDirection::Input));
+        assert!(roles.contains(&StreamDirection::Output));
+        send(&h.response_txs[0], ack(0, 1)).await;
         send(&h.response_txs[0], producer_cancel(0)).await;
         send(&h.response_txs[0], finished()).await;
         assert!(
@@ -2186,20 +2238,28 @@ async fn dropping_owner_before_acceptance_cancels_late_output_mapping() {
         .await
         .unwrap()
         .unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+    let invocation_request::Request::StreamEnd(cancel) = input(request) else {
         panic!("expected input cancellation")
     };
-    assert_eq!(cancel.role(), StreamCancelRole::InputProducer);
+    assert_eq!(cancel.direction(), StreamDirection::Input);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::Failed(StreamError::Interrupted("HTTP input disposed".into()))
+    );
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], stream_result()).await;
     let request = timeout(Duration::from_secs(1), tail.next())
         .await
         .unwrap()
         .unwrap();
-    let invocation_request::Request::StreamCancel(cancel) = input(request) else {
+    let invocation_request::Request::StreamEnd(cancel) = input(request) else {
         panic!("expected output cancellation")
     };
-    assert_eq!(cancel.role(), StreamCancelRole::OutputConsumer);
-    assert_eq!(cancel.reason(), StreamCancelReason::Cancelled);
+    assert_eq!(cancel.direction(), StreamDirection::Output);
+    assert_eq!(
+        StreamTerminal::try_from(cancel.outcome.unwrap()).unwrap(),
+        StreamTerminal::ConsumerCancelled { details: None }
+    );
     send(&h.response_txs[0], producer_cancel(0)).await;
     send(&h.response_txs[0], finished()).await;
     assert!(
@@ -2226,9 +2286,10 @@ async fn disconnect_finished_during_drain_skips_fallback_cleanup() {
     for _ in 0..2 {
         assert!(matches!(
             input(tail.next().await.unwrap()),
-            invocation_request::Request::StreamCancel(_)
+            invocation_request::Request::StreamEnd(_)
         ));
     }
+    send(&h.response_txs[0], ack(0, 1)).await;
     send(&h.response_txs[0], producer_cancel(0)).await;
     send(&h.response_txs[0], finished()).await;
     assert!(matches!(

@@ -156,11 +156,7 @@ impl OplogEntry {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::StreamEnd {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::StreamCancel {
+            | OplogEntry::StreamTerminal {
                 entity_parent_start_index,
                 ..
             }
@@ -306,8 +302,7 @@ impl OplogEntry {
             | OplogEntry::HostStreamFrame { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. }
@@ -378,8 +373,7 @@ impl OplogScopeProjection {
             | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. }
             | OplogEntry::ToolAttachmentControl { .. }
             | OplogEntry::ToolAttachmentRead { .. }

@@ -481,6 +481,7 @@ impl UpdateFields {
                     target_revision,
                     new_component_size,
                     snapshot_assisted_details,
+                    bootstrap,
                     ..
                 },
                 step,
@@ -515,6 +516,7 @@ impl UpdateFields {
                         self.authoritative_snapshot = Some(AuthoritativeSnapshot {
                             index: *oplog_index,
                             kind: AuthoritativeSnapshotKind::ManualUpdate,
+                            bootstrap: bootstrap.clone(),
                         });
                     }
                     Some(PendingUpdateRef {
@@ -528,6 +530,7 @@ impl UpdateFields {
                             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                                 filesystem_snapshot: snapshot.filesystem_snapshot.clone(),
                             },
+                            bootstrap: bootstrap.clone(),
                         });
                     }
                     Some(PendingUpdateRef {
@@ -541,6 +544,7 @@ impl UpdateFields {
                 OplogEntry::Snapshot {
                     timestamp,
                     filesystem_snapshot,
+                    bootstrap,
                     ..
                 },
                 _,
@@ -560,6 +564,7 @@ impl UpdateFields {
                     timestamp: *timestamp,
                     component_revision: self.component_revision,
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
+                    bootstrap: bootstrap.clone(),
                 });
             }
             (
@@ -889,6 +894,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                 confirmed_up_to,
                 sending_up_to,
                 last_batch_start,
+                delivery,
                 ..
             } => {
                 result.insert(
@@ -898,6 +904,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *confirmed_up_to,
                         sending_up_to: *sending_up_to,
                         last_batch_start: *last_batch_start,
+                        delivery: delivery.clone(),
                     },
                 );
             }
@@ -911,6 +918,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                         confirmed_up_to: *idx,
                         sending_up_to: *idx,
                         last_batch_start: *idx,
+                        delivery: None,
                     });
             }
             OplogEntry::DeactivatePlugin {
@@ -940,6 +948,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                             confirmed_up_to: *idx,
                             sending_up_to: *idx,
                             last_batch_start: *idx,
+                            delivery: None,
                         });
                 }
             }

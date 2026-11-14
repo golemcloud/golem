@@ -95,7 +95,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid account_id: {e}"))
             })?;
 
-        let config: Vec<(String, String)> = request.config.into_iter().collect();
+        let mut config: Vec<(String, String)> = request.config.into_iter().collect();
+        config.sort();
 
         let metadata_dto: AgentMetadataDto = request
             .metadata
@@ -105,10 +106,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid metadata: {e}"))
             })?;
 
+        let mut env: Vec<_> = metadata_dto.env.into_iter().collect();
+        env.sort();
         let metadata = AgentMetadataForGuests {
             agent_id: metadata_dto.agent_id,
             args: vec![],
-            env: metadata_dto.env.into_iter().collect(),
+            env,
             config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
             status: metadata_dto.status,
             component_revision: metadata_dto.component_revision,

@@ -481,10 +481,8 @@ impl Rpc for RemoteInvocationRpc {
                         break;
                     }
                     Some(invocation_response::Response::OutputItem(_))
-                    | Some(invocation_response::Response::OutputEnd(_))
-                    | Some(invocation_response::Response::OutputError(_))
-                    | Some(invocation_response::Response::InputAck(_))
-                    | Some(invocation_response::Response::StreamCancel(_)) => {}
+                    | Some(invocation_response::Response::StreamEnd(_))
+                    | Some(invocation_response::Response::InputAck(_)) => {}
                     None => unreachable!("response state validation rejects empty frames"),
                 }
             }

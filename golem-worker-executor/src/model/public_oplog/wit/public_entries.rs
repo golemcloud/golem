@@ -187,6 +187,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        bootstrap: bootstrap.map(oplog_region_to_wit),
     } }
     FailedUpdate { record FailedUpdateParams => FailedUpdateParameters {
         timestamp: timestamp.into(),
@@ -274,6 +275,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                     timestamp,
                     data,
                     filesystem_snapshot,
+                    bootstrap,
                 })) => Ok({
                     let (snapshot_bytes, mime_type) = match data {
                         PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
@@ -292,11 +294,13 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                             mime_type,
                         },
                         filesystem_snapshot,
+                        bootstrap: bootstrap.map(oplog_region_to_wit),
                     })
                 }) }
     OplogProcessorCheckpoint { record OplogProcessorCheckpointParams => OplogProcessorCheckpointParameters {
         timestamp: timestamp.into(),
         plugin: plugin.into(),
+        source_component_revision: source_component_revision.into(),
         target_agent_id: target_agent_id.into(),
         confirmed_up_to: confirmed_up_to.into(),
         sending_up_to: sending_up_to.into(),
@@ -385,11 +389,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         timestamp: timestamp.into(),
         record: encode_public_typed_schema_value(record)?,
     } }
-    StreamEnd { record StreamEndParams => DurableStreamRecordParameters {
-        timestamp: timestamp.into(),
-        record: encode_public_typed_schema_value(record)?,
-    } }
-    StreamCancel { record StreamCancelParams => DurableStreamRecordParameters {
+    StreamTerminal { record StreamTerminalParams => DurableStreamRecordParameters {
         timestamp: timestamp.into(),
         record: encode_public_typed_schema_value(record)?,
     } }

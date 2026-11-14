@@ -2,9 +2,12 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "golem/common/uuid.proto";
 import "golem/worker/worker_id.proto";
 
 message PromiseId {
   AgentId agent_id = 1;
   uint64 oplog_idx = 2;
+  // Fingerprint of the agent incarnation that created the promise.
+  golem.common.UUID fingerprint = 3;
 }

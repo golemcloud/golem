@@ -227,10 +227,8 @@ impl TestWorkerExecutor {
                 }
                 Some(
                     invocation_response::Response::OutputItem(_)
-                    | invocation_response::Response::OutputEnd(_)
-                    | invocation_response::Response::OutputError(_)
-                    | invocation_response::Response::InputAck(_)
-                    | invocation_response::Response::StreamCancel(_),
+                    | invocation_response::Response::StreamEnd(_)
+                    | invocation_response::Response::InputAck(_),
                 ) => {
                     return Err(anyhow!(
                         "non-streaming test invocation received a stream frame"

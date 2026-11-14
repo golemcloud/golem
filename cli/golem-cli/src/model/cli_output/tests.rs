@@ -1638,6 +1638,29 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_accepts_every_sample_oplog_entry() {
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
+    for entry in sample_public_oplog_entries() {
+        let entry_type =
+            serde_json::to_value(&entry).expect("oplog entry should serialize")["type"].clone();
+        let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+            index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+            entry: entry.into(),
+        })
+        .expect("agent.oplog should serialize");
+        assert!(
+            validator.is_valid(&output),
+            "schema should accept the {entry_type} oplog entry: {:?}",
+            validator
+                .iter_errors(&output)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
@@ -2597,6 +2620,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(2),
             }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
@@ -2694,16 +2721,22 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             data: raw_snapshot(),
             filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
             timestamp: timestamp(),
@@ -2721,6 +2754,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
             plugin: plugin(4),
+            source_component_revision: ComponentRevision::INITIAL,
             target_agent_id: agent_id("target-agent"),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),

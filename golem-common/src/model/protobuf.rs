@@ -17,11 +17,12 @@ use crate::base_model::agent::AgentFileContentHash;
 use crate::model::component::{AgentFilePath, InitialAgentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
-    AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
-    AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
-    AgentStatusFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationId,
-    InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
-    RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator, Timestamp,
+    AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter,
+    AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter,
+    AgentRevisionFilter, AgentStatus, AgentStatusFilter, FilterComparator, IdempotencyKey,
+    IdempotencyScope, InvocationId, InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
+    Timestamp,
 };
 use applying::Apply;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -112,6 +113,7 @@ impl From<PromiseId> for golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
             agent_id: Some(value.agent_id.into()),
+            fingerprint: Some(value.fingerprint.0.into()),
             oplog_idx: value.oplog_idx.into(),
         }
     }
@@ -123,6 +125,7 @@ impl TryFrom<golem::worker::PromiseId> for PromiseId {
     fn try_from(value: golem::worker::PromiseId) -> Result<Self, Self::Error> {
         Ok(Self {
             agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
+            fingerprint: AgentFingerprint(value.fingerprint.ok_or("Missing fingerprint")?.into()),
             oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         })
     }

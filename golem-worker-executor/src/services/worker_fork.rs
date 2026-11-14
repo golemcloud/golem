@@ -66,12 +66,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRequest, ForkStreamSlotResponse,
 };
 use golem_common::base_model::oplog::QueuedCardEvent;
-use golem_common::base_model::regions::DeletedRegionsBuilder;
+use golem_common::base_model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::durable_stream::{
+    StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     CreateRequest, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
@@ -818,6 +820,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // The entries that the update queue reads, kept from the copy, so the fold over them
         // after the copy, when the deleted regions are known, reads no entry again.
         let mut update_entries: Vec<(OplogIndex, KeptUpdateEntry)> = Vec::new();
+        // The bootstrap ranges that the copied restore points name.
+        let mut restore_points: Vec<(OplogIndex, OplogRegion)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -884,6 +888,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
             }
+            if let Some(range) = crate::worker::cut_point::bootstrap_range_named_by(&entry) {
+                restore_points.push((oplog_index, range.clone()));
+            }
 
             // For pending invocations, deleted regions don't matter - both inputs
             // and outputs in deleted regions are still accounted for (see calculate_pending_invocations).
@@ -924,6 +931,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // The update queue pairs the update entries as the status fold does: entries in a
         // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
+        crate::worker::cut_point::validate_restore_point_ranges(
+            restore_points.iter().map(|(index, range)| (*index, range)),
+            oplog_index_cut_off,
+            &deleted_regions,
+        )
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {oplog_index_cut_off}: {error}"
+            ))
+        })?;
         let (cancellations, baseline) = update_entries
             .into_iter()
             .fold(ForkUpdates::default(), |updates, (oplog_index, entry)| {
@@ -1025,7 +1042,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     &mapping.handle.source_invocation,
                     mapping.handle.stream_id,
                     candidate.initial.clone(),
-                    candidate.export.closed,
+                    candidate
+                        .export
+                        .closed
+                        .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                     None,
                 )
                 .await
@@ -1678,6 +1698,7 @@ mod tests {
                 snapshot_index: index(snapshot),
                 snapshot_revision: revision(1),
                 filesystem_snapshot: name,
+                snapshot_bootstrap: None,
             },
             Some(index(admission)),
         )
@@ -1710,7 +1731,7 @@ mod tests {
     }
 
     fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     /// The updates of the prefix `entries` from oplog index 2, with the regions in `deleted`.

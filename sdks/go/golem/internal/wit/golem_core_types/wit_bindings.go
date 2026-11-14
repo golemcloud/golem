@@ -905,8 +905,12 @@ type OplogIndex = uint64
 // complete that promise from an arbitrary external source, while Golem
 // agents can await for this completion.
 type PromiseId struct {
-	AgentId  AgentId
-	OplogIdx uint64
+	AgentId AgentId
+	// Fingerprint of the agent incarnation that created the promise. A deleted and
+	// re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs
+	// of the deleted incarnation do not reach the new one.
+	Fingerprint Uuid
+	OplogIdx    uint64
 }
 
 //go:wasmimport golem:core/types@2.0.0 [resource-drop]quota-token
@@ -2396,6 +2400,73 @@ type TypedSchemaValue struct {
 	Graph SchemaGraph
 	Value SchemaValueTree
 }
+
+const (
+	StreamErrorFailed  uint8 = 0
+	StreamErrorTrapped uint8 = 1
+	// An invocation cancellation request was recorded and honoured.
+	StreamErrorCancelled uint8 = 2
+	// The producing invocation completed with its writer still open.
+	StreamErrorAbandoned         uint8 = 3
+	StreamErrorInterrupted       uint8 = 4
+	StreamErrorResourceExhausted uint8 = 5
+)
+
+// The producer's failure, independent of a reader dropping its stream.
+type StreamError struct {
+	tag   uint8
+	value any
+}
+
+func (self StreamError) Tag() uint8 {
+	return self.tag
+}
+
+func (self StreamError) Failed() TypedSchemaValue {
+	if self.tag != StreamErrorFailed {
+		panic("tag mismatch")
+	}
+	return self.value.(TypedSchemaValue)
+}
+func (self StreamError) Trapped() string {
+	if self.tag != StreamErrorTrapped {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self StreamError) Interrupted() string {
+	if self.tag != StreamErrorInterrupted {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self StreamError) ResourceExhausted() string {
+	if self.tag != StreamErrorResourceExhausted {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+
+func MakeStreamErrorFailed(value TypedSchemaValue) StreamError {
+	return StreamError{StreamErrorFailed, value}
+}
+func MakeStreamErrorTrapped(value string) StreamError {
+	return StreamError{StreamErrorTrapped, value}
+}
+func MakeStreamErrorCancelled() StreamError {
+	return StreamError{StreamErrorCancelled, nil}
+}
+func MakeStreamErrorAbandoned() StreamError {
+	return StreamError{StreamErrorAbandoned, nil}
+}
+func MakeStreamErrorInterrupted(value string) StreamError {
+	return StreamError{StreamErrorInterrupted, value}
+}
+func MakeStreamErrorResourceExhausted(value string) StreamError {
+	return StreamError{StreamErrorResourceExhausted, value}
+}
+
+type StreamOutcome = witTypes.Result[witTypes.Unit, StreamError]
 
 // A declared tool failure shared by invocation and oplog interfaces.
 type CustomToolError struct {

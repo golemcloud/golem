@@ -137,6 +137,32 @@ impl AgentInvocationPayload {
     pub fn same_caller_request(&self, other: &Self) -> bool {
         match (self, other) {
             (
+                Self::AgentInitialization { input, principal },
+                Self::AgentInitialization {
+                    input: other_input,
+                    principal: other_principal,
+                },
+            ) => principal == other_principal && schema_value_same_request(input, other_input),
+            (
+                Self::AgentMethod {
+                    method_name,
+                    input,
+                    principal,
+                    scope_card,
+                },
+                Self::AgentMethod {
+                    method_name: other_method,
+                    input: other_input,
+                    principal: other_principal,
+                    scope_card: other_card,
+                },
+            ) => {
+                method_name == other_method
+                    && principal == other_principal
+                    && scope_card == other_card
+                    && schema_value_same_request(input, other_input)
+            }
+            (
                 Self::ExternalTool {
                     tool_name,
                     command_path,
@@ -162,7 +188,8 @@ impl AgentInvocationPayload {
             ) => {
                 tool_name == other_tool
                     && command_path == other_path
-                    && input == other_input
+                    && input.graph() == other_input.graph()
+                    && schema_value_same_request(input.value(), other_input.value())
                     && stdin == other_stdin
                     && stdout == other_stdout
                     && stderr == other_stderr
@@ -171,6 +198,53 @@ impl AgentInvocationPayload {
             }
             _ => self == other,
         }
+    }
+}
+
+/// Compares stored request values without losing NaN payloads or the sign of zero.
+/// Non-float leaves, including stream identities and capabilities, retain their equality.
+fn schema_value_same_request(a: &SchemaValue, b: &SchemaValue) -> bool {
+    fn opt_same(a: &Option<Box<SchemaValue>>, b: &Option<Box<SchemaValue>>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => schema_value_same_request(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    match (a, b) {
+        (SchemaValue::F32(a), SchemaValue::F32(b)) => a.to_bits() == b.to_bits(),
+        (SchemaValue::F64(a), SchemaValue::F64(b)) => a.to_bits() == b.to_bits(),
+        (SchemaValue::Record { fields: a }, SchemaValue::Record { fields: b })
+        | (SchemaValue::Tuple { elements: a }, SchemaValue::Tuple { elements: b })
+        | (SchemaValue::List { elements: a }, SchemaValue::List { elements: b })
+        | (SchemaValue::FixedList { elements: a }, SchemaValue::FixedList { elements: b }) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| schema_value_same_request(a, b))
+        }
+        (SchemaValue::Map { entries: a }, SchemaValue::Map { entries: b }) => {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|((ak, av), (bk, bv))| {
+                    schema_value_same_request(ak, bk) && schema_value_same_request(av, bv)
+                })
+        }
+        (SchemaValue::Variant(a), SchemaValue::Variant(b)) => {
+            a.case == b.case && opt_same(&a.payload, &b.payload)
+        }
+        (SchemaValue::Option { inner: a }, SchemaValue::Option { inner: b }) => opt_same(a, b),
+        (SchemaValue::Result(a), SchemaValue::Result(b)) => match (a, b) {
+            (ResultValuePayload::Ok { value: a }, ResultValuePayload::Ok { value: b })
+            | (ResultValuePayload::Err { value: a }, ResultValuePayload::Err { value: b }) => {
+                opt_same(a, b)
+            }
+            _ => false,
+        },
+        (SchemaValue::Union(a), SchemaValue::Union(b)) => {
+            a.tag == b.tag && schema_value_same_request(&a.body, &b.body)
+        }
+        _ => a == b,
     }
 }
 
@@ -692,5 +766,243 @@ impl PendingInvocationRef {
 
     pub fn is_manual_update(&self) -> bool {
         self.manual_update_target_revision.is_some()
+    }
+}
+
+#[cfg(test)]
+mod request_equality_tests {
+    use super::*;
+    use crate::model::deployment::DeploymentRevision;
+    use crate::model::entity::FilesystemCapability;
+    use crate::model::json::NormalizedJsonValue;
+    use crate::model::tool::{
+        CompiledToolBinding, ToolBindingOwner, ToolFilesystemAccess, ToolRegistration, ToolSource,
+    };
+    use crate::schema::tool::{CommandTree, Tool};
+    use crate::schema::{SchemaGraph, SchemaType, UnionValuePayload, VariantValuePayload};
+    use test_r::test;
+
+    fn tool_request(input: TypedSchemaValue) -> AgentInvocationPayload {
+        let source = ToolSource::Component {
+            component_id: Default::default(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: "test:tool".try_into().unwrap(),
+        };
+        let tool_name = ToolName::try_from("test").unwrap();
+        AgentInvocationPayload::ExternalTool {
+            tool_name: tool_name.clone(),
+            command_path: vec!["run".to_string()],
+            input: Box::new(input),
+            stdin: false,
+            stdout: false,
+            stderr: false,
+            activation: Box::new(ToolActivationSnapshot {
+                registered_tool: ToolRegistration {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    definition: Tool {
+                        version: "1.0.0".to_string(),
+                        requires_filesystem: false,
+                        commands: CommandTree { nodes: Vec::new() },
+                        schema: SchemaGraph::empty(),
+                    },
+                    provision: Default::default(),
+                    source: source.clone(),
+                    owner_account_id: Default::default(),
+                    owner_account_email: "owner@example.com".into(),
+                    metadata_version: String::new(),
+                    metadata_digest: Default::default(),
+                    component_bindings: Default::default(),
+                },
+                binding: CompiledToolBinding {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: "Test".parse().unwrap(),
+                    },
+                    tool_name,
+                    version: "1.0.0".to_string(),
+                    metadata_version: String::new(),
+                    metadata_digest: Default::default(),
+                    account_id: Default::default(),
+                    account_email: "owner@example.com".into(),
+                    parameters: NormalizedJsonValue::new(serde_json::Value::Null),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: Default::default(),
+                    secret_keys_revealable: Default::default(),
+                    filesystem_access: ToolFilesystemAccess::Denied,
+                    source,
+                },
+                filesystem: FilesystemCapability::Incapable,
+                middleware_chain: None,
+                mcp_import: None,
+            }),
+            principal: Principal::anonymous(),
+            scope_card: None,
+        }
+    }
+
+    fn requests(value: SchemaValue, schema: SchemaType) -> Vec<AgentInvocationPayload> {
+        vec![
+            AgentInvocationPayload::AgentInitialization {
+                input: value.clone(),
+                principal: Principal::anonymous(),
+            },
+            AgentInvocationPayload::AgentMethod {
+                method_name: "run".to_string(),
+                input: value.clone(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            },
+            tool_request(TypedSchemaValue::new(SchemaGraph::anonymous(schema), value)),
+        ]
+    }
+
+    #[test]
+    fn same_caller_request_float_bits() {
+        for (a, b, schema) in [
+            (
+                SchemaValue::F32(f32::from_bits(0x7fc0_0001)),
+                SchemaValue::F32(f32::from_bits(0x7fc0_0002)),
+                SchemaType::f32(),
+            ),
+            (
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0001)),
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0002)),
+                SchemaType::f64(),
+            ),
+            (
+                SchemaValue::F32(0.0),
+                SchemaValue::F32(-0.0),
+                SchemaType::f32(),
+            ),
+            (
+                SchemaValue::F64(0.0),
+                SchemaValue::F64(-0.0),
+                SchemaType::f64(),
+            ),
+        ] {
+            for (a, b) in requests(a, schema.clone()).iter().zip(requests(b, schema)) {
+                assert!(a.same_caller_request(&a.clone()), "{a:?}");
+                assert!(!a.same_caller_request(&b), "{a:?} vs {b:?}");
+                assert!(!b.same_caller_request(a), "{b:?} vs {a:?}");
+                let bytes = desert_rust::serialize_to_byte_vec(a).unwrap();
+                let stored: AgentInvocationPayload = desert_rust::deserialize(&bytes).unwrap();
+                assert!(stored.same_caller_request(a));
+                assert!(!stored.same_caller_request(&b));
+            }
+        }
+    }
+
+    #[test]
+    fn same_caller_request_nested_float_bits() {
+        fn containers(value: SchemaValue) -> Vec<SchemaValue> {
+            vec![
+                SchemaValue::Record {
+                    fields: vec![value.clone()],
+                },
+                SchemaValue::Tuple {
+                    elements: vec![value.clone()],
+                },
+                SchemaValue::List {
+                    elements: vec![value.clone()],
+                },
+                SchemaValue::FixedList {
+                    elements: vec![value.clone()],
+                },
+                SchemaValue::Map {
+                    entries: vec![(value.clone(), SchemaValue::Bool(true))],
+                },
+                SchemaValue::Map {
+                    entries: vec![(SchemaValue::Bool(true), value.clone())],
+                },
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 1,
+                    payload: Some(Box::new(value.clone())),
+                }),
+                SchemaValue::Option {
+                    inner: Some(Box::new(value.clone())),
+                },
+                SchemaValue::Result(ResultValuePayload::Ok {
+                    value: Some(Box::new(value.clone())),
+                }),
+                SchemaValue::Result(ResultValuePayload::Err {
+                    value: Some(Box::new(value.clone())),
+                }),
+                SchemaValue::Union(UnionValuePayload {
+                    tag: "float".to_string(),
+                    body: Box::new(value),
+                }),
+            ]
+        }
+
+        for (a, b) in [
+            (
+                SchemaValue::F32(f32::from_bits(0x7fc0_0001)),
+                SchemaValue::F32(f32::from_bits(0x7fc0_0002)),
+            ),
+            (
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0001)),
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0002)),
+            ),
+            (SchemaValue::F32(0.0), SchemaValue::F32(-0.0)),
+            (SchemaValue::F64(0.0), SchemaValue::F64(-0.0)),
+        ] {
+            for (a, b) in containers(a).into_iter().zip(containers(b)) {
+                let a = SchemaValue::Option {
+                    inner: Some(Box::new(a)),
+                };
+                let b = SchemaValue::Option {
+                    inner: Some(Box::new(b)),
+                };
+                assert!(schema_value_same_request(&a, &a.clone()), "{a:?}");
+                assert!(!schema_value_same_request(&a, &b), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn same_caller_request_nested_typed_inputs() {
+        let schema = SchemaType::option(SchemaType::list(SchemaType::tuple(vec![
+            SchemaType::f32(),
+            SchemaType::f64(),
+        ])));
+        let nested = |a, b| SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::List {
+                elements: vec![SchemaValue::Tuple {
+                    elements: vec![SchemaValue::F32(a), SchemaValue::F64(b)],
+                }],
+            })),
+        };
+        for (a, b, changed_a, changed_b) in [
+            (
+                f32::from_bits(0x7fc0_0001),
+                f64::from_bits(0x7ff8_0000_0000_0001),
+                f32::from_bits(0x7fc0_0002),
+                f64::from_bits(0x7ff8_0000_0000_0002),
+            ),
+            (0.0, 0.0, -0.0, -0.0),
+        ] {
+            let original = requests(nested(a, b), schema.clone());
+            for changed in [nested(changed_a, b), nested(a, changed_b)] {
+                for (original, changed) in original.iter().zip(requests(changed, schema.clone())) {
+                    assert!(original.same_caller_request(&original.clone()));
+                    assert!(!original.same_caller_request(&changed));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn same_caller_request_tool_schema_is_part_of_identity() {
+        let a = tool_request(TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::f32()),
+            SchemaValue::F32(0.0),
+        ));
+        let b = tool_request(TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::f64()),
+            SchemaValue::F32(0.0),
+        ));
+        assert!(!a.same_caller_request(&b));
     }
 }

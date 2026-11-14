@@ -1108,6 +1108,68 @@ async fn explicit_structural_ephemeral_creation_has_no_canonical_key(
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
+async fn reverted_inactive_ephemeral_agent_stays_inactive(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::{RevertLastInvocations, RevertWorkerTarget};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralCounter", "reverted-inactive");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &logical_agent_id, "increment", data_value!())
+        .await?;
+    let final_agent_id = result.agent_id().clone();
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    // The revert reconstructs the agent for observation only and stops it externally before it
+    // appends the cut. The retained `Restart` keeps the agent fail-stop afterwards.
+    executor
+        .revert(
+            &final_agent_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 1,
+            }),
+        )
+        .await?;
+    let error = executor
+        .resume(&final_agent_id, false)
+        .await
+        .expect_err("an inactive ephemeral agent must not start after a revert");
+    assert!(
+        error
+            .to_string()
+            .contains("An ephemeral agent cannot accept another invocation or be resumed"),
+        "{error}"
+    );
+    assert!(
+        executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_))),
+        "the revert must be recorded"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
 async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

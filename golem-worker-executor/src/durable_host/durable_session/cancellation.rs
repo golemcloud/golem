@@ -14,6 +14,14 @@
 
 use super::*;
 
+fn cancellation_retained_bytes(
+    cancellation: &StreamCancellationRequest,
+) -> Result<usize, SessionError> {
+    golem_common::serialization::serialize(cancellation)
+        .map(|bytes| bytes.len())
+        .map_err(SessionError::from)
+}
+
 impl StreamSession {
     pub(super) fn cancellation_attachment_key(
         &self,
@@ -115,15 +123,18 @@ impl StreamSession {
                         consumer_invocation: self.consumer_invocation.idempotency_key,
                         source: binding.source,
                         epoch,
-                        role: match role.direction() {
-                            SessionStreamRole::Input => StreamCancelRole::InputProducer,
-                            SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
-                            SessionStreamRole::ToolStdin
-                            | SessionStreamRole::ToolStdout
-                            | SessionStreamRole::ToolStderr => unreachable!(),
+                        cancellation: StreamCancellationRequest {
+                            direction: role.direction(),
+                            side: match role.direction() {
+                                SessionStreamRole::Input => StreamEndpointSide::Producer,
+                                SessionStreamRole::Output => StreamEndpointSide::Consumer,
+                                _ => unreachable!(),
+                            },
+                            authored_by: StreamTerminalAuthor::Host,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                                "stream slot deleted".into(),
+                            )),
                         },
-                        reason: StreamCancelReason::Cancelled,
-                        details: None,
                     },
                 ));
             }
@@ -148,25 +159,26 @@ impl StreamSession {
     pub async fn cancel_stream(
         &self,
         transport_stream_id: u64,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        cancellation: StreamCancellationRequest,
         expected_attachment_epoch: Option<u64>,
     ) -> Result<(), SessionError> {
+        if matches!(cancellation.terminal, StreamTerminal::Finished) {
+            return Err(
+                "durable stream cancellation requires a cancellation or failure terminal".into(),
+            );
+        }
         let session = self.clone();
         self.producer
             .run_admitted(
                 None,
-                details.as_ref().map_or(0, String::len),
+                cancellation_retained_bytes(&cancellation)?,
                 true,
                 move |_, admission| async move {
                     session
                         .cancel_stream_owned(
                             &admission,
                             transport_stream_id,
-                            role,
-                            reason,
-                            details,
+                            cancellation,
                             expected_attachment_epoch,
                         )
                         .await
@@ -179,9 +191,7 @@ impl StreamSession {
         &self,
         admission: &Arc<StreamWriteAdmission>,
         transport_stream_id: u64,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        cancellation: StreamCancellationRequest,
         expected_attachment_epoch: Option<u64>,
     ) -> Result<(), SessionError> {
         let session_guard = self.session_lock.lock().await;
@@ -196,20 +206,7 @@ impl StreamSession {
         let mapping = self
             .mapping(transport_stream_id)
             .ok_or_else(|| format!("unknown durable input stream {transport_stream_id}"))?;
-        let expected_role = match role {
-            StreamCancelRole::InputProducer | StreamCancelRole::InputConsumer => {
-                SessionStreamRole::Input
-            }
-            StreamCancelRole::OutputProducer | StreamCancelRole::OutputConsumer => {
-                SessionStreamRole::Output
-            }
-            StreamCancelRole::System => {
-                return Err(SessionError::from(
-                    "system-authored durable stream cancellation is internal".to_string(),
-                ));
-            }
-        };
-        if mapping.role.direction() != expected_role {
+        if mapping.role.direction() != cancellation.direction {
             return Err(SessionError::from(
                 "durable stream cancellation role does not match its mapping".to_string(),
             ));
@@ -271,9 +268,7 @@ impl StreamSession {
             consumer_invocation: self.consumer_invocation.idempotency_key,
             source: binding.source.clone(),
             epoch,
-            role,
-            reason,
-            details,
+            cancellation,
         };
         let persisted_intent = self
             .current_control_metadata()
@@ -320,7 +315,7 @@ impl StreamSession {
             self.producer
                 .run_admitted(
                     admission,
-                    intent.details.as_ref().map_or(0, String::len),
+                    cancellation_retained_bytes(&intent.cancellation)?,
                     true,
                     move |_, admission| async move {
                         let _guard = session.session_lock.lock().await;
@@ -340,9 +335,8 @@ impl StreamSession {
                                     .commit_cancel_open(
                                         Some(&context),
                                         mapping.handle.stream_id,
-                                        intent.role,
-                                        intent.reason,
-                                        intent.details.clone(),
+                                        intent.cancellation.authored_by,
+                                        intent.cancellation.terminal.clone(),
                                     )
                                     .await
                                     .map_err(SessionError::from)?;
@@ -408,13 +402,13 @@ impl StreamSession {
                 .producer
                 .run_admitted(
                     None,
-                    intent.details.as_ref().map_or(0, String::len),
+                    cancellation_retained_bytes(&intent.cancellation)?,
                     true,
                     move |_, admission| async move {
                         tokio::time::timeout(
                             timeout,
                             RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
-                                .cancel_stream(key, intent.role, intent.reason, intent.details),
+                                .cancel_stream(key, intent.cancellation),
                         )
                         .await
                         .map_err(|_| StreamStoreError::RecoveryRequired)?
@@ -468,9 +462,8 @@ impl StreamSession {
                         .commit_cancel_open(
                             Some(&context),
                             mapping.handle.stream_id,
-                            intent.role,
-                            intent.reason,
-                            intent.details.clone(),
+                            intent.cancellation.authored_by,
+                            intent.cancellation.terminal.clone(),
                         )
                         .await
                         .map_err(SessionError::from)?;
@@ -508,12 +501,8 @@ impl StreamSession {
             let key = self.cancellation_attachment_key(&mapping.handle, &intent)?;
             self.producer
                 .remote_until_retired(
-                    RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx).cancel_stream(
-                        key,
-                        intent.role,
-                        intent.reason,
-                        intent.details,
-                    ),
+                    RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
+                        .cancel_stream(key, intent.cancellation),
                 )
                 .await
                 .map_err(SessionError::from)?;

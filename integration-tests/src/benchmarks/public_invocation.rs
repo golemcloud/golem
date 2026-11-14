@@ -22,8 +22,8 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicInvocationOutcome,
-    PublicInvocationResult, PublicOutputStreamOutcome, PublicResumeOperation, PublicServerMessage,
-    PublicStreamDirection, PublicStreamMapping,
+    PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
+    PublicStreamMapping, PublicStreamOutcome,
 };
 use golem_common::model::{IdempotencyKey, InvocationId};
 use golem_common::schema::SchemaValue;
@@ -54,7 +54,7 @@ pub fn public_u32(value: u32) -> serde_json::Value {
 #[derive(Clone, Debug, Default)]
 pub struct OutputObservation {
     pub items: Vec<(u64, serde_json::Value)>,
-    pub terminal: Option<(u64, PublicOutputStreamOutcome)>,
+    pub terminal: Option<(u64, PublicStreamOutcome)>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +86,7 @@ impl SessionCheckpoint {
         ensure!(
             self.outputs
                 .values()
-                .all(|output| matches!(output.terminal, Some((_, PublicOutputStreamOutcome::Ok)))),
+                .all(|output| matches!(output.terminal, Some((_, PublicStreamOutcome::Finished)))),
             "an output stream did not end successfully"
         );
         ensure!(
@@ -179,12 +179,17 @@ impl SessionCheckpoint {
                 attempt.first_item.get_or_insert(now);
                 attempt.first_items.entry(stream).or_insert(now);
             }
-            PublicServerMessage::OutputStreamEnd {
+            PublicServerMessage::StreamEnd {
                 channel,
+                direction,
                 sequence,
                 outcome,
                 ..
             } => {
+                ensure!(
+                    *direction == PublicStreamDirection::Output,
+                    "unexpected input terminal"
+                );
                 let stream = self
                     .channels
                     .get(channel)
@@ -212,8 +217,7 @@ impl SessionCheckpoint {
             PublicServerMessage::AttachmentRevoked { reason, .. } => {
                 anyhow::bail!("attachment revoked: {reason:?}")
             }
-            PublicServerMessage::InputStreamAck { .. }
-            | PublicServerMessage::StreamCancel { .. } => {
+            PublicServerMessage::InputStreamAck { .. } => {
                 anyhow::bail!("unexpected input or cancellation response")
             }
         }
@@ -306,6 +310,7 @@ impl PublicInvocationSession {
                 stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
+                accepted_invocation: None,
             },
             SessionCheckpoint::default(),
             timeout,
@@ -462,6 +467,10 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
+                agent_id: "counter()".to_string(),
+            },
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),

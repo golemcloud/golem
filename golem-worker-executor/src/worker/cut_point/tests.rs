@@ -119,6 +119,7 @@ fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
         snapshot_index: idx(2),
         snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
         filesystem_snapshot: None,
+        snapshot_bootstrap: None,
     }
 }
 
@@ -134,6 +135,7 @@ fn successful_snapshot_update_boundary_is_validated() {
                 100,
                 None,
                 Default::default(),
+                None,
                 None,
             ),
         ),
@@ -198,6 +200,7 @@ fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::failed_update(
             ComponentRevision::new(2).unwrap(),
@@ -252,6 +255,7 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
                 None,
                 Default::default(),
                 None,
+                None,
             ),
         ),
         (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
@@ -262,6 +266,7 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
                 100,
                 None,
                 Default::default(),
+                None,
                 None,
             ),
         ),
@@ -334,6 +339,7 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
                 None,
                 Default::default(),
                 None,
+                None,
             ),
         ),
     ]);
@@ -381,6 +387,63 @@ fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() 
 
     assert_eq!(
         validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+        Ok(())
+    );
+}
+
+/// A cut that retains a restore point must retain its whole bootstrap range; a cut that drops
+/// the restore point, or a revert that deleted it, does not constrain its range.
+#[test]
+fn a_cut_that_retains_a_restore_point_retains_its_bootstrap_range() {
+    let range = |from: u64, to: u64| OplogRegion::from_range(from..=to);
+    let successful = OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        None,
+        Some(range(4, 6)),
+    );
+    let mut description = snapshot_assisted_update(2);
+    if let UpdateDescription::SnapshotAssistedAutomatic {
+        snapshot_bootstrap, ..
+    } = &mut description
+    {
+        *snapshot_bootstrap = Some(range(2, 3));
+    }
+    let strategy = OplogEntry::pending_update(description, None);
+    assert_eq!(bootstrap_range_named_by(&successful), Some(&range(4, 6)));
+    assert_eq!(bootstrap_range_named_by(&strategy), Some(&range(2, 3)));
+    assert_eq!(
+        bootstrap_range_named_by(&OplogEntry::pending_update(snapshot_update(2), None)),
+        None
+    );
+
+    let named = range(4, 6);
+    let check = |point: u64, named: &OplogRegion, cut: u64, deleted: &DeletedRegions| {
+        validate_restore_point_ranges([(idx(point), named)], idx(cut), deleted)
+    };
+    let dropped = |point: u64, named: &OplogRegion| {
+        Err(RevertUpdateBoundaryError::DroppedBootstrapRange {
+            restore_point_index: idx(point),
+            bootstrap: named.clone(),
+        })
+    };
+    let none = DeletedRegions::new();
+
+    assert_eq!(check(10, &named, 10, &none), Ok(()));
+    assert_eq!(check(10, &named, 9, &none), Ok(()));
+    assert_eq!(
+        check(10, &range(4, 12), 10, &none),
+        dropped(10, &range(4, 12))
+    );
+    assert_eq!(check(10, &range(4, 11), 11, &none), Ok(()));
+    // A range that contains a deleted region is replayed around it.
+    assert_eq!(check(10, &named, 12, &deleted(vec![(5, 5)])), Ok(()));
+    assert_eq!(check(10, &named, 12, &deleted(vec![(2, 4)])), Ok(()));
+    // A deleted restore point does not constrain the cut.
+    assert_eq!(
+        check(10, &range(4, 12), 11, &deleted(vec![(9, 10)])),
         Ok(())
     );
 }

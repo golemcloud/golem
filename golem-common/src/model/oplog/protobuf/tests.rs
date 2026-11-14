@@ -358,6 +358,7 @@ mod successful_update_proto_tests {
         FailedSnapshotAssistedUpdateDetails, FilesystemSnapshotName, OplogEntry,
         SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription,
     };
+    use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, Timestamp};
 
     #[test]
@@ -373,6 +374,10 @@ mod successful_update_proto_tests {
                 source_component_revision: ComponentRevision::new(1).unwrap(),
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(3),
+            }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(11),
+                end: OplogIndex::from_u64(17),
             }),
         };
 
@@ -430,28 +435,38 @@ mod successful_update_proto_tests {
     }
 
     #[test]
-    fn raw_snapshot_assisted_pending_update_preserves_the_filesystem_snapshot() {
-        [None, Some(FilesystemSnapshotName::periodic())]
-            .into_iter()
-            .for_each(|filesystem_snapshot| {
-                let original = OplogEntry::PendingUpdate {
-                    timestamp: Timestamp::now_utc(),
-                    description: UpdateDescription::SnapshotAssistedAutomatic {
-                        target_revision: ComponentRevision::new(2).unwrap(),
-                        source_component_revision: ComponentRevision::new(1).unwrap(),
-                        source_revision_start_index: OplogIndex::INITIAL,
-                        snapshot_index: OplogIndex::from_u64(3),
-                        snapshot_revision: ComponentRevision::new(1).unwrap(),
-                        filesystem_snapshot,
-                    },
-                    update_attempt_index: Some(OplogIndex::from_u64(2)),
-                };
+    fn raw_snapshot_assisted_pending_update_preserves_the_filesystem_snapshot_and_bootstrap() {
+        [
+            (None, None),
+            (
+                Some(FilesystemSnapshotName::periodic()),
+                Some(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(7),
+                }),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(filesystem_snapshot, snapshot_bootstrap)| {
+            let original = OplogEntry::PendingUpdate {
+                timestamp: Timestamp::now_utc(),
+                description: UpdateDescription::SnapshotAssistedAutomatic {
+                    target_revision: ComponentRevision::new(2).unwrap(),
+                    source_component_revision: ComponentRevision::new(1).unwrap(),
+                    source_revision_start_index: OplogIndex::INITIAL,
+                    snapshot_index: OplogIndex::from_u64(3),
+                    snapshot_revision: ComponentRevision::new(1).unwrap(),
+                    filesystem_snapshot,
+                    snapshot_bootstrap,
+                },
+                update_attempt_index: Some(OplogIndex::from_u64(2)),
+            };
 
-                let proto: RawOplogEntry = original.clone().try_into().unwrap();
-                let roundtrip: OplogEntry = proto.try_into().unwrap();
+            let proto: RawOplogEntry = original.clone().try_into().unwrap();
+            let roundtrip: OplogEntry = proto.try_into().unwrap();
 
-                assert_eq!(roundtrip, original);
-            });
+            assert_eq!(roundtrip, original);
+        });
     }
 }
 

@@ -973,6 +973,7 @@ async fn revocation_between_underlying_calls(
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),
@@ -1198,6 +1199,7 @@ async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),
@@ -1673,6 +1675,7 @@ async fn scope_revocation_consumed_by_middleware_gives_ambient_and_underlying_th
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),

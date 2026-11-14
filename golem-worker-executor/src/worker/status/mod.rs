@@ -306,15 +306,28 @@ fn update_status_with_precomputed_regions(
         {
             match record.as_ref() {
                 StreamSessionRecord::ConsumerCancelIntent(intent) => {
-                    if !pending_durable_stream_cancellations.iter().any(|existing| {
-                        existing.session_key == intent.session_key
-                            && existing.source == intent.source
-                    }) {
-                        pending_durable_stream_cancellations.insert(intent.clone());
+                    if !pending_durable_stream_cancellations
+                        .values()
+                        .flatten()
+                        .any(|existing| {
+                            existing.session_key == intent.session_key
+                                && existing.source == intent.source
+                        })
+                    {
+                        pending_durable_stream_cancellations
+                            .entry((intent.source.clone(), intent.epoch))
+                            .or_default()
+                            .push(intent.clone());
                     }
                 }
                 StreamSessionRecord::ConsumerCancelApplied(receipt) => {
-                    pending_durable_stream_cancellations.remove(&receipt.intent);
+                    let key = (receipt.intent.source.clone(), receipt.intent.epoch);
+                    if let Some(bucket) = pending_durable_stream_cancellations.get_mut(&key) {
+                        bucket.retain(|intent| intent != &receipt.intent);
+                        if bucket.is_empty() {
+                            pending_durable_stream_cancellations.remove(&key);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -326,8 +339,7 @@ fn update_status_with_precomputed_regions(
                 entry,
                 OplogEntry::StreamRegistered { .. }
                     | OplogEntry::StreamItems { .. }
-                    | OplogEntry::StreamEnd { .. }
-                    | OplogEntry::StreamCancel { .. }
+                    | OplogEntry::StreamTerminal { .. }
                     | OplogEntry::StreamSession { .. }
             )
         });

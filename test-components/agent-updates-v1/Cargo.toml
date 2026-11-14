@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 log = { version = "0.4.29", features = ["kv"] }
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0", features = ["async", "async-spawn"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "d3b26c17256b958ef02094ef2a2e90f9fcec46e2", version = "=0.63.0", features = ["async", "async-spawn"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

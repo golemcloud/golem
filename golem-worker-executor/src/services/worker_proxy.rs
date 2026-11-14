@@ -992,6 +992,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(promise_id.agent_id.clone().into()),
                     complete_parameters: Some(CompleteParameters {
                         oplog_idx: promise_id.oplog_idx.into(),
+                        fingerprint: Some(promise_id.fingerprint.0.into()),
                         data: data.clone(),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -1903,9 +1904,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await,
             Err(StreamStoreError::Oplog(_))
@@ -1918,9 +1922,12 @@ mod tests {
             control
                 .cancel_stream(
                     key.clone(),
-                    StreamCancelRole::OutputConsumer,
-                    StreamCancelReason::Cancelled,
-                    None,
+                    StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        terminal: StreamTerminal::ConsumerCancelled { details: None },
+                    },
                 )
                 .await
                 .unwrap()

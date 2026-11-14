@@ -677,25 +677,27 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
         return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
     }
-    if chain_contains(&|cause| {
-        cause.is::<GolemSpecificWasmTrap>()
-            || cause.is::<ClassifiedHostError>()
-            || cause.is::<SemanticTrapRetryOverrideMarker>()
-            || cause.is::<DurableCallTrapContextMarker>()
-            || cause.is::<wasmtime_wasi::I32Exit>()
-            || matches!(
-                cause.downcast_ref::<WorkerExecutorError>(),
-                Some(
-                    WorkerExecutorError::InvalidRequest { .. }
-                        | WorkerExecutorError::UnexpectedOplogEntry { .. }
-                        | WorkerExecutorError::ParamTypeMismatch { .. }
-                        | WorkerExecutorError::ValueMismatch { .. }
-                        | WorkerExecutorError::InvocationFailed { .. }
-                        | WorkerExecutorError::ReadOnlyViolation { .. }
-                        | WorkerExecutorError::PermissionDenied { .. }
+    if error.is::<ClassifiedHostError>()
+        || chain_contains(&|cause| {
+            cause.is::<GolemSpecificWasmTrap>()
+                || cause.is::<ClassifiedHostError>()
+                || cause.is::<SemanticTrapRetryOverrideMarker>()
+                || cause.is::<DurableCallTrapContextMarker>()
+                || cause.is::<wasmtime_wasi::I32Exit>()
+                || matches!(
+                    cause.downcast_ref::<WorkerExecutorError>(),
+                    Some(
+                        WorkerExecutorError::InvalidRequest { .. }
+                            | WorkerExecutorError::UnexpectedOplogEntry { .. }
+                            | WorkerExecutorError::ParamTypeMismatch { .. }
+                            | WorkerExecutorError::ValueMismatch { .. }
+                            | WorkerExecutorError::InvocationFailed { .. }
+                            | WorkerExecutorError::ReadOnlyViolation { .. }
+                            | WorkerExecutorError::PermissionDenied { .. }
+                    )
                 )
-            )
-    }) {
+        })
+    {
         return true;
     }
     if chain_contains(&|cause| cause.is::<WorkerExecutorError>()) {
@@ -3006,6 +3008,49 @@ mod tests {
         )
         .expect("the event loop itself settled");
         assert!(guest_trap.is_err());
+
+        use crate::durable_host::stream_bus::StreamTerminalError;
+        use golem_common::base_model::durable_stream::{
+            StreamError, StreamTerminal, StreamTerminalAuthor,
+        };
+        use golem_common::model::agent::AgentMode;
+        use golem_common::model::oplog::AgentError;
+
+        let terminal = StreamTerminal::Failed(StreamError::Interrupted("source lost".into()));
+        let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
+            Err(wasmtime::Error::from_anyhow(
+                StreamTerminalError {
+                    authored_by: StreamTerminalAuthor::Protocol,
+                    terminal: terminal.clone(),
+                }
+                .into_trap(),
+            )),
+            None,
+            false,
+        );
+        let Err(GuestCallSettlementError::Trap(error)) = result else {
+            panic!("a classified stream failure must remain a guest trap");
+        };
+        let error: anyhow::Error = error.into();
+        assert_eq!(
+            error
+                .downcast_ref::<StreamTerminalError>()
+                .unwrap()
+                .terminal,
+            terminal
+        );
+        assert!(matches!(
+            TrapType::from_error::<crate::workerctx::default::Context>(
+                &error,
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            ),
+            TrapType::Error {
+                error: AgentError::PermanentError(_),
+                ..
+            }
+        ));
 
         assert!(matches!(
             classify_guest_call_settlement::<()>(

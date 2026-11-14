@@ -514,6 +514,8 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn observe_input_terminal(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32>;
     async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
     async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
     async fn consume_nested_before_timer(
@@ -594,6 +596,32 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .collect()
             .await
             .expect("failed to consume input stream")
+    }
+
+    async fn observe_input_terminal(
+        &mut self,
+        mut input: AgentStream<u32>,
+        gate: PromiseId,
+    ) -> u64 {
+        self.scalar += 1;
+        assert_eq!(input.next().await.unwrap(), Some(17));
+        golem_rust::await_promise(&gate).await;
+        assert_eq!(input.next().await.unwrap(), None);
+        self.scalar
+    }
+
+    fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32> {
+        self.scalar += 1;
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(17).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            assert_eq!(
+                writer.write_one(29).await.unwrap_err(),
+                "agent stream reader was dropped"
+            );
+        });
+        output
     }
 
     async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String> {
@@ -1114,8 +1142,10 @@ pub trait StreamingRpcCaller {
         forwarded_drop: bool,
     ) -> Vec<u64>;
     async fn drop_new_increment_output(&self);
+    async fn drop_gated_output(&self, gate: PromiseId) -> u64;
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn call_producer_error(&self) -> Vec<u32>;
+    async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
@@ -1277,6 +1307,15 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     fn create_input_gate(&self) -> PromiseId {
         golem_rust::create_promise()
+    }
+
+    async fn drop_gated_output(&self, gate: PromiseId) -> u64 {
+        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+            .produce_drop_probe(gate)
+            .await;
+        assert_eq!(output.next().await.unwrap(), Some(17));
+        drop(output);
+        42
     }
 
     async fn transfer_input_after_timer(&self) -> Vec<u32> {
@@ -1493,6 +1532,15 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .collect()
             .await
             .expect("producer stream must fail")
+    }
+
+    async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32> {
+        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+            .produce_error()
+            .await;
+        assert_eq!(output.next().await.unwrap(), Some(1));
+        golem_rust::await_promise(&gate).await;
+        output.collect().await.expect("producer stream must fail")
     }
 
     async fn call_stream_free(&self) -> u64 {
@@ -1767,6 +1815,8 @@ pub trait RpcBlockingCounter {
     /// Blocks on a previously created promise
     fn await_promise(&self, promise_id: PromiseId);
     fn inc_after_promise(&mut self, promise_id: PromiseId) -> u64;
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 }
 
 struct RpcBlockingCounterImpl {
@@ -1803,6 +1853,10 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
         golem_rust::blocking_await_promise(&promise_id);
         self.value += 7;
         self.value
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 }
 
@@ -1873,6 +1927,9 @@ pub trait CancelTester {
     async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
 
     fn name(&self) -> String;
+
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
@@ -2120,6 +2177,10 @@ impl CancelTester for CancelTesterImpl {
             }
         })
         .await
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {

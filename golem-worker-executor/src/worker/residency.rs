@@ -76,7 +76,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
-            WorkerInstance::Unloaded { .. } | WorkerInstance::CleanupFailed(_) => None,
+            WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Inactive(_)
+            | WorkerInstance::CleanupFailed(_) => None,
             WorkerInstance::Deleting(_) => None,
             WorkerInstance::Unresolved | WorkerInstance::Initializing(_) => None,
         };
@@ -246,7 +248,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
-            WorkerInstance::Unloaded { .. } => {
+            WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
                     self.owned_agent_id
@@ -514,7 +516,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.handle_stop_result(stop_result).await;
             let outcome = match self.instance.lock().await.state() {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
-                WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
+                WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {
+                    EvictionStopOutcome::Unloaded
+                }
                 _ => EvictionStopOutcome::CleanupFailed,
             };
             if outcome == EvictionStopOutcome::Unloaded && self.has_due_invocations().await {

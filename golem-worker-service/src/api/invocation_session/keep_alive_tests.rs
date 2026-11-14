@@ -281,8 +281,8 @@ async fn buffered_output(websocket: WebSocket, state: Data<&SlowOutput>) -> impl
                         ..Default::default()
                     },
                 ),
-                move |_incoming, outbound, _budgets, setup_complete| async move {
-                    let _held = (_incoming, _budgets);
+                move |mut incoming, outbound, budgets, setup_complete| async move {
+                    let _held = budgets;
                     setup_complete.send(()).unwrap();
                     for index in 0..state.items {
                         let message = PublicServerMessage::OutputStreamItem {
@@ -308,6 +308,8 @@ async fn buffered_output(websocket: WebSocket, state: Data<&SlowOutput>) -> impl
                         .send(Message::Text(encode_text(&finished).unwrap()), None)
                         .await
                         .unwrap();
+                    // Keep the connection open until the client receives completion and closes.
+                    while incoming.next().await.is_some() {}
                 },
             )
             .await;
@@ -344,6 +346,7 @@ async fn slow_output_consumer_keeps_connection(items: usize, bytes_per_item: usi
             ..
         })
     ));
+    client.close().await.unwrap();
 }
 
 #[test]

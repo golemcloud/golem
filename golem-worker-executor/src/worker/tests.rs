@@ -118,6 +118,7 @@ fn assisted_pending(
                 index: OplogIndex::from_u64(7),
                 component_revision: source_revision,
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     }
@@ -526,6 +527,7 @@ fn rejected_automatic_snapshot_uses_manual_replay_revision() {
             timestamp: Timestamp::from(1_000),
             component_revision: active_revision,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         ..Default::default()
     };
@@ -602,6 +604,22 @@ fn merging_unloaded_states_preserves_startup_failure() {
             startup_failure: Some(_)
         }
     ));
+}
+
+#[test]
+fn inactivity_outranks_unloaded_states_in_both_orders() {
+    let inactive = || FinalWorkerState::Inactive(WorkerExecutorError::runtime("inactive"));
+    for unloaded in [None, Some(WorkerExecutorError::runtime("startup failed"))] {
+        let unloaded = || FinalWorkerState::Unloaded {
+            startup_failure: unloaded.clone(),
+        };
+        for (current, requested) in [(inactive(), unloaded()), (unloaded(), inactive())] {
+            assert!(matches!(
+                merge_final_worker_state(current, requested),
+                FinalWorkerState::Inactive(error) if error.to_string().contains("inactive")
+            ));
+        }
+    }
 }
 
 #[test]
@@ -911,9 +929,7 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
 
 #[test]
 fn reconstructed_ephemeral_agent_is_terminal() {
-    let instance = WorkerInstance::Unloaded {
-        startup_failure: Some(inactive_ephemeral_agent_error()),
-    };
+    let instance = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
 
     assert!(matches!(
         instance.startup_failure(),

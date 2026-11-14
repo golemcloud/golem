@@ -307,6 +307,19 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     );
 
     deliver(&executor, request.clone()).await?;
+    let mut changed = request.clone();
+    changed.metadata.as_mut().unwrap().retry_count += 1;
+    let rejected = executor
+        .client
+        .clone()
+        .process_oplog_entries(changed)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        &rejected.result,
+        Some(process_oplog_entries_response::Result::Failure(_))
+    ));
+    assert!(format!("{rejected:?}").contains("IdempotencyConflict"));
     let fresh_key = InvocationId(Uuid::new_v4());
     let mut fresh = request.clone();
     fresh.idempotency_key = Some(fresh_key.into());

@@ -73,6 +73,7 @@ use golem_common::model::oplog::{
     AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
     SnapshotAssistedUpdateDetails,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OwnedAgentId,
 };
@@ -883,6 +884,7 @@ impl UpdateManagement for Context {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(
@@ -890,6 +892,7 @@ impl UpdateManagement for Context {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await
     }

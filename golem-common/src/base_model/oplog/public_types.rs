@@ -223,8 +223,7 @@ impl PublicOplogEntry {
             Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
             Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
-            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
-            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
             _ => {}
         }
