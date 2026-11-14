@@ -1874,10 +1874,16 @@ async fn test_generated_streaming_bridges_end_to_end() {
         assert.equal((await firstConsumer.next()).value, 8)
         await firstConsumer.return?.()
 
-        const cancelled = await agent.produceByteThenWait()
-        const cancelConsumer = cancelled[Symbol.asyncIterator]()
-        assert.equal((await cancelConsumer.next()).value, 1)
-        await cancelConsumer.return?.()
+        const attachment = new AbortController()
+        try {{
+          const cancelled = await agent.produceByteThenWait.abortable(attachment.signal)
+          const cancelConsumer = cancelled[Symbol.asyncIterator]()
+          assert.equal((await cancelConsumer.next()).value, 1)
+          await cancelConsumer.return?.()
+        }} finally {{
+          // Reader cancellation does not end the parked producer body.
+          attachment.abort()
+        }}
         console.log('TYPESCRIPT_STREAMING_BRIDGE_E2E_OK')
         "#};
     std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
