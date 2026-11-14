@@ -377,10 +377,6 @@ until the cleanup has deleted the user of the deleted account (see
 The form targets answer 403 to a post whose `Origin` header is not the origin of `BETTER_AUTH_URL`,
 also to a post without `Origin`. The webhook route of Polar does not check `Origin`.
 
-A route reads at most 16 KiB of a request body (`defaultBodyLimit` in `src/Http.ts`), and the
-webhook route at most 1 MiB. A larger body gets 413. The gateway does not limit the size of a body,
-and a route reads the body into memory, so the app sets these limits itself.
-
 Better Auth limits the requests to its handler for each client address, in the memory of each
 replica. `POST /sign-in/github` goes through the handler: a client address starts at most 3 GitHub
 sign-ins in 10 seconds, and the next one redirects to `/?error=too_many_requests`.

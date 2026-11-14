@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { ByteSize, Effect, Layer, Option } from "effect"
+import { ByteSize, Effect, Option } from "effect"
 import {
   Cookies,
   HttpEffect,
@@ -75,21 +75,6 @@ const webhookSignatureHeaders = ["webhook-id", "webhook-timestamp", "webhook-sig
  */
 export const webhookBodyLimit = ByteSize.mebibytes(1)
 
-/**
- * The largest body that a route reads when it sets no limit of its own. The forms of the pages
- * post a few bytes. The gateway passes a body of any size to the app, and a route reads the body
- * into memory, so without a limit a few large posts could fill the memory of a replica.
- */
-export const defaultBodyLimit = ByteSize.kibibytes(16)
-
-const bodyLimit = HttpRouter.middleware(
-  (httpEffect) => Effect.provideService(httpEffect, HttpIncomingMessage.MaxBodySize, defaultBodyLimit),
-  { global: true }
-)
-
-const tooLarge = () =>
-  HttpServerResponse.text("The request body is too large.", { status: 413, headers: securityHeaders })
-
 const isBodyTooLarge = (error: unknown): boolean =>
   error instanceof HttpServerError.HttpServerError &&
   error.reason._tag === "RequestParseError" &&
@@ -130,7 +115,7 @@ const redirectWithCookies = (location: string, headers: Headers) =>
     cookies: Cookies.fromSetCookie(headers.getSetCookie())
   })
 
-const routeHandlers = HttpRouter.use((router) =>
+export const routes = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const { auth, getSignedIn } = yield* Auth
     const registry = yield* Registry
@@ -179,7 +164,9 @@ const routeHandlers = HttpRouter.use((router) =>
             Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
             Effect.catch((error) =>
               Effect.succeed(
-                isBodyTooLarge(error) ? tooLarge() : HttpServerResponse.text("cannot read the body", { status: 400 })
+                isBodyTooLarge(error)
+                  ? HttpServerResponse.text("the body is too large", { status: 413 })
+                  : HttpServerResponse.text("cannot read the body", { status: 400 })
               )
             )
           )
@@ -393,12 +380,10 @@ const routeHandlers = HttpRouter.use((router) =>
             return HttpServerResponse.redirect(`/?overage=${notice}`, { status: 303 })
           }).pipe(
             Effect.catch((error) =>
-              isBodyTooLarge(error)
-                ? Effect.succeed(tooLarge())
-                : Effect.logError("Cannot change the monthly usage mode").pipe(
-                    Effect.annotateLogs({ error: error.message }),
-                    Effect.as(errorPage)
-                  )
+              Effect.logError("Cannot change the monthly usage mode").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
             )
           )
         : Effect.succeed(crossOrigin())
@@ -460,6 +445,3 @@ const routeHandlers = HttpRouter.use((router) =>
     )
   })
 )
-
-/** The routes of the app, with `defaultBodyLimit` for every route that sets no limit of its own. */
-export const routes = Layer.mergeAll(routeHandlers, bodyLimit)
