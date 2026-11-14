@@ -296,7 +296,7 @@ object DurableStreamsSpec extends ZIOSpecDefault {
         resources("writers")(0).requests.asInstanceOf[js.Array[js.Dynamic]].isEmpty
       )
     },
-    test("nested schema/RPC forwarding uses ordinary streams and rejects native producer errors") {
+    test("nested schema/RPC forwarding exposes native producer errors in the completion outcome") {
       ZIO.fromFuture { _ =>
         install(
           js.Dynamic.literal(readStream =
@@ -316,11 +316,18 @@ object DurableStreamsSpec extends ZIOSpecDefault {
           outerIterator = iterator(outerRaw)
           item         <- FutureInterop.fromPromise(outerIterator.next().asInstanceOf[js.Promise[js.Dynamic]])
           innerRaw      = item.value.valueNodes.asInstanceOf[js.Array[js.Dynamic]](0).selectDynamic("val")
-          error        <- FutureInterop.fromPromise(iterator(innerRaw).next().asInstanceOf[js.Promise[js.Dynamic]]).failed
+          end          <- FutureInterop.fromPromise(iterator(innerRaw).next().asInstanceOf[js.Promise[js.Dynamic]])
+          outcome      <- FutureInterop.fromPromise(innerRaw.outcome.asInstanceOf[js.Promise[js.Dynamic]])
           _            <- FutureInterop.fromPromise(outerIterator.applyDynamic("return")().asInstanceOf[js.Promise[js.Dynamic]])
         } yield assertTrue(
           !item.done.asInstanceOf[Boolean],
-          error.toString.contains("native failure"),
+          end.done.asInstanceOf[Boolean],
+          outcome.tag.asInstanceOf[String] == "err",
+          outcome.`val`.tag.asInstanceOf[String] == "failed",
+          outcome.`val`.`val`.value.valueNodes.asInstanceOf[js.Array[js.Dynamic]].exists { node =>
+            node.tag
+              .asInstanceOf[String] == "string-value" && node.`val`.asInstanceOf[String].contains("native failure")
+          },
           resources("readers").length == 1,
           resources("readers")(0).drops.asInstanceOf[Int] == 1
         )

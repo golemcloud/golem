@@ -174,7 +174,7 @@ func TestReadingAClosedStreamPanics(t *testing.T) {
 	s, _ := streamOverFake(t, "a")
 	s.Close()
 	s.Close()
-	mustPanic(t, "stream is closed", func() { s.Next() })
+	mustPanic(t, "stream is closed", func() { _, _ = s.Next() })
 }
 
 // TestAgentStreamTransferIsAffine — handing a stream on moves the endpoint;
@@ -189,7 +189,7 @@ func TestAgentStreamTransferIsAffine(t *testing.T) {
 	if _, err := alias.streamTake(); !errors.Is(err, errStreamTransferred) {
 		t.Errorf("second transfer through an alias gave %v, want errStreamTransferred", err)
 	}
-	mustPanic(t, "already transferred", func() { s.Next() })
+	mustPanic(t, "already transferred", func() { _, _ = s.Next() })
 }
 
 // TestAgentStreamPartiallyReadCannotBeForwarded — the items already taken
@@ -227,7 +227,7 @@ func TestAgentStreamDecodeErrorIsNotEOF(t *testing.T) {
 	}
 	s := AgentStream[int64]{st: &streamState{src: f.source()}, codec: defaultStreamCodec[int64]()}
 
-	mustPanic(t, "stream item", func() { s.Next() })
+	mustPanic(t, "stream item", func() { _, _ = s.Next() })
 }
 
 // TestStreamSchemaIsAlwaysTyped — an untyped stream cannot supply an item

@@ -147,8 +147,9 @@ type treeSource struct {
 	read          func(dst []types.SchemaValueTree) uint32
 	writerDropped func() bool
 	outcome       func() error
-	dropOutcome   func()
-	drop          func()
+	//nolint:unused // released by the wasip1 build when forwarding an unread stream
+	dropOutcome func()
+	drop        func()
 	// reader is the host endpoint this source wraps, kept so an unread stream
 	// can be handed straight back. It is nil for a source that did not come
 	// from the host, which therefore cannot be transferred.

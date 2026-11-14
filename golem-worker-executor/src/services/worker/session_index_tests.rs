@@ -573,7 +573,7 @@ async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
         );
         let consumer = owned_agent("overlay-consumer", ComponentId::new());
         let source = owned_agent("overlay-source", ComponentId::new());
-        let invocation = session_key(&consumer, &IdempotencyKey::new("consume".into()));
+        let invocation = session_key(&consumer, &test_invocation_id("consume".into()));
         let oplog = create_oplog_with_identity(
             oplog_service.as_ref(),
             &consumer,
@@ -588,7 +588,7 @@ async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
             producer: source.agent_id.clone(),
             expected_producer_fingerprint: AgentFingerprint::new(),
             producer_generation: OplogIndex::NONE,
-            source_invocation: session_key(&source, &IdempotencyKey::new("produce".into())),
+            source_invocation: session_key(&source, &test_invocation_id("produce".into())),
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         };

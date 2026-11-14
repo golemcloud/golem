@@ -1089,8 +1089,10 @@ mod tests {
             first: AgentStream<String>,
             second: AgentStream<u32>,
         ) -> String {
-            let first = first.into_raw().await.unwrap().take_handle();
-            let second = second.into_raw().await.unwrap().take_handle();
+            let (first, _first_outcome) = first.into_raw().await.unwrap();
+            let (second, _second_outcome) = second.into_raw().await.unwrap();
+            let first = first.take_handle();
+            let second = second.take_handle();
             format!("{prefix}:{first}:{second}")
         }
 

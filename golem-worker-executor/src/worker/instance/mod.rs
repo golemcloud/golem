@@ -1508,8 +1508,8 @@ mod monthly_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ObservedPrimaryStore, PrimaryStore, StoreFuelGuard, instantiation_failure, interrupt_kind_in,
-        resource_capacity_trap,
+        ObservedPrimaryStore, PrimaryStore, StoreFuelGuard, instantiation_failure,
+        interrupt_kind_in, resource_capacity_trap,
     };
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
