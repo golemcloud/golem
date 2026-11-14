@@ -227,7 +227,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     worker.lookup_invocation_result(&ik).await,
                                     crate::model::LookupResult::New
                                 ) {
-                                    return Err(error);
+                                    return worker
+                                        .deleted_incarnation_as_not_found(
+                                            expected_fingerprint,
+                                            Err(error),
+                                        )
+                                        .await;
                                 }
                                 // Acceptance still validates the exact origin and descriptor.
                                 // Observing accepted work does not start a failed runtime.
