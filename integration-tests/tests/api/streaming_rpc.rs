@@ -2321,6 +2321,7 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
             StreamError, StreamSessionRecord, StreamTerminal,
         };
         use golem_common::model::oplog::PublicOplogEntry;
+        use golem_schema::FromSchema;
         matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
             if matches!(StreamSessionRecord::from_value(session.record.value()),
                 Ok(StreamSessionRecord::ConsumerTerminal(record))
