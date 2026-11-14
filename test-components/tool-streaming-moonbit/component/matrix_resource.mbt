@@ -363,6 +363,10 @@ pub fn MatrixResourceTyped::transform(
     async fn(writer) {
       defer input.drop()
       while input.read() is Some(value) {
+        let value = match value {
+          Ok(value) => value
+          Err(error) => raise error
+        }
         if writer.write_one(value * 3U + 1U) is PeerDropped {
           return
         }
@@ -570,7 +574,12 @@ pub async fn MoonBitResourceToolStreamingCaller::matrix_typed_stream_observation
   defer output.drop()
   let typed_values : Array[UInt] = []
   while output.read() is Some(value) {
-    typed_values.push(value)
+    typed_values.push(
+      match value {
+        Ok(value) => value
+        Err(error) => raise error
+      },
+    )
   }
   { ..empty_matrix_resource_observation(), typedValues: typed_values, }
 }

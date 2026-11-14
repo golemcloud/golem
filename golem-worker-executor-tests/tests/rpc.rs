@@ -2087,17 +2087,25 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 Some(invocation_response::Response::Finished(completion)) => {
                     match completion.outcome {
                         Some(invocation_session_completion::Outcome::Success(_)) => {
-                            assert_eq!(terminal, StreamTerminal::Finished);
-                            assert_eq!(observed, Some(SchemaValue::U64(1)));
+                            let expected = match &terminal {
+                                StreamTerminal::Finished => {
+                                    SchemaValue::Result(ResultValuePayload::Ok {
+                                        value: Some(Box::new(SchemaValue::U64(1))),
+                                    })
+                                }
+                                StreamTerminal::Failed(error) => {
+                                    SchemaValue::Result(ResultValuePayload::Err {
+                                        value: Some(Box::new(SchemaValue::String(format!(
+                                            "{error:?}"
+                                        )))),
+                                    })
+                                }
+                                _ => unreachable!(),
+                            };
+                            assert_eq!(observed, Some(expected), "restart={restart}");
                         }
                         Some(invocation_session_completion::Outcome::Failure(failure)) => {
-                            assert_ne!(terminal, StreamTerminal::Finished);
-                            assert!(observed.is_none(), "failed native read must not return EOF");
-                            assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
-                            assert!(
-                                failure.message.contains("stream terminated: Failed("),
-                                "wrong failure for {terminal:?}, restart={restart}: {failure:?}"
-                            );
+                            anyhow::bail!("stream outcome must be catchable: {failure:?}");
                         }
                         None => anyhow::bail!("terminal observation has no completion outcome"),
                     }
@@ -9783,6 +9791,56 @@ async fn generated_rust_client_streaming_rpc_e2e(
         .into_typed::<u64>()?;
     assert_eq!((first, second), (1, 2));
     executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn guest_stream_outcomes_preserve_prefix_forwarding_and_replayed_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    for (kind, outcome) in [(0u8, 73u32), (1, 1), (2, 2), (3, 2)] {
+        let name = format!("outcome-{kind}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "catch_producer_outcome",
+                data_value!(kind),
+            )
+            .await?
+            .into_typed::<Vec<u32>>()?;
+        assert_eq!(result, vec![17, 29, outcome, 1]);
+
+        executor.simulated_crash(&caller).await?;
+        // A fresh call reconstructs the completed reading invocation, including its outcome
+        // observation and the effect that was conditional on that outcome.
+        executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?;
+        let effect_id = agent_id!("StreamingRpcTarget", format!("{name}-outcome-effect"));
+        let count = executor
+            .invoke_and_await_agent(&component, &effect_id, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(
+            count, 1,
+            "outcome-dependent effect repeated for kind {kind}"
+        );
+    }
     Ok(())
 }
 

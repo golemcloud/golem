@@ -37,21 +37,23 @@ func newStreamPair() (treeSink, treeSource) {
 		write:         p.write,
 		readerDropped: p.isReaderGone,
 		drop:          p.dropWriter,
+		finish:        p.finish,
 	}, treeSource{
 		read:          p.read,
 		writerDropped: p.isWriterGone,
+		outcome:       p.outcome,
 		drop:          p.dropReader,
 	}
 }
 
-// memoryPipe is the native stand-in for a host stream. Like the host's, it has
-// a single end state: the writer dropping it is end of input.
+// memoryPipe is the native stand-in for the host's item and outcome channels.
 type memoryPipe struct {
 	mu         sync.Mutex
 	ready      *sync.Cond
 	items      []types.SchemaValueTree
 	writerGone bool
 	readerGone bool
+	failure    error
 }
 
 func (p *memoryPipe) write(items []types.SchemaValueTree) uint32 {
@@ -91,8 +93,31 @@ func (p *memoryPipe) isReaderGone() bool {
 func (p *memoryPipe) dropWriter() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.writerGone {
+		return
+	}
+	p.failure = &StreamError{Kind: StreamAbandoned}
 	p.writerGone = true
 	p.ready.Broadcast()
+}
+
+func (p *memoryPipe) finish(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.writerGone {
+		return
+	}
+	if err != nil {
+		p.failure = streamErrorFromWire(streamFailure(err))
+	}
+	p.writerGone = true
+	p.ready.Broadcast()
+}
+
+func (p *memoryPipe) outcome() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failure
 }
 
 func (p *memoryPipe) dropReader() {

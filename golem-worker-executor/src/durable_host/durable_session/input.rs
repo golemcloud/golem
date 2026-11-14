@@ -1048,7 +1048,8 @@ impl StreamSession {
                             record.session_key == self.session_reference
                                 && record.reader_id == reader_id
                         }
-                        StreamSessionRecord::ConsumerTerminal(record) => {
+                        StreamSessionRecord::ConsumerTerminal(record)
+                        | StreamSessionRecord::ConsumerOutcome(record) => {
                             record.session_key == self.session_reference
                                 && record.reader_id == reader_id
                         }
@@ -1219,6 +1220,8 @@ impl StreamSession {
                     if record.session_key == self.session_reference
                         && record.reader_id == reader_id =>
                 {
+                    // A guest EOF observation replaces a previously prepared source-loss overlay.
+                    events.retain(|(ordinal, _)| *ordinal != record.consumer_read_ordinal);
                     events.push((
                         record.consumer_read_ordinal,
                         CommittedProducerStreamEvent {

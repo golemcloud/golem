@@ -120,6 +120,8 @@ export type {
 } from './defineAgent';
 export { Secret } from './secret';
 export { AgentStream } from './schema/agentStream';
+export { StreamError } from './internal/schema-model/errors';
+export type { StreamFailure } from './internal/schema-model/errors';
 export { schemaFingerprintV1, SchemaFingerprintError } from './internal/schema-model/fingerprint';
 export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';

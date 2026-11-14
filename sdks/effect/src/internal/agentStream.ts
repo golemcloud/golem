@@ -9,8 +9,10 @@ import { decodeFromWire } from "../WitCodec.js"
 import { AbortableStreamIterable } from "./abortableStreamIterable.js"
 import { HttpStreamOwner, streamDisposals } from "./ownedStream.js"
 import { assertCapabilityReady } from "./schema-model/capabilityTransaction.js"
+import { StreamError } from "./schema-model/errors.js"
 import {
   GuestSchemaValueStreamHandle,
+  unwrapSchemaValueStream,
   type GuestSchemaValueStream,
   type StreamOwnership,
 } from "./schema-model/schemaValueStreamHandle.js"
@@ -103,7 +105,7 @@ export function agentStreamFromHandle<T>(
   handle: GuestSchemaValueStreamHandle,
   itemCodec: ItemCodec<T>,
   decodingContext: Context.Context<any> = Context.empty() as Context.Context<any>,
-): Stream.Stream<T, unknown> {
+): Stream.Stream<T, StreamError> {
   return directAgentStreamFromHandle(
     handle,
     {
@@ -128,7 +130,7 @@ export function directAgentStreamFromHandle<T>(
   handle: GuestSchemaValueStreamHandle,
   itemCodec: DirectItemCodec<T>,
   context: Context.Context<any> = Context.empty() as Context.Context<any>,
-): Stream.Stream<T, unknown> {
+): Stream.Stream<T, StreamError> {
   const endpoint = handle.peek()
   if (!endpoint) throw new Error("schema value stream was already transferred")
   const state: ReceivedState = { endpoint, ownership: handle.ownership(STREAM_INTERNAL) }
@@ -164,11 +166,16 @@ export function directAgentStreamFromHandle<T>(
                     Effect.map((value) => [value, undefined] as const),
                   ),
             ),
+            Effect.catch((error) =>
+              error instanceof StreamError && error.failure.tag === "cancelled"
+                ? Effect.interrupt
+                : Effect.fail(error),
+            ),
           ),
         ),
       ),
     ),
-  )
+  ).pipe(Stream.mapError(StreamError.from))
   received.set(stream, state)
   Context.get(context, HttpStreamOwner)?.add(() => disposeAgentStream(stream))
   return stream
@@ -238,9 +245,7 @@ async function wireIterator(state: ReceivedState): Promise<AsyncIterator<SchemaV
   state.endpoint = undefined
   const acquisition = (async () => {
     const source =
-      endpoint.kind === "native"
-        ? endpoint.value
-        : await (await import("golem:core/types@2.0.0")).SchemaValueStream.unwrap(endpoint.value)
+      endpoint.kind === "native" ? endpoint.value : await unwrapSchemaValueStream(endpoint.value)
     state.ownership.iterator = source[Symbol.asyncIterator]()
     return state.ownership.iterator
   })()

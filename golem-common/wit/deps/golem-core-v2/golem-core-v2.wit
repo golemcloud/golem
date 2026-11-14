@@ -147,11 +147,14 @@ interface types {
     /// values. The indirection lets a stream occur anywhere in a recursive
     /// `schema-value-tree` while preserving the native stream endpoint.
     resource schema-value-stream {
-        /// Wraps any native schema-value reader for placement in a value tree.
-        wrap: static async func(reader: stream<schema-value-tree>) -> own<schema-value-stream>;
+        /// Wraps items and their producer's explicit outcome for placement in a value tree.
+        /// Producers may supply only ok or failed. None means no explicit outcome:
+        /// body settlement supplies abandoned on normal return or trapped on a trap.
+        wrap: static async func(reader: stream<schema-value-tree>, outcome: future<option<stream-outcome>>) -> own<schema-value-stream>;
 
-        /// Consumes a schema-value-stream wrapper and returns its native reader.
-        unwrap: static async func(value: own<schema-value-stream>) -> stream<schema-value-tree>;
+        /// Consumes the wrapper. Completion resolves only after the reader consumes EOF.
+        /// Readers must await completion at EOF; a failed outcome is not a clean end.
+        unwrap: static async func(value: own<schema-value-stream>) -> tuple<stream<schema-value-tree>, future<stream-outcome>>;
     }
 
     /// An unforgeable handle to a permission card held by the runtime. The

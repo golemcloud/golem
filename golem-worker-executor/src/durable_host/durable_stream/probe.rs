@@ -489,7 +489,21 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                             "consumer terminal journal contains a read-ordinal gap".to_string(),
                         ));
                     }
-                    offsets.push(record.source_offset);
+                    if let Some(source_unavailable) = *overlay {
+                        if record.source_offset != source_unavailable
+                            || record.authored_by != StreamTerminalAuthor::Protocol
+                            || record.terminal
+                                != StreamTerminal::Failed(StreamError::Interrupted(
+                                    "durable stream source unavailable".into(),
+                                ))
+                        {
+                            return Err(StreamStoreError::CorruptHistory(
+                                "consumer EOF differs from its source-unavailable overlay".into(),
+                            ));
+                        }
+                    } else {
+                        offsets.push(record.source_offset);
+                    }
                 }
                 StreamSessionRecord::SourceUnavailable(record)
                     if record.session_key.qualify(

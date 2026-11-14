@@ -23,7 +23,9 @@ use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, accounted_output_stream_pair, relay_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalAuthor};
+use golem_common::model::durable_stream::{
+    StreamError, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+};
 use golem_schema::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
 };
@@ -32,7 +34,7 @@ use golem_schema::schema::tool::compatibility::{
 };
 use golem_schema::schema::wit::wire::{
     Host, HostQuotaToken, HostSchemaValueStream, HostSchemaValueStreamWithStore, HostSecret,
-    HostWithStore, SchemaValueTree, Uuid,
+    HostWithStore, SchemaValueTree, StreamOutcome, Uuid,
 };
 use golem_schema::schema::wit::{
     PermissionCardHandleRep, PermissionCardResolver, QuotaTokenHandleRep, QuotaTokenResolver,
@@ -45,8 +47,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use wasmtime::StoreContextMut;
-use wasmtime::component::{Access, Accessor, HasData, HasSelf, Resource, StreamReader};
+use wasmtime::component::{
+    Access, Accessor, FutureReader, HasData, HasSelf, Resource, StreamReader,
+};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Returns whether a schema value contains a stream at any nesting depth.
 pub fn contains_stream(value: &SchemaValue) -> bool {
@@ -78,6 +82,7 @@ pub(crate) struct ExecutorProjectionStreams {
     pub(crate) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     pub(crate) drop_event_sink: mpsc::UnboundedSender<DropEvent>,
     pub(crate) durable_receives: Option<mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
+    pub(crate) body_trap: Option<tokio::sync::watch::Receiver<Option<String>>>,
 }
 
 struct ProjectionReceiveDispatcher(mpsc::UnboundedReceiver<DurableInputReceiveAdmission>);
@@ -95,6 +100,23 @@ impl ProjectionReceiveDispatcher {
 }
 
 impl ExecutorProjectionStreams {
+    async fn body_trapped(
+        mut receiver: Option<tokio::sync::watch::Receiver<Option<String>>>,
+    ) -> String {
+        if let Some(receiver) = &mut receiver {
+            loop {
+                if let Some(details) = receiver.borrow_and_update().clone() {
+                    return details;
+                }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+        // Normal release and runtime loss do not select a producer terminal.
+        std::future::pending().await
+    }
+
     async fn store_closed(&self) {
         match &self.durable_receives {
             Some(sender) => sender.closed().await,
@@ -118,6 +140,7 @@ impl ExecutorProjectionStreams {
                     .dropped_call_event_sender()
                     .expect("dropped-call event sender is always available"),
                 durable_receives: Some(sender),
+                body_trap: Some(ctx.schema_producers.projection_trap()),
             }
         }))
     }
@@ -130,6 +153,7 @@ impl ExecutorProjectionStreams {
             runtime_teardown: Arc::new(|| false),
             drop_event_sink,
             durable_receives: None,
+            body_trap: None,
         }
     }
 }
@@ -158,9 +182,21 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
             let mut source = DurableInputProducer::new(endpoint)
                 .with_drop_cleanup(self.drop_event_sink.clone(), self.runtime_teardown.clone());
             tokio::spawn(async move {
+                let mut trapped = Box::pin(Self::body_trapped(item_context.body_trap.clone()));
                 loop {
                     let event = tokio::select! {
                         biased;
+                        details = &mut trapped => {
+                            source.abort_for_teardown();
+                            if publisher.publish_terminal_with_origin(
+                                StreamTerminalAuthor::Host,
+                                StreamTerminalOrigin::Control,
+                                StreamTerminal::Failed(StreamError::Trapped(details)),
+                            ).await.is_err() {
+                                target_lifecycle.abort();
+                            }
+                            return;
+                        },
                         _ = item_context.store_closed() => {
                             source.abort_for_teardown();
                             target_lifecycle.abort();
@@ -207,6 +243,17 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                         };
                     tokio::select! {
                         biased;
+                        details = &mut trapped => {
+                            source.abort_for_teardown();
+                            if publisher.publish_terminal_with_origin(
+                                StreamTerminalAuthor::Host,
+                                StreamTerminalOrigin::Control,
+                                StreamTerminal::Failed(StreamError::Trapped(details)),
+                            ).await.is_err() {
+                                target_lifecycle.abort();
+                            }
+                            return;
+                        },
                         _ = item_context.store_closed() => {
                             source.abort_for_teardown();
                             target_lifecycle.abort();
@@ -261,7 +308,11 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                             crate::durable_host::stream_bus::LiveStreamEventPayload::Terminal {
                                 authored_by,
                                 terminal,
-                            } => Box::pin(publisher.publish_terminal(authored_by, terminal)),
+                            } => Box::pin(publisher.publish_terminal_with_origin(
+                                authored_by,
+                                event.terminal_origin.expect("live terminal origin"),
+                                terminal,
+                            )),
                         },
                         Err(error) => Box::pin(publisher.publish_terminal(
                             StreamTerminalAuthor::Host,
@@ -496,11 +547,14 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
     async fn wrap(
         accessor: &Accessor<T, Self>,
         reader: StreamReader<SchemaValueTree>,
+        mut outcome: FutureReader<Option<StreamOutcome>>,
     ) -> anyhow::Result<Resource<SchemaValueStreamHandleRep>> {
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
                 let reader = match reader.try_into::<ForwardedDurableInput>(&mut access) {
                     Ok(forwarded) => {
+                        // The original durable handle already carries its exact terminal.
+                        outcome.close(&mut access)?;
                         return access
                             .get()
                             .table()
@@ -519,13 +573,16 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .runtime_suspension
                     .as_ref()
                     .map(|runtime| runtime.source());
+                let producer = access.get().schema_producers.register();
                 let (consumer, stream) = accounted_output_stream_pair(
                     capacity,
                     runtime_teardown,
                     runtime_source,
                     interrupt,
+                    Some(producer.clone()),
                 )
                 .map_err(wasmtime::Error::msg)?;
+                outcome.pipe(&mut access, producer.consumer())?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -539,7 +596,7 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
     async fn unwrap(
         accessor: &Accessor<T, Self>,
         value: Resource<SchemaValueStreamHandleRep>,
-    ) -> anyhow::Result<StreamReader<SchemaValueTree>> {
+    ) -> anyhow::Result<(StreamReader<SchemaValueTree>, FutureReader<StreamOutcome>)> {
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
                 let stream = access
@@ -561,17 +618,18 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     let endpoint = stream
                         .take_host_endpoint::<DurableInputEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
-                    StreamReader::new(
-                        &mut access,
-                        DurableInputProducer::new(endpoint)
-                            .with_drop_cleanup(drop_event_sink, runtime_teardown),
-                    )
+                    let (producer, outcome) = DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(drop_event_sink, runtime_teardown)
+                        .with_completion(&mut access.as_context_mut())?;
+                    Ok((StreamReader::new(&mut access, producer)?, outcome))
                 } else {
                     let endpoint = stream
                         .take_host_endpoint::<LiveStreamEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
                     let interrupt = access.get().create_interrupt_signal();
-                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint, interrupt))
+                    let (producer, outcome) =
+                        LiveInputProducer::new(&mut access, endpoint, interrupt)?;
+                    Ok((StreamReader::new(&mut access, producer)?, outcome))
                 }
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))

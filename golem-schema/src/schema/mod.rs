@@ -68,6 +68,6 @@ pub use schema_value::{
     ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
     VariantValuePayload,
 };
-pub use stream::SchemaValueStream;
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use stream::SchemaValueStreamHandleRep;
+pub use stream::{SchemaValueStream, StreamError};

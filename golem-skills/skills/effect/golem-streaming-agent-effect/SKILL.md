@@ -78,10 +78,10 @@ later invocation.
   guarantee; drain them concurrently when either may block waiting for demand.
 - Normal completion, early downstream termination, fiber interruption, transport disconnect, and
   fatal invocation failure are distinct outcomes.
-- A bare agent stream has no recoverable error terminal. Put `Schema.Result` (or another explicit
-  result schema) in the item type when callers must handle an application error and continue.
-- A producer or item-decoding failure fails the active stream or invocation; never convert it to
-  clean EOF.
+- Received streams await the completion outcome after item EOF. A terminal failure fails the Effect stream with the tagged `StreamError`; `Cancelled` interrupts the fiber instead. Catch the stream failure to preserve unrelated sibling streams.
+- `StreamError` carries a `failure` discriminant: `failed` contains a typed schema value; `trapped`, `cancelled`, `abandoned`, `interrupted`, and `resource-exhausted` are host outcomes. Guests may author only success or `failed`. Fail the producer with a declared `StreamError` to preserve its typed payload; ordinary errors become typed string failures.
+- An unsettled writer is abandoned when its body completes normally, or trapped when its body traps. Item EOF alone is not success. Forward an unread stream to preserve its original outcome.
+- Put `Schema.Result` (or another explicit result schema) in the item type for per-item application errors that do not end the stream. Early downstream termination closes without awaiting completion.
 
 ## Calling Through Agent RPC
 

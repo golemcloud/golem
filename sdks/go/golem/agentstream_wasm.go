@@ -28,7 +28,30 @@ import (
 
 func newStreamPair() (treeSink, treeSource) {
 	w, r := types.MakeStreamSchemaValueTree()
-	return sinkOf(w), sourceOf(r)
+	fw, fr := types.MakeFutureOptionResultUnitStreamError()
+	sink, src := sinkOf(w), sourceOf(r)
+	sink.drop = func() { w.Drop(); fw.Drop() }
+	sink.finish = func(err error) {
+		w.Drop()
+		outcome := witTypes.Ok[witTypes.Unit, types.StreamError](witTypes.Unit{})
+		if err != nil {
+			outcome = witTypes.Err[witTypes.Unit, types.StreamError](streamFailure(err))
+		}
+		fw.Write(witTypes.Some(outcome))
+	}
+	src.future = fr
+	src.outcome = func() error {
+		outcome := fr.Read()
+		if outcome.IsNone() {
+			return &StreamError{Kind: StreamAbandoned}
+		}
+		if outcome.Some().IsErr() {
+			return streamErrorFromWire(outcome.Some().Err())
+		}
+		return nil
+	}
+	src.drop = func() { r.Drop(); fr.Drop() }
+	return sink, src
 }
 
 // sourceOf and sinkOf bind a host endpoint to the function-struct the stream
@@ -53,7 +76,18 @@ func sinkOf(w *witTypes.StreamWriter[types.SchemaValueTree]) treeSink {
 // streamSourceFromNode takes the reading endpoint out of a received stream
 // value node.
 func streamSourceFromNode(n types.SchemaValueNode) (treeSource, bool) {
-	return sourceOf(types.SchemaValueStreamUnwrap(n.StreamValue())), true
+	r, outcome := types.SchemaValueStreamUnwrap(n.StreamValue())
+	src := sourceOf(r)
+	src.outcome = func() error {
+		result := outcome.Read()
+		if result.IsErr() {
+			return streamErrorFromWire(result.Err())
+		}
+		return nil
+	}
+	src.dropOutcome = outcome.Drop
+	src.drop = func() { r.Drop(); outcome.Drop() }
+	return src, true
 }
 
 // streamNodeFrom turns a reading endpoint back into a value node for transfer.
@@ -63,7 +97,18 @@ func streamNodeFrom(src treeSource) (types.SchemaValueNode, bool) {
 	if !ok {
 		return types.SchemaValueNode{}, false
 	}
-	return types.MakeSchemaValueNodeStreamValue(types.SchemaValueStreamWrap(r)), true
+	outcome, ok := src.future.(*witTypes.FutureReader[witTypes.Option[types.StreamOutcome]])
+	if !ok {
+		// The host recognizes an unread forwarded input and retains its outcome.
+		writer, reader := types.MakeFutureOptionResultUnitStreamError()
+		go func() { writer.Write(witTypes.None[types.StreamOutcome]()) }()
+		outcome = reader
+	}
+	wrapped := types.SchemaValueStreamWrap(r, outcome)
+	if src.dropOutcome != nil {
+		src.dropOutcome()
+	}
+	return types.MakeSchemaValueNodeStreamValue(wrapped), true
 }
 
 // streamTypeBody builds the stream type node for an item type.

@@ -49,6 +49,52 @@ async fn aborted_admission_joins_without_waiting_for_replay_progress() {
 
 #[test]
 #[timeout("30s")]
+async fn interrupted_drain_retains_children_and_preserves_completed_failure() {
+    let worker = WorkerTasks::default();
+    let owner = NativeReconstructionTasks::new(&worker).unwrap();
+    let monitor = owner.monitor();
+    let (release, released) = oneshot::channel();
+    let (completed, completion) = oneshot::channel();
+    owner
+        .spawner()
+        .spawn(async move {
+            released.await.unwrap();
+            completed.send(()).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        monitor
+            .drain_interruptibly(std::future::ready(InterruptKind::EntityCancellation))
+            .await,
+        Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::EntityCancellation,
+        })
+    );
+    release.send(()).unwrap();
+    monitor.drain().await.unwrap();
+    completion.await.unwrap();
+
+    owner.spawner().spawn(std::future::pending()).unwrap();
+    let failure = WorkerExecutorError::recovery_required_from(
+        "output terminal is missing",
+        golem_common::model::OplogIndex::from_u64(37),
+    );
+    let error = failure.clone();
+    owner.spawner().spawn(async move { Err(error) }).unwrap();
+    assert_eq!(monitor.wait_for_failure().await, failure);
+    assert_eq!(
+        monitor
+            .drain_interruptibly(std::future::ready(InterruptKind::EntityCancellation))
+            .await,
+        Err(failure)
+    );
+    drop(owner);
+    worker.stop_and_wait().await.unwrap();
+}
+
+#[test]
+#[timeout("30s")]
 async fn reusable_drain_joins_registered_work_before_first_poll_and_after_wakeup() {
     let worker = WorkerTasks::default();
     let owner = NativeReconstructionTasks::new(&worker).unwrap();

@@ -113,6 +113,7 @@ pub struct SessionControlMetadata {
     tombstoned_slots: HashMap<String, SessionStreamRole>,
     cancellation_requested: bool,
     consumer_record_counts: HashMap<LocalStreamReaderId, u64>,
+    consumer_outcome_positions: HashMap<LocalStreamReaderId, Vec<OplogIndex>>,
     consumer_deleting: Option<golem_common::model::durable_stream::StreamConsumerDeletingRecord>,
 }
 
@@ -436,6 +437,13 @@ impl SessionControlMetadata {
         self.consumer_record_counts
             .get(&reader)
             .copied()
+            .unwrap_or_default()
+    }
+    /// Returns outcome observations without enumerating the item journal.
+    pub(crate) fn consumer_outcome_positions(&self, reader: LocalStreamReaderId) -> &[OplogIndex] {
+        self.consumer_outcome_positions
+            .get(&reader)
+            .map(Vec::as_slice)
             .unwrap_or_default()
     }
     /// Returns consumer journal counts for fork-prefix indexing.
@@ -847,7 +855,10 @@ impl SessionControlMetadata {
             StreamSessionRecord::ConsumerItemValue(record) if record_matches => {
                 Some(record.reader_id)
             }
-            StreamSessionRecord::ConsumerTerminal(record) if record_matches => {
+            StreamSessionRecord::ConsumerTerminal(record)
+            | StreamSessionRecord::ConsumerOutcome(record)
+                if record_matches =>
+            {
                 Some(record.reader_id)
             }
             StreamSessionRecord::SourceUnavailable(record) if record_matches => {
@@ -857,6 +868,12 @@ impl SessionControlMetadata {
         };
         if let Some(reader) = consumer_reader {
             *self.consumer_record_counts.entry(reader).or_default() += 1;
+            if matches!(record, StreamSessionRecord::ConsumerOutcome(_)) {
+                self.consumer_outcome_positions
+                    .entry(reader)
+                    .or_default()
+                    .push(index);
+            }
             if matches!(
                 record,
                 StreamSessionRecord::ConsumerTerminal(_)

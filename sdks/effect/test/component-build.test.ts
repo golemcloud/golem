@@ -403,6 +403,7 @@ describe("capability-sensitive component exports", () => {
     const closed = vi.fn(async () => ({ done: true, value: undefined }))
     const values = ["17", "41"]
     const stream = {
+      outcome: Promise.resolve({ tag: "ok", val: undefined }),
       source: {
         [Symbol.asyncIterator]: () => ({
           next: async () =>

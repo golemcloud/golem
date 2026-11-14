@@ -135,9 +135,9 @@ func (b *streamBody) Read(p []byte) (int, error) {
 		if b.err != nil {
 			return 0, b.err
 		}
-		chunk, ok := b.s.Next()
-		if !ok {
-			b.err = io.EOF
+		chunk, err := b.s.Next()
+		if err != nil {
+			b.err = err
 		} else {
 			b.buf = chunk
 		}

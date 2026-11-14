@@ -6,8 +6,14 @@ test "native preflight detects distinct holders of the same reader at both bound
       @async-core.Stream[@types.SchemaValueTree],
       @async-core.Sink[@types.SchemaValueTree],
     ) = @async-core.Stream::new()
-    let original = @model.GuestSchemaValueStreamHandle::from_native(reader)
-    let duplicate = @model.GuestSchemaValueStreamHandle::from_native(reader)
+    let original = @model.GuestSchemaValueStreamHandle::from_native(
+      reader,
+      outcome=@async-core.Future::ready(Ok(())),
+    )
+    let duplicate = @model.GuestSchemaValueStreamHandle::from_native(
+      reader,
+      outcome=@async-core.Future::ready(Ok(())),
+    )
     encoder.streams.push((0, original))
     for i in 1..<50 {
       let (other, _) : (
@@ -20,7 +26,10 @@ test "native preflight detects distinct holders of the same reader at both bound
           if i == at {
             duplicate
           } else {
-            @model.GuestSchemaValueStreamHandle::from_native(other)
+            @model.GuestSchemaValueStreamHandle::from_native(
+              other,
+              outcome=@async-core.Future::ready(Ok(())),
+            )
           },
         ),
       )

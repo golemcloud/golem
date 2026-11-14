@@ -67,7 +67,7 @@ import {
   takeGuestQuotaTokenHandleToWire,
 } from "./quotaTokenHandle.js"
 import { QUOTA_INTERNAL } from "./quotaInternal.js"
-import { GuestSchemaValueStreamHandle } from "./schemaValueStreamHandle.js"
+import { GuestSchemaValueStreamHandle, wrapSchemaValueStream } from "./schemaValueStreamHandle.js"
 import { STREAM_INTERNAL } from "./streamInternal.js"
 import {
   abandonGuestPermissionCardWireHandle,
@@ -1079,9 +1079,8 @@ export async function schemaValueToWitAsync(
         wrapped: undefined as unknown,
       }
       prepared.push(entry)
-      const { SchemaValueStream } = await import("golem:core/types@2.0.0")
       checkActive()
-      const wrapped = await SchemaValueStream.wrap(entry.proxy)
+      const wrapped = await wrapSchemaValueStream(entry.proxy)
       if (aborted) {
         dispose(wrapped)
         checkActive()

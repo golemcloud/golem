@@ -6,6 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+pub use crate::schema::StreamError;
 use crate::schema::wit::direct::{self, FromWire, IntoWire, WireSchema};
 use crate::schema::wit::wire::SchemaValueTree;
 use crate::schema::{
@@ -21,9 +22,9 @@ type RawWriter = wit_bindgen::StreamWriter<SchemaValueTree>;
 /// The readable end of a native component-model agent value stream.
 ///
 /// Run the producer concurrently with the consumer: writes wait for acceptance.
-/// Dropping the writer ends the stream; dropping the reader makes subsequent
-/// writes fail. A decoding error is an error, not end-of-stream. Model recoverable
-/// application errors as items such as `AgentStream<Result<T, E>>`.
+/// Close the writer explicitly for success, or finish it with a declared failure.
+/// Dropping it without an outcome is abandoned on normal body completion.
+/// Dropping the reader makes subsequent writes fail. Per-item Result values remain items.
 ///
 /// Generated bridges supply schema-bound producer factories. Prefer those over
 /// [`Self::new`] for generated types: `String`, for example, can represent either
@@ -43,6 +44,7 @@ type EncodeFuture = Pin<Box<dyn Future<Output = Result<SchemaValueTree, String>>
 /// The writable end of an [`AgentStream`].
 pub struct AgentStreamWriter<T> {
     raw: RawWriter,
+    outcome: wit_bindgen::FutureWriter<Option<crate::schema::wit::wire::StreamOutcome>>,
     encode: Box<dyn Fn(T) -> EncodeFuture + Send + Sync>,
 }
 
@@ -53,13 +55,15 @@ impl<T> AgentStream<T> {
         decode: impl Fn(SchemaValueTree) -> Result<T, String> + Send + Sync + 'static,
     ) -> (AgentStreamWriter<T>, Self) {
         let (writer, reader) = crate::schema::wit::new_schema_value_stream();
+        let (outcome_writer, outcome) = crate::schema::wit::new_schema_stream_outcome();
         (
             AgentStreamWriter {
                 raw: writer,
+                outcome: outcome_writer,
                 encode: Box::new(move |value| Box::pin(encode(value))),
             },
             Self {
-                stream: SchemaValueStream::from_native(reader),
+                stream: SchemaValueStream::from_native(reader, outcome),
                 decode: Box::new(decode),
             },
         )
@@ -123,22 +127,31 @@ impl<T> AgentStream<T> {
     }
 
     #[doc(hidden)]
-    pub async fn into_raw(self) -> Result<RawReader, String> {
+    pub async fn into_raw(
+        self,
+    ) -> Result<
+        (
+            RawReader,
+            wit_bindgen::FutureReader<crate::schema::wit::wire::StreamOutcome>,
+        ),
+        String,
+    > {
         self.stream.take_native().await
     }
 
-    /// Reads and decodes one item lazily. `Ok(None)` is clean EOF.
-    pub async fn next(&mut self) -> Result<Option<T>, String> {
-        match self.stream.next_wire().await? {
-            Some(tree) => (self.decode)(tree).map(Some),
-            None => Ok(None),
+    /// Reads one item, or one terminal error followed by the end.
+    pub async fn next(&mut self) -> Option<Result<T, StreamError>> {
+        match self.stream.next_wire().await {
+            Ok(Some(tree)) => Some((self.decode)(tree).map_err(StreamError::from)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
         }
     }
 
-    pub async fn collect(mut self) -> Result<Vec<T>, String> {
+    pub async fn collect(mut self) -> Result<Vec<T>, StreamError> {
         let mut result = Vec::new();
-        while let Some(item) = self.next().await? {
-            result.push(item);
+        while let Some(item) = self.next().await {
+            result.push(item?);
         }
         Ok(result)
     }
@@ -161,15 +174,37 @@ impl<T: IntoWire + FromWire + 'static> AgentStream<T> {
 
 impl<T: FromWire> AgentStream<T> {
     #[doc(hidden)]
-    pub fn from_raw(raw: RawReader) -> Self {
+    pub fn from_raw(
+        raw: RawReader,
+        outcome: wit_bindgen::FutureReader<crate::schema::wit::wire::StreamOutcome>,
+    ) -> Self {
         Self {
-            stream: SchemaValueStream::from_native(raw),
+            stream: SchemaValueStream::from_reader(raw, outcome),
             decode: Box::new(|tree| direct::decode(tree).map_err(|e| e.to_string())),
         }
     }
 }
 
 impl<T> AgentStreamWriter<T> {
+    /// Close item admission and publish an explicit producer outcome.
+    /// Only Ok and Failed may be authored by a guest; the host rejects other cases.
+    pub async fn finish(self, outcome: Result<(), StreamError>) -> Result<(), String> {
+        let outcome = match outcome {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error.into_wire().await),
+        };
+        drop(self.raw);
+        self.outcome
+            .write(Some(outcome))
+            .await
+            .map_err(|_| "agent stream reader was dropped".to_string())
+    }
+
+    /// Finish a stream successfully. Dropping a writer is not a successful close.
+    pub async fn close(self) -> Result<(), String> {
+        self.finish(Ok(())).await
+    }
+
     /// Encodes one item and waits for acceptance by the native stream.
     /// Encoding failures preserve the codec's error and drop the consumed item,
     /// including any nested endpoints it still owns. A codec rejection sends
@@ -282,14 +317,38 @@ mod tests {
         entries: Vec<Result<Option<u32>, String>>,
     }
 
-    struct Items(std::collections::VecDeque<SchemaValueTree>);
+    struct Items(std::collections::VecDeque<Result<SchemaValueTree, StreamError>>);
 
     impl crate::schema::stream::SchemaValueStreamSource for Items {
         fn next(
             &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<SchemaValueTree>, String>> + Send + '_>>
+        ) -> Pin<Box<dyn Future<Output = Result<Option<SchemaValueTree>, StreamError>> + Send + '_>>
         {
-            Box::pin(async { Ok(self.0.pop_front()) })
+            Box::pin(async { self.0.pop_front().transpose() })
+        }
+    }
+
+    #[test]
+    async fn terminal_failures_are_yielded_once_after_the_prefix() {
+        let declared = crate::schema::try_into_typed_schema_value(&73u32).unwrap();
+        for error in [
+            StreamError::Failed(Box::new(declared)),
+            StreamError::Cancelled,
+        ] {
+            let mut stream = AgentStream::<u32>::from_schema_stream_with_wire_decoder(
+                SchemaValueStream::from_source(Items(
+                    [
+                        Ok(direct::encode(&7u32).unwrap()),
+                        Err(error.clone()),
+                        Ok(direct::encode(&23u32).unwrap()),
+                    ]
+                    .into(),
+                )),
+                |tree| direct::decode(tree).map_err(|error| error.to_string()),
+            );
+            assert_eq!(stream.next().await, Some(Ok(7)));
+            assert_eq!(stream.next().await, Some(Err(error)));
+            assert_eq!(stream.next().await, None);
         }
     }
 
@@ -313,16 +372,17 @@ mod tests {
                     },
                     direct::encode(&item).unwrap(),
                 ]
+                .map(Ok)
                 .into(),
             )),
             |tree| direct::decode(tree).map_err(|e| e.to_string()),
         );
         assert_eq!(
-            stream.next().await.unwrap_err(),
-            "wire value index 2 is referenced more than once"
+            stream.next().await.unwrap().unwrap_err(),
+            StreamError::from("wire value index 2 is referenced more than once".to_string())
         );
-        assert_eq!(stream.next().await.unwrap(), Some(item));
-        assert_eq!(stream.next().await.unwrap(), None);
+        assert_eq!(stream.next().await.unwrap(), Ok(item));
+        assert_eq!(stream.next().await, None);
     }
 
     #[test]

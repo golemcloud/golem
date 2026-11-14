@@ -83,11 +83,12 @@ impl InputGc for InputGcImpl {
         let target = StreamingRpcTargetClient::get(self.state.name.clone());
         let mut stream = target.produce(vec![20, 21, 22]).await;
         if unwrap {
-            stream = AgentStream::from_raw(stream.into_raw().await.unwrap());
+            let (reader, outcome) = stream.into_raw().await.unwrap();
+            stream = AgentStream::from_raw(reader, outcome);
         }
         if !(self.restored && omit_read_after_restore) {
             for index in 0..reads {
-                assert_eq!(stream.next().await.unwrap(), Some(20 + index));
+                assert_eq!(stream.next().await, Some(Ok(20 + index)));
                 self.reads += 1;
             }
         }

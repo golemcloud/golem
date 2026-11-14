@@ -147,7 +147,8 @@ impl ProducerMetadataKey {
                     .qualify(owner_environment_id, owner, owner_fingerprint),
                 record.reader_id,
             )),
-            StreamSessionRecord::ConsumerTerminal(record) => Some((
+            StreamSessionRecord::ConsumerTerminal(record)
+            | StreamSessionRecord::ConsumerOutcome(record) => Some((
                 record
                     .session_key
                     .qualify(owner_environment_id, owner, owner_fingerprint),

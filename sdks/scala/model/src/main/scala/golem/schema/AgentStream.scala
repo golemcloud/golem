@@ -34,10 +34,8 @@ import scala.util.control.NonFatal
  * value becomes externally observable before an immediately following producer
  * failure.
  *
- * A bare protocol stream has no recoverable terminal error or error reason. At
- * that protocol boundary, producer and cleanup failures fail the active
- * invocation. Applications that need recoverable failures must represent them
- * explicitly in the element type.
+ * A received stream rejects its final pull with a [[StreamError]] on producer
+ * failure, then ends. Per-item Result values remain ordinary stream items.
  *
  * @tparam A
  *   the type of values produced by this stream
@@ -270,8 +268,9 @@ final class AgentStream[+A] private[golem] (
         if (state == Pulling && activePull.contains(target)) {
           activePull = None
           state = completed match {
-            case Success(_)     => Completed
-            case Failure(error) => Failed(error)
+            case Success(_)              => Completed
+            case Failure(_: StreamError) => Completed
+            case Failure(error)          => Failed(error)
           }
           target.tryComplete(completed)
         }

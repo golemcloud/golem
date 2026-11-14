@@ -14,13 +14,16 @@ declare module 'golem:core/types@2.0.0' {
   }
   export class SchemaValueStream {
     /**
-     * Wraps any native schema-value reader for placement in a value tree.
+     * Wraps items and their producer's explicit outcome for placement in a value tree.
+     * Producers may supply only ok or failed. None means no explicit outcome:
+     * body settlement supplies abandoned on normal return or trapped on a trap.
      */
-    static wrap(reader: AsyncIterable<SchemaValueTree>): Promise<SchemaValueStream>;
+    static wrap(reader: AsyncIterable<SchemaValueTree>, outcome: Promise<StreamOutcome | undefined>): Promise<SchemaValueStream>;
     /**
-     * Consumes a schema-value-stream wrapper and returns its native reader.
+     * Consumes the wrapper. Completion resolves only after the reader consumes EOF.
+     * Readers must await completion at EOF; a failed outcome is not a clean end.
      */
-    static unwrap(value: SchemaValueStream): Promise<AsyncIterable<SchemaValueTree>>;
+    static unwrap(value: SchemaValueStream): Promise<[AsyncIterable<SchemaValueTree>, Promise<StreamOutcome>]>;
   }
   export class PermissionCard {
   }

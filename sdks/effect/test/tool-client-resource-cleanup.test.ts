@@ -28,9 +28,12 @@ describe("tool client rejected payload ownership", () => {
     const dispose = vi.fn()
     const endpoints = await Promise.all(
       [0, 1].map(async () => {
-        const raw = await SchemaValueStream.wrap({
-          [Symbol.asyncIterator]: () => ({ next, return: close }),
-        })
+        const raw = await SchemaValueStream.wrap(
+          {
+            [Symbol.asyncIterator]: () => ({ next, return: close }),
+          },
+          Promise.resolve(undefined),
+        )
         return Object.assign(raw, { [Symbol.dispose]: dispose })
       }),
     )
@@ -83,9 +86,12 @@ describe("tool client rejected payload ownership", () => {
       const close = vi.fn(async () => ({ done: true as const, value: undefined }))
       const raw =
         tag === "stream-value"
-          ? await SchemaValueStream.wrap({
-              [Symbol.asyncIterator]: () => ({ next, return: close }),
-            })
+          ? await SchemaValueStream.wrap(
+              {
+                [Symbol.asyncIterator]: () => ({ next, return: close }),
+              },
+              Promise.resolve(undefined),
+            )
           : {}
       Object.assign(raw, { [Symbol.dispose]: dispose })
       const payload: Common.TypedSchemaValue = {
@@ -131,9 +137,12 @@ describe("tool client rejected payload ownership", () => {
     const disposes = Array.from({ length: 3 }, () => vi.fn())
     const next = vi.fn()
     const close = vi.fn(async () => ({ done: true as const, value: undefined }))
-    const raw = await SchemaValueStream.wrap({
-      [Symbol.asyncIterator]: () => ({ next, return: close }),
-    })
+    const raw = await SchemaValueStream.wrap(
+      {
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      },
+      Promise.resolve(undefined),
+    )
     Object.assign(raw, { [Symbol.dispose]: dispose })
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -346,9 +355,12 @@ describe("tool client rejected payload ownership", () => {
   it("closes a rejected schema stream without pulling its contents", async () => {
     const next = vi.fn()
     const close = vi.fn(async () => ({ done: true as const, value: undefined }))
-    const raw = await SchemaValueStream.wrap({
-      [Symbol.asyncIterator]: () => ({ next, return: close }),
-    })
+    const raw = await SchemaValueStream.wrap(
+      {
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      },
+      Promise.resolve(undefined),
+    )
     const dispose = vi.fn()
     Object.assign(raw, { [Symbol.dispose]: dispose })
     const payload: Common.TypedSchemaValue = {

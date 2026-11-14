@@ -803,8 +803,11 @@ describe('component exports', () => {
         }
       },
       SchemaValueStream: {
-        wrap: async (iterable) => ({ iterable }),
-        unwrap: async (wrapped) => wrapped.iterable,
+        wrap: async (iterable, outcome) => ({ iterable, outcome }),
+        unwrap: async (wrapped) => [
+          wrapped.iterable,
+          wrapped.outcome ?? Promise.resolve({ tag: 'ok', val: undefined }),
+        ],
       },
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);

@@ -21,6 +21,7 @@ use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
 use crate::worker::Worker;
+use crate::worker::tasks::NativeReconstructionSpawner;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -40,6 +41,7 @@ pub(super) struct MaterializeResponse {
     pub response: ToolInvokeResponse,
     pub completed: oneshot::Sender<Result<HostResponseEntityInvocation, WorkerExecutorError>>,
     pub activity: TailActivity,
+    pub output_tasks: NativeReconstructionSpawner,
 }
 
 impl MaterializeResponse {
@@ -53,9 +55,11 @@ impl MaterializeResponse {
             response,
             completed,
             activity: _activity,
+            output_tasks,
         } = self;
         let result = async {
-            let response = materialize_response(&streams, revision, response).await?;
+            let response =
+                materialize_response(&streams, revision, response, &output_tasks).await?;
             let response = response.map(|result| SerializableToolStructuredResult {
                 result: result
                     .result
@@ -157,6 +161,7 @@ pub(super) async fn materialize_response(
     streams: &StreamSession,
     revision: ComponentRevision,
     mut response: ToolInvokeResponse,
+    output_tasks: &NativeReconstructionSpawner,
 ) -> Result<ToolInvokeResponse, WorkerExecutorError> {
     let Some(value) = payload(&mut response) else {
         return Ok(response);
@@ -168,8 +173,8 @@ pub(super) async fn materialize_response(
     let value = value.value().clone();
     let stripped = strip_response(response);
     streams
-        .materialize_result(value, &graph, &graph.root, revision)
+        .spawn_materialize_result(value, &graph, &graph.root, revision, None, output_tasks)?
         .await
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        .map_err(|_| WorkerExecutorError::runtime("tool result materialization owner stopped"))??;
     Ok(stripped)
 }

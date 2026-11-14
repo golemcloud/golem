@@ -6,6 +6,7 @@ import { QUOTA_INTERNAL } from "../schema-model/quotaInternal.js"
 import { abandonGuestPermissionCardWireHandle } from "../schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "../schema-model/permissionCardInternal.js"
 import { restoreCapabilityAdoption } from "./collectionOwnership.js"
+import { unwrapSchemaValueStream } from "../schema-model/schemaValueStreamHandle.js"
 
 export function discardRejectedPayload<A, E, R>(
   payload: Common.TypedSchemaValue | undefined,
@@ -48,8 +49,7 @@ export async function discardSchemaValueTree(tree: Core.SchemaValueTree): Promis
               node,
             )
           if (node.tag === "stream-value") {
-            const { SchemaValueStream } = await import("golem:core/types@2.0.0")
-            const source = await SchemaValueStream.unwrap(raw as Core.SchemaValueStream)
+            const source = await unwrapSchemaValueStream(raw as Core.SchemaValueStream)
             await source[Symbol.asyncIterator]().return?.()
           }
         } catch {

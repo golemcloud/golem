@@ -127,7 +127,8 @@ impl DurableStreamStore {
             && let Some(existing) = journal.source_unavailable
         {
             return if existing == source_offset
-                && journal.next_read_ordinal == consumer_read_ordinal
+                && consumer_read_ordinal.checked_add(u64::from(journal.terminal))
+                    == Some(journal.next_read_ordinal)
             {
                 *index = staged;
                 Ok(true)

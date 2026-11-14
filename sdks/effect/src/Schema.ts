@@ -11,6 +11,8 @@
 
 /** @since 1.6.0 @category schemas */
 export * from "effect/Schema"
+/** Producer terminal failure, distinct from failures carried by stream items. @since 1.6.0 @category errors */
+export { StreamError, type StreamFailure } from "./internal/schema-model/errors.js"
 /** @since 1.6.0 @category schemas */
 export {
   AgentStream,

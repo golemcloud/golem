@@ -8,6 +8,7 @@
 #warnings("-unused_type_variable")
 pub(all) struct AgentStream[T] {
   priv handle : @model.GuestSchemaValueStreamHandle
+  priv ended : Ref[Bool]
   priv decode : (@types.SchemaValueTree) -> T raise AgentStreamReadError
 }
 
@@ -35,6 +36,8 @@ pub extend AgentStream with WireSchema::{append_wire_type, append_result_type}
 #warnings("-unused_type_variable")
 pub struct AgentStreamWriter[T] {
   priv sink : @async-core.Sink[@types.SchemaValueTree]
+  priv completion : @async-core.Promise[Result[Unit, @types.StreamError]]
+  priv settled : Ref[Bool]
   priv encode : async (T) -> @types.SchemaValueTree
   priv cleanup_encoded : (@types.SchemaValueTree) -> Unit
   priv release : (T) -> Unit
@@ -78,12 +81,46 @@ pub extend AgentStreamReadError with Debug::{to_repr}
 pub extend AgentStreamReadError with Eq::{equal, not_equal}
 
 ///|
+/// Terminal producer failures are raised once, after all accepted items.
+pub suberror StreamError {
+  Failed(@model.TypedSchemaValue)
+  Trapped(String)
+  Cancelled
+  Abandoned
+  Interrupted(String)
+  ResourceExhausted(String)
+} derive(Debug, Eq)
+
+///|
+pub extend StreamError with Debug::{to_repr}
+
+///|
+pub extend StreamError with Eq::{equal, not_equal}
+
+///|
+fn decode_stream_error(error : @types.StreamError) -> StreamError raise {
+  match error {
+    @types.StreamError::Failed(value) =>
+      Failed(@model_host.typed_schema_value_from_wit(value))
+    @types.StreamError::Trapped(message) => Trapped(message)
+    @types.StreamError::Cancelled => Cancelled
+    @types.StreamError::Abandoned => Abandoned
+    @types.StreamError::Interrupted(message) => Interrupted(message)
+    @types.StreamError::ResourceExhausted(message) => ResourceExhausted(message)
+  }
+}
+
+///|
 fn[T] AgentStream::from_reader(
   reader : @async-core.Stream[@types.SchemaValueTree],
   decode : (@model.SchemaValue) -> T raise FromSchemaError,
+  outcome~ : @async-core.Future[Result[Unit, @types.StreamError]] = @async-core.Future::ready(
+    Ok(()),
+  ),
 ) -> AgentStream[T] {
   {
-    handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+    handle: @model.GuestSchemaValueStreamHandle::from_native(reader, outcome~),
+    ended: Ref(false),
     decode: tree => decode_model_stream_item(tree, decode),
   }
 }
@@ -117,6 +154,13 @@ fn drop_wire_stream_item(tree : @types.SchemaValueTree) -> Unit {
 }
 
 ///|
+fn drop_stream_outcome(outcome : Result[Unit, @types.StreamError]) -> Unit {
+  if outcome is Err(@types.StreamError::Failed(value)) {
+    drop_wire_stream_item(value.value)
+  }
+}
+
+///|
 /// Creates an explicit writer and readable stream endpoint. The writer owns
 /// every value passed to it, including values rejected after the reader drops.
 pub fn[T : IntoWire + FromWire] AgentStream::new() -> (
@@ -126,15 +170,21 @@ pub fn[T : IntoWire + FromWire] AgentStream::new() -> (
   let (reader, sink) = @async-core.Stream::new_with_cleanup(
     drop_wire_stream_item,
   )
+  let (outcome, completion) = @async-core.Future::new_with_cleanup(
+    drop_stream_outcome,
+  )
   (
     {
       sink,
+      completion,
+      settled: Ref(false),
       encode: into_wire_async,
       cleanup_encoded: drop_wire_stream_item,
       release: release_wire,
     },
     {
-      handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+      handle: @model.GuestSchemaValueStreamHandle::from_native(reader, outcome~),
+      ended: Ref(false),
       decode: decode_wire_stream_item,
     },
   )
@@ -153,9 +203,14 @@ pub fn[T] AgentStream::new_with_codec(
   let (reader, sink) = @async-core.Stream::new_with_cleanup(
     @model.drop_wit_capabilities,
   )
+  let (outcome, completion) = @async-core.Future::new_with_cleanup(
+    drop_stream_outcome,
+  )
   (
     {
       sink,
+      completion,
+      settled: Ref(false),
       encode: async fn(value) {
         let model = encode(value)
         errdefer model.release_resources(@model_host.resource_drops())
@@ -164,36 +219,47 @@ pub fn[T] AgentStream::new_with_codec(
       cleanup_encoded: @model.drop_wit_capabilities,
       release,
     },
-    AgentStream::from_reader(reader, decode),
+    AgentStream::from_reader(reader, decode, outcome~),
   )
 }
 
 ///|
 /// Creates a lazy typed stream producer. A normal producer return closes the
-/// stream. Producer failure and cancellation keep their operation-level
-/// terminal behavior and are not converted to clean EOF. When the producer
+/// stream. Producer errors become declared terminal failures. Cancellation
+/// remains an operation-level signal. When the producer
 /// captures explicitly owned capabilities, `on_unstarted_drop` must release
 /// them if the readable endpoint is dropped before the producer first runs.
 pub fn[T : IntoWire + FromWire] AgentStream::produce(
   producer : async (AgentStreamWriter[T]) -> Unit,
   on_unstarted_drop? : () -> Unit,
 ) -> AgentStream[T] {
+  let (outcome, completion) = @async-core.Future::new_with_cleanup(
+    drop_stream_outcome,
+  )
   let reader = @async-core.Stream::produce(
     async fn(sink) {
       let writer : AgentStreamWriter[T] = {
         sink,
+        completion,
+        settled: Ref(false),
         encode: into_wire_async,
         cleanup_encoded: drop_wire_stream_item,
         release: release_wire,
       }
-      producer(writer)
+      producer(writer) catch {
+        error => {
+          writer.finish(error)
+          return
+        }
+      }
       writer.close()
     },
     cleanup=drop_wire_stream_item,
     on_unstarted_drop?,
   )
   {
-    handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+    handle: @model.GuestSchemaValueStreamHandle::from_native(reader, outcome~),
+    ended: Ref(false),
     decode: decode_wire_stream_item,
   }
 }
@@ -208,10 +274,15 @@ pub fn[T] AgentStream::produce_with_codec(
   release : (T) -> Unit,
   on_unstarted_drop? : () -> Unit,
 ) -> AgentStream[T] {
+  let (outcome, completion) = @async-core.Future::new_with_cleanup(
+    drop_stream_outcome,
+  )
   let reader = @async-core.Stream::produce(
     async fn(sink) {
       let writer : AgentStreamWriter[T] = {
         sink,
+        completion,
+        settled: Ref(false),
         encode: async fn(value) {
           let model = encode(value)
           errdefer model.release_resources(@model_host.resource_drops())
@@ -220,13 +291,18 @@ pub fn[T] AgentStream::produce_with_codec(
         cleanup_encoded: @model.drop_wit_capabilities,
         release,
       }
-      producer(writer)
+      producer(writer) catch {
+        error => {
+          writer.finish(error)
+          return
+        }
+      }
       writer.close()
     },
     cleanup=@model.drop_wit_capabilities,
     on_unstarted_drop?,
   )
-  AgentStream::from_reader(reader, decode)
+  AgentStream::from_reader(reader, decode, outcome~)
 }
 
 ///|
@@ -287,6 +363,43 @@ pub async fn[T] AgentStreamWriter::write_all(
 ///|
 /// Closes the writable endpoint. Repeated closes have no effect.
 pub async fn[T] AgentStreamWriter::close(self : AgentStreamWriter[T]) -> Unit {
+  if !self.settled.val {
+    self.settled.val = true
+    ignore(self.completion.complete(Ok(())))
+  }
+  self.sink.close()
+}
+
+///|
+/// Finishes with a declared failure. A typed Failed payload is preserved;
+/// ordinary producer errors become a typed string failure.
+pub async fn[T] AgentStreamWriter::finish(
+  self : AgentStreamWriter[T],
+  error : Error,
+) -> Unit {
+  if self.settled.val {
+    return
+  }
+  self.settled.val = true
+  let string_tag : TypeTag[String] = type_tag()
+  let value = match error {
+    StreamError::Failed(value) => value
+    _ =>
+      @model.TypedSchemaValue::{
+        graph: schema_graph_of_tag(string_tag),
+        value: @model.String(repr(error)),
+      }
+  }
+  let failure = @model.schema_value_to_wit_async(value.value)
+  let outcome = Err(
+    @types.StreamError::Failed({
+      graph: @model.schema_graph_to_wit(value.graph),
+      value: failure,
+    }),
+  )
+  if !self.completion.complete(outcome) {
+    @model.drop_wit_capabilities(failure)
+  }
   self.sink.close()
 }
 
@@ -305,13 +418,23 @@ pub fn[T] AgentStream::drop(self : AgentStream[T]) -> Unit {
 /// `AgentStreamReadError`; canonical operation cancellation is propagated
 /// unchanged. Use `AgentStream[Result[T, E]]` when individual items need
 /// recoverable application errors.
-pub async fn[T] AgentStream::read(self : AgentStream[T]) -> T? {
+pub async fn[T] AgentStream::read(
+  self : AgentStream[T],
+) -> Result[T, StreamError]? {
+  if self.ended.val {
+    return None
+  }
   for ;; {
     let chunk = self.handle.read_native() catch {
       @model.SchemaValueStreamReadError::Ownership(message) =>
         raise AgentStreamReadError::Ownership(message)
       @model.SchemaValueStreamReadError::Transport(message) =>
         raise AgentStreamReadError::Transport(message)
+      @model.SchemaValueStreamReadError::Outcome(error) => {
+        self.ended.val = true
+        self.drop()
+        return Some(Err(decode_stream_error(error)))
+      }
       error =>
         raise AgentStreamReadError::Transport(
           "unexpected schema value stream failure: \{repr(error)}",
@@ -319,11 +442,12 @@ pub async fn[T] AgentStream::read(self : AgentStream[T]) -> T? {
     }
     match chunk {
       None => {
+        self.ended.val = true
         self.drop()
         return None
       }
       Some(values) if values.length() == 0 => continue
-      Some(values) => return Some((self.decode)(values[0]))
+      Some(values) => return Some(Ok((self.decode)(values[0])))
     }
   }
 }
@@ -365,7 +489,11 @@ pub fn[T] AgentStream::from_value_with_codec(
 ) -> AgentStream[T] raise FromSchemaError {
   match value {
     @model.SchemaValue::Stream(handle) =>
-      { handle, decode: tree => decode_model_stream_item(tree, decode), }
+      {
+        handle,
+        ended: Ref(false),
+        decode: tree => decode_model_stream_item(tree, decode),
+      }
     other =>
       raise FromSchemaError::shape_mismatch(
         "stream",
@@ -392,6 +520,7 @@ pub impl[T : FromWire] FromWire for AgentStream[T] with fn read_wire(
 ) {
   {
     handle: FromWire::read_wire(reader, index),
+    ended: Ref(false),
     decode: decode_wire_stream_item,
   }
 }

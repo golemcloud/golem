@@ -390,7 +390,7 @@ async function sessionCancellation() {
     if (slot === "input") {
       assert.equal(cancelled, "true");
     } else {
-      // The reader trap may close the output before administrative cancellation.
+      // The echo's panic may close the output before administrative cancellation.
       // The first terminal is preserved.
       assert.ok(cancelled === null || cancelled === "true");
     }
@@ -400,7 +400,7 @@ async function sessionCancellation() {
   });
   assert.match(
     (await failed.json()).error,
-    /stream terminated: Failed\(Interrupted\("session deleted"\)\)/,
+    /input stream failed: agent stream interrupted: session deleted/,
   );
   await request(`${s.agent}/mark/37`, 500, { method: "PUT" });
 }

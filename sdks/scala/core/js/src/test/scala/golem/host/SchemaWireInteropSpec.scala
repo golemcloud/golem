@@ -744,9 +744,10 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
             _       <- FutureInterop.fromPromise(
                    streamMock.waitForPendingWrap().asInstanceOf[js.Promise[js.Any]]
                  )
-            _  = streamMock.releaseWraps()
-            _ <- next.failed
+            _    = streamMock.releaseWraps()
+            end <- next
           } yield assertTrue(
+            end.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
             outerFinalizations == 1,
             nestedFinalizations == 1,
             streamMock.state.unwraps.asInstanceOf[Int] == 1
@@ -773,10 +774,13 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
             iterator = outboundIterator(encoded.valueNodes(0))
             next     = callIterator(iterator, "next")
             _       <- callIterator(iterator, "return")
-            _       <- next.failed
+            end     <- next
             _        = pending.success(Some(child))
             _       <- pending.future
-          } yield assertTrue(childFinalizations == 1)
+          } yield assertTrue(
+            end.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
+            childFinalizations == 1
+          )
         }
       },
       test("schema value stream: outbound EOF and failure finalize exactly once") {
@@ -811,13 +815,77 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
             failedIterator = outboundIterator(failedEncoded.valueNodes(0))
             end           <- callIterator(eofIterator, "next")
             _             <- callIterator(eofIterator, "return")
-            _             <- callIterator(failedIterator, "next").failed
-            _             <- callIterator(failedIterator, "return")
+            failedEnd     <- callIterator(failedIterator, "next")
+            failedOutcome <- FutureInterop.fromPromise(
+                               rawVal(failedEncoded.valueNodes(0))
+                                 .asInstanceOf[js.Dynamic]
+                                 .selectDynamic("outcome")
+                                 .asInstanceOf[js.Promise[js.Dynamic]]
+                             )
+            _ <- callIterator(failedIterator, "return")
           } yield assertTrue(
             end.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
+            failedEnd.asInstanceOf[js.Dynamic].selectDynamic("done").asInstanceOf[Boolean],
+            failedOutcome.selectDynamic("tag").asInstanceOf[String] == "err",
+            failedOutcome.selectDynamic("val").selectDynamic("tag").asInstanceOf[String] == "failed",
             eofFinalizations == 1,
             failureFinalizations == 1
           )
+        }
+      },
+      test("schema value stream: inbound failures retain the accepted prefix and end after one error") {
+        ZIO.fromFuture { implicit ec =>
+          val declared = TypedSchemaValue(
+            SchemaGraph(scala.collection.immutable.ListMap.empty, t.string),
+            SchemaValue.StringValue("denied")
+          )
+          val failures = List(
+            "failed"             -> StreamError.Failed(declared),
+            "trapped"            -> StreamError.Trapped("trap"),
+            "cancelled"          -> StreamError.Cancelled,
+            "abandoned"          -> StreamError.Abandoned,
+            "interrupted"        -> StreamError.Interrupted("lost hop"),
+            "resource-exhausted" -> StreamError.ResourceExhausted("limit")
+          )
+          Future
+            .traverse(failures) { case (tag, expected) =>
+              var first   = true
+              val fixture = iteratorFixture(
+                () => {
+                  if (first) {
+                    first = false;
+                    js.Promise.resolve(js.Dynamic.literal("done" -> false, "value" -> stringTree("accepted")))
+                  } else js.Promise.resolve(js.Dynamic.literal("done" -> true))
+                },
+                withReturn = true
+              )
+              val payload: js.Any = expected match {
+                case StreamError.Failed(value)             => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(value))
+                case StreamError.Trapped(detail)           => detail
+                case StreamError.Interrupted(detail)       => detail
+                case StreamError.ResourceExhausted(detail) => detail
+                case _                                     => js.undefined
+              }
+              fixture.raw
+                .asInstanceOf[js.Dynamic]
+                .updateDynamic("outcome")(
+                  js.Promise.resolve(
+                    js.Dynamic.literal("tag" -> "err", "val" -> js.Dynamic.literal("tag" -> tag, "val" -> payload))
+                  )
+                )
+              val stream = decodeStream(fixture.raw)
+              for {
+                item  <- stream.pull()
+                error <- stream.pull().failed
+                end   <- stream.pull()
+              } yield assertTrue(
+                item.contains("accepted"),
+                error == expected,
+                end.isEmpty,
+                tag != "cancelled" || error.asInstanceOf[StreamError].name == "AbortError"
+              )
+            }
+            .map(_.reduce(_ && _))
         }
       },
       test("schema value stream: inbound close calls optional iterator return at most once") {

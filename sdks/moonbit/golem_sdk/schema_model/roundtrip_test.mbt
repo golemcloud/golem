@@ -1151,7 +1151,10 @@ test "a sync encode rejects a native stream before it moves any capability" {
     @async-core.Stream[@types.SchemaValueTree],
     @async-core.Sink[@types.SchemaValueTree],
   ) = @async-core.Stream::new()
-  let stream = GuestSchemaValueStreamHandle::from_native(reader)
+  let stream = GuestSchemaValueStreamHandle::from_native(
+    reader,
+    outcome=@async-core.Future::ready(Ok(())),
+  )
   let result = try
     schema_value_to_wit(Record([PermissionCard(card), Stream(stream)])) |> Ok
   catch {

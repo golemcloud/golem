@@ -66,7 +66,7 @@ import {
   takeGuestQuotaTokenHandleToWire,
 } from './quotaTokenHandle';
 import { QUOTA_INTERNAL } from './quotaInternal';
-import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
+import { GuestSchemaValueStreamHandle, wrapSchemaValueStream } from './schemaValueStreamHandle';
 import {
   abandonGuestPermissionCardWireHandle,
   assertGuestPermissionCardHandleCanLiftFromWire,
@@ -1025,7 +1025,7 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
       // Only native streams need asynchronous preparation. Keep their movement
       // serialized so a failed wrap never starts a later sibling wrap.
       current.handle.take();
-      const wrapped = await SchemaValueStream.wrap(stream.value);
+      const wrapped = await wrapSchemaValueStream(stream.value);
       current.handle = new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped });
       newlyWrapped.push({ handle: current.handle, value: wrapped });
     }

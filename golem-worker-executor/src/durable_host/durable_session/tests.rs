@@ -2001,6 +2001,7 @@ async fn output_coordinator_collects_cancelled_children_after_suspension_commit(
         Arc::new(|| true),
         Some(runtime.source()),
         Box::pin(std::future::pending()),
+        None,
     )
     .unwrap();
     let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
@@ -2020,6 +2021,7 @@ async fn output_coordinator_collects_cancelled_children_after_suspension_commit(
         Arc::new(SchemaGraph::anonymous(SchemaType::u32())),
         Some(runtime.source()),
         Some(coordinator_activity),
+        false,
     ));
     while !eligible_now(&owner) {
         assert!(futures::poll!(coordinator.as_mut()).is_pending());
@@ -2511,6 +2513,198 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
 #[test]
 #[test_r::timeout("30s")]
 async fn materialized_output_releases_admission_and_survives_abandoned_response() {
+    for invocation_owned in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = StreamSession::new(
+            producer.clone(),
+            oplog,
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        );
+        let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
+        let mut tasks = crate::worker::tasks::NativeReconstructionTasks::new(
+            &crate::worker::tasks::WorkerTasks::default(),
+        )
+        .unwrap();
+        let root = SchemaType::stream(Some(SchemaType::u8()));
+        let graph = SchemaGraph::anonymous(root.clone());
+        let value = SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint));
+        let materialization = if invocation_owned {
+            let response = streams
+                .spawn_materialize_result(
+                    value,
+                    &graph,
+                    &root,
+                    ComponentRevision::INITIAL,
+                    None,
+                    &tasks.spawner(),
+                )
+                .unwrap();
+            drop(response);
+            None
+        } else {
+            let task_streams = streams.clone();
+            Some(tokio::spawn(async move {
+                task_streams
+                    .materialize_result(value, &graph, &root, ComponentRevision::INITIAL)
+                    .await
+            }))
+        };
+        streams.wait_persisted_result().await.unwrap();
+        let binding = streams
+            .remote_result_record()
+            .await
+            .unwrap()
+            .unwrap()
+            .stream_mappings[0]
+            .clone();
+        let handle = producer.materialize_binding(&binding).await.unwrap().handle;
+
+        // The live drain must leave all sixteen normal operation slots available.
+        // Hold them in completions, since durable mutation bodies execute serially.
+        let admitted = Arc::new(tokio::sync::Barrier::new(17));
+        let mut operations = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let producer = producer.clone();
+            let admitted = admitted.clone();
+            operations.spawn(async move {
+                producer
+                    .run_admitted(None, 0, false, move |_, _admission| async move {
+                        admitted.wait().await;
+                        Ok::<_, SessionError>(())
+                    })
+                    .await
+            });
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), admitted.wait())
+            .await
+            .expect("a long-lived output drain retained mutation admission");
+        while let Some(result) = operations.join_next().await {
+            result.unwrap().unwrap();
+        }
+        if let Some(materialization) = materialization {
+            materialization.abort();
+            assert!(materialization.await.unwrap_err().is_cancelled());
+        }
+
+        publisher.publish_item(SchemaValue::U8(37)).await.unwrap();
+        publisher.publish_item(SchemaValue::U8(81)).await.unwrap();
+        publisher.publish_end().await.unwrap();
+        let mut reader = producer.catch_up(handle, None).await.unwrap();
+        for expected in [37, 81] {
+            assert_eq!(
+                reader.next().await.unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayload::PackedU8(expected)
+            );
+        }
+        assert_eq!(
+            reader.next().await.unwrap().unwrap().payload,
+            CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
+        );
+        tasks.seal_and_drain().await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_owned_output_abort_is_not_a_durable_terminal() {
+    for nested in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = StreamSession::new(
+            producer.clone(),
+            oplog,
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        );
+        let tasks = crate::worker::tasks::NativeReconstructionTasks::new(
+            &crate::worker::tasks::WorkerTasks::default(),
+        )
+        .unwrap();
+        let (publisher, endpoint) = test_output_stream_pair(1).unwrap();
+        let lifecycle = endpoint.lifecycle();
+        let item = if nested {
+            SchemaType::stream(Some(SchemaType::u32()))
+        } else {
+            SchemaType::u8()
+        };
+        let root = SchemaType::stream(Some(item));
+        let response = streams
+            .spawn_materialize_result(
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint)),
+                &SchemaGraph::anonymous(root.clone()),
+                &root,
+                ComponentRevision::INITIAL,
+                None,
+                &tasks.spawner(),
+            )
+            .unwrap();
+        response.await.unwrap().unwrap();
+        let binding = streams
+            .remote_result_record()
+            .await
+            .unwrap()
+            .unwrap()
+            .stream_mappings[0]
+            .clone();
+        let handle = producer.materialize_binding(&binding).await.unwrap().handle;
+        if nested {
+            let (_child_publisher, child) = test_output_stream_pair(1).unwrap();
+            let child_lifecycle = child.lifecycle();
+            publisher
+                .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                    child,
+                )))
+                .await
+                .unwrap();
+            publisher.publish_end().await.unwrap();
+            let mut reader = producer.catch_up(handle.clone(), None).await.unwrap();
+            assert!(matches!(
+                reader.next().await.unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayload::Value(_)
+            ));
+            assert_eq!(
+                reader.next().await.unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
+            );
+            child_lifecycle.abort();
+        } else {
+            lifecycle.abort();
+        }
+        let error = tasks.monitor().drain().await.unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerExecutorError::RecoveryRequired { .. }
+        ));
+        assert_eq!(
+            producer.terminal_event(&handle).await.unwrap().is_some(),
+            nested
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_owned_materialization_revokes_work_waiting_for_admission() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let producer = DurableStreamStore::load(
@@ -2522,74 +2716,155 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
     )
     .await
     .unwrap();
+    let entered = Arc::new(tokio::sync::Barrier::new(17));
+    let release = Arc::new(tokio::sync::Barrier::new(17));
+    let mut operations = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let producer = producer.clone();
+        let entered = entered.clone();
+        let release = release.clone();
+        operations.spawn(async move {
+            producer
+                .run_admitted(None, 0, false, move |_, _admission| async move {
+                    entered.wait().await;
+                    release.wait().await;
+                    Ok::<_, SessionError>(())
+                })
+                .await
+        });
+    }
+    entered.wait().await;
     let streams = StreamSession::new(
         producer.clone(),
         oplog,
         StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         [],
     );
-    let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
-    let task_streams = streams.clone();
-    let materialization = tokio::spawn(async move {
-        let root = SchemaType::stream(Some(SchemaType::u8()));
-        task_streams
-            .materialize_result(
-                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint)),
-                &SchemaGraph::anonymous(root.clone()),
-                &root,
+    let worker_tasks = crate::worker::tasks::WorkerTasks::default();
+    let mut tasks = crate::worker::tasks::NativeReconstructionTasks::new(&worker_tasks).unwrap();
+    let spawner = tasks.spawner();
+    let (publisher, endpoint) = test_output_stream_pair(1).unwrap();
+    let root = SchemaType::stream(Some(SchemaType::u8()));
+    let response = streams
+        .spawn_materialize_result(
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint)),
+            &SchemaGraph::anonymous(root.clone()),
+            &root,
+            ComponentRevision::INITIAL,
+            None,
+            &spawner,
+        )
+        .unwrap();
+    tasks.abort_and_join().await;
+    assert!(response.await.is_err());
+    assert!(publisher.publish_item(SchemaValue::U8(29)).await.is_err());
+    assert!(
+        streams
+            .spawn_materialize_result(
+                SchemaValue::U8(41),
+                &SchemaGraph::anonymous(SchemaType::u8()),
+                &SchemaType::u8(),
                 ComponentRevision::INITIAL,
+                None,
+                &spawner,
             )
-            .await
+            .is_err()
+    );
+    release.wait().await;
+    while let Some(result) = operations.join_next().await {
+        result.unwrap().unwrap();
+    }
+    assert!(streams.remote_result_record().await.unwrap().is_none());
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn invocation_output_owner_abort_after_commit_cannot_start_a_late_drain() {
+    use crate::durable_host::durable_stream::DurableStreamCommit;
+    use std::sync::atomic::AtomicBool;
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let committed = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let commit: DurableStreamCommit = Arc::new({
+        let oplog = oplog.clone();
+        let committed = committed.clone();
+        let release = release.clone();
+        let first = Arc::new(AtomicBool::new(true));
+        move |receipt| {
+            let oplog = oplog.clone();
+            let committed = committed.clone();
+            let release = release.clone();
+            let first = first.clone();
+            Box::pin(async move {
+                oplog.commit(CommitLevel::Always).await.unwrap();
+                if first.swap(false, Ordering::AcqRel) {
+                    committed.notify_one();
+                    release.acquire().await.unwrap().forget();
+                }
+                if let Some(receipt) = receipt {
+                    let _ = receipt.send(Ok(()));
+                }
+            })
+        }
     });
-    streams.wait_persisted_result().await.unwrap();
+    let producer = DurableStreamStore::load_with_commit(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+        commit,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog.clone(),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    let worker_tasks = crate::worker::tasks::WorkerTasks::default();
+    let mut owner = crate::worker::tasks::NativeReconstructionTasks::new(&worker_tasks).unwrap();
+    let (publisher, endpoint) = test_output_stream_pair(1).unwrap();
+    let lifecycle = endpoint.lifecycle();
+    let root = SchemaType::stream(Some(SchemaType::u8()));
+    let response = streams
+        .spawn_materialize_result(
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint)),
+            &SchemaGraph::anonymous(root.clone()),
+            &root,
+            ComponentRevision::INITIAL,
+            None,
+            &owner.spawner(),
+        )
+        .unwrap();
+    committed.notified().await;
+    assert!(oplog.committed_length() > 0);
+    owner.abort_and_join().await;
+    assert!(response.await.is_err());
+    release.add_permits(1);
+    lifecycle.cancelled().await;
+
     let binding = streams
         .remote_result_record()
         .await
         .unwrap()
-        .unwrap()
+        .expect("accepted mappings survive cancellation of their observer")
         .stream_mappings[0]
         .clone();
+    assert!(publisher.publish_item(SchemaValue::U8(67)).await.is_err());
     let handle = producer.materialize_binding(&binding).await.unwrap().handle;
-
-    // The live drain must leave all sixteen normal operation slots available.
-    // Hold them in completions, since durable mutation bodies execute serially.
-    let admitted = Arc::new(tokio::sync::Barrier::new(17));
-    let mut operations = tokio::task::JoinSet::new();
-    for _ in 0..16 {
-        let producer = producer.clone();
-        let admitted = admitted.clone();
-        operations.spawn(async move {
-            producer
-                .run_admitted(None, 0, false, move |_, _admission| async move {
-                    admitted.wait().await;
-                    Ok::<_, SessionError>(())
-                })
-                .await
-        });
-    }
-    tokio::time::timeout(std::time::Duration::from_secs(5), admitted.wait())
-        .await
-        .expect("a long-lived output drain retained mutation admission");
-    while let Some(result) = operations.join_next().await {
-        result.unwrap().unwrap();
-    }
-    materialization.abort();
-    assert!(materialization.await.unwrap_err().is_cancelled());
-
-    publisher.publish_item(SchemaValue::U8(37)).await.unwrap();
-    publisher.publish_item(SchemaValue::U8(81)).await.unwrap();
-    publisher.publish_end().await.unwrap();
-    let mut reader = producer.catch_up(handle, None).await.unwrap();
-    for expected in [37, 81] {
-        assert_eq!(
-            reader.next().await.unwrap().unwrap().payload,
-            CommittedProducerStreamEventPayload::PackedU8(expected)
-        );
-    }
-    assert_eq!(
-        reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Finished)
+    assert!(
+        producer
+            .read_segment(&handle, None, None)
+            .await
+            .unwrap()
+            .is_empty()
     );
+    drop(owner);
+    worker_tasks.stop_and_wait().await.unwrap();
 }
 
 #[test]
@@ -3444,7 +3719,7 @@ fn late_input_is_discarded_after_the_session_or_consumer_terminates() {
     ));
 }
 
-async fn backpressured_session_input() -> (
+pub(super) async fn backpressured_session_input() -> (
     Arc<DurableStreamStore>,
     StreamSession,
     DurableCatchUpReader,
@@ -3654,12 +3929,38 @@ async fn byte_output_replay_checks_bytes_and_terminal_without_rewriting_history(
     assert!(reader.next().await.unwrap().is_none());
     let completed_index = oplog.current_oplog_index().await;
 
-    for (bytes, terminal_error, should_succeed) in [
-        (vec![0, 255, 9, 128], None, true),
-        (vec![0, 254, 9, 128], None, false),
-        (vec![0, 255], None, false),
-        (vec![0, 255, 9, 128, 17], None, false),
-        (vec![0, 255, 9, 128], Some("different terminal"), false),
+    for (bytes, terminal_error, terminal_origin, should_succeed) in [
+        (
+            vec![0, 255, 9, 128],
+            None,
+            StreamTerminalOrigin::Source,
+            true,
+        ),
+        (
+            vec![0, 254, 9, 128],
+            None,
+            StreamTerminalOrigin::Source,
+            false,
+        ),
+        (vec![0, 255], None, StreamTerminalOrigin::Source, false),
+        (
+            vec![0, 255, 9, 128, 17],
+            None,
+            StreamTerminalOrigin::Source,
+            false,
+        ),
+        (
+            vec![0, 255, 9, 128],
+            Some("different terminal"),
+            StreamTerminalOrigin::Source,
+            false,
+        ),
+        (
+            vec![0, 255, 9, 128],
+            None,
+            StreamTerminalOrigin::Control,
+            false,
+        ),
     ] {
         let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
         let ((), result) = tokio::join!(
@@ -3670,7 +3971,13 @@ async fn byte_output_replay_checks_bytes_and_terminal_without_rewriting_history(
                 if let Some(error) = terminal_error {
                     let _ = publisher.publish_error(error.to_string()).await;
                 } else {
-                    let _ = publisher.publish_end().await;
+                    let _ = publisher
+                        .publish_terminal_with_origin(
+                            StreamTerminalAuthor::Guest,
+                            terminal_origin,
+                            StreamTerminal::Finished,
+                        )
+                        .await;
                 }
             },
             streams.drain_registered_output(
@@ -6231,6 +6538,81 @@ async fn local_cancellation_releases_session_lock_after_commit_before_live_publi
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn result_materialization_publishes_mappings_before_its_stream_terminal() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog,
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    );
+    let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
+    let root = SchemaType::stream(Some(SchemaType::u8()));
+    let graph = SchemaGraph::anonymous(root.clone());
+    let tasks = crate::worker::tasks::WorkerTasks::default();
+    let mut outputs = crate::worker::tasks::NativeReconstructionTasks::new(&tasks).unwrap();
+    streams
+        .spawn_materialize_result(
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(endpoint)),
+            &graph,
+            &root,
+            ComponentRevision::INITIAL,
+            None,
+            &outputs.spawner(),
+        )
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(streams.remote_result_record().await.unwrap().is_some());
+    let handle = producer
+        .handle_for_coordinate(&StreamRegistrationCoordinate::Root {
+            invocation_id: streams.session_key.clone(),
+            root_kind: StreamRootKind::MethodResult,
+            recursive_value_path: Vec::new(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(producer.terminal_event(&handle).await.unwrap().is_none());
+    let mut finished = Box::pin(outputs.seal_and_drain());
+    assert!(futures::poll!(&mut finished).is_pending());
+    publisher.publish_item(SchemaValue::U8(73)).await.unwrap();
+    publisher
+        .publish_terminal_with_origin(
+            StreamTerminalAuthor::Host,
+            StreamTerminalOrigin::Control,
+            StreamTerminal::Failed(StreamError::Interrupted("source closed".into())),
+        )
+        .await
+        .unwrap();
+    finished.await.unwrap();
+    let terminal = producer.terminal_event(&handle).await.unwrap().unwrap();
+    assert_eq!(terminal.producer_sequence, 1);
+    assert_eq!(
+        terminal.terminal_origin,
+        Some(StreamTerminalOrigin::Control)
+    );
+    assert_eq!(
+        terminal.payload,
+        CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+            StreamError::Interrupted("source closed".into())
+        ),)
+    );
+}
+
+#[test]
 async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reload() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
@@ -6680,6 +7062,7 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
         runtime_teardown: Arc::new(|| false),
         drop_event_sink,
         durable_receives: None,
+        body_trap: None,
     };
     let first = projection
         .project_stream(
@@ -9602,6 +9985,7 @@ async fn mapped_source_unavailable_replays_as_permanent_without_cancelling_sourc
         runtime_teardown: Arc::new(|| false),
         drop_event_sink,
         durable_receives: None,
+        body_trap: None,
     };
     let mapped = projection
         .project_stream(
@@ -9728,6 +10112,7 @@ async fn durable_projection_preserves_typed_outcomes_from_live_and_consumer_hist
                     runtime_teardown: Arc::new(|| false),
                     drop_event_sink,
                     durable_receives: None,
+                    body_trap: None,
                 };
                 let mut target = projection
                     .project_stream(
@@ -9893,6 +10278,7 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
         runtime_teardown: Arc::new(|| false),
         drop_event_sink,
         durable_receives: None,
+        body_trap: None,
     };
     let projected = projection
         .project_stream(
@@ -10007,6 +10393,7 @@ async fn mapped_durable_target_drop_cancels_once_and_teardown_suppresses_cancel(
             runtime_teardown: Arc::new(move || teardown),
             drop_event_sink,
             durable_receives: None,
+            body_trap: None,
         };
         let target = projection
             .project_stream(
@@ -10048,8 +10435,15 @@ async fn mapped_durable_target_drop_cancels_once_and_teardown_suppresses_cancel(
 
 #[test]
 #[test_r::timeout("30s")]
-async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
-    for grant in [false, true] {
+async fn projected_durable_store_loss_only_publishes_a_selected_body_trap() {
+    for (grant, trapped, later_body) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+    ] {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = DurableStreamStore::load(
@@ -10094,11 +10488,13 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
         let before = oplog.current_oplog_index().await;
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let (drop_event_sink, mut drop_events) = mpsc::unbounded_channel();
+        let mut body = crate::durable_host::stream_outcome::ProducerOutcomeScope::default();
         let mut projection = ExecutorProjectionStreams {
             capacity: 1,
             runtime_teardown: Arc::new(|| false),
             drop_event_sink,
             durable_receives: Some(sender),
+            body_trap: Some(body.projection_trap()),
         };
         let target = projection
             .project_stream(
@@ -10123,28 +10519,54 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
         let request = receiver.recv().await.unwrap();
         assert!(request.opens_source);
         let (guard, live_calls) = receive_guard_counts();
+        if later_body {
+            body.settle(Ok(()));
+            body.settle(Err("a later body trapped".into()));
+        }
         if grant {
             assert!(request.result.send(Ok(guard)).is_ok());
-            assert!(
-                tokio::time::timeout(Duration::from_millis(20), target.recv())
-                    .await
-                    .is_err()
-            );
-            assert_eq!(live_calls.load(Ordering::Acquire), 1);
+            if trapped {
+                body.settle(Err("projection body trapped".into()));
+            }
+            if !trapped {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(20), target.recv())
+                        .await
+                        .is_err()
+                );
+                assert_eq!(live_calls.load(Ordering::Acquire), 1);
+            }
         } else {
             drop(guard);
+            if trapped {
+                body.settle(Err("projection body trapped".into()));
+            }
             // Lose the request before its dispatcher: this must also abort, not publish an error.
             drop(request);
         }
         if grant {
             drop(receiver);
         }
-        lifecycle.cancelled().await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), target.recv())
-                .await
-                .is_err()
-        );
+        if trapped {
+            let event = target.recv().await.unwrap();
+            assert_eq!(event.terminal_origin, Some(StreamTerminalOrigin::Control));
+            assert_eq!(
+                event.payload,
+                LiveStreamEventPayload::Terminal {
+                    authored_by: StreamTerminalAuthor::Host,
+                    terminal: StreamTerminal::Failed(StreamError::Trapped(
+                        "projection body trapped".into()
+                    )),
+                }
+            );
+        } else {
+            lifecycle.cancelled().await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), target.recv())
+                    .await
+                    .is_err()
+            );
+        }
         assert_eq!(live_calls.load(Ordering::Acquire), 0);
         assert!(drop_events.try_recv().is_err());
         assert_eq!(oplog.current_oplog_index().await, before);

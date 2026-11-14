@@ -1238,7 +1238,8 @@ impl StreamSessionIndexService {
                             StreamSessionRecord::ConsumerItemValue(record) => {
                                 Some(record.reader_id)
                             }
-                            StreamSessionRecord::ConsumerTerminal(record) => {
+                            StreamSessionRecord::ConsumerTerminal(record)
+                            | StreamSessionRecord::ConsumerOutcome(record) => {
                                 Some(record.reader_id)
                             }
                             StreamSessionRecord::SourceUnavailable(record) => {

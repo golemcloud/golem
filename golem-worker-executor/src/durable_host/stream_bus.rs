@@ -16,7 +16,7 @@ use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use async_broadcast::{Receiver, RecvError, Sender, TrySendError, broadcast};
 use golem_common::base_model::durable_stream::{
     MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE, StreamError,
-    StreamOffset, StreamTerminal, StreamTerminalAuthor,
+    StreamOffset, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
 };
 use std::collections::HashMap;
 use std::future::Future;
@@ -605,6 +605,7 @@ impl<T> Drop for DurableLiveStreamSubscription<T> {
 pub(crate) struct LiveStreamEvent<T> {
     pub(crate) offset: u64,
     pub(crate) payload: LiveStreamEventPayload<T>,
+    pub(crate) terminal_origin: Option<StreamTerminalOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -695,6 +696,7 @@ impl<T: Clone> LiveStreamPublisher<T> {
         self.send_event(LiveStreamEvent {
             offset,
             payload: LiveStreamEventPayload::Item(value),
+            terminal_origin: None,
         })
         .await?;
         state.next_offset = following_offset;
@@ -746,6 +748,16 @@ impl<T: Clone> LiveStreamPublisher<T> {
         authored_by: StreamTerminalAuthor,
         terminal: StreamTerminal,
     ) -> Result<u64, LiveStreamPublishError> {
+        self.publish_terminal_with_origin(authored_by, StreamTerminalOrigin::Source, terminal)
+            .await
+    }
+
+    pub(crate) async fn publish_terminal_with_origin(
+        &self,
+        authored_by: StreamTerminalAuthor,
+        origin: StreamTerminalOrigin,
+        terminal: StreamTerminal,
+    ) -> Result<u64, LiveStreamPublishError> {
         let mut state = self.state.lock().await;
         if state.terminated {
             return Err(LiveStreamPublishError::Terminated);
@@ -757,6 +769,7 @@ impl<T: Clone> LiveStreamPublisher<T> {
                 authored_by,
                 terminal,
             },
+            terminal_origin: Some(origin),
         })
         .await?;
         state.terminated = true;
@@ -948,7 +961,7 @@ mod tests {
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::durable_stream::{
-        StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor,
+        StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
     };
     use golem_schema::schema::IntoTypedSchemaValue;
     use std::sync::Arc;
@@ -1428,10 +1441,12 @@ mod tests {
             LiveStreamEvent {
                 offset: 0,
                 payload: LiveStreamEventPayload::Item("first"),
+                terminal_origin: None,
             },
             LiveStreamEvent {
                 offset: 1,
                 payload: LiveStreamEventPayload::Item("second"),
+                terminal_origin: None,
             },
             LiveStreamEvent {
                 offset: 2,
@@ -1439,6 +1454,7 @@ mod tests {
                     authored_by: StreamTerminalAuthor::Guest,
                     terminal: StreamTerminal::Finished,
                 },
+                terminal_origin: Some(StreamTerminalOrigin::Source),
             },
         ];
         let mut primary_events = Vec::new();

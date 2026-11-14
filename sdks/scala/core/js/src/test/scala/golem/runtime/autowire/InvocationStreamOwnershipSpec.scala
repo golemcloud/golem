@@ -8,7 +8,7 @@ package golem.runtime.autowire
 
 import golem.{FutureInterop, Principal}
 import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
-import golem.schema.{AgentStream, FromSchema, FromSchemaError, IntoSchema, SchemaGraph, SchemaValue}
+import golem.schema.{AgentStream, FromSchema, FromSchemaError, IntoSchema, SchemaGraph, SchemaValue, StreamError}
 import zio.ZIO
 import zio.test._
 
@@ -254,7 +254,13 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
               invoke(binding).flatMap { output =>
                 val body    = SchemaPayload.decode[AgentStream[String]](output.get).fold(throw _, identity)
                 val before  = (finalized, cleaned)
-                val consume = if (fail) body.pull().failed.map(_ eq failure) else body.close().map(_ => true)
+                val consume =
+                  if (fail)
+                    body.pull().failed.map {
+                      case StreamError.Failed(value) => value.value == SchemaValue.StringValue(failure.getMessage)
+                      case _                         => false
+                    }
+                  else body.close().map(_ => true)
                 for { expected <- consume; _ <- body.close() } yield assertTrue(
                   before == (0, 0),
                   expected,
