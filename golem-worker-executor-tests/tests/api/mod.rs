@@ -12080,13 +12080,13 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
     Ok(())
 }
 
-// Sends an `increment` that names the incarnation by `fingerprint` in `mode`, scheduled an hour
-// ahead when `delayed`, and describes how it was answered.
-async fn fingerprinted_increment(
+// Sends an `increment` in `mode`, scheduled an hour ahead when `delayed`, that names the
+// incarnation by `fingerprint` when one is given, and describes how it was answered.
+async fn send_increment(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     worker_id: &AgentId,
-    fingerprint: AgentFingerprint,
+    fingerprint: Option<AgentFingerprint>,
     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
     delayed: bool,
 ) -> anyhow::Result<String> {
@@ -12109,7 +12109,7 @@ async fn fingerprinted_increment(
         auth_ctx: Some(executor.auth_ctx().into()),
         freshness_disposition:
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
-        expected_callee_fingerprint: Some(fingerprint.0.into()),
+        expected_callee_fingerprint: fingerprint.map(|fingerprint| fingerprint.0.into()),
         request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
         ..Default::default()
     };
@@ -12118,10 +12118,11 @@ async fn fingerprinted_increment(
         executor.invoke_agent_session(start),
     )
     .await;
+    let pinned = fingerprint.is_some();
     Ok(match result {
-        Err(_) => format!("{mode:?} delayed={delayed}: timed out"),
-        Ok(Ok(_)) => format!("{mode:?} delayed={delayed}: admitted"),
-        Ok(Err(error)) => format!("{mode:?} delayed={delayed}: {error:#}"),
+        Err(_) => format!("{mode:?} delayed={delayed} pinned={pinned}: timed out"),
+        Ok(Ok(_)) => format!("{mode:?} delayed={delayed} pinned={pinned}: admitted"),
+        Ok(Err(error)) => format!("{mode:?} delayed={delayed} pinned={pinned}: {error:#}"),
     })
 }
 
@@ -12158,11 +12159,11 @@ async fn fingerprinted_calls_during_deletion(
             async move { executor.delete_worker(&worker_id).await }
         });
         hook.wait_until_gated().await;
-        let answer = fingerprinted_increment(
+        let answer = send_increment(
             &executor,
             &component,
             &worker_id,
-            fingerprint,
+            Some(fingerprint),
             mode,
             delayed,
         )
@@ -12206,9 +12207,9 @@ async fn expected_fingerprint_of_a_deleting_incarnation_is_not_found_once_remove
 }
 
 // A deletion that fails after stopping the incarnation's runtime leaves the agent in place, with
-// the stopped generation still resident. A caller that names that incarnation by its fingerprint
-// gets the deletion's refusal, as reads do, and the executor keeps serving: the retried
-// deletion succeeds.
+// the stopped generation still resident. A caller gets the deletion's refusal, as reads do,
+// whether or not it names that incarnation by its fingerprint, and the executor keeps serving:
+// the retried deletion succeeds.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -12285,12 +12286,15 @@ async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
     );
 
     let mut failures = Vec::new();
-    for (mode, delayed) in [
-        (Mode::Await, false),
-        (Mode::Schedule, false),
-        (Mode::Schedule, true),
+    for (mode, delayed, fingerprint) in [
+        (Mode::Await, false, Some(fingerprint)),
+        (Mode::Schedule, false, Some(fingerprint)),
+        (Mode::Schedule, true, Some(fingerprint)),
+        (Mode::Await, false, None),
+        (Mode::Schedule, false, None),
+        (Mode::Schedule, true, None),
     ] {
-        let answer = fingerprinted_increment(
+        let answer = send_increment(
             &executor,
             &component,
             &worker_id,
@@ -12299,7 +12303,8 @@ async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
             delayed,
         )
         .await?;
-        if !answer.contains("being deleted") {
+        // The deletion's refusal is a validation error, not the runtime error of a refused bind.
+        if !(answer.contains("VALIDATION") && answer.contains("being deleted")) {
             failures.push(answer);
         }
     }

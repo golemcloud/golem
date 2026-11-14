@@ -545,7 +545,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if worker.pending_startup_attempt().is_some() {
                 None
             } else {
-                Some((worker.agent_mode(), worker.get_last_known_status().await))
+                Some((
+                    worker.agent_mode(),
+                    worker.try_get_last_known_status().await?,
+                ))
             }
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)

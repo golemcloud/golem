@@ -85,11 +85,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// [`Self::get_last_known_status`] for a caller that has not bound its task scope to this
     /// generation, whose status actor a deletion may already have stopped. That read fails
     /// instead of panicking: with the deletion's refusal when a deletion retired the generation,
-    /// as a failed deletion leaves it resident.
+    /// as a failed deletion leaves it resident, and with the routing miss when the shard was lost.
     pub(crate) async fn try_get_last_known_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
         match self.state_actor.try_status().await {
+            Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
             Err(_) if self.deletion_owns_retirement().await => Err(
                 WorkerExecutorError::invalid_request("Worker is being deleted"),
             ),
