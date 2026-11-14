@@ -1419,6 +1419,7 @@ async fn pump_next_input(session : LiveStreamSession) -> Unit {
       return
     }
   }
+  close_unused_attachment(session)
 }
 
 ///|
@@ -1719,6 +1720,7 @@ async fn receive_output(
       }
       None => ()
     }
+    close_unused_attachment(session)
     match batch.error {
       Some(error) => raise error
       None => return None
@@ -2125,6 +2127,29 @@ async fn receive_actor(session : LiveStreamSession) -> Unit {
 }
 
 ///|
+fn close_unused_attachment(session : LiveStreamSession) -> Unit {
+  if !session.finished &&
+    session.result_seen &&
+    !session.output_cancelled.is_empty() &&
+    session.inputs.all(input => input.terminal) &&
+    session.output_channels
+    .iter()
+    .all(entry => {
+      session.output_cancelled.contains(entry.0) ||
+      session.cursor_terminals.get(entry.0).unwrap_or(false)
+    }) {
+    session.finished = true
+    session.output_space.broadcast()
+    release_unclaimed_outputs(session)
+    session.socket.close()
+    if session.actor_owner is Some(owner) {
+      session.actor_owner = None
+      owner.close()
+    }
+  }
+}
+
+///|
 async fn cancel_output(
   session : LiveStreamSession,
   token : String,
@@ -2154,6 +2179,7 @@ async fn cancel_output(
       ]),
     )
   }
+  close_unused_attachment(session)
 }
 
 ///|

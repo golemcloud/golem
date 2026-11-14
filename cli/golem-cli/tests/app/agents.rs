@@ -2210,6 +2210,12 @@ async fn test_generated_streaming_bridges_end_to_end() {
             [0, 1, 127, 128, 255],
           )
 
+          let (dropped, retained) = agent.produce_siblings()
+          assert_eq(dropped.next(), Some("a"))
+          assert_eq(dropped.next(), Some("b"))
+          dropped.drop()
+          assert_eq(collect_uint(retained), [for value in 0U..<64U => value])
+
           let affine = agent.produce([8, 9])
           assert_eq(affine.next(), Some(8))
           affine.drop()
