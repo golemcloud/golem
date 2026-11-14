@@ -8,6 +8,7 @@ import type pg from "pg"
 import { BillingConfig, type PostgresConfig } from "./BillingConfig.ts"
 import { Database, withAdvisoryLock } from "./Database.ts"
 import { Registry, type RegistryShape } from "./Registry.ts"
+import { RegistryAccounts, type RegistryAccountsShape } from "./RegistryAccounts.ts"
 
 type SessionCreateResult = boolean | void | { data: Session & Record<string, unknown> }
 
@@ -149,10 +150,14 @@ const trySession = <A>(reason: string, f: () => Promise<A>) =>
  * Without account linking, only the GitHub identity of the user signs in to it, and Better Auth
  * stores the access token of the sign-in on that account before it creates the session. The
  * bridge therefore requires exactly one GitHub account, and it refuses a Golem account other than
- * the one that the user has already.
+ * the one that the user has already. After the registry deletes the account, the registry gives the
+ * GitHub identity a new Golem account at the next login, and the bridge still refuses the user of
+ * the deleted account. The cleanup deletes the Polar customer of the deleted account first and the
+ * user after it, so the next sign-in creates a new user for the new account. A checkout of the new
+ * account therefore never finds the Polar customer of the deleted account by its email.
  */
 export const linkSessionToGolemAccount =
-  (registry: RegistryShape) =>
+  (registry: RegistryShape, registryAccounts: RegistryAccountsShape) =>
   (session: Session & Record<string, unknown>, context: GenericEndpointContext | null) =>
     Effect.gen(function* () {
       if (context === null) {
@@ -181,8 +186,15 @@ export const linkSessionToGolemAccount =
       )
       const golemToken = yield* registry.exchangeGitHubAccessToken(accessToken)
       if (linkedAccountId && linkedAccountId !== golemToken.accountId) {
+        const linkedIsDeleted = yield* registryAccounts.isDeleted(linkedAccountId).pipe(
+          Effect.mapError(
+            (cause) => new IdentityBridgeError({ reason: "cannot read whether the linked Golem account is deleted", cause })
+          )
+        )
         return yield* new IdentityBridgeError({
-          reason: `the registry returned the Golem account ${golemToken.accountId}, but the user is linked to ${linkedAccountId}`
+          reason: linkedIsDeleted
+            ? `the user is linked to the deleted Golem account ${linkedAccountId}, and the cleanup has not deleted the user yet`
+            : `the registry returned the Golem account ${golemToken.accountId}, but the user is linked to ${linkedAccountId}`
         })
       }
       if (!linkedAccountId) {
@@ -240,6 +252,28 @@ export class Auth extends Context.Service<Auth, AuthShape>()("golem-cloud-billin
  * Call it before `betterAuth`: a new Better Auth instance checks the schema at once and logs
  * an error for every missing table.
  */
+/**
+ * PostgreSQL error codes of a table, column or schema that another session dropped or changed
+ * during the introspection of `getMigrations`. Better Auth reads the columns of every table in
+ * the database, also outside its schema, so migrations of the registry service that run at the
+ * same time can fail the read. A later attempt sees the finished change.
+ */
+const concurrentDdlCodes = new Set(["42P01", "42703", "3F000"])
+
+const getMigrationsRetryingConcurrentDdl = async (options: BetterAuthOptions) => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await getMigrations(options)
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      if (attempt === 5 || typeof code !== "string" || !concurrentDdlCodes.has(code)) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+    }
+  }
+}
+
 export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresConfig): Promise<void> =>
   withAdvisoryLock(db, "golem-cloud-billing/migrations", async () => {
     const schema = db.schema
@@ -247,7 +281,7 @@ export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresC
     if (existing.rowCount === 0) {
       await pool.query(`CREATE SCHEMA "${schema}"`)
     }
-    const { runMigrations } = await getMigrations(options)
+    const { runMigrations } = await getMigrationsRetryingConcurrentDdl(options)
     await runMigrations()
     const column = await pool.query<{ data_type: string }>(
       `SELECT data_type FROM information_schema.columns
@@ -262,15 +296,16 @@ export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresC
     }
   })
 
-export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry> =
+export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry | RegistryAccounts> =
   Layer.effect(
     Auth,
     Effect.gen(function* () {
       const config = yield* BillingConfig
       const { pool, schema } = yield* Database
       const registry = yield* Registry
+      const registryAccounts = yield* RegistryAccounts
       const services = yield* Effect.context<never>()
-      const link = linkSessionToGolemAccount(registry)
+      const link = linkSessionToGolemAccount(registry, registryAccounts)
 
       const options = authOptions({
         pool,

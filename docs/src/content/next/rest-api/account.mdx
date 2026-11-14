@@ -61,6 +61,9 @@ Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}`|DELETE|Yes
 
+The delete fails with 409 while the account has a deletion hold. The error lists the
+reasons of the holds.
+
 **Query Parameters**
 
 Name|Type|Required|Description
@@ -261,6 +264,72 @@ The response not only contains the token data but also the secret which can be p
   "createdAt": "2019-08-24T14:15:22Z",
   "expiresAt": "2019-08-24T14:15:22Z"
 }
+```
+
+## List the deletion holds of an account.
+
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/deletion-holds`|GET|Yes
+
+While an account has a deletion hold, the account cannot be deleted.
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "holderAccountId": "bf6ad1ab-0406-44e8-8223-435cf1e305d7",
+      "reason": "string",
+      "createdAt": "2019-08-24T14:15:22Z"
+    }
+  ]
+}
+```
+
+## Place a deletion hold on an account.
+
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/deletion-holds/{holder_account_id}`|PUT|Yes
+
+The holder is the account of the caller. An administrator with the
+`override-deletion-hold` permission can also place a hold for another holder. When the
+holder has a hold on the account already, the reason replaces the reason of that hold.
+
+**Example Request JSON**
+```json copy
+{
+  "reason": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "holderAccountId": "bf6ad1ab-0406-44e8-8223-435cf1e305d7",
+  "reason": "string",
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Remove a deletion hold from an account.
+
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/deletion-holds/{holder_account_id}`|DELETE|Yes
+
+The holder removes its own hold. An administrator with the `override-deletion-hold`
+permission can remove the hold of any holder. Removing a hold that does not exist succeeds.
+
+**Example Response JSON**
+
+```json copy
+{}
 ```
 
 ## Get account usage for a UTC calendar month.

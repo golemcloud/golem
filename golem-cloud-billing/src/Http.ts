@@ -4,15 +4,28 @@ import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, Htt
 import { Auth } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
-import { cliBootstrapCommand, type SafeHtml, signedInPage, signedOutPage } from "./Page.ts"
-import { type Account, Registry } from "./Registry.ts"
+import {
+  cliBootstrapCommand,
+  type OverageNotice,
+  type PlanState,
+  type SafeHtml,
+  signedInPage,
+  signedOutPage
+} from "./Page.ts"
+import { Polar } from "./Polar.ts"
+import { type Account, type AccountLimits, Registry } from "./Registry.ts"
+import { pastDueGraceEnd } from "./Settlement.ts"
+import { type Subscription, Subscriptions } from "./Subscriptions.ts"
+import * as Webhooks from "./Webhooks.ts"
 
 const securityHeaders = {
-  // The sign-in form posts to /sign-in/github, which redirects to GitHub; `form-action` also
-  // applies to that redirect.
+  // The sign-in form posts to /sign-in/github, which redirects to GitHub, and the billing forms
+  // redirect to the checkout and the customer portal of Polar; `form-action` also applies to
+  // these redirects.
   "content-security-policy":
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
-    "form-action 'self' https://github.com; frame-ancestors 'none'; base-uri 'none'",
+    "form-action 'self' https://github.com https://polar.sh https://*.polar.sh; frame-ancestors 'none'; " +
+    "base-uri 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "same-origin",
   "cache-control": "no-store"
@@ -25,7 +38,7 @@ const page = (body: SafeHtml, status = 200) =>
     headers: securityHeaders
   })
 
-const errorPage = HttpServerResponse.text("Something went wrong. Reload the page to try again.", {
+const errorPage = HttpServerResponse.text("An error occurred. Reload the page.", {
   status: 500,
   headers: securityHeaders
 })
@@ -41,6 +54,20 @@ const asset = (name: string, contentType: string) =>
 const toWebHeaders = (request: HttpServerRequest.HttpServerRequest): Headers =>
   new globalThis.Headers(Object.entries(request.headers))
 
+const crossOrigin = () => HttpServerResponse.text("Cross-origin request", { status: 403 })
+
+const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
+  value === "on" || value === "off" || value === "not-eligible" ? value : undefined
+
+/**
+ * The IP address of the browser, for the local currency of the checkout: the first address of
+ * `x-forwarded-for`, which the gateway sets, or the address of the connection.
+ */
+const clientIp = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
+  const forwarded = request.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+  return forwarded !== undefined && forwarded !== "" ? forwarded : Option.getOrUndefined(request.remoteAddress)
+}
+
 const redirectWithCookies = (location: string, headers: Headers) =>
   HttpServerResponse.redirect(location, {
     status: 303,
@@ -51,9 +78,21 @@ export const routes = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const { auth, getSignedIn } = yield* Auth
     const registry = yield* Registry
+    const polar = yield* Polar
+    const subscriptions = yield* Subscriptions
     const config = yield* BillingConfig
     const { pool } = yield* Database
+    const handleWebhook = yield* Webhooks.makeHandler
     const cliCommand = cliBootstrapCommand(config.publicApiUrl)
+    const home = new URL("/", config.baseUrl).href
+
+    const planOf = (account: Account | undefined): PlanState => {
+      if (account === undefined) return "unknown"
+      if (account.planId === config.plans.paid) return "paid"
+      if (account.planId === config.plans.suspended) return "suspended"
+      if (account.planId === config.plans.free) return "free"
+      return "other"
+    }
 
     // The billing app's own form posts carry no CSRF token; a browser sends `Origin` on every
     // POST, so a cross-site post is rejected here.
@@ -67,6 +106,16 @@ export const routes = HttpRouter.use((router) =>
     // includes get-access-token, which returns the decrypted GitHub access token, and
     // link-social and update-user, which change the user.
     yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
+
+    // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
+    // the path is the one that the Polar organization has configured.
+    yield* router.add("POST", "/api/auth/polar/webhooks", (request) =>
+      request.text.pipe(
+        Effect.flatMap((body) => handleWebhook(body, request.headers)),
+        Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
+        Effect.catch(() => Effect.succeed(HttpServerResponse.text("cannot read the body", { status: 400 })))
+      )
+    )
 
     yield* router.add("GET", "/", (request) =>
       Effect.gen(function* () {
@@ -84,8 +133,49 @@ export const routes = HttpRouter.use((router) =>
             )
           )
         )
+        const subscription: Subscription | undefined = yield* subscriptions
+          .latest(user.golemAccountId, config.polar.productId)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Cannot read the subscription").pipe(
+                Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                Effect.as(undefined)
+              )
+            )
+          )
+        const plan = planOf(account)
+        const params = new URL(request.url, config.baseUrl).searchParams
+        // Polar redirects here with the checkout ID after a payment; the webhook that changes the
+        // plan can arrive a few seconds later.
+        const checkoutPending = params.has("checkout_id") && (plan === "free" || plan === "suspended")
+        const limits: AccountLimits | undefined =
+          plan === "paid"
+            ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Cannot read the monthly usage mode").pipe(
+                    Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                    Effect.as(undefined)
+                  )
+                )
+              )
+            : undefined
         return page(
-          signedInPage({ email: user.email, golemAccountId: user.golemAccountId, account, cliCommand })
+          signedInPage({
+            email: user.email,
+            golemAccountId: user.golemAccountId,
+            account,
+            plan,
+            subscription,
+            pastDueGraceEnd:
+              plan === "paid" && subscription !== undefined
+                ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
+                : undefined,
+            checkoutPending,
+            cliCommand,
+            limits,
+            overagePrices: config.overagePrices,
+            overageNotice: overageNoticeOf(params.get("overage"))
+          })
         )
       }).pipe(
         Effect.catch((error) =>
@@ -118,7 +208,91 @@ export const routes = HttpRouter.use((router) =>
               )
             )
           )
-        : Effect.succeed(HttpServerResponse.text("Cross-origin request", { status: 403 }))
+        : Effect.succeed(crossOrigin())
+    )
+
+    yield* router.add("POST", "/billing/checkout", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const user = signedIn.value
+            const url = yield* polar.createCheckout({
+              productId: config.polar.productId,
+              externalCustomerId: user.golemAccountId,
+              customerEmail: user.email,
+              customerName: user.name === "" ? undefined : user.name,
+              customerIpAddress: clientIp(request),
+              successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
+              returnUrl: home
+            })
+            return HttpServerResponse.redirect(url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot start the checkout").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    // The registry accepts the change of the monthly usage mode only with the token of the owner,
+    // and records it as the consent of the owner, so the form uses the token of the session.
+    yield* router.add("POST", "/billing/overage", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const mode = new URLSearchParams(yield* request.text).get("mode")
+            if (mode !== "allowOverage" && mode !== "hardLimit") {
+              return HttpServerResponse.text("Unknown mode", { status: 400, headers: securityHeaders })
+            }
+            const user = signedIn.value
+            const change = yield* registry.setMonthlyUsageMode(user.golemToken, user.golemAccountId, mode)
+            yield* Effect.logInfo("Changed the monthly usage mode").pipe(
+              Effect.annotateLogs({ golemAccountId: user.golemAccountId, mode, change })
+            )
+            const notice: OverageNotice =
+              change === "notEligible" ? "not-eligible" : mode === "allowOverage" ? "on" : "off"
+            return HttpServerResponse.redirect(`/?overage=${notice}`, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot change the monthly usage mode").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
+    )
+
+    yield* router.add("POST", "/billing/portal", (request) =>
+      isSameOrigin(request)
+        ? Effect.gen(function* () {
+            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            if (Option.isNone(signedIn)) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
+            const url = yield* polar.createCustomerPortalUrl({
+              externalCustomerId: signedIn.value.golemAccountId,
+              returnUrl: home
+            })
+            return HttpServerResponse.redirect(url, { status: 303 })
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Cannot open the customer portal").pipe(
+                Effect.annotateLogs({ error: error.message }),
+                Effect.as(errorPage)
+              )
+            )
+          )
+        : Effect.succeed(crossOrigin())
     )
 
     yield* router.add("POST", "/sign-out", (request) =>
@@ -129,7 +303,7 @@ export const routes = HttpRouter.use((router) =>
             Effect.map(({ headers }) => redirectWithCookies("/", headers)),
             Effect.catch(() => Effect.succeed(HttpServerResponse.redirect("/", { status: 303 })))
           )
-        : Effect.succeed(HttpServerResponse.text("Cross-origin request", { status: 403 }))
+        : Effect.succeed(crossOrigin())
     )
 
     yield* router.add("GET", "/assets/app.css", asset("app.css", "text/css; charset=utf-8"))

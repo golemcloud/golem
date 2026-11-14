@@ -628,9 +628,9 @@ render_verb!(KvVerb { Read => "read", Write => "write", Delete => "delete", List
 render_verb!(BlobVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
 render_verb!(RdbmsVerb { Query => "query", Mutate => "mutate", Unanalyzed => "unanalyzed" });
 render_verb!(CardVerb { Derive => "derive", Revoke => "revoke", Inspect => "inspect", Install => "install" });
-render_verb!(SystemVerb { CreateAccount => "create-account", ImpersonateUser => "impersonate-user", ViewDefaultPlan => "view-default-plan", ViewAccountSummariesReport => "view-account-summaries-report", ViewAccountCountsReport => "view-account-counts-report" });
+render_verb!(SystemVerb { CreateAccount => "create-account", ImpersonateUser => "impersonate-user", ViewDefaultPlan => "view-default-plan", ViewAccountSummariesReport => "view-account-summaries-report", ViewAccountCountsReport => "view-account-counts-report", OverrideDeletionHold => "override-deletion-hold" });
 render_verb!(PlanVerb { View => "view", Create => "create", Update => "update" });
-render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete", SetPlan => "set-plan", ViewPlan => "view-plan" });
+render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete", SetPlan => "set-plan", ViewPlan => "view-plan", HoldDeletion => "hold-deletion" });
 render_verb!(AccountUsageVerb { View => "view", Update => "update" });
 render_verb!(AccountTokenVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(AccountPluginVerb { View => "view", Register => "register", Delete => "delete", Restore => "restore" });

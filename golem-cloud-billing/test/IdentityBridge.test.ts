@@ -2,40 +2,43 @@ import { symmetricDecrypt } from "better-auth/crypto"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { breakAtHyphens } from "../src/Page.ts"
+import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   authSecret,
   baseUrl,
   CookieJar,
-  dropSchema,
   FakeUpstreams,
   makeApp,
   newGitHubIdentity,
   queryPool,
   request,
-  signInWithGitHub,
-  testConfig
+  signInWithGitHub
 } from "./support.ts"
 
 describe("GitHub sign-in", () => {
+  // The registry tables in `public`: the bridge reads whether the linked account is deleted.
+  const registry = new RegistryDatabase()
   let config: BillingConfigShape
   let pool: pg.Pool
   let app: ReturnType<typeof makeApp>
   let upstreams: FakeUpstreams
 
-  beforeAll(() => {
-    config = testConfig()
+  beforeAll(async () => {
+    await registry.create()
+    config = registry.config
     pool = queryPool(config)
     app = makeApp(config)
     // Effect's fetch client keeps the `fetch` it sees first, so the stub delegates to the fake
     // upstreams of the running test.
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
-  })
+  }, 60_000)
 
   afterAll(async () => {
     vi.unstubAllGlobals()
     await app.dispose()
-    await dropSchema(pool, config.db.schema)
-    await pool.end()
+    await closePool(pool)
+    await registry.drop()
   })
 
   beforeEach(() => {
@@ -135,13 +138,17 @@ describe("GitHub sign-in", () => {
     ])
   })
 
+  /** Makes the GitHub identity of the test resolve to a new registry account, as after a delete. */
+  const newRegistryAccount = async () => {
+    const accountId = await registry.account()
+    upstreams.registryAccounts.set(upstreams.github.accessToken, { accountId, secret: `golem_${accountId}` })
+    return accountId
+  }
+
   it("refuses a session when the registry returns another account than the user has", async () => {
+    const linked = await newRegistryAccount()
     await signInWithGitHub(app.handler, new CookieJar())
-    const linked = upstreams.registryAccount.accountId
-    upstreams.registryAccounts.set(upstreams.github.accessToken, {
-      accountId: "0e9f2f4a-4f7c-4c55-9a3e-3b6a8f0d2c11",
-      secret: "golem_other"
-    })
+    await newRegistryAccount()
 
     const callback = await signInWithGitHub(app.handler, new CookieJar())
 
@@ -150,6 +157,40 @@ describe("GitHub sign-in", () => {
     )
     expect(await sessions()).toHaveLength(1)
     expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: linked }])
+  })
+
+  it("refuses the user of a deleted account until the cleanup deletes the user", async () => {
+    const deleted = await newRegistryAccount()
+    await signInWithGitHub(app.handler, new CookieJar())
+    await registry.deleteAccount(deleted)
+    await newRegistryAccount()
+
+    const callback = await signInWithGitHub(app.handler, new CookieJar())
+
+    expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBe(
+      "unable_to_create_session"
+    )
+    expect(await sessions()).toHaveLength(1)
+    expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: deleted }])
+  })
+
+  it("links a new user to the new account after the cleanup deletes the user of the deleted account", async () => {
+    const deleted = await newRegistryAccount()
+    await signInWithGitHub(app.handler, new CookieJar())
+    await registry.deleteAccount(deleted)
+    const replacement = await newRegistryAccount()
+    // What the cleanup does after it deletes the Polar customer of the deleted account.
+    await pool.query(`DELETE FROM "${config.db.schema}"."user" WHERE golem_account_id = $1`, [deleted])
+
+    const callback = await signInWithGitHub(app.handler, new CookieJar())
+
+    expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBeNull()
+    expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: replacement }])
+    const sessionsOfNewUser = await sessions()
+    expect(sessionsOfNewUser).toHaveLength(1)
+    expect(await symmetricDecrypt({ key: authSecret, data: sessionsOfNewUser[0]!.golem_token! })).toBe(
+      `golem_${replacement}`
+    )
   })
 
   it("refuses a session for a user with more than one GitHub account", async () => {
@@ -198,12 +239,11 @@ describe("GitHub sign-in", () => {
     const body = await response.text()
 
     expect(response.status).toBe(200)
-    expect(body).toContain("You're on Free")
-    expect(body).toContain(upstreams.registryAccount.accountId)
+    expect(body).toContain("<h1>Free</h1>")
+    expect(body).toContain(breakAtHyphens(upstreams.registryAccount.accountId).value)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
-    expect(body).toMatch(/<button[^>]*disabled>Upgrade to Paid<\/button>/)
-    expect(body).toContain("Coming soon")
+    expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
   })
 
   it("shows the sign-in form without a session", async () => {
@@ -212,7 +252,7 @@ describe("GitHub sign-in", () => {
 
     expect(response.status).toBe(200)
     expect(body).toContain('action="/sign-in/github"')
-    expect(body).not.toContain("You're on Free")
+    expect(body).not.toContain("<h1>Free</h1>")
   })
 
   it("rejects a cross-origin sign-in form post", async () => {

@@ -20,6 +20,24 @@ const startServices = (config: BillingConfigShape) =>
     )
   )
 
+/**
+ * The tables of Better Auth, of the Polar subscriptions and orders, of the usage push, of the
+ * cleanup, of the deletion holds and of the usage settlements, in the order of their names.
+ */
+const appTables = [
+  "account",
+  "deleted_account_cleanups",
+  "deletion_holds",
+  "polar_orders",
+  "polar_subscriptions",
+  "polar_webhook_deliveries",
+  "session",
+  "usage_events",
+  "usage_settlements",
+  "user",
+  "verification"
+]
+
 describe("migrations", () => {
   let config: BillingConfigShape
   let pool: pg.Pool
@@ -45,7 +63,7 @@ describe("migrations", () => {
       ).rows.map((row) => [row.column_name, row.data_type])
     )
 
-  it("creates the Better Auth tables in the schema of the billing app only", async () => {
+  it("creates the tables of the billing app in its schema only", async () => {
     await startServices(config)
 
     const tablesIn = async (schema: string) =>
@@ -56,7 +74,7 @@ describe("migrations", () => {
         )
       ).rows.map((row) => row.table_name)
 
-    expect(await tablesIn(config.db.schema)).toEqual(["account", "session", "user", "verification"])
+    expect(await tablesIn(config.db.schema)).toEqual(appTables)
     // The registry service keeps its tables in `public`.
     expect(await tablesIn("public")).toEqual([])
   })
@@ -129,7 +147,7 @@ describe("migrations", () => {
         [restricted.db.schema]
       )
       expect(tables.rows).toEqual(
-        ["account", "session", "user", "verification"].map((table_name) => ({ table_name, table_owner: role }))
+        appTables.map((table_name) => ({ table_name, table_owner: role }))
       )
       await expect(rolePool.query(`SELECT secret FROM ${registryTable}`)).rejects.toThrow(/permission denied/)
     } finally {
