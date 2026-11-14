@@ -69,7 +69,7 @@ use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
     ToolReleaseId,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::tool::{
     CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
@@ -500,7 +500,7 @@ fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
             component_id: ComponentId::new(),
             agent_id: "runtime-card-source".to_string(),
         },
-        invocation_key: IdempotencyKey::new("runtime-card-invocation".to_string()),
+        invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(42),
     }
 }

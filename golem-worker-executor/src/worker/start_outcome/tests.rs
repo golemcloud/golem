@@ -51,6 +51,7 @@ fn assisted_kind(filesystem_snapshot: Option<FilesystemSnapshotName>) -> Pending
             index: OplogIndex::from_u64(7),
             component_revision: revision(2),
             filesystem_snapshot,
+            bootstrap: None,
         },
     }))
 }
@@ -516,7 +517,7 @@ fn the_outcome_table() {
         ),
         (Problem::Interrupted, ["P", "F", "P", "P", "Fr", "P", "P"]),
         (Problem::AgentFailed, ["P", "P", "P", "P", "Fr", "F", "P"]),
-        (Problem::Divergence, ["R", "P", "P", "P", "Fr", "Fi", "P"]),
+        (Problem::Divergence, ["R", "F", "P", "P", "Fr", "Fi", "P"]),
         (Problem::ReplayError, ["P", "P", "P", "P", "Fr", "F", "P"]),
         (
             Problem::UpdateState(FetchProblem::Unavailable),
@@ -2052,6 +2053,26 @@ fn a_full_replay_failure_of_an_automatic_update_names_the_replay_code() {
     assert_eq!(
         (assisted, attempt, fault),
         (None, Some(OplogIndex::from_u64(10)), None)
+    );
+}
+
+#[test]
+fn a_divergence_of_a_pending_manual_update_fails_it_as_a_manual_update() {
+    let manual = manual_head();
+    let runtime = WorkerExecutorError::runtime("diverged");
+    let (entry, _) = failed_entry(decide_now(
+        &BaselineRole::ManualPending(Arc::new(manual.clone())),
+        Some(&manual),
+        RawStartError::Replay {
+            error: &runtime,
+            diverged: true,
+        },
+    ));
+    let (target, details, assisted, attempt, fault) = entry_fields(&entry);
+    assert_eq!(details, "Manual update failed: Runtime error: diverged");
+    assert_eq!(
+        (target, assisted, attempt, fault),
+        (revision(3), None, Some(OplogIndex::from_u64(9)), None)
     );
 }
 

@@ -924,12 +924,12 @@ struct RecordedWalletReads {
 impl RecordedWalletReads {
     fn find(
         entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
         read: WalletRead,
     ) -> Option<Self> {
         let started = entries.iter().find_map(|(index, entry)| {
             matches!(entry,
-                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+                OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == key
             )
             .then_some(*index)
         })?;
@@ -1057,6 +1057,9 @@ async fn wallet_reads_survive_reconstruction(
         .await
         .ok_or_else(|| anyhow::anyhow!("the reconstructed agent is not active"))?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&worker, &key, read.method())
+        .await?;
     let wallet_ids = vec![root_card_id, extra_id];
     let mut gate = authority.gate_check_cards(wallet_ids.clone());
     let live_call = executor.invoke_and_await_agent_with_key(
@@ -1071,7 +1074,7 @@ async fn wallet_reads_survive_reconstruction(
         for _ in 0..64 {
             gate.entered().await?;
             let entries = read_whole_oplog(&owner).await;
-            in_paused_read = RecordedWalletReads::find(&entries, &key, read)
+            in_paused_read = RecordedWalletReads::find(&entries, &stored_key, read)
                 .is_some_and(|recorded| recorded.completed_reads() == paused_read - 1);
             if in_paused_read {
                 break;
@@ -1141,7 +1144,7 @@ async fn wallet_reads_survive_reconstruction(
         "reconstruction must keep the guest's observations"
     );
 
-    let recorded = RecordedWalletReads::find(&entries, &key, read)
+    let recorded = RecordedWalletReads::find(&entries, &stored_key, read)
         .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
     let finished = recorded
         .finished
@@ -1418,6 +1421,9 @@ async fn card_decisions_survive_reconstruction(
         .await
         .ok_or_else(|| anyhow::anyhow!("the agent is not active"))?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&worker, &key, "remember_card_decisions_around_gap")
+        .await?;
     let mut gap = executor
         .gate_after_next_append(&worker, is_card_decision_gap_marker)
         .await;
@@ -1477,7 +1483,7 @@ async fn card_decisions_survive_reconstruction(
         "reconstruction must keep the outcome of each decision"
     );
 
-    let recorded = RecordedCardDecisions::find(&entries, &key, decision)
+    let recorded = RecordedCardDecisions::find(&entries, &stored_key, decision)
         .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
     let marker = recorded
         .marker
@@ -1523,12 +1529,12 @@ struct RecordedCardDecisions {
 impl RecordedCardDecisions {
     fn find(
         entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
-        key: &IdempotencyKey,
+        key: &golem_common::model::InvocationId,
         decision: CardDecision,
     ) -> Option<Self> {
         let started = entries.iter().find_map(|(index, entry)| {
             matches!(entry,
-                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+                OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == key
             )
             .then_some(*index)
         })?;
@@ -2565,7 +2571,13 @@ async fn ephemeral_guest_revoke_publishes_its_cascade_before_the_revoke_complete
     let root_card_id = configure_scope_card_root(&authority, &component, &logical_agent)?;
     let key = IdempotencyKey::fresh();
     let agent = logical_agent
-        .with_ephemeral_invocation_phantom(&key)
+        .with_ephemeral_invocation_phantom(
+            &golem_common::model::InvocationRequestKey::external(
+                executor.auth_ctx().idempotency_scope(),
+                Some(&key),
+            )
+            .owner_key("revoke_card_by_id"),
+        )
         .map_err(anyhow::Error::msg)?;
     let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
 

@@ -350,13 +350,23 @@ Transport disconnection is not represented by this message and only detaches.
 ```json
 {
   "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
-  "idempotencyKey":"upload-42",
+  "agentId": {
+    "componentId":"00000000-0000-0000-0000-000000000004",
+    "agentId":"media/encoder"
+  },
+  "idempotencyKey":"01234567-89ab-cdef-fedc-ba9876543210",
   "mappings":[],
   "sessionToken":"<opaque-session-token>",
   "type":"invocationAccepted",
   "version":1
 }
 ```
+
+`agentId` and `idempotencyKey` identify the accepted invocation. The UUID can
+differ from the request seed. Clients persist both identifiers with the session
+token. An acceptance after resume must preserve both identifiers. A tool start
+that targets a component returns the actual accepted agent owner here; clients
+must not derive that owner from the component or decode the opaque session token.
 
 `mappings` installs the complete initial or resumed channel table before
 execution or output exposure. An exact-attempt replay returns the committed
@@ -380,7 +390,25 @@ the client starts a new resume operation with a fresh attempt ID.
 `attemptId` is optional only when the first message could not be decoded far
 enough to recover it. `message` is safe public text and MUST NOT include Rust
 type names, protobuf names, gRPC details, credentials, tokens, oplog terms, or
-internal IDs. Before acceptance, rejection is definitive for this attempt.
+internal IDs. A failure of the agent itself is the exception: for the codes
+`invocation-failed` and `previous-invocation-failed`, `message` is the error
+the agent reported, and the optional `stderr` member holds the end of what the
+failed invocation wrote to stderr, at most 1 MiB. No other rejection has
+`stderr`:
+
+```json
+{
+  "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
+  "code":"previous-invocation-failed",
+  "message":"intentional invocation failure",
+  "retryable":false,
+  "stderr":"intentional failure stderr\n",
+  "type":"invocationRejected",
+  "version":1
+}
+```
+
+Before acceptance, rejection is definitive for this attempt.
 After acceptance, this variant is also the final diagnostic for a fatal client
 protocol violation such as `invalid-channel`, `input-gap`, or
 `input-conflict`; in that state `attemptId` is required and identifies the
@@ -521,11 +549,21 @@ Failure:
 
 ```json
 {
-  "outcome":{"code":"invocation-failed","kind":"failure","message":"invocation failed"},
+  "outcome":{
+    "code":"invocation-failed",
+    "kind":"failure",
+    "message":"intentional invocation failure",
+    "stderr":"intentional failure stderr\n"
+  },
   "type":"invocationFinished",
   "version":1
 }
 ```
+
+When the agent itself failed, `message` is the error the agent reported and
+the optional `stderr` member holds the end of what the failed invocation wrote
+to stderr, at most 1 MiB. Any other fatal failure has the safe generic message
+of its code and no `stderr`.
 
 Fatal failure terminalizes every open input and output first. This message
 follows every declared output terminal and the optional invocation result.
@@ -769,7 +807,8 @@ The v1 code set is frozen:
 | `token-invalid` | token malformed, tampered, wrong type/deployment/parent, or expired by retention |
 | `resource-exhausted` | a frozen protocol or configured account/session resource limit was exceeded |
 | `producer-error` | output producer terminated one stream with an application error |
-| `invocation-failed` | invocation failed after acceptance |
+| `invocation-failed` | the agent failed the invocation; `message` is the agent's error and `stderr` may hold its stderr |
+| `previous-invocation-failed` | the agent's previous invocation failed, so the agent accepts no invocation until it is reverted; `message` is that failure's error and `stderr` may hold its stderr |
 | `routing-miss` | the agent's shard is moving between executors; `retryable` is `true` and a new attempt reaches its owner |
 | `internal-error` | safe, non-sensitive internal failure |
 

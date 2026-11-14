@@ -214,8 +214,7 @@ impl StreamForkLineage {
                     entry,
                     OplogEntry::StreamRegistered { .. }
                         | OplogEntry::StreamItems { .. }
-                        | OplogEntry::StreamEnd { .. }
-                        | OplogEntry::StreamCancel { .. }
+                        | OplogEntry::StreamTerminal { .. }
                         | OplogEntry::StreamSession { .. }
                 ) {
                     first_stream_entry.get_or_insert(index);

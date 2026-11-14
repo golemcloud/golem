@@ -390,32 +390,19 @@ async function sessionCancellation() {
     if (slot === "input") {
       assert.equal(cancelled, "true");
     } else {
-      // Input cancellation delivers EOF, so echo may close its output normally
-      // before output cancellation applies. The first terminal is preserved.
+      // The reader trap may close the output before administrative cancellation.
+      // The first terminal is preserved.
       assert.ok(cancelled === null || cancelled === "true");
     }
   }
-  // The guest reaches its continuation after observing input EOF; DELETE is not an interrupt.
-  const continuationDeadline = Date.now() + 20_000;
-  for (;;) {
-    const observations = await request(`${s.agent}/observations`, 200, {
-      method: "PUT",
-    });
-    const values = await observations.json();
-    if (values[4] === "1") {
-      assert.deepEqual(values, ["1", "1", "1", "0", "1", "0", "0"]);
-      break;
-    }
-    assert.ok(
-      Date.now() < continuationDeadline,
-      "guest did not continue after cancellation",
-    );
-    await sleep(20);
-  }
-  assert.equal(
-    await (await request(`${s.agent}/mark/37`, 200, { method: "PUT" })).json(),
-    "37",
+  const failed = await request(`${s.agent}/observations`, 500, {
+    method: "PUT",
+  });
+  assert.match(
+    (await failed.json()).error,
+    /stream terminated: Failed\(Interrupted\("session deleted"\)\)/,
   );
+  await request(`${s.agent}/mark/37`, 500, { method: "PUT" });
 }
 
 async function outputSessionCancellation() {

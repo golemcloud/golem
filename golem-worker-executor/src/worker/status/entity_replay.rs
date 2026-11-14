@@ -225,6 +225,7 @@ pub(crate) fn calculate_entity_replay_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::InvocationId;
     use golem_common::model::Timestamp;
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
@@ -234,6 +235,7 @@ mod tests {
     use golem_common::model::regions::OplogRegion;
     use golem_common::serialization::{deserialize, serialize};
     use test_r::test;
+    use uuid::Uuid;
 
     fn idx(index: u64) -> OplogIndex {
         OplogIndex::from_u64(index)
@@ -376,7 +378,7 @@ mod tests {
                 parent_start_index: Some(idx(2)),
             },
             reobserves: None,
-            session_key: StreamRegistrationInvocation::Local(IdempotencyKey::new("input".into())),
+            session_key: StreamRegistrationInvocation::Local(InvocationId(Uuid::from_u128(1))),
             reader_id: LocalStreamReaderId {
                 introducing_oplog_index: idx(1),
                 binding_slot: 0,

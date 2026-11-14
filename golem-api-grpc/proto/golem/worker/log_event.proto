@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.worker;
 
 import "google/protobuf/timestamp.proto";
-import "golem/worker/idempotency_key.proto";
+import "golem/common/uuid.proto";
 
 message LogEvent {
   oneof event {
@@ -22,11 +22,13 @@ message LogEvent {
 message StdOutLog {
   string message = 1;
   google.protobuf.Timestamp timestamp = 2;
+  optional golem.common.UUID invocation_id = 3;
 }
 
 message StdErrLog {
   string message = 1;
   google.protobuf.Timestamp timestamp = 2;
+  optional golem.common.UUID invocation_id = 3;
 }
 
 enum Level {
@@ -43,18 +45,19 @@ message Log {
   string context = 2;
   string message = 3;
   google.protobuf.Timestamp timestamp = 4;
+  optional golem.common.UUID invocation_id = 5;
 }
 
 message InvocationStarted {
   google.protobuf.Timestamp timestamp = 1;
   string function = 2;
-  IdempotencyKey idempotency_key = 3;
+  golem.common.UUID invocation_id = 3;
 }
 
 message InvocationFinished {
   google.protobuf.Timestamp timestamp = 1;
   string function = 2;
-  IdempotencyKey idempotency_key = 3;
+  golem.common.UUID invocation_id = 3;
 }
 
 message PluginError {

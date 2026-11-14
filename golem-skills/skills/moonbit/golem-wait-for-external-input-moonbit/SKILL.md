@@ -54,43 +54,57 @@ let data : Bytes = promise_result.get()
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agent_id` and an `oplog_idx`. To let an external system complete the promise via the Golem REST API, the agent must expose both fields. The external caller then sends:
+A `PromiseId` contains an `agent_id`, a `fingerprint` and an `oplog_idx`. The `fingerprint` is a `@types.Uuid` that identifies the agent incarnation that created the promise: a deleted and re-created agent keeps its agent ID but gets a new fingerprint, so a promise ID of the deleted incarnation does not reach the new one. Golem displays a promise ID as `<agent-id>/<fingerprint>/<oplog-idx>`.
+
+To let an external system complete the promise via the Golem REST API, the agent must expose the agent ID, the fingerprint and the oplog index. `@schema.Uuid::from_wit(promise_id.fingerprint).to_string()` gives the fingerprint as a UUID string. The external caller then sends:
 
 ```
 POST /v1/components/{component_id}/workers/{agent_name}/complete
 Content-Type: application/json
 Authorization: Bearer <token-with-agent-invoke-permission>
 
-{"oplogIdx": <oplog_idx>, "data": [<bytes>]}
+{"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint-uuid>", "data": [<bytes>]}
 ```
+
+All three body fields are required.
 
 ## Full Example: Human-in-the-Loop Approval
 
 ```moonbit
+/// The values an external caller needs to complete the approval promise
+#derive.golem_schema
+pub(all) struct ApprovalRequest {
+  oplog_idx : UInt64
+  fingerprint : String
+}
+
 #derive.agent
 struct WorkflowAgent {
   name : String
+  mut pending : @types.PromiseId?
   mut last_result : String
 }
 
 fn WorkflowAgent::new(name : String) -> WorkflowAgent {
-  { name, last_result: "" }
+  { name, pending: None, last_result: "" }
 }
 
 /// Start an approval workflow that waits for external input
-pub fn WorkflowAgent::start_approval(self : Self) -> UInt64 {
+pub fn WorkflowAgent::start_approval(self : Self) -> ApprovalRequest {
   let promise_id = @api.create_promise()
-  // Return the oplog_idx so the external caller can complete the promise
-  promise_id.oplog_idx
+  self.pending = Some(promise_id)
+  // Return the oplog index and the fingerprint so the external caller can complete the promise
+  {
+    oplog_idx: promise_id.oplog_idx,
+    fingerprint: @schema.Uuid::from_wit(promise_id.fingerprint).to_string(),
+  }
 }
 
 /// Wait for the approval to arrive and return the result
-pub async fn WorkflowAgent::wait_for_approval(self : Self, oplog_idx : UInt64) -> String {
-  let promise_id = @types.PromiseId::{
-    agent_id: @api.get_self_metadata().agent_id,
-    oplog_idx,
-  }
+pub async fn WorkflowAgent::wait_for_approval(self : Self) -> String {
+  guard self.pending is Some(promise_id) else { return "No approval is pending" }
   let data = @api.await_promise(promise_id)
+  self.pending = None
   let result = @utf8.decode_lossy(data[:])
   self.last_result = result
   result
@@ -99,10 +113,12 @@ pub async fn WorkflowAgent::wait_for_approval(self : Self, oplog_idx : UInt64) -
 
 ## Use Cases
 
-Import `"moonbitlang/core/encoding/utf8" @utf8` in `moon.pkg`.
-`get_self_metadata()` requires `self-view` in the effective permission card.
-Call `start_approval` first and publish its returned index together with the known
-component and agent IDs to the approver before invoking `wait_for_approval`.
+Import `"moonbitlang/core/encoding/utf8" @utf8`, `"golemcloud/golem_sdk/schema" @schema`
+and `"golemcloud/golem_sdk/interface/golem/core/types" @types` in `moon.pkg`.
+The agent keeps the full `PromiseId` in its state, because the fingerprint cannot be
+rebuilt from the agent metadata.
+Call `start_approval` first and publish its returned oplog index and fingerprint together
+with the known component and agent IDs to the approver before invoking `wait_for_approval`.
 External completion requires agent-invoke permission. Async methods propagate
 host errors; external callers must handle invocation failure rather than treating
 it as approval. Lossy decoding replaces invalid UTF-8; validate the approval value

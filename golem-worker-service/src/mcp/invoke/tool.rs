@@ -114,7 +114,7 @@ pub async fn invoke_tool(
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
-            idempotency_key,
+            golem_common::model::InvocationRequestKey::external(None, idempotency_key.as_ref()),
             None,
             false,
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
@@ -841,11 +841,27 @@ mod tests {
         .unwrap();
         {
             let recorded = &durable.contexts.lock().unwrap()[0];
-            assert_eq!(recorded.idempotency_key, key);
+            assert!(matches!(
+                recorded.request_key,
+                golem_common::model::InvocationRequestKey::Unkeyed(_)
+            ));
+            assert_ne!(recorded.idempotency_key, key);
             assert_eq!(
                 recorded.freshness,
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist
             );
+        }
+        invoke_tool(
+            JsonObject::default(),
+            &tool,
+            &durable.worker_service,
+            Some(key.clone()),
+        )
+        .await
+        .unwrap();
+        {
+            let contexts = durable.contexts.lock().unwrap();
+            assert_ne!(contexts[0].request_key, contexts[1].request_key);
         }
 
         let (ephemeral, tool) = run_harness(AgentMode::Ephemeral);
@@ -860,10 +876,13 @@ mod tests {
         assert_eq!(
             phantom_id(&ephemeral.recorded_agent_id()),
             Some(golem_common::model::agent::ephemeral_invocation_phantom_id(
-                &key
+                &ephemeral.contexts.lock().unwrap()[0].idempotency_key
             )),
-            "the ephemeral agent is the one the key derives"
+            "the ephemeral owner uses the prepared unkeyed seed"
         );
-        assert_eq!(ephemeral.contexts.lock().unwrap()[0].idempotency_key, key);
+        assert!(matches!(
+            ephemeral.contexts.lock().unwrap()[0].request_key,
+            golem_common::model::InvocationRequestKey::Unkeyed(_)
+        ));
     }
 }

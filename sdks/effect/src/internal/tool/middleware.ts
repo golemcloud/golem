@@ -4,6 +4,7 @@ import type * as StreamsWit from "golem:tool/streams@0.1.0"
 import type * as Agent from "golem:agent/common@2.0.0"
 import { Cause, Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
+import { immediateCaller, InvocationContextLive } from "../../host/InvocationContextClient.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
 import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
@@ -722,11 +723,13 @@ export const toolMiddlewareGuest = {
     stdin: AsyncIterable<StreamsWit.ByteStreamItem> | undefined,
     stdout: StreamsWit.ToolOutputWriter | undefined,
     stderr: StreamsWit.ToolOutputWriter | undefined,
-    principal: Agent.Principal,
     wrapped: UnderlyingWit.UnderlyingTool,
   ): Promise<Common.InvocationResult> => {
     const entry = entries.get(middlewareName)
     if (!entry) throw { tag: "invalid-tool-name", val: middlewareName } satisfies Common.ToolError
+    const principal = await Effect.runPromise(
+      Effect.provide(immediateCaller, InvocationContextLive),
+    )
     const ownership = new InvocationOwnership()
     const managedStdin = stdin ? ownership.own(decodeByteStream(stdin)) : undefined
     const middlewareStdin = inputStream(managedStdin)

@@ -40,6 +40,7 @@ impl ForwardingOplog {
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
                         last_batch_start: cp.last_batch_start,
+                        delivery: cp.delivery.clone(),
                     },
                 );
             }
@@ -51,6 +52,7 @@ impl ForwardingOplog {
                     sending_up_to: OplogIndex::NONE,
                     send_in_progress: false,
                     last_batch_start: OplogIndex::NONE,
+                    delivery: None,
                 });
             }
             state

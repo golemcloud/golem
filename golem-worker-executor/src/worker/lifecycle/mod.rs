@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
@@ -627,6 +629,7 @@ mod tests {
                     index: OplogIndex::from_u64(4),
                     component_revision: ComponentRevision::new(2).unwrap(),
                     filesystem_snapshot: None,
+                    bootstrap: None,
                 },
             })),
         });
@@ -834,6 +837,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         let wallet = self.owner_execution.wallet().await?;
         let boundary = Box::pin(wallet.lock_boundary());
@@ -843,6 +847,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             new_component_size,
             new_active_plugins,
             snapshot_assisted_details,
+            bootstrap,
             wallet,
             boundary,
         )
@@ -855,6 +860,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
         wallet: Arc<owner_wallet::OwnerWallet>,
         boundary: futures::future::BoxFuture<
             'static,
@@ -869,6 +875,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(linear_memory.current_bytes()),
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
@@ -1017,7 +1024,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         schedule_id: ScheduleId,
         owner: &AgentId,
     ) -> Result<bool, WorkerExecutorError> {
@@ -1067,7 +1074,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn cancel_invocation(
         &self,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1099,7 +1106,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         let initialization_key = self.initialization_idempotency_key();
         if self.agent_mode() == AgentMode::Ephemeral
@@ -1173,7 +1180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
             match worker.lock_non_stopping_worker().await.state() {
-                WorkerInstance::Unloaded { .. } => {}
+                WorkerInstance::Unloaded { .. } | WorkerInstance::Inactive(_) => {}
                 WorkerInstance::CleanupFailed(error) => return Err(error.clone()),
                 _ => {
                     return Err(WorkerExecutorError::runtime(
@@ -1246,6 +1253,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_oplog_index,
                 &last_known_status.deleted_regions,
             )
+            .and_then(|()| {
+                cut_point::validate_restore_point_ranges(
+                    entries.iter().filter_map(|(index, entry)| {
+                        cut_point::bootstrap_range_named_by(entry).map(|range| (*index, range))
+                    }),
+                    last_oplog_index,
+                    &last_known_status.deleted_regions,
+                )
+            })
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
                     "Cannot revert worker to oplog index {last_oplog_index}: {error}"
@@ -1370,7 +1386,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .is_some_and(|session| session.prepared.is_some())
                     {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
-                            OplogEntry::cancel_pending_invocation(key.clone()),
+                            OplogEntry::cancel_pending_invocation(*key),
                         ));
                     }
                 }

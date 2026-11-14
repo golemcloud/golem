@@ -230,8 +230,8 @@ fn model_target_types_round_trip() {
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::worker::{RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::{
-        AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, OplogIndex, PromiseId,
-        TransactionId,
+        AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationId, OplogIndex,
+        PromiseId, TransactionId,
     };
     use crate::model::quota::{Reservation, ReserveResult};
     use crate::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
@@ -263,12 +263,35 @@ fn model_target_types_round_trip() {
     // base_model leaves / records
     round_trip(agent_id.clone());
     round_trip(AgentFingerprint::from(uuid::Uuid::from_u64_pair(3, 4)));
+    round_trip(InvocationId::from(uuid::Uuid::from_u64_pair(
+        0x0123456789abcdef,
+        0xfedcba9876543210,
+    )));
     round_trip(IdempotencyKey::new("idem-1".to_string()));
     round_trip(OplogIndex::from_u64(42));
     round_trip(PromiseId {
         agent_id: agent_id.clone(),
+        fingerprint: AgentFingerprint::from(uuid::Uuid::from_u64_pair(9, 10)),
         oplog_idx: OplogIndex::from_u64(7),
     });
+    // A promise ID that a guest returns has the shape of the WIT `promise-id` record, where the
+    // fingerprint is a plain `uuid`.
+    let guest_promise_id = golem_schema::PromiseId::new(
+        golem_schema::AgentId::new(
+            golem_schema::ComponentId::new(component_id.0),
+            agent_id.agent_id.clone(),
+        ),
+        uuid::Uuid::from_u64_pair(9, 10),
+        7,
+    );
+    assert_eq!(
+        PromiseId::from_value(&guest_promise_id.to_value()).expect("decode guest promise id"),
+        PromiseId {
+            agent_id: agent_id.clone(),
+            fingerprint: AgentFingerprint::from(uuid::Uuid::from_u64_pair(9, 10)),
+            oplog_idx: OplogIndex::from_u64(7),
+        }
+    );
     round_trip(TransactionId::new("tx-1"));
     round_trip(AgentStatus::Running);
     round_trip(AgentStatus::Failed);

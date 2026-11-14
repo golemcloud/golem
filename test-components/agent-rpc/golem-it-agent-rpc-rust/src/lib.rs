@@ -234,8 +234,11 @@ pub trait ScheduledInvocationClient {
     /// Schedule inc_global_by on self 200ms in the future
     fn test3(&mut self);
 
+    /// Schedules `inc_global_by(17)` on the server and keeps the receipt
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
     fn cancel_scheduled(&self);
+    /// The invocation ID of the receipt kept by `schedule_at`, in its text form
+    fn scheduled_invocation_id(&self) -> Option<String>;
 
     /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps its cancellation token
     fn schedule_ephemeral_at(
@@ -255,7 +258,8 @@ pub trait ScheduledInvocationClient {
 struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
-    token: Option<golem_rust::golem_agentic::golem::agent::host::CancellationToken>,
+    token: Option<golem_rust::CancellationToken>,
+    scheduled_invocation_id: Option<String>,
 }
 
 #[agent_implementation]
@@ -265,6 +269,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             _name: name,
             global: 0,
             token: None,
+            scheduled_invocation_id: None,
         }
     }
 
@@ -294,18 +299,33 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
-        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
-        self.token = Some(
-            server
-                .schedule_cancelable_inc_global_by(
-                    17,
-                    Datetime {
-                        seconds: seconds as i64,
-                        nanoseconds,
-                    },
-                )
-                .expect("failed to schedule cancelable invocation"),
+        // The generated durable client drops the receipt metadata, so this calls the host directly.
+        use golem_rust::golem_agentic::golem::agent::host as agentic_host;
+        let server = agentic_host::WasmRpc::new(
+            "ScheduledInvocationServer",
+            encode_single_parameter(server_agent_name),
+            None,
+            Vec::new(),
         );
+        let receipt = server
+            .schedule_cancelable_invocation(
+                agentic_host::Datetime {
+                    seconds: seconds as i64,
+                    nanoseconds,
+                },
+                "inc_global_by",
+                encode_single_parameter(17u64),
+                None,
+            )
+            .expect("failed to schedule cancelable invocation");
+        self.scheduled_invocation_id = Some(
+            golem_rust::InvocationMetadata::from(receipt.metadata)
+                .invocation_id
+                .to_string(),
+        );
+        self.token = Some(golem_rust::CancellationToken::from(
+            receipt.cancellation_token,
+        ));
     }
 
     fn cancel_scheduled(&self) {
@@ -313,6 +333,10 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
             .as_ref()
             .expect("no scheduled invocation")
             .cancel();
+    }
+
+    fn scheduled_invocation_id(&self) -> Option<String> {
+        self.scheduled_invocation_id.clone()
     }
 
     fn schedule_ephemeral_at(
@@ -490,6 +514,8 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn observe_input_terminal(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32>;
     async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
     async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
     async fn consume_nested_before_timer(
@@ -570,6 +596,32 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .collect()
             .await
             .expect("failed to consume input stream")
+    }
+
+    async fn observe_input_terminal(
+        &mut self,
+        mut input: AgentStream<u32>,
+        gate: PromiseId,
+    ) -> u64 {
+        self.scalar += 1;
+        assert_eq!(input.next().await.unwrap(), Some(17));
+        golem_rust::await_promise(&gate).await;
+        assert_eq!(input.next().await.unwrap(), None);
+        self.scalar
+    }
+
+    fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32> {
+        self.scalar += 1;
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(17).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            assert_eq!(
+                writer.write_one(29).await.unwrap_err(),
+                "agent stream reader was dropped"
+            );
+        });
+        output
     }
 
     async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String> {
@@ -1090,8 +1142,10 @@ pub trait StreamingRpcCaller {
         forwarded_drop: bool,
     ) -> Vec<u64>;
     async fn drop_new_increment_output(&self);
+    async fn drop_gated_output(&self, gate: PromiseId) -> u64;
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn call_producer_error(&self) -> Vec<u32>;
+    async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
@@ -1253,6 +1307,15 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     fn create_input_gate(&self) -> PromiseId {
         golem_rust::create_promise()
+    }
+
+    async fn drop_gated_output(&self, gate: PromiseId) -> u64 {
+        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+            .produce_drop_probe(gate)
+            .await;
+        assert_eq!(output.next().await.unwrap(), Some(17));
+        drop(output);
+        42
     }
 
     async fn transfer_input_after_timer(&self) -> Vec<u32> {
@@ -1469,6 +1532,15 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .collect()
             .await
             .expect("producer stream must fail")
+    }
+
+    async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32> {
+        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+            .produce_error()
+            .await;
+        assert_eq!(output.next().await.unwrap(), Some(1));
+        golem_rust::await_promise(&gate).await;
+        output.collect().await.expect("producer stream must fail")
     }
 
     async fn call_stream_free(&self) -> u64 {
@@ -1743,6 +1815,8 @@ pub trait RpcBlockingCounter {
     /// Blocks on a previously created promise
     fn await_promise(&self, promise_id: PromiseId);
     fn inc_after_promise(&mut self, promise_id: PromiseId) -> u64;
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 }
 
 struct RpcBlockingCounterImpl {
@@ -1779,6 +1853,10 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
         golem_rust::blocking_await_promise(&promise_id);
         self.value += 7;
         self.value
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 }
 
@@ -1824,9 +1902,9 @@ pub trait RpcAuthTester {
 
     async fn try_ephemeral_call_async(&self) -> RpcCallOutcome;
 
-    async fn denied_streaming_metadata(&self) -> String;
+    async fn denied_streaming_metadata(&self) -> Option<String>;
 
-    fn invalid_async_call_without_get(&self) -> String;
+    fn invalid_async_call_without_get(&self) -> Option<String>;
 }
 
 struct RpcAuthTesterImpl {
@@ -1849,6 +1927,9 @@ pub trait CancelTester {
     async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
 
     fn name(&self) -> String;
+
+    /// Grows the linear memory by one page
+    fn grow_memory(&self);
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
@@ -1986,7 +2067,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         }
     }
 
-    async fn denied_streaming_metadata(&self) -> String {
+    async fn denied_streaming_metadata(&self) -> Option<String> {
         let rpc = WasmRpc::new(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-streaming-target".to_string()),
@@ -1999,10 +2080,12 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             result.future.get().await,
             Err(RpcError::Denied(_))
         ));
-        result.metadata.idempotency_key
+        result
+            .metadata
+            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
     }
 
-    fn invalid_async_call_without_get(&self) -> String {
+    fn invalid_async_call_without_get(&self) -> Option<String> {
         let rpc = WasmRpc::new(
             "RpcCounter",
             encode_single_parameter("invalid-async-target".to_string()),
@@ -2014,7 +2097,9 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
             None,
         );
-        result.metadata.idempotency_key
+        result
+            .metadata
+            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
@@ -2092,6 +2177,10 @@ impl CancelTester for CancelTesterImpl {
             }
         })
         .await
+    }
+
+    fn grow_memory(&self) {
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {

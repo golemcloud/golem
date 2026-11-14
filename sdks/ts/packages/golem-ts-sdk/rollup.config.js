@@ -48,7 +48,7 @@ function javascript(input, output, isExternal = external) {
           '**/http-contract/index.ts',
         ],
         tsconfigOverride: {
-          compilerOptions: { declaration: false, rootDir: '../../..' },
+          compilerOptions: { declaration: false, rootDir: '../../..', types: ['node'] },
         },
       }),
       terser(),

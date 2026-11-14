@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::tests::{ReadCountingBlobStorage, ReadCountingIndexedStorage};
@@ -27,8 +31,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatusRecord, IdempotencyKey, RetryConfig, Timestamp,
-    agent::OwnerKind,
+    AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, agent::OwnerKind,
 };
 use golem_common::read_only_lock;
 use golem_schema::schema::SchemaFingerprintV1;
@@ -139,7 +142,7 @@ fn owner(name: &str) -> OwnedAgentId {
 }
 
 fn registration() -> StreamRegisteredRecord {
-    let invocation = StreamRegistrationInvocation::Local(IdempotencyKey::new("session-1".into()));
+    let invocation = StreamRegistrationInvocation::Local(test_invocation_id("session-1".into()));
     StreamRegisteredRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         coordinate: StreamRegistrationRecordCoordinate::Root {
@@ -158,8 +161,9 @@ fn registration() -> StreamRegisteredRecord {
 pub(crate) fn prepared(key: &StreamSessionKey) -> StreamSessionPreparedRecord {
     StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
-        session_key: key.idempotency_key.clone(),
-        public_session_id: key.idempotency_key.value.clone(),
+        session_key: key.idempotency_key,
+        public_session_id: key.idempotency_key.to_string(),
+        route_scope: None,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
@@ -788,4 +792,8 @@ fn through_preserves_marker_and_deletion_boundaries() {
             .len(),
         1
     );
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

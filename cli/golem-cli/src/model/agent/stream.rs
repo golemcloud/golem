@@ -15,7 +15,7 @@
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::format_stderr;
-use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
+use golem_common::model::{LogLevel, Timestamp};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,8 +28,10 @@ pub struct AgentStreamEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_name: Option<String>,
+    /// The invocation that produced the event, as `<agent-id>.<uuid>`. Output written outside
+    /// an invocation, such as during initialization, has none.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
+    pub invocation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number_of_missed_messages: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,13 +70,19 @@ impl AgentStreamEvent {
             context: context.into(),
             message: message.into(),
             function_name: None,
-            idempotency_key: None,
+            invocation_id: None,
             number_of_missed_messages: None,
             error: None,
         }
     }
 
-    pub fn log(timestamp: Timestamp, level: &str, context: String, message: String) -> Self {
+    pub fn log(
+        timestamp: Timestamp,
+        level: &str,
+        context: String,
+        message: String,
+        invocation_id: Option<String>,
+    ) -> Self {
         Self::new(
             timestamp,
             AgentStreamEventKind::Log,
@@ -82,9 +90,10 @@ impl AgentStreamEvent {
             context,
             message,
         )
+        .with_invocation_id(invocation_id)
     }
 
-    pub fn stdout(timestamp: Timestamp, message: &str) -> Self {
+    pub fn stdout(timestamp: Timestamp, message: &str, invocation_id: Option<String>) -> Self {
         Self::new(
             timestamp,
             AgentStreamEventKind::Stdout,
@@ -92,9 +101,10 @@ impl AgentStreamEvent {
             "",
             message,
         )
+        .with_invocation_id(invocation_id)
     }
 
-    pub fn stderr(timestamp: Timestamp, message: &str) -> Self {
+    pub fn stderr(timestamp: Timestamp, message: &str, invocation_id: Option<String>) -> Self {
         Self::new(
             timestamp,
             AgentStreamEventKind::Stderr,
@@ -102,6 +112,12 @@ impl AgentStreamEvent {
             "",
             message,
         )
+        .with_invocation_id(invocation_id)
+    }
+
+    fn with_invocation_id(mut self, invocation_id: Option<String>) -> Self {
+        self.invocation_id = invocation_id;
+        self
     }
 
     pub fn stream_closed(timestamp: Timestamp) -> Self {
@@ -130,7 +146,7 @@ impl AgentStreamEvent {
     pub fn invocation_started(
         timestamp: Timestamp,
         function_name: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: String,
     ) -> Self {
         let mut event = Self::new(
             timestamp,
@@ -140,14 +156,14 @@ impl AgentStreamEvent {
             "Invocation started",
         );
         event.function_name = Some(function_name);
-        event.idempotency_key = Some(idempotency_key.to_string());
+        event.invocation_id = Some(invocation_id);
         event
     }
 
     pub fn invocation_finished(
         timestamp: Timestamp,
         function_name: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: String,
     ) -> Self {
         let mut event = Self::new(
             timestamp,
@@ -157,7 +173,7 @@ impl AgentStreamEvent {
             "Invocation finished",
         );
         event.function_name = Some(function_name);
-        event.idempotency_key = Some(idempotency_key.to_string());
+        event.invocation_id = Some(invocation_id);
         event
     }
 
@@ -212,6 +228,17 @@ impl AgentStreamEvent {
             }
             result.push_str("] ");
         }
+        if !options.logs_only
+            && matches!(
+                self.kind,
+                AgentStreamEventKind::Log
+                    | AgentStreamEventKind::Stdout
+                    | AgentStreamEventKind::Stderr
+            )
+            && let Some(invocation_id) = &self.invocation_id
+        {
+            result.push_str(&format!("[{invocation_id}] "));
+        }
         if options.colors && matches!(self.kind, AgentStreamEventKind::Stderr) {
             result.push_str(&format_stderr(&self.text_message()))
         } else {
@@ -245,12 +272,12 @@ impl AgentStreamEvent {
             AgentStreamEventKind::InvocationStarted => format!(
                 "STARTED  {} ({})",
                 self.function_name.as_deref().unwrap_or_default(),
-                self.idempotency_key.as_deref().unwrap_or_default()
+                self.invocation_id.as_deref().unwrap_or_default()
             ),
             AgentStreamEventKind::InvocationFinished => format!(
                 "FINISHED {} ({})",
                 self.function_name.as_deref().unwrap_or_default(),
-                self.idempotency_key.as_deref().unwrap_or_default()
+                self.invocation_id.as_deref().unwrap_or_default()
             ),
         }
     }
@@ -260,7 +287,7 @@ impl AgentStreamEvent {
 mod tests {
     use super::{AgentStreamEvent, AgentStreamEventKind};
     use crate::model::agent::AgentLogStreamOptions;
-    use golem_common::model::{IdempotencyKey, Timestamp};
+    use golem_common::model::Timestamp;
     use std::str::FromStr;
     use test_r::test;
 
@@ -289,7 +316,7 @@ mod tests {
     #[test]
     fn agent_stream_event_renders_text_with_prefix() {
         let timestamp = Timestamp::from_str("2026-01-01T00:00:00Z").unwrap();
-        let event = AgentStreamEvent::stdout(timestamp, "hello");
+        let event = AgentStreamEvent::stdout(timestamp, "hello", None);
 
         assert_eq!(
             event.render_text(&AgentLogStreamOptions {
@@ -300,15 +327,37 @@ mod tests {
             }),
             "[2026-01-01T00:00:00.000Z] [STDOUT  ] hello"
         );
+
+        let invocation_id = "Counter(\"a.b\").0f0e0d0c-0b0a-4908-8706-050403020100";
+        let event = AgentStreamEvent::stdout(timestamp, "hello", Some(invocation_id.to_string()));
+        let options = AgentLogStreamOptions {
+            colors: false,
+            show_timestamp: false,
+            show_level: true,
+            logs_only: false,
+        };
+        assert_eq!(
+            event.render_text(&options),
+            format!("[STDOUT  ] [{invocation_id}] hello")
+        );
+        assert_eq!(
+            event.render_text(&AgentLogStreamOptions {
+                logs_only: true,
+                ..options
+            }),
+            "[STDOUT  ] hello"
+        );
     }
 
     #[test]
     fn agent_stream_event_renders_invocation_text() {
         let timestamp = Timestamp::from_str("2026-01-01T00:00:00Z").unwrap();
-        let idempotency_key = IdempotencyKey::fresh();
-        let rendered_idempotency_key = idempotency_key.to_string();
-        let event =
-            AgentStreamEvent::invocation_started(timestamp, "run".to_string(), idempotency_key);
+        let invocation_id = "Counter(\"a\").0f0e0d0c-0b0a-4908-8706-050403020100";
+        let event = AgentStreamEvent::invocation_started(
+            timestamp,
+            "run".to_string(),
+            invocation_id.to_string(),
+        );
 
         assert_eq!(
             event.render_text(&AgentLogStreamOptions {
@@ -317,7 +366,7 @@ mod tests {
                 show_level: true,
                 logs_only: false,
             }),
-            format!("[INVOKE  ] STARTED  run ({rendered_idempotency_key})")
+            format!("[INVOKE  ] STARTED  run ({invocation_id})")
         );
     }
 }

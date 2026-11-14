@@ -17,7 +17,7 @@ use super::tool_middleware_registry::{
 };
 use super::wire;
 use super::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, ToolInvokeError,
+    InputStream, InvocationResult, OutputStream, RawCustomToolError, ToolInvokeError,
     ToolMiddleware, UnderlyingTool,
 };
 use crate::decode_typed_schema_value_owned;
@@ -46,9 +46,9 @@ pub(crate) async fn invoke_tool_middleware(
     stdin: Option<InputStream>,
     stdout: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
     stderr: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
-    principal: Principal,
     wrapped: crate::tool_underlying_bindings::UnderlyingTool,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
+    let principal = crate::agentic::immediate_caller();
     let invoker = get_tool_middleware_invoker_by_name(&middleware_name)
         .ok_or_else(|| wire::ToolError::InvalidToolName(middleware_name.clone()))?;
     let tool_metadata = decode_tool(tool_metadata)
@@ -168,20 +168,9 @@ pub fn install_middleware_exports() {
     let _ = MIDDLEWARE.set(MiddlewareHooks {
         discover: discover_tool_middlewares,
         get: get_tool_middleware,
-        invoke: |name,
-                 tool,
-                 metadata,
-                 parameters,
-                 path,
-                 input,
-                 stdin,
-                 stdout,
-                 stderr,
-                 principal,
-                 wrapped| {
+        invoke: |name, tool, metadata, parameters, path, input, stdin, stdout, stderr, wrapped| {
             Box::pin(invoke_tool_middleware(
-                name, tool, metadata, parameters, path, input, stdin, stdout, stderr, principal,
-                wrapped,
+                name, tool, metadata, parameters, path, input, stdin, stdout, stderr, wrapped,
             ))
         },
     });

@@ -112,7 +112,7 @@ defineAgent({
         firstAgentId: Schema.String,
         secondAgentId: Schema.String,
         identitiesDiffer: Schema.Boolean,
-        idempotencyKeysPresent: Schema.Boolean,
+        invocationIdsMatchAgents: Schema.Boolean,
         values: Schema.Array(Schema.String),
       }),
     }),
@@ -186,9 +186,10 @@ defineAgent({
           firstAgentId: firstResult.metadata.agentId,
           secondAgentId: secondResult.metadata.agentId,
           identitiesDiffer: firstResult.metadata.agentId !== secondResult.metadata.agentId,
-          idempotencyKeysPresent:
-            firstResult.metadata.idempotencyKey.length > 0 &&
-            secondResult.metadata.idempotencyKey.length > 0,
+          invocationIdsMatchAgents:
+            firstResult.metadata.invocationId.agentId === firstResult.metadata.agentId &&
+            secondResult.metadata.invocationId.agentId === secondResult.metadata.agentId &&
+            firstResult.metadata.invocationId.uuid !== secondResult.metadata.invocationId.uuid,
           values: [firstResult.value, secondResult.value],
         }
       }).pipe(Effect.orDie, Effect.scoped),

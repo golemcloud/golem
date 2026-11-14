@@ -18,11 +18,11 @@ mod bindings {
     });
 }
 
+use bindings::golem::core::types::TypedSchemaValue;
 use bindings::golem::tool::{
     common::{InvocationResult, Tool, ToolError},
-    streams::{ByteStreamItem, ToolStdoutWriter},
+    streams::{ByteStreamItem, ToolOutputWriter},
 };
-use bindings::golem::{agent::common::Principal, core::types::TypedSchemaValue};
 use wit_bindgen::rt::async_support::StreamReader;
 
 struct Component;
@@ -40,8 +40,8 @@ impl bindings::exports::golem::tool::guest::Guest for Component {
         _: Vec<String>,
         _: TypedSchemaValue,
         _: Option<StreamReader<ByteStreamItem>>,
-        _: Option<ToolStdoutWriter>,
-        _: Principal,
+        _: Option<ToolOutputWriter>,
+        _: Option<ToolOutputWriter>,
     ) -> Result<InvocationResult, ToolError> {
         Err(ToolError::InvalidToolName(String::new()))
     }
@@ -71,13 +71,12 @@ mod unified {
     }
 
     impl bindings::exports::golem::agent::guest::Guest for Component {
-        async fn initialize(_: String, _: SchemaValueTree, _: Principal) -> Result<(), AgentError> {
+        async fn initialize(_: String, _: SchemaValueTree) -> Result<(), AgentError> {
             Err(AgentError::InvalidType(String::new()))
         }
         async fn invoke(
             _: String,
             _: SchemaValueTree,
-            _: Principal,
         ) -> Result<Option<SchemaValueTree>, AgentError> {
             Err(AgentError::InvalidType(String::new()))
         }
@@ -104,8 +103,8 @@ mod unified {
             _: Vec<String>,
             _: TypedSchemaValue,
             _: Option<StreamReader<ByteStreamItem>>,
-            _: Option<ToolStdoutWriter>,
-            _: Principal,
+            _: Option<ToolOutputWriter>,
+            _: Option<ToolOutputWriter>,
             _: UnderlyingTool,
         ) -> Result<InvocationResult, ToolError> {
             Err(ToolError::InvalidToolName(String::new()))

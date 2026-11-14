@@ -25,7 +25,7 @@ use golem_common::model::component::{InstalledPlugin, PluginPriority};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::{HasOplogProcessorPlugin, UsesAllDeps};
@@ -72,12 +72,12 @@ async fn deliver(
     Ok(())
 }
 
-fn assert_execution_count(entries: &[OplogEntry], key: &IdempotencyKey, count: usize) {
+fn assert_execution_count(entries: &[OplogEntry], key: &InvocationId, count: usize) {
     assert_eq!(
         entries
             .iter()
             .filter(|entry| matches!(entry,
-                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+                OplogEntry::AgentInvocationStarted { invocation_id, .. } if invocation_id == key
             ))
             .count(),
         count
@@ -200,7 +200,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         agent_id: Some(target.clone().into()),
         environment_id: Some(context.default_environment_id.into()),
         component_revision: processor.revision.into(),
-        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        idempotency_key: Some(InvocationId(Uuid::new_v4()).into()),
         account_id: Some(context.account_id.into()),
         config: [("callback-url".to_string(), callback_url)].into(),
         metadata: Some(metadata.try_into().map_err(anyhow::Error::msg)?),
@@ -244,13 +244,11 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     let key = accepted
         .iter()
         .find_map(|entry| match entry {
-            OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
-            } => Some(idempotency_key.clone()),
+            OplogEntry::PendingAgentInvocation { invocation_id, .. } => Some(*invocation_id),
             _ => None,
         })
         .expect("local dispatch must durably accept the batch");
-    request.idempotency_key = Some(key.clone().into());
+    request.idempotency_key = Some(key.into());
     let OplogEntry::Create { parameters, .. } = &accepted[0] else {
         panic!("missing Create")
     };
@@ -259,7 +257,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     assert!(parameters.agent_type_name.is_none());
     assert!(parameters.canonical_key.is_none());
     assert!(accepted.iter().any(|entry| matches!(entry,
-        OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key
+        OplogEntry::PendingAgentInvocation { invocation_id, .. } if invocation_id == &key
     )));
     assert_execution_count(&accepted, &key, 0);
     assert!(callbacks.try_recv().is_err());
@@ -309,9 +307,22 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     );
 
     deliver(&executor, request.clone()).await?;
-    let fresh_key = IdempotencyKey::fresh();
+    let mut changed = request.clone();
+    changed.metadata.as_mut().unwrap().retry_count += 1;
+    let rejected = executor
+        .client
+        .clone()
+        .process_oplog_entries(changed)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        &rejected.result,
+        Some(process_oplog_entries_response::Result::Failure(_))
+    ));
+    assert!(format!("{rejected:?}").contains("IdempotencyConflict"));
+    let fresh_key = InvocationId(Uuid::new_v4());
     let mut fresh = request.clone();
-    fresh.idempotency_key = Some(fresh_key.clone().into());
+    fresh.idempotency_key = Some(fresh_key.into());
     deliver(&executor, fresh).await?;
     let next = tokio::time::timeout(Duration::from_secs(30), callbacks.recv())
         .await?
@@ -338,9 +349,9 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     drop(executor);
     let executor = start(deps, &context).await?;
     deliver(&executor, request.clone()).await?;
-    let after_restart_key = IdempotencyKey::fresh();
+    let after_restart_key = InvocationId(Uuid::new_v4());
     let mut after_restart = request;
-    after_restart.idempotency_key = Some(after_restart_key.clone().into());
+    after_restart.idempotency_key = Some(after_restart_key.into());
     deliver(&executor, after_restart).await?;
     let after_restart_callback = tokio::time::timeout(Duration::from_secs(30), callbacks.recv())
         .await?
@@ -429,14 +440,13 @@ async fn processor_committed_admission_survives_owner_retirement(
         agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
     };
     let target_owned = OwnedAgentId::new(context.default_environment_id, &target);
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     // Recovery-index publication follows the durable PendingAgentInvocation commit,
     // while admission still holds the lifecycle lock.
     let gate = faults.pause_next("add");
     let activator = seed.all().worker_activator();
     let admission = tokio::spawn({
         let target_owned = target_owned.clone();
-        let key = key.clone();
         async move {
             activator
                 .enqueue_oplog_processor(
@@ -461,7 +471,7 @@ async fn processor_committed_admission_survives_owner_retirement(
     let accepted = executor.stored_oplog(&target).await;
     assert!(
         accepted.iter().any(|entry| matches!(entry,
-            OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key
+            OplogEntry::PendingAgentInvocation { invocation_id, .. } if invocation_id == &key
         )),
         "the gate must follow durable acceptance"
     );

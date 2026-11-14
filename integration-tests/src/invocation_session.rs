@@ -23,8 +23,9 @@ use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
     InvocationSessionResult, InvocationStart, OutputStreamItem, ResumeAttach, ResumeOperation,
-    StreamCancel, StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole,
-    invocation_request, invocation_response, invocation_session_completion,
+    StreamConsumerCancelled, StreamCursor, StreamDirection, StreamEnd, StreamMappingRole,
+    StreamTerminal, StreamTerminalAuthor, invocation_request, invocation_response,
+    invocation_session_completion, stream_terminal,
 };
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::ParsedAgentKey;
@@ -152,7 +153,9 @@ impl SessionCheckpoint {
         ensure!(
             self.outputs.values().all(|output| matches!(
                 output.terminal.as_ref().and_then(|t| t.response.as_ref()),
-                Some(invocation_response::Response::OutputEnd(_))
+                Some(invocation_response::Response::StreamEnd(end))
+                    if end.direction == StreamDirection::Output as i32
+                        && matches!(end.outcome.as_ref().and_then(|outcome| outcome.terminal.as_ref()), Some(stream_terminal::Terminal::Finished(_)))
             )),
             "an output did not end successfully"
         );
@@ -254,14 +257,12 @@ impl SessionCheckpoint {
                     .entry(stream_id(item.durable_stream_id.unwrap()))
                     .or_insert(now);
             }
-            invocation_response::Response::OutputEnd(end) => {
+            invocation_response::Response::StreamEnd(end) => {
+                ensure!(
+                    end.direction == StreamDirection::Output as i32,
+                    "unexpected input terminal"
+                );
                 self.record_terminal(end.durable_stream_id, &end.durable_offset, response)?;
-            }
-            invocation_response::Response::OutputError(error) => {
-                self.record_terminal(error.durable_stream_id, &error.durable_offset, response)?;
-            }
-            invocation_response::Response::StreamCancel(cancel) => {
-                self.record_terminal(cancel.durable_stream_id, &cancel.durable_offset, response)?;
             }
             invocation_response::Response::Finished(finished) => {
                 self.completion = Some(finished.clone());
@@ -358,7 +359,7 @@ impl InvocationSession {
             .context("cannot resume before acceptance")?;
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: accepted.idempotency_key.clone(),
+                idempotency_key: accepted.idempotency_key,
                 agent_id: accepted.agent_id.clone(),
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,
@@ -518,12 +519,18 @@ impl InvocationSession {
             .context("cancelled output has no transport channel")?
             .transport_stream_id;
         let request = InvocationRequest {
-            request: Some(invocation_request::Request::StreamCancel(StreamCancel {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
                 transport_stream_id,
                 producer_sequence: 0,
-                role: StreamCancelRole::OutputConsumer as i32,
-                reason: StreamCancelReason::Cancelled as i32,
-                details: Some("the consumer cancelled the output".to_string()),
+                direction: StreamDirection::Output as i32,
+                authored_by: StreamTerminalAuthor::Host as i32,
+                outcome: Some(StreamTerminal {
+                    terminal: Some(stream_terminal::Terminal::ConsumerCancelled(
+                        StreamConsumerCancelled {
+                            details: Some("the consumer cancelled the output".to_string()),
+                        },
+                    )),
+                }),
                 durable_stream_id: Some(Uuid {
                     high_bits: stream.0,
                     low_bits: stream.1,
@@ -569,7 +576,6 @@ impl InvocationSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_api_grpc::proto::golem::worker::OutputStreamEnd;
     use test_r::test;
 
     fn checkpoint() -> SessionCheckpoint {
@@ -633,7 +639,12 @@ mod tests {
         checkpoint.record(&item((2, 5), 4)).unwrap();
         checkpoint.record(&item((1, 9), 7)).unwrap();
         let terminal = InvocationResponse {
-            response: Some(invocation_response::Response::OutputEnd(OutputStreamEnd {
+            response: Some(invocation_response::Response::StreamEnd(StreamEnd {
+                direction: StreamDirection::Output as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(StreamTerminal {
+                    terminal: Some(stream_terminal::Terminal::Finished(Default::default())),
+                }),
                 durable_stream_id: Some(Uuid {
                     high_bits: 1,
                     low_bits: 9,

@@ -26,7 +26,7 @@ use golem_common::model::oplog::{
     PublicSpanAttributes, PublicSpanData, PublicSpanKind, PublicSpanStarted, SpanAttributes,
     SpanData, SpanKind, SpanStarted, StringAttributeValue,
 };
-use golem_common::model::{AgentFingerprint, AgentId, AgentInvocationPayload};
+use golem_common::model::{AgentFingerprint, AgentId, AgentInvocationPayload, InvocationId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_worker_executor::services::HasOplog;
@@ -96,7 +96,7 @@ async fn invoke_blob_tool(
     executor: &TestWorkerExecutor,
     owner: &OwnedAgentId,
     fingerprint: AgentFingerprint,
-    key: &IdempotencyKey,
+    key: &InvocationId,
     input: &TypedSchemaValue,
     principal: Principal,
 ) -> Result<AgentInvocationResult, WorkerExecutorError> {
@@ -108,7 +108,7 @@ async fn invoke_blob_tool(
         .primary()
         .invoke_external_tool(
             fingerprint,
-            key.clone(),
+            *key,
             ToolName::try_from("clock-race").unwrap(),
             vec!["write-blob".into()],
             input.clone(),
@@ -246,7 +246,7 @@ async fn write_and_reconstruct(
         .await
         .context("existing durable owner")?;
     let worker = active.primary();
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(uuid::Uuid::new_v4());
     let principal = Principal::GolemUser(GolemUserPrincipal {
         account_id: context.account_id,
     });
@@ -254,7 +254,6 @@ async fn write_and_reconstruct(
     let mut invocation = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let owner = owner.clone();
-        let key = key.clone();
         let input = input.clone();
         let principal = principal.clone();
         async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await }
@@ -515,13 +514,13 @@ struct Window {
 
 fn read_window(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &InvocationId,
     input: &TypedSchemaValue,
     finished: usize,
 ) -> anyhow::Result<Window> {
     let matches = |invocation: &PublicAgentInvocation| {
         matches!(invocation,
-        PublicAgentInvocation::ExternalTool(call) if &call.idempotency_key == key
+        PublicAgentInvocation::ExternalTool(call) if &call.invocation_id == key
             && call.tool_name == "clock-race" && call.command_path == ["write-blob"] && &call.input == input)
     };
     let mut accepted = 0;
@@ -1013,12 +1012,12 @@ fn assert_invocation_facts_equal(
         ) => {
             ensure!(
                 (
-                    &expected.idempotency_key,
+                    &expected.invocation_id,
                     &expected.constructor_parameters,
                     &expected.trace_id,
                     &expected.trace_states,
                 ) == (
-                    &actual.idempotency_key,
+                    &actual.invocation_id,
                     &actual.constructor_parameters,
                     &actual.trace_id,
                     &actual.trace_states,
@@ -1031,13 +1030,13 @@ fn assert_invocation_facts_equal(
         ) => {
             ensure!(
                 (
-                    &expected.idempotency_key,
+                    &expected.invocation_id,
                     &expected.method_name,
                     &expected.function_input,
                     &expected.trace_id,
                     &expected.trace_states,
                 ) == (
-                    &actual.idempotency_key,
+                    &actual.invocation_id,
                     &actual.method_name,
                     &actual.function_input,
                     &actual.trace_id,
@@ -1051,14 +1050,14 @@ fn assert_invocation_facts_equal(
         ) => {
             ensure!(
                 (
-                    &expected.idempotency_key,
+                    &expected.invocation_id,
                     &expected.tool_name,
                     &expected.command_path,
                     &expected.input,
                     &expected.trace_id,
                     &expected.trace_states,
                 ) == (
-                    &actual.idempotency_key,
+                    &actual.invocation_id,
                     &actual.tool_name,
                     &actual.command_path,
                     &actual.input,
@@ -1159,7 +1158,7 @@ fn oracle_fixture() -> OplogSnapshot {
         ),
         (
             "idempotency_key".into(),
-            AttributeValue::String("oracle-key".into()),
+            AttributeValue::String("00000000-0000-0000-0000-000000000001".into()),
         ),
         (
             "function_name".into(),
@@ -1191,9 +1190,7 @@ fn oracle_fixture() -> OplogSnapshot {
         input: input.value().clone(),
         principal: Principal::anonymous(),
     };
-    let key = IdempotencyKey {
-        value: "oracle-key".into(),
-    };
+    let key = InvocationId(uuid::Uuid::from_u128(1));
     let token = WalletVersionToken {
         wallet_id_hash: [3; 32],
         generation: 4,
@@ -1218,7 +1215,7 @@ fn oracle_fixture() -> OplogSnapshot {
     let raw = vec![
         OplogEntry::AgentInvocationStarted {
             timestamp,
-            idempotency_key: key.clone(),
+            invocation_id: key,
             payload: OplogPayload::Inline(Box::new(payload.clone())),
             trace_id: trace_id.clone(),
             trace_states: Vec::new(),
@@ -1257,7 +1254,7 @@ fn oracle_fixture() -> OplogSnapshot {
         PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
             timestamp,
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-                idempotency_key: key,
+                invocation_id: key,
                 constructor_parameters: input,
                 trace_id,
                 trace_states: Vec::new(),

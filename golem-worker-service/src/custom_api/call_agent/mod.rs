@@ -128,7 +128,7 @@ impl CallAgentHandler {
                 Some(proto_method_parameters),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                None,
+                golem_common::model::InvocationRequestKey::external(None, None),
                 invocation_context,
                 false,
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist,

@@ -27,7 +27,6 @@ import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -386,12 +385,12 @@ func liveCardValue(t *testing.T) (types.TypedSchemaValue, *types.PermissionCard)
 func TestARefusedInvocationReleasesItsInputCards(t *testing.T) {
 	released := recordReleases(t)
 	input, live := liveCardValue(t)
-	if res := toolExports.Exports.Invoke("no-such-tool", nil, input, toolExports.Stdin{}, toolExports.Stdout{}, toolExports.Stderr{}, common.MakePrincipalAnonymous()); res.IsOk() {
+	if res := toolExports.Exports.Invoke("no-such-tool", nil, input, toolExports.Stdin{}, toolExports.Stdout{}, toolExports.Stderr{}); res.IsOk() {
 		t.Fatal("an unknown tool ran")
 	}
 	middlewareInput, middlewareLive := liveCardValue(t)
 	if res := mwExports.Exports.InvokeToolMiddleware("no-such-middleware", "keys", toolCommon.Tool{}, witOf(emptyRecord()),
-		nil, middlewareInput, mwExports.Stdin{}, mwExports.Stdout{}, mwExports.Stderr{}, common.MakePrincipalAnonymous(), nil); res.IsOk() {
+		nil, middlewareInput, mwExports.Stdin{}, mwExports.Stdout{}, mwExports.Stderr{}, nil); res.IsOk() {
 		t.Fatal("an unknown middleware ran")
 	}
 	if len(*released) != 2 || (*released)[0] != live || (*released)[1] != middlewareLive {
