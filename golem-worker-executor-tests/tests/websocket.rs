@@ -840,6 +840,85 @@ async fn websocket_report_loss_preserves_live_disconnect_and_recorded_close(
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn websocket_default_policy_reports_session_loss_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    for first_access in [
+        "receive_next_from_persisted_result",
+        "send_persisted_result",
+    ] {
+        let mut peer = ReconnectTestServer::start().await;
+        let agent_id = agent_id!("WebsocketTest", format!("default-policy-{first_access}"));
+        executor
+            .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "connect_default_and_receive_first",
+                    data_value!(peer.url())
+                )
+                .await?
+                .into_typed::<String>()?,
+            RECONNECT_FIRST_MESSAGE
+        );
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+        drop(executor);
+        executor = start(deps, &context).await?;
+
+        let first = if first_access == "send_persisted_result" {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    first_access,
+                    data_value!("must-not-reach-peer"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?
+                .map(|()| "sent".to_string())
+        } else {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, first_access, data_value!())
+                .await?
+                .into_typed::<Result<String, String>>()?
+        };
+        let later = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "receive_next_from_persisted_result",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        for result in [first, later] {
+            let error = result.expect_err("a handle without a policy must not reconnect");
+            assert!(error.ends_with("SessionLost"), "{error}");
+        }
+        assert_eq!(peer.accepted(), 1, "no replacement connection");
+        assert_eq!(peer.completed_handshakes(), 1);
+        assert_eq!(peer.frames_received(), Vec::<String>::new());
+        peer.stop().await?;
+    }
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn websocket_reconstruction_policies_are_independent_in_one_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -40,6 +40,7 @@ assert_has "$ordinary_wit" "export golem:tool/guest@0.1.0;"
 assert_has "$ordinary_wit" "export golem:tool/tool-middleware-guest@0.1.0;"
 assert_has "$ordinary_wit" "import golem:tool/host@0.1.0;"
 assert_has "$ordinary_wit" "import golem:agent/durable-streams@2.0.0;"
+assert_has "$ordinary_wit" "import golem:websocket/client@1.5.0;"
 
 host_dts="$(cat "$sdk_root/wit/dts/golem_agent_2_0_0_host.d.ts")"
 streams_dts="$(cat "$sdk_root/wit/dts/golem_agent_2_0_0_durable_streams.d.ts")"

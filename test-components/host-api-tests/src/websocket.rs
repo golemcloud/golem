@@ -23,6 +23,8 @@ pub trait WebsocketTest {
     fn echo_and_record(&self, url: String, msg: String) -> String;
     /// Connects once, stores the connection in agent state and receives one message.
     fn connect_and_receive_first(&self, url: String) -> String;
+    /// Like `connect_and_receive_first`, but passes no reconstruction policy.
+    fn connect_default_and_receive_first(&self, url: String) -> String;
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
     /// Like `receive_next_from_persisted`, but returns websocket errors to the caller.
@@ -81,14 +83,22 @@ pub trait EphemeralWebsocketTest {
     ) -> Result<(String, Option<String>), String>;
 }
 
+/// The reconnect tests need the non-default policy, so they opt into it explicitly.
+fn connect_reconnecting(url: &str) -> Result<WebsocketConnection, WebSocketError> {
+    WebsocketConnection::connect(
+        url,
+        None,
+        Some(WebSocketReconstructionPolicy::ReconnectAutomatically),
+    )
+}
+
 async fn receive_lock_contention(
     url: &str,
     timeout_ms: u64,
 ) -> Result<(String, Option<String>), String> {
     use futures_concurrency::future::Join;
 
-    let ws =
-        WebsocketConnection::connect(url, None, None).map_err(|e| format!("Connect: {e:?}"))?;
+    let ws = connect_reconnecting(url).map_err(|e| format!("Connect: {e:?}"))?;
     let reader_ready = golem_rust::create_promise();
     let timed = async {
         golem_rust::await_promise(&reader_ready).await;
@@ -116,7 +126,7 @@ impl EphemeralWebsocketTest for EphemeralWebsocketTestImpl {
     }
 
     fn connect_and_receive_first(&self, url: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        let ws = connect_reconnecting(&url).expect("connect failed");
         match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
@@ -124,7 +134,7 @@ impl EphemeralWebsocketTest for EphemeralWebsocketTestImpl {
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
-        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        let ws = connect_reconnecting(&url).expect("connect failed");
         match ws
             .blocking_receive_with_timeout(timeout_ms)
             .expect("receive failed")
@@ -163,7 +173,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn echo(&self, url: String, msg: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        let ws = connect_reconnecting(&url).expect("connect failed");
 
         ws.send(&WebSocketMessage::Text(msg)).expect("send failed");
 
@@ -180,6 +190,16 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn connect_and_receive_first(&self, url: String) -> String {
+        let ws = connect_reconnecting(&url).expect("connect failed");
+        let first = match ws.blocking_receive().expect("receive failed") {
+            WebSocketMessage::Text(t) => t,
+            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+        };
+        *self.persisted_ws.borrow_mut() = Some(ws);
+        first
+    }
+
+    fn connect_default_and_receive_first(&self, url: String) -> String {
         let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
         let first = match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
@@ -255,8 +275,8 @@ impl WebsocketTest for WebsocketTestImpl {
         first_url: String,
         second_url: String,
     ) -> (String, String) {
-        let first = WebsocketConnection::connect(&first_url, None, None).expect("connect failed");
-        let second = WebsocketConnection::connect(&second_url, None, None).expect("connect failed");
+        let first = connect_reconnecting(&first_url).expect("connect failed");
+        let second = connect_reconnecting(&second_url).expect("connect failed");
         fn text(result: Result<WebSocketMessage, WebSocketError>) -> String {
             match result {
                 Ok(WebSocketMessage::Text(t)) => t,
@@ -434,8 +454,7 @@ impl WebsocketTest for WebsocketTestImpl {
         url: String,
         barrier: PromiseId,
     ) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None, None)
-            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+        let ws = connect_reconnecting(&url).map_err(|e| format!("Failed to connect: {:?}", e))?;
         let mut received = Vec::new();
 
         for payload in ["msg-1", "msg-2"] {
@@ -473,7 +492,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
-        let ws = WebsocketConnection::connect(&url, None, None).expect("connect failed");
+        let ws = connect_reconnecting(&url).expect("connect failed");
 
         match ws
             .blocking_receive_with_timeout(timeout_ms)
@@ -494,8 +513,7 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     async fn async_bidi_test(&self, url: String) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None, None)
-            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+        let ws = connect_reconnecting(&url).map_err(|e| format!("Failed to connect: {:?}", e))?;
 
         let payloads = ["msg-a", "msg-b", "msg-c"];
         let mut received = Vec::new();
@@ -520,14 +538,13 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn connect_result(&self, url: String) -> Result<(), String> {
-        WebsocketConnection::connect(&url, None, None)
+        connect_reconnecting(&url)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
     }
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None, None)
-            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+        let ws = connect_reconnecting(&url).map_err(|e| format!("Failed to connect: {:?}", e))?;
         match ws
             .blocking_receive_with_timeout(timeout_ms)
             .map_err(|e| format!("Receive error: {:?}", e))?
@@ -544,8 +561,7 @@ impl WebsocketTest for WebsocketTestImpl {
         timeout_ms: u64,
         max_timeouts: u32,
     ) -> Result<String, String> {
-        let ws = WebsocketConnection::connect(&url, None, None)
-            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+        let ws = connect_reconnecting(&url).map_err(|e| format!("Failed to connect: {:?}", e))?;
 
         for _ in 0..max_timeouts {
             match ws

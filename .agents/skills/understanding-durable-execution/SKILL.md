@@ -3212,7 +3212,7 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry applies the policy. With the default
+still sees its own gate in the entry applies the policy. With an explicit
 `reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
@@ -3240,8 +3240,9 @@ interruption. Tests:
 `websocket_closed_connection_stays_terminal_after_replay`.
 
 The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
-`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
-live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+`report-connection-loss`, which publishes terminal `SessionLost` at the first live access to a
+reconstructed successful handle, without a pool permit or handshake. Only an explicit
+`reconnect-automatically` opens a replacement connection. Recorded
 send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
 restart, and crash all use this reconstruction path; the option does not change ordinary live
 disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;

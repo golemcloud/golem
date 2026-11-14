@@ -19,12 +19,14 @@ defineAgent({
         const stream = Stream.unwrap(
           Effect.gen(function* () {
             if (readers === 0) return input
-            const first = yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/first`)
+            // The duplex session continues after a crash, so the sockets reconnect.
+            const options = { reconstructionPolicy: "reconnect-automatically" } as const
+            const first = yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/first`, options)
             const firstPull = yield* Socket.readerString(first)
             const write = yield* first.writer
             const secondPull =
               readers === 2
-                ? yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/second`).pipe(
+                ? yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/second`, options).pipe(
                     Effect.flatMap(Socket.readerString),
                   )
                 : undefined
