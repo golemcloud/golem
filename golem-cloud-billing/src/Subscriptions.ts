@@ -19,6 +19,12 @@ export interface Subscription {
   readonly status: string
   readonly currentPeriodEnd: Date | undefined
   readonly cancelAtPeriodEnd: boolean
+  /**
+   * When the subscription ended (`ended_at` of Polar). A cancellation ends it at or after
+   * `currentPeriodEnd`. A revoke, in the dashboard or by Polar after the failed retries, ends it
+   * before `currentPeriodEnd`, which Polar keeps.
+   */
+  readonly endedAt: Date | undefined
   /** `modified_at` of the subscription in Polar, or `created_at` before its first change. */
   readonly modifiedAt: Date
   /** The metered prices of the product: an order item of one of them bills paid overage. */
@@ -86,7 +92,7 @@ export interface SubscriptionsShape {
   /**
    * Whether the usage push recorded paid overage of the account that an order can still bill: a
    * usage event that is not held, and is not sent yet, or was sent after the newest order of the
-   * account before the last order of its ended subscription (see `unbilledUsageEvents`). Polar
+   * account while a subscription can still create an order (see `unbilledUsageEvents`). Polar
    * bills a sent event on the next order of the subscription. The push sends an unsent event at
    * its next run, or holds it when Polar would not bill it.
    */
@@ -133,13 +139,6 @@ export interface SubscriptionsShape {
     accountId: string,
     productId: string
   ) => Effect.Effect<Subscription | undefined, SubscriptionsError>
-  /**
-   * Records that an administrator checked the account in Polar: Polar has billed, or will never
-   * bill, the usage events that the usage push recorded until now. `unbilledUsage` then skips them,
-   * so the deletion hold and the cleanup no longer count them. A later event counts again. Returns
-   * the time up to which the usage is settled.
-   */
-  readonly settleUsage: (accountId: string) => Effect.Effect<Date, SubscriptionsError>
   /** Records that the app placed a deletion hold on the account in the registry, with this reason. */
   readonly recordHold: (accountId: string, reason: string) => Effect.Effect<void, SubscriptionsError>
   /** Records that the app removed its deletion hold from the account. */
@@ -164,9 +163,13 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
 /**
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
  * the usage events of the usage push, the deleted accounts that the cleanup has finished, the
- * deletion holds that the app placed in the registry, and the usage settlements of administrators.
- * The web app, the usage push and the cleanup each create them, because each reads tables that
- * another one writes and can run first.
+ * deletion holds that the app placed in the registry, and the usage settlements of operators with
+ * their history. The web app, the usage push and the cleanup each create them, because each reads
+ * tables that another one writes and can run first.
+ *
+ * An operator script outside the app records a usage settlement with the admin database user: it
+ * sets `usage_settlements.settled_through` of the account, and adds a row with the same time, the
+ * operator and the reason to `usage_settlement_history`. The app only reads `usage_settlements`.
  */
 export const tables = `
   CREATE TABLE IF NOT EXISTS polar_subscriptions (
@@ -179,6 +182,7 @@ export const tables = `
     modified_at TIMESTAMPTZ NOT NULL,
     metered_price_ids TEXT[] NOT NULL,
     past_due_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
   CREATE INDEX IF NOT EXISTS polar_subscriptions_account ON polar_subscriptions (account_id, product_id);
@@ -226,24 +230,38 @@ export const tables = `
   CREATE TABLE IF NOT EXISTS usage_settlements (
     account_id UUID PRIMARY KEY,
     settled_through TIMESTAMPTZ NOT NULL
-  )`
+  );
+  CREATE TABLE IF NOT EXISTS usage_settlement_history (
+    settlement_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    account_id UUID NOT NULL,
+    settled_through TIMESTAMPTZ NOT NULL,
+    operator TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+  );
+  CREATE INDEX IF NOT EXISTS usage_settlement_history_account ON usage_settlement_history (account_id, recorded_at)`
 
 /**
- * The usage events of account $1 that an order can still bill: not held, and either
+ * The usage events of account $1 that an order can still bill: not held, recorded after the usage
+ * settlement of the account, and either
  *
  * - not sent yet. Polar bills only the events that it received, so an unsent event stays
  *   unbilled until the usage push sends it or holds it, also when an order is newer, or
- * - sent after the creation of the newest order of the account, until the last order of the
- *   account's newest subscription exists: that subscription is no longer in a status of $2, and
- *   Polar created an order of it at or after its period end. No order of Polar bills anything
- *   for the subscription after that one. What that order billed is final, and whether it is paid
- *   is a matter of `pendingOrders`. The app sets `sent_at` after Polar accepts an event, so an
- *   event that the last order billed can look newer than that order; the last order settles it.
+ * - sent after the creation of the newest order of the account, while the latest subscription
+ *   of the account can still create an order. The latest subscription is a subscription in a
+ *   status of $2, which can always create an order, or else the subscription that ended last.
+ *   An ended subscription cannot create an order when:
+ *   - Polar ended it before its period end, for example with a revoke. Polar bills paid overage
+ *     only on the order at the period end, and the product has no meter cycle, so Polar never
+ *     bills the events that it received after the newest order. They are lost revenue.
+ *   - Polar created an order of it at or after its period end: its last order. What that order
+ *     billed is final. The app sets `sent_at` after Polar accepts an event, so an event that the
+ *     last order billed can look newer than that order; the last order settles it.
  *
- * A subscription that Polar ends before its period end has no order after the period end. Its
- * events that look newer than the newest order count until an administrator checks the account in
- * Polar and records a usage settlement (`settleUsage`): an event that the push recorded up to the
- * settlement no longer counts.
+ * Whether an order is paid is a matter of `pendingOrders`. When the app cannot tell that Polar has
+ * billed or dropped an event, for example when the last order of a subscription never comes, an
+ * operator checks the account in Polar and records a usage settlement outside the app: an event
+ * that the push recorded up to `settled_through` no longer counts.
  */
 const unbilledUsageEvents = `
   usage_events e
@@ -257,13 +275,16 @@ const unbilledUsageEvents = `
           (SELECT max(o.created_at) FROM polar_orders o WHERE o.account_id = $1), '-infinity'::timestamptz)
         AND NOT EXISTS (
           SELECT 1
-            FROM (SELECT s.subscription_id, s.status, s.current_period_end
+            FROM (SELECT s.subscription_id, s.status, s.current_period_end, s.ended_at
                     FROM polar_subscriptions s
                    WHERE s.account_id = $1
-                   ORDER BY s.current_period_end DESC NULLS LAST
-                   LIMIT 1) newest
-            JOIN polar_orders o ON o.subscription_id = newest.subscription_id
-           WHERE NOT (newest.status = ANY($2)) AND o.created_at >= newest.current_period_end)))`
+                   ORDER BY (s.status = ANY($2)) DESC, s.ended_at DESC NULLS LAST, s.current_period_end DESC NULLS LAST
+                   LIMIT 1) latest
+           WHERE NOT (latest.status = ANY($2))
+             AND (latest.ended_at < latest.current_period_end
+                  OR EXISTS (
+                    SELECT 1 FROM polar_orders o
+                     WHERE o.subscription_id = latest.subscription_id AND o.created_at >= latest.current_period_end)))))`
 
 interface SubscriptionRow {
   readonly subscription_id: string
@@ -272,6 +293,7 @@ interface SubscriptionRow {
   readonly status: string
   readonly current_period_end: Date | null
   readonly cancel_at_period_end: boolean
+  readonly ended_at: Date | null
   readonly modified_at: Date
   readonly metered_price_ids: Array<string>
   readonly past_due_at: Date | null
@@ -284,13 +306,14 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
   status: row.status,
   currentPeriodEnd: row.current_period_end ?? undefined,
   cancelAtPeriodEnd: row.cancel_at_period_end,
+  endedAt: row.ended_at ?? undefined,
   modifiedAt: row.modified_at,
   meteredPriceIds: row.metered_price_ids,
   pastDueAt: row.past_due_at ?? undefined
 })
 
 const columns = `subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
-                cancel_at_period_end, modified_at, metered_price_ids, past_due_at`
+                cancel_at_period_end, ended_at, modified_at, metered_price_ids, past_due_at`
 
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
@@ -313,15 +336,16 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
     const record = (subscription: Subscription) =>
       query(
         `INSERT INTO polar_subscriptions
-           (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
-            metered_price_ids, past_due_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, ended_at,
+            modified_at, metered_price_ids, past_due_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (subscription_id) DO UPDATE SET
            account_id = EXCLUDED.account_id,
            product_id = EXCLUDED.product_id,
            status = EXCLUDED.status,
            current_period_end = EXCLUDED.current_period_end,
            cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+           ended_at = EXCLUDED.ended_at,
            modified_at = EXCLUDED.modified_at,
            metered_price_ids = EXCLUDED.metered_price_ids,
            past_due_at = EXCLUDED.past_due_at,
@@ -334,6 +358,7 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
           subscription.status,
           subscription.currentPeriodEnd ?? null,
           subscription.cancelAtPeriodEnd,
+          subscription.endedAt ?? null,
           subscription.modifiedAt,
           subscription.meteredPriceIds,
           subscription.pastDueAt ?? null
@@ -413,14 +438,6 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
          SELECT account_id::text AS account_id FROM deletion_holds WHERE updated_at < $4`,
         [productId, billableStatuses, since, recheckBefore]
       ).pipe(Effect.map((result) => result.rows.map((row) => row.account_id)))
-
-    const settleUsage = (accountId: string) =>
-      query<{ settled_through: Date }>(
-        `INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())
-         ON CONFLICT (account_id) DO UPDATE SET settled_through = EXCLUDED.settled_through
-         RETURNING settled_through`,
-        [accountId]
-      ).pipe(Effect.map((result) => result.rows[0]!.settled_through))
 
     const recordHold = (accountId: string, reason: string) =>
       query(
@@ -515,7 +532,6 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
       pendingOrders,
       unbilledUsage,
       holdCandidates,
-      settleUsage,
       recordHold,
       forgetHold,
       ending,

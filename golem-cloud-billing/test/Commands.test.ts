@@ -32,28 +32,6 @@ describe("push-usage", () => {
   })
 })
 
-describe("settle-usage", () => {
-  it("refuses a value that is not the ID of a Golem account, before it reads a setting", async () => {
-    const lines: Array<string> = []
-
-    const exit = await Effect.runPromiseExit(
-      Commands.settleUsage("octocat@example.com").pipe(
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))),
-        Effect.provide(Logger.layer([Logger.map(Logger.formatJson, (line) => void lines.push(line))]))
-      )
-    )
-
-    expect(Exit.isFailure(exit)).toBe(true)
-    expect(lines.map((line) => JSON.parse(line))).toEqual([
-      expect.objectContaining({
-        level: "ERROR",
-        message: "The usage settlement failed",
-        annotations: { error: "settle-usage needs the ID of a Golem account, not octocat@example.com" }
-      })
-    ])
-  })
-})
-
 describe("cleanup-deleted-accounts", () => {
   it("logs the missing setting before it fails, without the secrets", async () => {
     const lines: Array<string> = []

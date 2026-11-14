@@ -66,7 +66,8 @@ the billing account, the webhooks and the sweep call `GET /v1/me/token`,
 `/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
 [Subscriptions](#subscriptions)). The app also keeps tables of its own: `polar_subscriptions`,
 `polar_orders`, `polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups`,
-`deletion_holds` and `usage_settlements`. An administrator creates the role once:
+`deletion_holds`, `usage_settlements` and `usage_settlement_history`. An administrator creates the
+role once:
 
 ```sql
 CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
@@ -218,8 +219,27 @@ when none is:
 | --- | --- |
 | `subscription` | a billable subscription (`active`, `trialing` or `past_due`) is not canceled at the period end |
 | `canceledSubscription` | a billable subscription is canceled at the period end and runs to the end of the period |
-| `unbilledUsage` | a usage event is not held, and is not sent yet, or was sent after the newest order of the account and the last order of its ended subscription has not come. Polar bills an event only after the push sends it, on the next order. The last order is an order of the account's newest subscription, created at or after its period end, when that subscription is no longer billable. No order bills anything after it, so it settles every sent event, also one whose `sent_at` the app recorded after that order |
+| `unbilledUsage` | a billable subscription, and a usage event that no order bills yet |
+| `unsettledUsage` | no billable subscription, and a usage event that no order bills yet |
 | `unpaidOverage` | a `pending` order has an amount for a metered price |
+
+A usage event that no order bills yet is not held, and is not sent yet, or was sent after the
+newest order of the account while the latest subscription of the account can still create an
+order. Polar bills an event only after the push sends it, on the next order. The latest
+subscription is a billable subscription, or else the subscription that ended last (`ended_at` of
+Polar). An ended subscription creates no more orders when:
+
+- Polar ended it before its period end: a revoke in the Polar dashboard, or the revoke of Polar
+  after the failed retries. Polar keeps `current_period_end`, so `ended_at` is before it. Polar
+  bills paid overage only on the order at the period end, and the product has no meter cycle, so
+  Polar never bills the events that it received after the newest order. This overage is lost
+  revenue, and it does not hold the account.
+- Polar created its last order: an order of the subscription, created at or after its period end.
+  No order bills anything after it, so it settles every sent event, also one whose `sent_at` the
+  app recorded after that order.
+
+An unpaid order holds the account as `unpaidOverage`, also after an early end, because the
+customer can still pay it.
 
 The hold stays for the whole life of a billable subscription, also after a cancellation. Paid
 overage needs the paid plan, and the paid plan needs a billable subscription, so the account has a
@@ -237,13 +257,16 @@ no webhook comes for a usage event, and each account whose row is older than an 
 (`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
 sweep tries the removal again with no time limit.
 
-A subscription that Polar ends before its period end, for example a revocation, has no order after
-the period end. When the push sent paid overage after the newest order of such an account, the
-hold stays until an administrator checks the account in Polar and runs
-`node main.mjs settle-usage <account ID>`. The command records in `usage_settlements` that Polar
-has billed, or will never bill, the usage events that the push recorded until then. The app then
-removes its hold at the next sweep, and the cleanup no longer counts these events either. A
-later event counts again. The command reads only the `GOLEM__DB__*` variables.
+An `unsettledUsage` hold clears by itself within minutes: the push sends or holds an unsent event
+at its next run, and Polar creates the last order soon after the period end. When it stays, for
+example because the last order never comes, an operator checks the account in Polar and records a
+usage settlement with the operator script of golem-cloud, as the admin database user. The billing
+app has no command for it, and reads only `usage_settlements`. The script refuses while the
+account has a billable subscription. It sets `usage_settlements.settled_through` of the account,
+which records that Polar has billed, or will never bill, the usage events that the push recorded
+until then, and adds a row with the same time, the operator and the reason to
+`usage_settlement_history`. The sweep then removes the hold within an hour (`HOLD_RECHECK_MS`),
+and the cleanup does not count these events either. A later event counts again.
 
 Do not remove the hold of the app in the registry instead (`override-deletion-hold`): the next
 reconcile places it again while the reason holds, and after a delete the cleanup checks the same
@@ -252,8 +275,10 @@ reasons and keeps the user, so the person cannot sign up again.
 The registry refuses `DELETE /v1/accounts/{account_id}` with 409 while the account has a hold, and
 shows the reason text to the person, for example in `golem-cli account delete`. The text starts
 with `Golem Cloud billing:` and has one sentence for each reason that tells the person what to do:
-cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. The
-rest of the paid period is not refunded.
+cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. Only
+a billable subscription has an invoice to come, so the text of `unsettledUsage` promises none: it
+says to try again in an hour, and then to contact support at `contact@golem.cloud`. The rest of
+the paid period is not refunded.
 
 ## Billable overage
 

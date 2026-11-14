@@ -44,7 +44,9 @@ import {
  * Settlement also places a deletion hold on the account while the account has a billable
  * subscription or owes paid overage (`holdFor`), so the registry refuses to delete it. Golem does
  * not charge early and does not end a paid period early: the person deletes the account after the
- * subscription ends and Polar has billed the paid overage and been paid for it.
+ * subscription ends and Polar has billed the paid overage and been paid for it. When Polar ends a
+ * subscription before its period end, it never bills the paid overage after the newest order, and
+ * that overage does not hold the account.
  */
 
 /**
@@ -141,14 +143,24 @@ export type HoldReason =
   | "subscription"
   /** A billable subscription is canceled at the period end, and runs to the end of the period. */
   | "canceledSubscription"
-  /** The usage push recorded paid overage that no order bills yet. */
+  /**
+   * The usage push recorded paid overage that no order bills yet, and a billable subscription
+   * bills it on its next order.
+   */
   | "unbilledUsage"
+  /**
+   * The usage push recorded paid overage that no order bills yet, and no subscription is billable:
+   * the last order of an ended subscription has not come, or the push has not sent or held an
+   * event yet. Each clears within minutes. If it does not, an operator checks the account in Polar.
+   */
+  | "unsettledUsage"
   /** A pending order has an amount for a metered price. */
   | "unpaidOverage"
 
 /**
  * The reasons for a deletion hold on the account; none when the account has no billable
- * subscription and owes no paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`.
+ * subscription and owes no paid overage. `unbilledUsage` is `Subscriptions.unbilledUsage`, which
+ * does not count the overage that Polar drops when it ends a subscription before its period end.
  *
  * A billable subscription holds the account to the end of the period, also after a cancellation.
  * Paid overage needs the paid plan, and the paid plan needs a billable subscription, so the
@@ -170,7 +182,7 @@ export const holdFor = (
     reasons.push("canceledSubscription")
   }
   if (unbilledUsage) {
-    reasons.push("unbilledUsage")
+    reasons.push(billable.length > 0 ? "unbilledUsage" : "unsettledUsage")
   }
   if (pendingOrders.some((order) => order.meteredAmount > 0)) {
     reasons.push("unpaidOverage")
@@ -178,9 +190,14 @@ export const holdFor = (
   return reasons
 }
 
+/** Where the person asks for help when a deletion hold stays and an operator has to act. */
+export const SUPPORT_EMAIL = "contact@golem.cloud"
+
 /**
  * The reason text of the deletion hold. The registry shows it to the person who tries to delete
  * the account, so each sentence says what to do. `billingUrl` is the page of the billing app.
+ * Only a billable subscription has an invoice to come, so the text of `unsettledUsage` promises
+ * none.
  */
 export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: string): string => {
   const sentences: Record<HoldReason, string> = {
@@ -189,6 +206,7 @@ export const holdReasonText = (reasons: ReadonlyArray<HoldReason>, billingUrl: s
       "The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends.",
     unbilledUsage:
       "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
+    unsettledUsage: `The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact support at ${SUPPORT_EMAIL}.`,
     unpaidOverage: `An invoice for paid overage is not paid. Pay it in Manage billing at ${billingUrl}.`
   }
   return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason])].join(" ")
