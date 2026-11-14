@@ -223,11 +223,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         &method_name,
                                     )
                                     .id();
+                                // The scope is not bound yet, so a deletion can stop this
+                                // generation's state actor; that read fails with the original
+                                // error rather than panicking.
                                 if matches!(
-                                    worker.lookup_invocation_result(&ik).await,
-                                    crate::model::LookupResult::New
+                                    worker.try_lookup_invocation_result(&ik).await,
+                                    Ok(crate::model::LookupResult::New) | Err(_)
                                 ) {
-                                    return Err(error);
+                                    return worker
+                                        .deleted_incarnation_as_not_found(
+                                            expected_fingerprint,
+                                            Err(error),
+                                        )
+                                        .await;
                                 }
                                 // Acceptance still validates the exact origin and descriptor.
                                 // Observing accepted work does not start a failed runtime.
@@ -389,7 +397,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     (None, _) => None,
                 };
                 let existing_metadata = if let Some((worker, _)) = &pinned {
-                    Some(worker.get_latest_worker_metadata().await)
+                    Some(
+                        worker
+                            .deleted_incarnation_as_not_found(
+                                expected_fingerprint,
+                                worker.try_get_latest_worker_metadata().await,
+                            )
+                            .await?,
+                    )
                 } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                     None
                 } else {

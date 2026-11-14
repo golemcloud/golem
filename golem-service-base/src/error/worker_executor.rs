@@ -37,6 +37,9 @@ pub enum WorkerExecutorError {
     AgentAlreadyExists {
         agent_id: AgentId,
     },
+    CreateIdempotencyKeyConflict {
+        agent_id: AgentId,
+    },
     AgentNotFound {
         agent_id: AgentId,
     },
@@ -348,6 +351,12 @@ impl Display for WorkerExecutorError {
             Self::AgentAlreadyExists { agent_id } => {
                 write!(f, "Worker already exists: {agent_id}")
             }
+            Self::CreateIdempotencyKeyConflict { agent_id } => {
+                write!(
+                    f,
+                    "Create idempotency key conflicts with the stored request for {agent_id}"
+                )
+            }
             Self::AgentNotFound { agent_id } => {
                 write!(f, "Worker not found: {agent_id}")
             }
@@ -514,6 +523,7 @@ impl Error for WorkerExecutorError {
         match self {
             Self::InvalidRequest { .. } => "Invalid request",
             Self::AgentAlreadyExists { .. } => "Worker already exists",
+            Self::CreateIdempotencyKeyConflict { .. } => "Create idempotency key conflict",
             Self::AgentNotFound { .. } => "Worker not found",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
@@ -556,6 +566,7 @@ impl ApiErrorDetails for WorkerExecutorError {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
             Self::AgentAlreadyExists { .. } => "AgentAlreadyExists",
+            Self::CreateIdempotencyKeyConflict { .. } => "CreateIdempotencyKeyConflict",
             Self::AgentNotFound { .. } => "AgentNotFound",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
@@ -593,6 +604,7 @@ impl ApiErrorDetails for WorkerExecutorError {
     fn is_expected(&self) -> bool {
         match self {
             Self::AgentAlreadyExists { .. }
+            | Self::CreateIdempotencyKeyConflict { .. }
             | Self::AgentNotFound { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
@@ -682,10 +694,17 @@ impl From<std::io::Error> for WorkerExecutorError {
 impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
-            error @ WorkerExecutorError::PreviousInvocationFailed { .. } => {
+            error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+            | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::AgentAlreadyExists { .. }) => {
+                let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
+                    tonic::Code::AlreadyExists
+                } else {
+                    tonic::Code::FailedPrecondition
+                };
                 let message = error.to_string();
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
-                Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+                Self::with_details(code, message, details.into())
             }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
@@ -733,6 +752,15 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::AgentAlreadyExists(
                         golem::worker::v1::AgentAlreadyExists {
+                            agent_id: Some(agent_id.into()),
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
+                        golem::worker::v1::CreateIdempotencyKeyConflict {
                             agent_id: Some(agent_id.into()),
                         },
                     ),
@@ -1053,6 +1081,11 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .agent_id
                     .ok_or("Missing agent_id")?
                     .try_into()?,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
+                conflict,
+            )) => Ok(Self::CreateIdempotencyKeyConflict {
+                agent_id: conflict.agent_id.ok_or("Missing agent_id")?.try_into()?,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::AgentNotFound(
                 worker_not_found,
@@ -1401,15 +1434,32 @@ mod read_only_violation_trap_tests {
     use test_r::test;
 
     #[test]
-    fn previous_invocation_failure_round_trips_through_grpc_status_details() {
-        let expected = WorkerExecutorError::PreviousInvocationFailed {
-            error: AgentError::Unknown("guest failure".to_string()),
-            stderr: "guest stderr".to_string(),
-        };
-
+    fn worker_failures_round_trip_through_grpc_status_details() {
+        for expected in [
+            WorkerExecutorError::PreviousInvocationFailed {
+                error: AgentError::Unknown("guest failure".to_string()),
+                stderr: "guest stderr".to_string(),
+            },
+            WorkerExecutorError::CreateIdempotencyKeyConflict {
+                agent_id: AgentId {
+                    component_id: ComponentId(uuid::Uuid::nil()),
+                    agent_id: "Counter(17)".to_string(),
+                },
+            },
+        ] {
+            let status: Status = expected.clone().into();
+            assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(
+                WorkerExecutorError::from_status_details(&status),
+                Some(expected)
+            );
+        }
+        let expected = WorkerExecutorError::worker_already_exists(AgentId {
+            component_id: ComponentId(uuid::Uuid::nil()),
+            agent_id: "Counter(23)".to_string(),
+        });
         let status: Status = expected.clone().into();
-
-        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(status.code(), tonic::Code::AlreadyExists);
         assert_eq!(
             WorkerExecutorError::from_status_details(&status),
             Some(expected)

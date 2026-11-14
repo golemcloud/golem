@@ -426,7 +426,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
     /// actor a deletion has stopped: that read fails instead of panicking.
-    pub(in crate::worker) async fn try_lookup_invocation_result(
+    pub(crate) async fn try_lookup_invocation_result(
         &self,
         key: &InvocationId,
     ) -> Result<LookupResult, WorkerExecutorError> {

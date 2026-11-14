@@ -1329,6 +1329,8 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
@@ -1366,7 +1368,11 @@ task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` o
 has completed `DurableStateRemoved`, because nothing committed to the generation can run after
 that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
-deletion attempt and a lost-shard retirement keep their own errors. Failures after the bind keep
+deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
+worker's status before the bind, with or without a fingerprint, without panicking on a stopped
+status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
+deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
+as reads do, until a retried delete claims it. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
 while it runs. External-tool sessions bind the same way after each acquisition. A call on an
 existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual

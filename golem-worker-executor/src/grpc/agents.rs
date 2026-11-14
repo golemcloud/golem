@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use super::{
-    AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AgentMetadata, AuthCtx,
-    CancelInvocationRequest, DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest,
-    ForkWorkerResponse, HasActiveAgents, HasAll, HasEvents, HasPromiseService, HasWorkerService,
-    HashMap, LookupResult, OplogIndex, OwnedAgentId, RecvError,
+    AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AuthCtx, CancelInvocationRequest,
+    DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest, ForkWorkerResponse, HasAll,
+    HasEvents, HasPromiseService, LookupResult, OplogIndex, OwnedAgentId, RecvError,
     ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
     UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
@@ -32,56 +31,6 @@ use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
-    /// Checks whether a create-worker request carries the same per-worker override
-    /// parameters that an already-persisted worker was created with. When this returns
-    /// `true` the request is treated as an idempotent duplicate and execution falls
-    /// through to `get_or_create_suspended` which handles the already-existing worker.
-    ///
-    /// All three fields store only per-worker overrides — agent-type defaults are
-    /// applied at runtime and not stored. Direct equality is therefore used for all three.
-    fn is_same_worker_creation_request(
-        existing: &AgentMetadata,
-        request_env: &[(String, String)],
-        request_config: &[AgentConfigEntryDto],
-    ) -> bool {
-        // env — both sides hold only per-worker overrides; compare order-independently
-        let existing_env: HashMap<&str, &str> = existing
-            .env
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        let request_env_map: HashMap<&str, &str> = request_env
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        if existing_env != request_env_map {
-            return false;
-        }
-
-        // config — both sides hold only per-worker overrides; compare path and value
-        if existing.config.len() != request_config.len() {
-            return false;
-        }
-        for (existing_entry, request_entry) in existing.config.iter().zip(request_config.iter()) {
-            if existing_entry.path != request_entry.path {
-                return false;
-            }
-            // Compare the existing entry's plain (schema-guided) JSON (the same
-            // form the request DTO carries) against the requested value.
-            let existing_json = golem_schema::schema::render::to_json_value(
-                existing_entry.value.graph(),
-                existing_entry.value.root_type(),
-                existing_entry.value.value(),
-            )
-            .ok();
-            if existing_json.as_ref() != Some(&request_entry.value.0) {
-                return false;
-            }
-        }
-
-        true
-    }
-
     pub(super) async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
@@ -139,35 +88,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "Failed parsing local agent config: {err}"
                 ))
             })?;
-
-        if !request.ignore_already_existing
-            && freshness_disposition == InvocationFreshnessDisposition::MayExist
-        {
-            if let Some(existing) = self.active_agents().try_get(&owned_agent_id).await {
-                if !Self::is_same_worker_creation_request(
-                    &existing.get_initial_worker_metadata(),
-                    &env,
-                    &config,
-                ) {
-                    return Err(WorkerExecutorError::worker_already_exists(
-                        owned_agent_id.agent_id(),
-                    ));
-                }
-            } else {
-                let existing_worker = self.worker_service().get(&owned_agent_id).await?;
-                if let Some(existing) = existing_worker
-                    && !Self::is_same_worker_creation_request(
-                        &existing.initial_worker_metadata,
-                        &env,
-                        &config,
-                    )
-                {
-                    return Err(WorkerExecutorError::worker_already_exists(
-                        owned_agent_id.agent_id(),
-                    ));
-                }
-            }
-        }
 
         let invocation_context = self.limit_invocation_context_stack_depth(
             from_proto_invocation_context(&request.invocation_context),
