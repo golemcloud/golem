@@ -238,6 +238,34 @@ fn resolve_cargo_target_dir_uncached(repo_root: &Path) -> PathBuf {
     }
 }
 
+/// Finds the executable of a Golem service for a test that spawns its own copy of the service.
+///
+/// The service is looked up first in the cargo profile directory of the running test binary, so a
+/// `--release` run or a redirected target directory finds the binaries built with the test. When
+/// that directory has no such binary, as in CI where prebuilt binaries are placed in the debug
+/// directory, it falls back to the directory the shared test dependencies start services from.
+pub fn service_executable(golem_repo_root: &Path, name: &str) -> PathBuf {
+    let test_profile_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.to_path_buf()));
+    locate_service_executable(
+        test_profile_dir.as_deref(),
+        &resolve_cargo_target_dir(golem_repo_root).join("debug"),
+        name,
+    )
+}
+
+fn locate_service_executable(
+    test_profile_dir: Option<&Path>,
+    shared_services_dir: &Path,
+    name: &str,
+) -> PathBuf {
+    test_profile_dir
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| shared_services_dir.join(name))
+}
+
 impl Default for EnvBasedTestDependenciesConfig {
     fn default() -> Self {
         Self {
@@ -936,6 +964,17 @@ pub trait WorkerExecutorClusterControl {
 }
 
 impl EnvBasedTestDependencies {
+    /// A view of these dependencies whose clients reach the worker service through
+    /// `worker_service`, such as a private service that a test restarts or a relay that drops
+    /// connections. Every other dependency is shared with `self`. The view is for the calling
+    /// test only; it is not a hosted dependency.
+    pub fn with_worker_service(&self, worker_service: Arc<dyn WorkerService>) -> Self {
+        Self {
+            worker_service,
+            ..self.clone()
+        }
+    }
+
     fn usize_to_u16(idx: usize) -> u16 {
         u16::try_from(idx).expect("worker executor cluster index does not fit into u16")
     }
@@ -1145,13 +1184,45 @@ mod tests {
     use super::{
         ComponentCompilationServiceDescriptor, EnvBasedTestDependenciesDescriptor, RdbDescriptor,
         RegistryServiceDescriptor, ShardManagerDescriptor, TestTempDir, WorkerExecutorDescriptor,
-        WorkerServiceDescriptor,
+        WorkerServiceDescriptor, locate_service_executable,
     };
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn service_executable_prefers_the_test_binary_profile_directory() {
+        let target = TempDir::new().unwrap();
+        let release = target.path().join("release");
+        let debug = target.path().join("debug");
+        fs::create_dir_all(&release).unwrap();
+        fs::create_dir_all(&debug).unwrap();
+        fs::write(release.join("golem-worker-service"), b"").unwrap();
+        fs::write(debug.join("golem-worker-service"), b"").unwrap();
+
+        assert_eq!(
+            locate_service_executable(Some(&release), &debug, "golem-worker-service"),
+            release.join("golem-worker-service")
+        );
+    }
+
+    #[test]
+    fn service_executable_falls_back_to_the_shared_services_directory() {
+        let archive = TempDir::new().unwrap();
+        let shared = TempDir::new().unwrap();
+        fs::write(shared.path().join("golem-worker-service"), b"").unwrap();
+
+        assert_eq!(
+            locate_service_executable(Some(archive.path()), shared.path(), "golem-worker-service"),
+            shared.path().join("golem-worker-service")
+        );
+        assert_eq!(
+            locate_service_executable(None, shared.path(), "golem-worker-service"),
+            shared.path().join("golem-worker-service")
+        );
+    }
 
     #[test]
     fn owned_drop_deletes_directory() {

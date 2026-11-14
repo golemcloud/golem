@@ -110,10 +110,17 @@ impl SpawnedWorkerService {
         }
     }
 
+    /// The process ID of the running worker service, or `None` after it was killed.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().unwrap().as_ref().map(Child::id)
+    }
+
+    /// Kills the process and waits for its exit, so its ports are free when this returns.
     fn blocking_kill(&self) {
         info!("Stopping golem-worker-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }

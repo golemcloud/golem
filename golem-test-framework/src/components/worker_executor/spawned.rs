@@ -300,6 +300,10 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         Ok(Box::new(guard))
     }
 
+    fn pid(&self) -> Option<u32> {
+        self.child.lock().unwrap().as_ref().map(Child::id)
+    }
+
     fn metrics_endpoint(&self) -> Option<(String, u64)> {
         Some((
             format!("http://localhost:{}/metrics", self.http_port),
