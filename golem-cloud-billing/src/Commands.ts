@@ -3,6 +3,7 @@ import { FetchHttpClient } from "effect/http"
 import * as Cleanup from "./Cleanup.ts"
 import * as Database from "./Database.ts"
 import * as Metering from "./Metering.ts"
+import * as Migrations from "./Migrations.ts"
 import * as Polar from "./Polar.ts"
 import * as RegistryAccounts from "./RegistryAccounts.ts"
 import * as Subscriptions from "./Subscriptions.ts"
@@ -41,30 +42,21 @@ export const pushUsage = Effect.gen(function* () {
   )
 )
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /**
- * `settle-usage <account ID>` records that an administrator checked the account in Polar: Polar
- * has billed, or will never bill, the usage that the usage push recorded until now (see
- * `Subscriptions.settleUsage`). The deletion hold and the cleanup then no longer count that usage.
- * It needs only the database settings, so it runs in the pod of the web app.
+ * `migrate` applies the database migrations of the app once (see `Migrations.ts`), as the owner
+ * role of the schema, and exits. It reads only the database settings. A run on a migrated schema
+ * changes nothing. The web app, `push-usage` and `cleanup-deleted-accounts` fail until it has run.
  */
-export const settleUsage = (accountId: string | undefined) =>
-  Effect.suspend((): Effect.Effect<void, unknown> =>
-    accountId !== undefined && uuidPattern.test(accountId)
-      ? Effect.gen(function* () {
-          const subscriptions = yield* Subscriptions.Subscriptions
-          const settledThrough = yield* subscriptions.settleUsage(accountId)
-          yield* Effect.logInfo("Settled the recorded usage of the account").pipe(
-            Effect.annotateLogs({ golemAccountId: accountId, settledThrough: settledThrough.toISOString() })
-          )
-        }).pipe(Effect.provide(Subscriptions.commandLayer.pipe(Layer.provide(Database.layerFromEnv))))
-      : Effect.fail(new Error(`settle-usage needs the ID of a Golem account, not ${accountId ?? "nothing"}`))
-  ).pipe(
-    Effect.tapCause((cause) =>
-      Effect.logError("The usage settlement failed").pipe(Effect.annotateLogs({ error: messageOf(cause) }))
-    )
+export const migrate = Effect.gen(function* () {
+  yield* Migrations.migrate
+  const { schema } = yield* Database.Database
+  yield* Effect.logInfo("Applied the database migrations").pipe(Effect.annotateLogs({ schema }))
+}).pipe(
+  Effect.provide(Database.layerFromEnv),
+  Effect.tapCause((cause) =>
+    Effect.logError("The database migrations failed").pipe(Effect.annotateLogs({ error: messageOf(cause) }))
   )
+)
 
 /**
  * `cleanup-deleted-accounts` deletes the Polar customer and the Better Auth user of each account
@@ -82,7 +74,7 @@ export const cleanupDeletedAccounts = Effect.gen(function* () {
   )
 }).pipe(
   Effect.provide(
-    Layer.mergeAll(RegistryAccounts.layer, Subscriptions.commandLayer, Polar.layer).pipe(
+    Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
       Layer.provideMerge(Database.layerFromEnv),
       Layer.provide(Polar.configLayer),
       Layer.provide(FetchHttpClient.layer)

@@ -11,6 +11,7 @@ import {
   ORDER_PAYMENT_GRACE_MS,
   planFor,
   SETTLEMENT_MARGIN_MS,
+  CONTACT_EMAIL,
   sweeper
 } from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
@@ -28,6 +29,7 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   status: "active",
   currentPeriodEnd: new Date("2026-12-04T10:00:00Z"),
   cancelAtPeriodEnd: false,
+  endedAt: undefined,
   modifiedAt: new Date("2026-11-04T10:00:00Z"),
   meteredPriceIds: ["price_compute"],
   pastDueAt: undefined,
@@ -109,7 +111,23 @@ describe("holdFor", () => {
     ],
     ["an ended subscription", [], [subscription({ status: "canceled" })], [], false],
     ["a paused subscription", [], [subscription({ status: "paused" })], [], false],
-    ["an ended subscription with unbilled usage", ["unbilledUsage"], [subscription({ status: "canceled" })], [], true],
+    ["an active subscription with unbilled usage", ["subscription", "unbilledUsage"], [subscription()], [], true],
+    [
+      "a subscription canceled at the period end with unbilled usage",
+      ["canceledSubscription", "unbilledUsage"],
+      [canceledAtPeriodEnd],
+      [],
+      true
+    ],
+    ["an ended subscription with unbilled usage", ["unsettledUsage"], [subscription({ status: "canceled" })], [], true],
+    ["unbilled usage without a subscription", ["unsettledUsage"], [], [], true],
+    [
+      "an ended subscription with unbilled usage next to a billable one",
+      ["subscription", "unbilledUsage"],
+      [subscription({ status: "canceled" }), subscription({ subscriptionId: "sub_2" })],
+      [],
+      true
+    ],
     ["an unpaid order with overage", ["unpaidOverage"], [subscription({ status: "canceled" })], [pending()], false],
     ["an unpaid order of the price alone", [], [subscription({ status: "canceled" })], [priceOnly], false],
     [
@@ -124,11 +142,30 @@ describe("holdFor", () => {
   })
 
   it("writes every reason within the 1000 characters of a registry hold", () => {
-    const every: ReadonlyArray<HoldReason> = ["subscription", "canceledSubscription", "unbilledUsage", "unpaidOverage"]
+    const every: ReadonlyArray<HoldReason> = [
+      "subscription",
+      "canceledSubscription",
+      "unbilledUsage",
+      "unsettledUsage",
+      "unpaidOverage"
+    ]
     const text = holdReasonText(every, "https://billing.golem.cloud")
 
     expect(text.length).toBeLessThanOrEqual(1000)
     expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
+  })
+
+  it("promises an invoice only for the overage of a billable subscription, and names a contact for the rest", () => {
+    const billingUrl = "https://billing.golem.cloud"
+
+    expect(holdReasonText(["subscription", "unbilledUsage"], billingUrl)).toContain(
+      "Polar bills it on the invoice at the end of the period."
+    )
+    const unsettled = holdReasonText(["unsettledUsage"], billingUrl)
+    expect(unsettled).toBe(
+      `Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
+    )
+    expect(unsettled).not.toMatch(/invoice|period/)
   })
 })
 
@@ -140,7 +177,6 @@ describe("sweeper", () => {
       awaitingPayment: () => Effect.succeed([]),
       pastDue: () => Effect.succeed([]),
       holdCandidates: () => Effect.succeed([]),
-      settleUsage: () => Effect.die("unused"),
       recordHold: () => Effect.die("unused"),
       forgetHold: () => Effect.die("unused"),
       record: () => Effect.die("unused"),

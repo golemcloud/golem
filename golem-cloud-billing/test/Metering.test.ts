@@ -21,7 +21,7 @@ describe("Metering", () => {
         Effect.provide(
           Metering.layer.pipe(
             Layer.provide(Database.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config))
+            Layer.provide(Layer.succeed(BillingConfig, registry.configs.push))
           )
         )
       )

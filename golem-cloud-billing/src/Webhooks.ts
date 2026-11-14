@@ -48,6 +48,7 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
   status: data.status,
   currentPeriodEnd: new Date(data.current_period_end),
   cancelAtPeriodEnd: data.cancel_at_period_end,
+  endedAt: data.ended_at ? new Date(data.ended_at) : undefined,
   modifiedAt: new Date(data.modified_at ?? data.created_at),
   meteredPriceIds: (data.product?.prices ?? [])
     .filter((price) => price.amount_type === "metered_unit" || price.amount_type === "metered_tiers")

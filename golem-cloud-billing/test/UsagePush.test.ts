@@ -4,7 +4,6 @@ import pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Database from "../src/Database.ts"
-import * as Subscriptions from "../src/Subscriptions.ts"
 import * as Metering from "../src/Metering.ts"
 import * as Polar from "../src/Polar.ts"
 import * as UsagePush from "../src/UsagePush.ts"
@@ -70,7 +69,7 @@ class FakePolar {
 describe("UsagePush", () => {
   const registry = new RegistryDatabase()
   let polar: FakePolar
-  /** A pool as the role of the billing app, which owns the tables of the app. */
+  /** A pool as the owner role of the schema, for the rows of the tests. */
   let app: pg.Pool
 
   const push = (now: Date) =>
@@ -80,7 +79,7 @@ describe("UsagePush", () => {
           Layer.mergeAll(Metering.layer, Polar.layer).pipe(
             Layer.provideMerge(Database.layer),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config)),
+            Layer.provide(Layer.succeed(BillingConfig, registry.configs.push)),
             Layer.provide(
               Layer.succeed(Polar.PolarConfig, { apiUrl: new URL(polarUrl), accessToken: Redacted.make(polarToken) })
             )
@@ -136,8 +135,7 @@ describe("UsagePush", () => {
 
   beforeAll(async () => {
     await registry.create()
-    app = new pg.Pool(Database.connectionOptions(registry.config.db))
-    await app.query(Subscriptions.tables)
+    app = new pg.Pool(Database.connectionOptions(registry.ownerConfig.db))
   }, 60_000)
   afterAll(async () => {
     await closePool(app)

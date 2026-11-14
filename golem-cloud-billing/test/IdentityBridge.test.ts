@@ -26,8 +26,8 @@ describe("GitHub sign-in", () => {
 
   beforeAll(async () => {
     await registry.create()
-    config = registry.config
-    pool = queryPool(config)
+    config = registry.configs.web
+    pool = queryPool(registry.ownerConfig)
     app = makeApp(config)
     // Effect's fetch client keeps the `fetch` it sees first, so the stub delegates to the fake
     // upstreams of the running test.
@@ -244,6 +244,22 @@ describe("GitHub sign-in", () => {
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
     expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
+  })
+
+  it("extends a session that is older than a day when the user opens the page", async () => {
+    // Better Auth extends a session to its full lifetime of 7 days once its `updateAge` of a day
+    // has passed, so the role of the web app updates sessions.
+    const jar = new CookieJar()
+    await signInWithGitHub(app.handler, jar)
+    await pool.query(`UPDATE "${config.db.schema}"."session" SET "expiresAt" = now() + interval '6 days'`)
+
+    const response = await request(app.handler, jar, "GET", "/")
+
+    expect(await response.text()).toContain("<h1>Free</h1>")
+    const extended = await pool.query<{ extended: boolean }>(
+      `SELECT "expiresAt" > now() + interval '6 days 12 hours' AS extended FROM "${config.db.schema}"."session"`
+    )
+    expect(extended.rows).toEqual([{ extended: true }])
   })
 
   it("shows the sign-in form without a session", async () => {
