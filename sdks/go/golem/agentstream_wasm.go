@@ -101,7 +101,7 @@ func streamNodeFrom(src treeSource) (types.SchemaValueNode, bool) {
 	if !ok {
 		// The host recognizes an unread forwarded input and retains its outcome.
 		writer, reader := types.MakeFutureOptionResultUnitStreamError()
-		writer.Drop()
+		go func() { writer.Write(witTypes.None[types.StreamOutcome]()) }()
 		outcome = reader
 	}
 	wrapped := types.SchemaValueStreamWrap(r, outcome)
