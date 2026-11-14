@@ -12,7 +12,12 @@ type state struct{ value int64 }
 
 func (s *state) current() int64 { return s.value }
 
-var agent = counter.Agent.Implement(func(counter.CounterID) *state { return &state{} })
+var agent = counter.Agent.Implement(func(id counter.CounterID) *state {
+	if id.Name == "fail-constructor" {
+		panic("constructor gave up")
+	}
+	return &state{}
+})
 
 func init() {
 	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
@@ -24,7 +29,11 @@ func init() {
 		return ctx.State.value
 	})
 	agent.Handle(counter.Value, golem.Adapt0((*state).current)) // method-expression binding
-	agent.Handle(counter.Fail, func(*golem.Context[state], golem.Unit) int64 {
+	agent.Handle(counter.Fail, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		ctx.State.value += 7
 		panic("counter gave up")
+	})
+	agent.Handle(counter.DeclaredError, func(*golem.Context[state], golem.Unit) golem.Result[int64, string] {
+		return golem.Err[int64]("declared error")
 	})
 }

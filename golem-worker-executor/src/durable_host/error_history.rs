@@ -101,6 +101,12 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
                         break 'scan;
                     }
                     Some(OplogEntry::Error {
+                        kind: OplogErrorKind::InvocationLocal,
+                        ..
+                    }) => {
+                        break 'scan;
+                    }
+                    Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {
                         if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {

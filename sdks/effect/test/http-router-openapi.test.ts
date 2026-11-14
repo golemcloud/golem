@@ -266,7 +266,16 @@ describe("real Effect HttpApi and generated provider", () => {
     await withCaller(principal, () => guest.initialize("BadProvider", emptyInput()))
     await expect(
       withCaller(principal, () => guest.invoke("openApi", emptyInput())),
-    ).rejects.toThrow("openapi-document")
+    ).rejects.toMatchObject({
+      tag: "custom-error",
+      val: {
+        value: {
+          valueNodes: expect.arrayContaining([
+            { tag: "string-value", val: expect.stringContaining("openapi-document") },
+          ]),
+        },
+      },
+    })
     expect(generations).toBe(1)
   })
 })

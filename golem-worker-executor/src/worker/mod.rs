@@ -204,9 +204,9 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName,
-    OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
-    SnapshotAssistedUpdateDetails, UpdateDescription,
+    AgentError, CreateRequest, CreateRequestKind, DurableStreamEventSummary,
+    FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -1168,9 +1168,9 @@ struct StoppingWorker {
 }
 
 #[derive(Debug, Clone)]
-struct FailedInvocationResult {
-    pub trap_type: TrapType,
-    pub stderr: String,
+enum FailedInvocationResult {
+    Trap { trap_type: TrapType, stderr: String },
+    Method { error: AgentError, stderr: String },
 }
 
 #[derive(Debug, Clone)]

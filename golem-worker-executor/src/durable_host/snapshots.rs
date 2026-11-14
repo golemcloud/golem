@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(error) => Err(ManualLoadResult::Failed(format!(
                 "Manual update failed to load snapshot: {error}"
             ))),
-            Ok(InvokeResult::Failed { error, .. }) => {
+            Ok(InvokeResult::Failed { error, .. } | InvokeResult::MethodFailed { error, .. }) => {
                 let stderr = store
                     .as_context()
                     .data()

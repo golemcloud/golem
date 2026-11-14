@@ -309,7 +309,7 @@ declare module 'golem:api/oplog@1.5.0' {
     pinnedCardIds: CardId[];
     scopeCardId?: CardId;
   };
-  export type OplogErrorKind = "invocation" | "recovery";
+  export type OplogErrorKind = "invocation" | "recovery" | "invocation-local";
   export type ErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;

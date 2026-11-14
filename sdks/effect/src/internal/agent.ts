@@ -76,8 +76,8 @@ import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
 import { mergeGraphDefs } from "./schema-model/builder.js"
-import type { SchemaGraph } from "./schema-model/model.js"
-import { GraphEncoder } from "./schema-model/wit.js"
+import { t, v, type SchemaGraph } from "./schema-model/model.js"
+import { GraphEncoder, typedSchemaValueToWit } from "./schema-model/wit.js"
 
 /**
  * Combined Logger + Tracer layer applied automatically to every piece
@@ -1203,7 +1203,23 @@ export const dispatchInvoke = async (
       inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
         .inputSchema,
     },
-    handler,
+    (decoded) =>
+      Effect.suspend(() => handler(decoded)).pipe(
+        Effect.catchCause((cause) => {
+          // Declared failures remain result values. Interruption stays separate
+          // from application errors for cooperative cancellation.
+          if (Cause.hasInterrupts(cause) || (mc.errorWrapped && !Cause.hasDies(cause))) {
+            return Effect.failCause(cause)
+          }
+          return Effect.die({
+            tag: "custom-error",
+            val: typedSchemaValueToWit({
+              graph: { defs: new Map(), root: t.string() },
+              value: v.string(Cause.pretty(cause)),
+            }),
+          } satisfies AgentCommon.AgentError)
+        }),
+      ),
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {

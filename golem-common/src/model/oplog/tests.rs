@@ -1594,19 +1594,61 @@ fn error_serialization_poem_serde_equivalence() {
             },
         ))
     })) {
-        let entry = PublicOplogEntry::Error(ErrorParams {
-            timestamp: Timestamp::now_utc().rounded(),
-            kind: OplogErrorKind::Invocation,
-            invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
-            error: "test".to_string(),
-            retry_from: OplogIndex::INITIAL,
-            retry_policy_state,
-        });
-        let serialized = entry.to_json_string();
-        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(entry, deserialized);
-        assert_eq!(entry.to_json(), Some(serde_json::to_value(&entry).unwrap()));
+        for kind in [
+            OplogErrorKind::Invocation,
+            OplogErrorKind::Recovery,
+            OplogErrorKind::InvocationLocal,
+        ] {
+            let entry = PublicOplogEntry::Error(ErrorParams {
+                timestamp: Timestamp::now_utc().rounded(),
+                kind,
+                invocation_id: Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
+                error: "test".to_string(),
+                retry_from: OplogIndex::from_u64(17),
+                retry_policy_state: retry_policy_state.clone(),
+            });
+            let serialized = entry.to_json_string();
+            let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(entry, deserialized);
+            assert_eq!(entry.to_json(), Some(serde_json::to_value(&entry).unwrap()));
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                entry.clone().try_into().unwrap();
+            assert_eq!(entry, PublicOplogEntry::try_from(proto).unwrap());
+        }
     }
+}
+
+#[test]
+fn invocation_local_error_contract_roundtrips() {
+    use crate::model::oplog::AgentError;
+    use golem_api_grpc::proto::golem::worker::{RawOplogEntry, raw_oplog_entry::Entry};
+
+    let entry = OplogEntry::error(
+        Some(OplogIndex::from_u64(3)),
+        OplogErrorKind::InvocationLocal,
+        Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212).into()),
+        AgentError::InternalError("method gave up".to_string()),
+        OplogIndex::from_u64(17),
+        None,
+    )
+    .rounded();
+    let proto: RawOplogEntry = entry.clone().try_into().unwrap();
+    let Some(Entry::Error(parameters)) = &proto.entry else {
+        panic!("expected an error entry");
+    };
+    assert_eq!(parameters.kind, 2);
+    assert_eq!(parameters.retry_from, 17);
+    assert!(parameters.retry_policy_state.is_none());
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+        entry
+    );
+    assert_eq!(
+        serde_json::to_value(OplogErrorKind::InvocationLocal).unwrap(),
+        "invocationLocal"
+    );
 }
 
 #[test]

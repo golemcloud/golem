@@ -195,8 +195,9 @@ object OplogApi {
 
   sealed trait OplogErrorKind extends Product with Serializable
   object OplogErrorKind {
-    case object Invocation extends OplogErrorKind
-    case object Recovery   extends OplogErrorKind
+    case object Invocation      extends OplogErrorKind
+    case object Recovery        extends OplogErrorKind
+    case object InvocationLocal extends OplogErrorKind
   }
 
   final case class ErrorParameters(
@@ -910,9 +911,10 @@ object OplogApi {
     ErrorParameters(
       timestamp = parseDateTime(raw.timestamp),
       kind = raw.kind match {
-        case "invocation" => OplogErrorKind.Invocation
-        case "recovery"   => OplogErrorKind.Recovery
-        case other        => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
+        case "invocation"       => OplogErrorKind.Invocation
+        case "recovery"         => OplogErrorKind.Recovery
+        case "invocation-local" => OplogErrorKind.InvocationLocal
+        case other              => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
       },
       invocationId = raw.invocationId.toOption.map(JsUuid.toUuid),
       error = raw.error,

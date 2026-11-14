@@ -2558,6 +2558,14 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             retry_from: OplogIndex::INITIAL,
             retry_policy_state: Some(retry_policy_state),
         }),
+        PublicOplogEntry::Error(ErrorParams {
+            timestamp: timestamp(),
+            kind: OplogErrorKind::InvocationLocal,
+            invocation_id: Some(InvocationId(Uuid::from_u128(7))),
+            error: "method error".to_string(),
+            retry_from: OplogIndex::from_u64(2),
+            retry_policy_state: None,
+        }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
             timestamp: timestamp(),
         }),

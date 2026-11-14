@@ -7,7 +7,7 @@
 package golem.runtime.autowire
 
 import golem.{FutureInterop, Principal}
-import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
+import golem.runtime.{AgentMethodFailure, InputRecordCodec, MethodMetadata, OutputCodec}
 import golem.schema.{AgentStream, FromSchema, FromSchemaError, IntoSchema, SchemaGraph, SchemaValue}
 import zio.ZIO
 import zio.test._
@@ -93,7 +93,11 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
         val binding       =
           method(ownedStreamInput(() => finalizations += 1), OutputCodec.unit[Unit])(_ => Future.failed(failure))
 
-        ZIO.fromFuture(_ => invoke(binding).failed).map(error => assertTrue(error eq failure, finalizations == 1))
+        ZIO
+          .fromFuture(_ => invoke(binding).failed)
+          .map(error =>
+            assertTrue(error.isInstanceOf[AgentMethodFailure], error.getCause eq failure, finalizations == 1)
+          )
       },
       test("closes an input stream when output encoding fails") {
         var finalizations = 0

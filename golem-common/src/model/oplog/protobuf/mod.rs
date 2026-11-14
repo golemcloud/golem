@@ -220,6 +220,9 @@ fn oplog_error_kind_to_proto(
             golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation
         }
         OplogErrorKind::Recovery => golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery,
+        OplogErrorKind::InvocationLocal => {
+            golem_api_grpc::proto::golem::worker::OplogErrorKind::InvocationLocal
+        }
     }
 }
 
@@ -230,6 +233,9 @@ fn oplog_error_kind_from_proto(kind: i32) -> Result<OplogErrorKind, String> {
         }
         Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery) => {
             Ok(OplogErrorKind::Recovery)
+        }
+        Ok(golem_api_grpc::proto::golem::worker::OplogErrorKind::InvocationLocal) => {
+            Ok(OplogErrorKind::InvocationLocal)
         }
         Err(_) => Err(format!("Unknown oplog error kind: {kind}")),
     }

@@ -1171,6 +1171,70 @@ impl ReplayState {
         &self,
         invocation_id: &golem_common::model::InvocationId,
     ) -> Result<Option<(OplogIndex, AgentInvocationResult)>, WorkerExecutorError> {
+        match self
+            .get_oplog_entry_agent_invocation_terminal(invocation_id)
+            .await?
+        {
+            Some((index, OplogEntry::AgentInvocationFinished { result, .. })) => {
+                let result = self
+                    .cursor
+                    .oplog
+                    .download_payload(result)
+                    .await
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "failed to deserialize agent invocation result payload: {err}"
+                        ))
+                    })?;
+                Ok(Some((index, result)))
+            }
+            None => Ok(None),
+            Some((_, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "AgentInvocationFinished",
+                format!("{entry:?}"),
+            )),
+        }
+    }
+
+    pub async fn get_oplog_entry_agent_method_failure(
+        &self,
+        invocation_id: &golem_common::model::InvocationId,
+        anchor: OplogIndex,
+        error: &golem_common::model::oplog::AgentError,
+        parent: Option<OplogIndex>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        match self
+            .get_oplog_entry_agent_invocation_terminal(invocation_id)
+            .await?
+        {
+            Some((
+                index,
+                OplogEntry::Error {
+                    kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
+                    error: recorded,
+                    retry_from,
+                    retry_policy_state: None,
+                    entity_parent_start_index,
+                    ..
+                },
+            )) if retry_from == anchor
+                && &recorded == error
+                && entity_parent_start_index == parent =>
+            {
+                Ok(Some(index))
+            }
+            None => Ok(None),
+            Some((_, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("invocation-local error {error:?} for {anchor} with parent {parent:?}"),
+                format!("{entry:?}"),
+            )),
+        }
+    }
+
+    async fn get_oplog_entry_agent_invocation_terminal(
+        &self,
+        invocation_id: &golem_common::model::InvocationId,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
         // The walk to the finished marker tolerates live-only abandoned durable-call records
         // (see `AbandonedStarts`): the replayed guest has already produced its invocation
         // result, so any still-unclaimed `Start` (and its terminal) can never be claimed and is
@@ -1186,33 +1250,28 @@ impl ReplayState {
                     break Ok(None);
                 };
                 match oplog_entry {
-                    OplogEntry::AgentInvocationFinished {
-                        invocation_id: recorded_invocation_id,
-                        result,
+                    entry @ (OplogEntry::AgentInvocationFinished { .. }
+                    | OplogEntry::Error {
+                        kind: golem_common::model::oplog::OplogErrorKind::InvocationLocal,
                         ..
-                    } => {
-                        if recorded_invocation_id != *invocation_id {
+                    }) => {
+                        let matches_invocation = matches!(
+                            &entry,
+                            OplogEntry::AgentInvocationFinished { invocation_id: recorded, .. }
+                                if recorded == invocation_id
+                        ) || matches!(
+                            &entry,
+                            OplogEntry::Error { invocation_id: Some(recorded), .. }
+                                if recorded == invocation_id
+                        );
+                        if !matches_invocation {
                             break Err(WorkerExecutorError::unexpected_oplog_entry(
-                                format!("AgentInvocationFinished for invocation {invocation_id}"),
-                                format!(
-                                    "AgentInvocationFinished for invocation {recorded_invocation_id}"
-                                ),
+                                format!("invocation terminal for invocation {invocation_id}"),
+                                format!("{entry:?}"),
                             ));
                         }
                         std::mem::take(&mut abandoned).finish(&self.cursor.owned_agent_id)?;
-
-                        let result: AgentInvocationResult = self
-                            .cursor
-                            .oplog
-                            .download_payload(result)
-                            .await
-                            .map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to deserialize agent invocation result payload: {err}"
-                                ))
-                            })?;
-
-                        break Ok(Some((index, result)));
+                        break Ok(Some((index, entry)));
                     }
                     entry if entry.is_hint() => {}
                     _ => {

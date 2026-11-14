@@ -357,8 +357,8 @@ pub fn MatrixResourcePermissions::exchange(
 
 ///|
 pub fn MatrixResourceTyped::transform(
-  input : @schema.AgentStream[UInt],
-) -> @schema.AgentStream[UInt] {
+  input : @schema.AgentStream[UInt32],
+) -> @schema.AgentStream[UInt32] {
   @schema.AgentStream::produce(
     async fn(writer) {
       defer input.drop()
@@ -414,7 +414,7 @@ struct MatrixResourceObservation {
   permissionOriginalConsumed : Bool
   permissionPrincipal : String
   permissionOwnerAgentId : String
-  typedValues : Array[UInt]
+  typedValues : Array[UInt32]
 }
 
 ///|
@@ -556,7 +556,7 @@ pub async fn MoonBitResourceToolStreamingCaller::matrix_typed_stream_observation
   let client = MatrixResourceClient::new()
   let typed_client = client.typed()
   defer typed_client.drop()
-  let input : @schema.AgentStream[UInt] = @schema.AgentStream::produce(async fn(
+  let input : @schema.AgentStream[UInt32] = @schema.AgentStream::produce(async fn(
     writer,
   ) {
     guard writer.write_all([2U, 5U, 9U]) is Accepted else {
@@ -568,7 +568,7 @@ pub async fn MoonBitResourceToolStreamingCaller::matrix_typed_stream_observation
     Err(_) => abort("matrix typed transform failed")
   }
   defer output.drop()
-  let typed_values : Array[UInt] = []
+  let typed_values : Array[UInt32] = []
   while output.read() is Some(value) {
     typed_values.push(value)
   }

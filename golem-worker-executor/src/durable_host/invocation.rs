@@ -915,6 +915,101 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         InvocationFailureDecision::Retry(decision)
     }
 
+    async fn on_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.state.durability_is_suppressed() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "recorded agent method failure",
+                "method failure while durability is suppressed",
+            ));
+        }
+        if self.state.is_live() {
+            tool::durability::finish_producer_disposals(self).await?;
+        }
+        if !self.state.active_custom_invocations.is_empty()
+            || !self.state.custom_invocation_scopes.is_empty()
+        {
+            self.cleanup_custom_durability_state();
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation returned while a custom durable invocation ownership scope was still open",
+            ));
+        }
+        let anchor = self.invocation_anchor().ok_or_else(|| {
+            WorkerExecutorError::runtime("method failure has no invocation start")
+        })?;
+        let key = self
+            .state
+            .get_current_idempotency_key()
+            .ok_or_else(|| WorkerExecutorError::runtime("method failure has no idempotency key"))?;
+        if !self.state.is_live() {
+            concurrent::drain_queued_dropped_call_events(self)
+                .await
+                .map_err(|error| error.source)?;
+            if let Some(finished_index) = self
+                .state
+                .replay_state
+                .get_oplog_entry_agent_method_failure(
+                    &key,
+                    anchor,
+                    &error,
+                    self.entity_parent_start_index(),
+                )
+                .await?
+            {
+                if self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name)
+                {
+                    self.state.last_state_change = Some(finished_index);
+                }
+                return Ok(());
+            }
+            self.switch_to_live().await?;
+            tool::durability::finish_producer_disposals(self).await?;
+        }
+        if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+            self.state
+                .replay_state
+                .release_retained_starts_at_live_invocation_end()
+                .await?;
+        }
+        let worker = self.public_state.worker();
+        let finished_index = worker
+            .add_to_oplog(OplogEntry::error(
+                self.entity_parent_start_index(),
+                OplogErrorKind::InvocationLocal,
+                Some(key),
+                error.clone(),
+                anchor,
+                None,
+            ))
+            .await?;
+        let commit_level = match worker.agent_mode() {
+            AgentMode::Durable => CommitLevel::Always,
+            AgentMode::Ephemeral => CommitLevel::Deferred,
+        };
+        worker
+            .commit_oplog_before_status_update(commit_level)
+            .await?;
+        // Mutations preceding a returned error are retained. Invalidate before publishing
+        // the failure so a following reader cannot reuse the pre-invocation state.
+        if worker.agent_method_invalidates_read_only_cache(full_function_name) {
+            worker.bump_read_only_cache_epoch();
+            self.state.last_state_change = Some(finished_index);
+        }
+        worker
+            .store_method_failure(&key, error, finished_index)
+            .await;
+        self.public_state
+            .event_service()
+            .emit_invocation_finished(full_function_name, &key, true);
+        Ok(())
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
         if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
             warn!(

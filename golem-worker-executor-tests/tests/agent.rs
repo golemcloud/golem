@@ -18,16 +18,18 @@ use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId};
+use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::{
+    AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OwnedAgentId,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    scheduler_sqlite_storage_config, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, scheduler_sqlite_storage_config, start,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -57,6 +59,944 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_ts")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_go")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("permissions_effect")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_scala")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
+
+async fn external_invocation_id(
+    executor: &TestWorkerExecutor,
+    worker: &AgentId,
+    key: &IdempotencyKey,
+    method: &str,
+) -> anyhow::Result<InvocationId> {
+    let fingerprint = executor.get_worker_metadata(worker).await?.fingerprint;
+    Ok(
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
+            .finalize(worker.clone(), fingerprint, method)
+            .id(),
+    )
+}
+
+macro_rules! method_failure_test {
+    ($test_name:ident, $fixture:literal, $agent_type:literal, $declared:literal, [$($failure:literal),+]) => {
+        #[test]
+        #[timeout("2m")]
+        async fn $test_name(
+            last_unique_id: &LastUniqueId,
+            deps: &WorkerExecutorTestDependencies,
+            _tracing: &Tracing,
+            #[tagged_as($fixture)] fixture: &PrecompiledComponent,
+        ) -> anyhow::Result<()> {
+            let context = TestContext::new(last_unique_id);
+            let mut executor = start(deps, &context).await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, fixture)
+                .store()
+                .await?;
+            for failure in [$($failure),+] {
+                let agent = agent_id!($agent_type, failure);
+                let worker = executor.start_agent(&component.id, agent.clone()).await?;
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, $declared, data_value!())
+                        .await?.into_typed::<Result<i64, String>>()?,
+                    Err("declared error".to_string())
+                );
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, "value", data_value!())
+                        .await?.into_typed::<i64>()?,
+                    0
+                );
+                let key = IdempotencyKey::fresh();
+                let error = executor.invoke_and_await_agent_with_key(&component, &agent, &key, failure, data_value!())
+                    .await.expect_err("the method must fail its invocation");
+                assert!(format!("{error:#}").contains("method gave up"), "unexpected error: {error:#}");
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, "value", data_value!())
+                        .await?.into_typed::<i64>()?,
+                    7,
+                    "a fresh call must observe the mutation made before the failure"
+                );
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, "increment", data_value!())
+                        .await?.into_typed::<i64>()?,
+                    8,
+                    "the agent must still accept mutations after the failed invocation"
+                );
+                let before = executor.get_oplog_last_index(&worker).await?;
+                executor.release().await?;
+                executor = start(deps, &context).await?;
+                let error = executor.invoke_and_await_agent_with_key(&component, &agent, &key, failure, data_value!())
+                    .await.expect_err("cold lookup must preserve the original failure");
+                assert!(format!("{error:#}").contains("method gave up"), "{error:#}");
+                assert_eq!(executor.get_oplog_last_index(&worker).await?, before);
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, "value", data_value!())
+                        .await?.into_typed::<i64>()?,
+                    8,
+                    "reconstruction must retain the failed mutation and subsequent work"
+                );
+                assert_eq!(
+                    executor.invoke_and_await_agent(&component, &agent, "increment", data_value!())
+                        .await?.into_typed::<i64>()?,
+                    9
+                );
+            }
+            Ok(())
+        }
+    };
+}
+
+method_failure_test!(
+    rust_method_error_fails_only_its_invocation,
+    "agent_sdk_rust",
+    "RustMethodFailure",
+    "declared_error",
+    ["fail"]
+);
+
+#[test]
+#[timeout("2m")]
+async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RustMethodFailure", "cold-failure-tail");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let key = IdempotencyKey::fresh();
+    let failure = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "fail", data_value!())
+        .await
+        .expect_err("the invocation must fail");
+    assert!(format!("{failure:#}").contains("method gave up"));
+    let before = executor.get_oplog_last_index(&worker).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let failure = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "fail", data_value!())
+        .await
+        .expect_err("cold lookup must retain the failure");
+    assert!(format!("{failure:#}").contains("method gave up"));
+    assert_eq!(
+        executor.get_oplog_last_index(&worker).await?,
+        before,
+        "lookup must not activate the guest or record a second execution"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "value", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        7
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        8
+    );
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "fail").await?;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let starts: Vec<_> = oplog.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
+    )).collect();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry, PublicOplogEntry::Error(error)
+                    if error.kind == golem_common::model::oplog::OplogErrorKind::InvocationLocal
+                        && error.retry_from == starts[0].oplog_index
+            ))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn stream_method_failure_settles_active_http_tail_before_publication_and_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::{OplogEntry, OplogErrorKind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let release_body = Arc::new(tokio::sync::Notify::new());
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        let release_body = release_body.clone();
+        async move {
+            let route = axum::Router::new().route(
+                "/",
+                axum::routing::post(move || {
+                    let requests = requests.clone();
+                    let release_body = release_body.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        axum::response::Response::builder()
+                            .header("content-length", "16")
+                            .body(axum::body::Body::from_stream(futures::stream::once(
+                                async move {
+                                    release_body.notified().await;
+                                    Ok::<_, std::convert::Infallible>("effect completed")
+                                },
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RustMethodFailure", "stream-failure-tail");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "value", data_value!())
+        .await?;
+    let mut gate = executor
+        .gate_after_next_append(&worker, |entry| {
+            matches!(
+                entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::WallClockNow,
+                    ..
+                }
+            )
+        })
+        .await;
+    let key = IdempotencyKey::fresh();
+    let metadata = executor.get_worker_metadata(&worker).await?;
+    let invocation_id =
+        external_invocation_id(&executor, &worker, &key, "fail_stream_after_http").await?;
+    let request_key =
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+    let (_, input) = data_value!(url).into_parts();
+    let invocation = InvocationStart {
+        agent_id: Some(worker.clone().into()),
+        method_name: Some("fail_stream_after_http".to_string()),
+        input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        idempotency_key: Some(key.clone().into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        attempt_id: Some(uuid::Uuid::new_v4().into()),
+        expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+        request_key: Some(request_key.into()),
+        ..Default::default()
+    };
+    let mut failure = Box::pin(executor.invoke_agent_session(invocation));
+    tokio::select! {
+        _ = gate.entered() => {}
+        result = &mut failure => panic!("stream invocation ended before the HTTP checkpoint: {result:?}"),
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    let queued = IdempotencyKey::fresh();
+    let queued_id = external_invocation_id(&executor, &worker, &queued, "value").await?;
+    executor
+        .invoke_agent_with_key(&component, &agent, &queued, "value", data_value!())
+        .await?;
+    drop(gate);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut failure)
+            .await
+            .is_err(),
+        "a method failure must not be published while its response-body work is active"
+    );
+    let held = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        held.iter().any(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "http::types::response::consume-body-chunk"
+            ) && !held.iter().any(|terminal| matches!(
+                &terminal.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+            ))
+        }),
+        "the host must be waiting for real response-body I/O"
+    );
+    assert!(!held.iter().any(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )));
+    assert!(!held.iter().any(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.invocation_id == queued_id)
+    )));
+    release_body.notify_one();
+    let error = failure
+        .as_mut()
+        .await
+        .expect_err("the method must fail after settling its tail");
+    assert!(format!("{error:#}").contains("method gave up"));
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(&component, &agent, &queued, "value", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        7
+    );
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(entries.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.invocation_id == invocation_id)
+    )).count(), 1);
+    let terminal = entries.iter().find(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )).unwrap().oplog_index;
+    let body = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "http::types::response::consume-body"
+            )
+        })
+        .unwrap()
+        .oplog_index;
+    let body_end = entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry, PublicOplogEntry::End(end) if end.start_index == body
+            )
+        })
+        .expect("the response body must have a completed durable outcome")
+        .oplog_index;
+    assert!(body_end < terminal);
+    drop(failure);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        8
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must reuse the completed HTTP effect"
+    );
+    let reconstructed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(reconstructed.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )).count(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::{OplogEntry, OplogErrorKind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        async move {
+            let route = axum::Router::new().route(
+                "/",
+                axum::routing::post(move || {
+                    let requests = requests.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        "effect completed"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RustMethodFailure", "incomplete-failure-tail");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "value", data_value!())
+        .await?;
+    let mut gate = executor
+        .gate_after_next_append(&worker, |entry| {
+            matches!(
+                entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::WallClockNow,
+                    ..
+                }
+            )
+        })
+        .await;
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "fail_after_http",
+            data_value!(url.clone()),
+        )
+        .await?;
+    gate.entered().await;
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    let queued = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(&component, &agent, &queued, "value", data_value!())
+        .await?;
+    assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+    )));
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let failure = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "fail_after_http",
+            data_value!(url),
+        )
+        .await
+        .expect_err("recovery must finish the original failed invocation");
+    assert!(format!("{failure:#}").contains("method gave up"));
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_with_key(&component, &agent, &queued, "value", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        7,
+        "already queued work must not fail with the method"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
+            .await?
+            .into_typed::<i64>()?,
+        8
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "replay must not repeat the completed HTTP effect"
+    );
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "fail_after_http").await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let starts: Vec<_> = entries.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
+    )).collect();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(entries.iter().filter(|entry| matches!(
+        &entry.entry, PublicOplogEntry::Error(error)
+            if error.kind == OplogErrorKind::InvocationLocal && error.retry_from == starts[0].oplog_index
+    )).count(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_started_method(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{
+        OplogEntry, OplogErrorKind, host_functions::HostFunctionName,
+    };
+    use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.active_agents.ttl = std::time::Duration::from_secs(2);
+            config.oplog.sweep.interval = std::time::Duration::from_millis(100);
+        })),
+        ..Default::default()
+    };
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let url = format!("http://localhost:{}/", listener.local_addr()?.port());
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        async move {
+            let route = axum::Router::new().route(
+                "/",
+                axum::routing::post(move || {
+                    let requests = requests.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        "effect completed"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    for (index, incomplete) in [false, true].into_iter().enumerate() {
+        let agent = agent_id!(
+            "RustEphemeralMethodFailure",
+            format!("failure-{incomplete}")
+        );
+        let key = IdempotencyKey::fresh();
+        let worker = AgentId::from_agent_id(
+            component.id,
+            &agent
+                .with_ephemeral_invocation_phantom(
+                    &InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .owner_key("fail_after_http"),
+                )
+                .map_err(anyhow::Error::msg)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if incomplete {
+            let mut gate = executor
+                .gate_after_next_append(&worker, |entry| {
+                    matches!(
+                        entry,
+                        OplogEntry::Start {
+                            function_name: HostFunctionName::WallClockNow,
+                            ..
+                        }
+                    )
+                })
+                .await;
+            executor
+                .invoke_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "fail_after_http",
+                    data_value!(url.clone()),
+                )
+                .await?;
+            gate.entered().await;
+            assert_eq!(requests.load(Ordering::SeqCst), index + 1);
+            assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
+                &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+            )));
+            gate.abort();
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(gate);
+            drop(executor);
+            executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        }
+        let expected = if incomplete {
+            "an ephemeral agent cannot accept another invocation or be resumed"
+        } else {
+            "method gave up"
+        };
+        let failure = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &key,
+                "fail_after_http",
+                data_value!(url.clone()),
+            )
+            .await
+            .expect_err("an ephemeral method failure must remain terminal");
+        assert!(
+            format!("{failure:#}")
+                .to_ascii_lowercase()
+                .contains(expected),
+            "{failure:#}"
+        );
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while executor.worker_is_cached(&owned).await
+                || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker).await? != 0
+            {
+                tokio::task::yield_now().await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        let invocation_id =
+            external_invocation_id(&executor, &worker, &key, "fail_after_http").await?;
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let starts: Vec<_> = entries.iter().filter(|entry| matches!(
+            &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
+        )).collect();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(entries.iter().filter(|entry| matches!(
+            &entry.entry, PublicOplogEntry::Error(error)
+                if error.kind == OplogErrorKind::InvocationLocal && error.retry_from == starts[0].oplog_index
+        )).count(), usize::from(!incomplete));
+        let before = executor.get_oplog_last_index(&worker).await?;
+        executor.release().await?;
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let failure = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &key,
+                "fail_after_http",
+                data_value!(url.clone()),
+            )
+            .await
+            .expect_err("cold lookup must retain the archived failure");
+        assert!(
+            format!("{failure:#}")
+                .to_ascii_lowercase()
+                .contains(expected),
+            "{failure:#}"
+        );
+        assert_eq!(executor.get_oplog_last_index(&worker).await?, before);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            index + 1,
+            "archival and cold lookup must not repeat HTTP"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    #[tagged_as("agent_sdk_go")] go_fixture: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_scala")] scala_fixture: &PrecompiledComponent,
+    #[tagged_as("permissions_effect")] effect_fixture: &PrecompiledComponent,
+    #[tagged_as("agent_sdk_ts")] ts_fixture: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_moonbit")] moonbit_fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::{AgentStatus, oplog::OplogErrorKind};
+
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    for (fixture, agent_type, name, method, detail) in [
+        (
+            fixture,
+            "RustMethodFailure",
+            "fail-constructor",
+            "value",
+            "constructor gave up",
+        ),
+        (
+            fixture,
+            "RustMethodFailure",
+            "panic-control",
+            "panic",
+            "method panicked",
+        ),
+        (
+            go_fixture,
+            "CounterAgent",
+            "fail-constructor",
+            "value",
+            "wasm trap",
+        ),
+        (
+            scala_fixture,
+            "ScalaMethodFailure",
+            "fail-constructor",
+            "value",
+            "ScalaMethodFailureImpl",
+        ),
+        (
+            effect_fixture,
+            "EffectMethodFailure",
+            "fail-constructor",
+            "value",
+            "constructor gave up",
+        ),
+        (
+            ts_fixture,
+            "TsMethodFailure",
+            "fail-constructor",
+            "value",
+            "constructor gave up",
+        ),
+        (
+            moonbit_fixture,
+            "MoonBitMethodFailure",
+            "fail-constructor",
+            "value",
+            "constructor gave up",
+        ),
+    ] {
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let agent = agent_id!(agent_type, name);
+        let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+        let mut gate = executor.gate_next_invocation_started_append(&worker).await;
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        gate.entered().await;
+        let key = IdempotencyKey::fresh();
+        executor
+            .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
+            .await?;
+        drop(gate);
+        let failure = executor
+            .invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!())
+            .await
+            .expect_err("the control must remain fatal");
+        assert!(
+            format!("{failure:#}").contains(detail),
+            "unexpected fatal error: {failure:#}"
+        );
+        for cold in [false, true] {
+            if cold {
+                executor.release().await?;
+                executor = start(deps, &context).await?;
+            }
+            let failure = executor
+                .invoke_and_await_agent(&component, &agent, "value", data_value!())
+                .await
+                .expect_err("a fatal control must reject a later invocation");
+            let expected = if !cold {
+                "Previous invocation failed"
+            } else if matches!(agent_type, "ScalaMethodFailure" | "EffectMethodFailure") {
+                "golem:agent/guest@2.0.0#initialize"
+            } else {
+                detail
+            };
+            assert!(
+                format!("{failure:#}").contains(expected),
+                "unexpected rejection: {failure:#}"
+            );
+            assert_eq!(
+                executor.get_worker_metadata(&worker).await?.status,
+                AgentStatus::Failed
+            );
+            assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().any(|entry| matches!(
+                &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_terminal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
+
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    for method in ["value", "panic"] {
+        let agent = agent_id!("RustMethodFailure", format!("mismatched-{method}"));
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "value", data_value!())
+            .await?;
+        let mut gate = executor
+            .gate_after_next_append(&worker, |entry| {
+                matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+            })
+            .await;
+        let key = IdempotencyKey::fresh();
+        executor
+            .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
+            .await?;
+        gate.entered().await;
+        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let anchor = entries.iter().find(|entry| matches!(
+            &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
+        )).expect("the gated invocation start must be committed").oplog_index;
+        // Deliberately forge an incompatible completed outcome. Reconstruction must not
+        // accept a successful body or an actual Wasm trap as the recorded method error.
+        let terminal = OplogEntry::error(
+            None,
+            OplogErrorKind::InvocationLocal,
+            Some(invocation_id),
+            AgentError::InternalError("recorded method failure".into()),
+            anchor,
+            None,
+        );
+        let terminal_index = executor
+            .commit_oplog_entry_bypassing_worker_status(&worker, terminal.clone())
+            .await?;
+        let persisted_terminal =
+            executor.stored_oplog(&worker).await[terminal_index.as_u64() as usize - 1].clone();
+        gate.abort();
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+        drop(gate);
+        drop(executor);
+
+        executor = start(deps, &context).await?;
+        let failure = executor
+            .invoke_and_await_agent(&component, &agent, "value", data_value!())
+            .await
+            .expect_err("incompatible replay must fail closed");
+        assert!(
+            format!("{failure:#}").contains("Unexpected oplog entry"),
+            "unexpected recovery failure: {failure:#}"
+        );
+        let entries = executor.stored_oplog(&worker).await;
+        assert_eq!(
+            &entries[terminal_index.as_u64() as usize - 1],
+            &persisted_terminal
+        );
+        assert_eq!(entries.iter().filter(|entry| matches!(
+            entry, OplogEntry::Error { kind: OplogErrorKind::InvocationLocal, retry_from, .. } if *retry_from == anchor
+        )).count(), 1, "recovery must not replace or duplicate the recorded method failure");
+        let lookup = executor
+            .invoke_agent_session(InvocationStart {
+                agent_id: Some(worker.clone().into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+                idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                freshness_disposition:
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32,
+                ..Default::default()
+            })
+            .await
+            .expect_err("the original key must keep its recorded failure");
+        assert!(
+            format!("{lookup:#}").contains("recorded method failure"),
+            "recorded outcome changed: {lookup:#}"
+        );
+    }
+    Ok(())
+}
+
+method_failure_test!(
+    ts_method_error_fails_only_its_invocation,
+    "agent_sdk_ts",
+    "TsMethodFailure",
+    "declaredError",
+    ["fail"]
+);
+method_failure_test!(
+    ts_async_method_error_fails_only_its_invocation,
+    "agent_sdk_ts",
+    "TsMethodFailure",
+    "declaredError",
+    ["failAsync"]
+);
+method_failure_test!(
+    effect_method_error_fails_only_its_invocation,
+    "permissions_effect",
+    "EffectMethodFailure",
+    "declaredError",
+    ["fail"]
+);
+method_failure_test!(
+    scala_method_error_fails_only_its_invocation,
+    "tool_streaming_scala",
+    "ScalaMethodFailure",
+    "declaredError",
+    ["fail"]
+);
+method_failure_test!(
+    scala_async_method_error_fails_only_its_invocation,
+    "tool_streaming_scala",
+    "ScalaMethodFailure",
+    "declaredError",
+    ["failAsync"]
+);
+method_failure_test!(
+    moonbit_method_error_fails_only_its_invocation,
+    "tool_streaming_moonbit",
+    "MoonBitMethodFailure",
+    "declared_error",
+    ["fail"]
+);
 
 #[test]
 #[tracing::instrument]

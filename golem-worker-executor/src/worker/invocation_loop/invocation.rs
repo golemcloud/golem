@@ -242,6 +242,66 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 }
             }
+            Ok(InvokeResult::MethodFailed {
+                consumed_fuel,
+                error,
+            }) => {
+                if let Some(interrupt) = self.parent.interrupt_signal.claim_pending_terminal().await
+                {
+                    interrupt.establishment.wait().await;
+                    return self
+                        .agent_invocation_failed(
+                            &display_name,
+                            &invocation_idempotency_key,
+                            Ok(InvokeResult::Interrupted {
+                                consumed_fuel,
+                                interrupt_kind: interrupt.kind,
+                            }),
+                        )
+                        .await;
+                }
+                if let Err(error) = self
+                    .store
+                    .data_mut()
+                    .on_agent_method_failure(&display_name, error.clone())
+                    .await
+                {
+                    return self
+                        .agent_invocation_failed(
+                            &display_name,
+                            &invocation_idempotency_key,
+                            Err(error),
+                        )
+                        .await;
+                }
+                if self.uses_streams {
+                    let parent = self.parent.clone();
+                    let key = invocation_idempotency_key.clone();
+                    let result = self
+                        .store
+                        .run_concurrent(async move |_accessor| {
+                            parent
+                                .fail_durable_streaming_session(&key, error.message().to_owned())
+                                .await
+                        })
+                        .await;
+                    if let Err(error) = result
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                        .and_then(|result| result)
+                    {
+                        self.parent.record_recovery_failure(&error).await;
+                        return self.invocation_failure_recovery(&error);
+                    }
+                }
+                self.parent.reset_infrastructure_recovery_backoff();
+                match self.parent.agent_mode() {
+                    AgentMode::Durable => CommandOutcome::Continue,
+                    AgentMode::Ephemeral => CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+                        RetryDecision::None,
+                        None,
+                    ),
+                }
+            }
             _ => {
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
                     .await

@@ -531,7 +531,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_results.insert(
                 *idempotency_key,
                 InvocationResult::Cached {
-                    result: Err(FailedInvocationResult {
+                    result: Err(FailedInvocationResult::Trap {
                         trap_type: TrapType::Error {
                             error: cached_error.clone(),
                             retry_from: OplogIndex::INITIAL,

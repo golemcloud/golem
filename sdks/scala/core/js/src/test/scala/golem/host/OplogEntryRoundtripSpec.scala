@@ -120,22 +120,23 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         e.params.retryFrom == BigInt(5)
       )
     },
-    test("Error with invocation ID from dynamic") {
+    test("Invocation-local error with invocation ID from dynamic") {
       val raw = wrapEntry(
         "error",
         js.Dynamic.literal(
           timestamp = ts(),
-          kind = "invocation",
+          kind = "invocation-local",
           invocationId = invocationUuidJs,
-          error = "boom",
-          retryFrom = js.BigInt("6")
+          error = "method gave up",
+          retryFrom = js.BigInt("17")
         )
       )
-      val e = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Error]
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Error]
       assertTrue(
-        e.params.kind == OplogErrorKind.Invocation,
-        e.params.invocationId.contains(invocationUuid),
-        e.params.error == "boom"
+        parsed.params.kind == OplogErrorKind.InvocationLocal,
+        parsed.params.invocationId.contains(invocationUuid),
+        parsed.params.error == "method gave up",
+        parsed.params.retryFrom == BigInt(17)
       )
     },
     test("EndRemoteWrite from dynamic") {

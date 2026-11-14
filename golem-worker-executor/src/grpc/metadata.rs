@@ -260,6 +260,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             last_error_kind: latest_status.last_error_kind.map(|kind| match kind {
                 OplogErrorKind::Invocation => golem::worker::OplogErrorKind::Invocation as i32,
                 OplogErrorKind::Recovery => golem::worker::OplogErrorKind::Recovery as i32,
+                OplogErrorKind::InvocationLocal => {
+                    golem::worker::OplogErrorKind::InvocationLocal as i32
+                }
             }),
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,

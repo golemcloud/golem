@@ -5934,7 +5934,7 @@
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
-        "kind": { "type": "string", "enum": ["invocation", "recovery"] },
+        "kind": { "type": "string", "enum": ["invocation", "recovery", "invocationLocal"] },
         "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },

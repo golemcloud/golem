@@ -5716,6 +5716,7 @@ components:
       enum:
       - invocation
       - recovery
+      - invocationLocal
     OplogRegion:
       type: object
       title: OplogRegion

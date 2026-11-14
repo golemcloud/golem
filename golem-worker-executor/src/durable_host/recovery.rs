@@ -208,6 +208,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
+                        let recorded_local_failure = store.as_context().data().durable_ctx()
+                            .state.replay_state.invocation_has_recorded_local_failure(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -276,6 +278,40 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
+                            }
+                            Ok(InvokeResult::MethodFailed { error, .. }) => {
+                                if let Err(error) = store.as_context_mut().data_mut()
+                                    .on_agent_method_failure(&full_function_name, error.clone()).await
+                                {
+                                    break Err(error);
+                                }
+                                if uses_streams && store.as_context().data().durable_ctx().is_live() {
+                                    let worker = worker.clone();
+                                    let key = idempotency_key.clone();
+                                    let result = store.run_concurrent(async move |_accessor| {
+                                        worker.fail_durable_streaming_session(&key, error.message().to_owned()).await
+                                    }).await;
+                                    if let Err(error) = result
+                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                                        .and_then(|result| result)
+                                    {
+                                        break Err(error);
+                                    }
+                                }
+                                if store.as_context().data().durable_ctx().is_live() {
+                                    worker.reset_infrastructure_recovery_backoff();
+                                }
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
+                            Ok(ref result) if recorded_local_failure
+                                && (result.is_snapshot_replay_divergence()
+                                    || matches!(result, InvokeResult::Exited { .. })) =>
+                            {
+                                break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    "invocation-local method failure",
+                                    format!("{result:?}"),
+                                ));
                             }
                             _ => {
                                 let owner_failure = store

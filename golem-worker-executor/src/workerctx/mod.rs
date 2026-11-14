@@ -510,6 +510,13 @@ pub trait InvocationHooks {
         trap_type: &TrapType,
     ) -> InvocationFailureDecision;
 
+    /// Commits a live method's decoded guest error without failing the agent.
+    async fn on_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError>;
+
     /// Called when an agent invocation succeeds, with the typed result directly.
     ///
     /// The implementation may populate fields on `output` that are only known

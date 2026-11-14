@@ -288,7 +288,8 @@ interface oplog {
 
     enum oplog-error-kind {
         invocation,
-        recovery
+        recovery,
+        invocation-local
     }
 
     record error-parameters {

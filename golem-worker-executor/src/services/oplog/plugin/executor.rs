@@ -253,6 +253,10 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         golem_common::model::oplog::OplogErrorKind::Recovery => {
                             golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
                         }
+                        golem_common::model::oplog::OplogErrorKind::InvocationLocal => {
+                            golem_api_grpc::proto::golem::worker::OplogErrorKind::InvocationLocal
+                                as i32
+                        }
                     }),
                     component_size: latest_status.component_size,
                     total_linear_memory_size: latest_status.total_linear_memory_size,

@@ -353,7 +353,7 @@ pub fn MoonBitPermissionAgent::scope_report(
 
 ///|
 /// The number of cards in this agent's wallet.
-pub fn MoonBitPermissionAgent::wallet_card_count(self : Self) -> UInt {
+pub fn MoonBitPermissionAgent::wallet_card_count(self : Self) -> UInt32 {
   ignore(self)
   let cards = @permissions.wallet()
   @permissions.drop_all(cards)
@@ -390,7 +390,9 @@ pub fn MoonBitPermissionAgent::install_on(
 ///|
 /// Step 6: revokes the template root from the wallet and returns the number of
 /// revoked cards.
-pub fn MoonBitPermissionAgent::revoke_root(self : Self) -> Result[UInt, String] {
+pub fn MoonBitPermissionAgent::revoke_root(
+  self : Self,
+) -> Result[UInt32, String] {
   ignore(self)
   let root = require_template_root()
   try {

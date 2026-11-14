@@ -734,7 +734,13 @@ pub(crate) fn fold_invocation_result_entries(
                 requests.current = Some(*invocation_id);
                 requests.current_started_at = Some(*oplog_idx);
             }
-            OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
+            OplogEntry::AgentInvocationFinished { invocation_id, .. }
+            | OplogEntry::Error {
+                kind: OplogErrorKind::InvocationLocal,
+                invocation_id: Some(invocation_id),
+                entity_parent_start_index: None,
+                ..
+            } => {
                 observe_result(invocation_id, position(requests.request_of(invocation_id)));
                 if requests.current.as_ref() == Some(invocation_id) {
                     requests.current = None;
