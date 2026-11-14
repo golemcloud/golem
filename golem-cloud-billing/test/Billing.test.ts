@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
-import { webhookBodyLimit } from "../src/Http.ts"
+import { defaultBodyLimit, webhookBodyLimit } from "../src/Http.ts"
 import * as Settlement from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
@@ -472,6 +472,16 @@ describe("Polar billing", () => {
       expect(html).toContain(`action="/billing/overage"`)
     })
 
+    it("answers 413 to an overage form whose body is above the limit", async () => {
+      const { jar } = await paidAccount()
+      const padding = "x".repeat(Number(defaultBodyLimit))
+
+      const response = await postOverage(jar, `allowOverage&padding=${padding}`)
+
+      expect(response.status).toBe(413)
+      expect(upstreams.usageModeChanges()).toEqual([])
+    })
+
     it("refuses an unknown mode", async () => {
       const { jar } = await paidAccount()
 
@@ -567,6 +577,16 @@ describe("Polar billing", () => {
 
       expect(response.status).toBe(403)
       expect(read).toBe(false)
+    })
+
+    it("handles a delivery above the default body limit of the routes", async () => {
+      const { accountId } = await signedIn()
+      const padding = "x".repeat(4 * Number(defaultBodyLimit))
+
+      const response = await deliver("subscription.active", subscription(accountId, { metadata: { padding } }))
+
+      expect(response.status).toBe(200)
+      expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
     it("answers 413 to a signed delivery whose body is above the limit", async () => {
