@@ -149,6 +149,7 @@ expectrl = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
+golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }

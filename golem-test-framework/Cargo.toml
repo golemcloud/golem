@@ -21,6 +21,7 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-model-mock = { workspace = true }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }

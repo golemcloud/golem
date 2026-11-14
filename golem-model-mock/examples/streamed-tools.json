@@ -1,0 +1,13 @@
+{
+  "steps": [{
+    "response": {
+      "type": "stream",
+      "deltas": [
+        {"tool_calls": [{"index": 0, "id": "call-purchase", "name": "purchase", "arguments": "{\"quan"}]},
+        {"tool_calls": [{"index": 1, "id": "call-weather", "name": "weather", "arguments": "{\"ci"}]},
+        {"tool_calls": [{"index": 0, "arguments": "tity\":3}"}]},
+        {"tool_calls": [{"index": 1, "arguments": "ty\":\"Budapest\"}"}]}
+      ]
+    }
+  }]
+}

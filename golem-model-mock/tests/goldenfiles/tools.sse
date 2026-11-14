@@ -1,0 +1,14 @@
+data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"quan","name":"purchase"},"id":"call-purchase","index":0,"type":"function"}]},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"ci","name":"weather"},"id":"call-weather","index":1,"type":"function"}]},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"tity\":3}"},"index":0}]},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"ty\":\"Budapest\"}"},"index":1}]},"finish_reason":null,"index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}],"created":0,"id":"chatcmpl-mock-1","model":"scripted-model","object":"chat.completion.chunk"}
+
+data: [DONE]
+
