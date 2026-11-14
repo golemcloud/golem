@@ -104,6 +104,8 @@ export interface SubscriptionsShape {
    * - an account without a billable subscription of the product, with usage events that the usage
    *   push recorded, sent or held after `since`. No webhook comes for these events: a new one can
    *   need a hold, and a held one no longer counts as unbilled, so it can remove the hold,
+   * - an account with a usage settlement after `since`. An operator records it outside the app,
+   *   and no webhook comes for it,
    * - an account whose row in `deletion_holds` is older than `recheckBefore`. A hold that the app
    *   failed to remove keeps its row, so the sweep tries again, with no time limit.
    */
@@ -439,6 +441,8 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
             AND NOT EXISTS (
               SELECT 1 FROM polar_subscriptions s
                WHERE s.account_id = e.account_id AND s.product_id = $1 AND s.status = ANY($2))
+         UNION
+         SELECT account_id::text AS account_id FROM usage_settlements WHERE settled_through > $3
          UNION
          SELECT account_id::text AS account_id FROM deletion_holds WHERE updated_at < $4`,
         [productId, billableStatuses, since, recheckBefore]

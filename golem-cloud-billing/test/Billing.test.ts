@@ -1020,6 +1020,28 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.get(accountId)).toBe(unsettledHold)
     })
 
+    it("removes the hold at the next sweep after an operator records a usage settlement for old usage", async () => {
+      // The usage events are older than a day and the hold is new, so only the settlement makes the
+      // sweep check the account again.
+      const accountId = randomUUID()
+      const periodEnd = new Date(Date.now() - 3 * DAY).toISOString()
+      await deliver("subscription.active", subscription(accountId, { current_period_end: periodEnd }))
+      await usageEvent(accountId, 3 * DAY + MINUTE)
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, { status: "canceled", current_period_end: periodEnd, ended_at: periodEnd, modified_at: periodEnd })
+      )
+      await sweep(new Date())
+      expect(upstreams.deletionHolds.get(accountId)).toBe(unsettledHold)
+
+      await pool.query("INSERT INTO usage_settlements (account_id, settled_through) VALUES ($1, clock_timestamp())", [
+        accountId
+      ])
+      await sweep(new Date())
+
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+    })
+
     it("checks a recorded hold again with no time limit, and removes it when the account owes nothing", async () => {
       // A removal that failed long ago: the registry and the record still have the hold, and the
       // account has no subscription and no recent usage event.

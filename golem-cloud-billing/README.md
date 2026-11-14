@@ -165,8 +165,9 @@ plan.
 - **Sweep.** Every minute, each replica of the web app sets the plan and the deletion hold of the
   accounts whose plan or hold changes with the time alone: a subscription that is canceled at the
   period end, a `pending` order that is older than one hour, a `past_due` subscription whose
-  past-due grace ends, and usage events that the usage push recorded, sent or held in the last 24
-  hours for an account without a subscription that continues.
+  past-due grace ends, usage events that the usage push recorded, sent or held in the last 24
+  hours for an account without a subscription that continues, and usage settlements of the last 24
+  hours.
 - **Order and retries.** An advisory lock per account serializes the webhooks and the sweep of one
   account, also across replicas. When the registry or the database fails, the handler answers 500 and Polar
   delivers the webhook again. A 404 of the registry for an account that is not deleted also
@@ -271,9 +272,9 @@ A reconcile places the hold before it changes the plan, and removes the hold aft
 plan, so the account is never on the paid plan without a hold. The table `deletion_holds` records
 the holds that the app placed. The sweep reconciles every account with a billable subscription and
 no row there: a subscription from before the app placed holds, or one whose last placement failed.
-It also reconciles the accounts without a billable subscription whose usage events changed, because
-no webhook comes for a usage event, and each account whose row is older than an hour
-(`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
+It also reconciles the accounts without a billable subscription whose usage events changed, and the
+accounts with a new usage settlement, because no webhook comes for either. And it reconciles each
+account whose row is older than an hour (`HOLD_RECHECK_MS`). A placement refreshes the row, and a removal that failed keeps it, so the
 sweep tries the removal again with no time limit.
 
 An `unsettledUsage` hold clears by itself within minutes: the push sends or holds an unsent event
@@ -284,8 +285,8 @@ app has no command for it, and reads only `usage_settlements`. The script refuse
 account has a billable subscription. It sets `usage_settlements.settled_through` of the account,
 which records that Polar has billed, or will never bill, the usage events that the push recorded
 until then, and adds a row with the same time, the operator and the reason to
-`usage_settlement_history`. The sweep then removes the hold within an hour (`HOLD_RECHECK_MS`),
-and the cleanup does not count these events either. A later event counts again.
+`usage_settlement_history`. The sweep then removes the hold within a minute, and the cleanup does
+not count these events either. A later event counts again.
 
 Do not remove the hold of the app in the registry instead (`override-deletion-hold`): the next
 reconcile places it again while the reason holds, and after a delete the cleanup checks the same
