@@ -1651,6 +1651,209 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     Ok(())
 }
 
+/// A pending durable-stream session stays readable after its agent is loaded again with the oplog
+/// split between the archive, which holds the prefix, and the primary oplog, which holds the rest.
+#[test]
+#[timeout("120s")]
+async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::InvocationStart;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotRequest,
+        StreamSessionExpiryPolicy, StreamSlotReadAdmission, TypedStreamSlotItems,
+        append_to_stream_slot_request, append_to_stream_slot_response,
+        create_stream_session_response, read_stream_slot_response, stream_session_expiry_policy,
+    };
+    use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
+    use golem_worker_executor::services::golem_config::OplogConfig;
+    use golem_worker_executor_test_utils::{
+        agent_oplog_length, archived_oplog_chunks, start_with_oplog_config,
+    };
+    use prost::Message;
+    use uuid::Uuid;
+
+    // Commits move the oplog to the compressed archive at level 1 once 32 entries are pending,
+    // after the session is created and read.
+    let oplog_config = || OplogConfig {
+        indexed_storage_layers: 2,
+        blob_storage_layers: 0,
+        entry_count_limit: 32,
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_oplog_config(deps, &context, Some(oplog_config())).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let source = executor
+        .start_agent(
+            &component.id,
+            agent_id!("DurableStreamAgent", "archived-oplog-prefix"),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(component.environment_id, &source);
+    let session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(CreateStreamSessionRequest {
+            public_session_id: session.clone(),
+            expiry_policy: Some(StreamSessionExpiryPolicy {
+                kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
+            }),
+            creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+            invocation: Some(InvocationStart {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
+                method_name: Some("echo".into()),
+                input: Some(input),
+                ..Default::default()
+            }),
+        })
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(_)) = created.result else {
+        anyhow::bail!("{created:?}");
+    };
+    let read = |executor: &TestWorkerExecutor| {
+        let mut client = executor.client.clone();
+        let request = ReadStreamSlotRequest {
+            agent_id: Some(source.clone().into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            session: session.clone(),
+            slot: "input".into(),
+            expected_method: "echo".into(),
+            max_items: 0,
+            max_bytes: 1_000_000,
+            admission: StreamSlotReadAdmission::Head as i32,
+            ..Default::default()
+        };
+        async move {
+            let response = client
+                .read_stream_slot(request)
+                .await?
+                .into_inner()
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("the read returned no message"))?;
+            let Some(read_stream_slot_response::Result::Success(read)) = response.result else {
+                anyhow::bail!("{response:?}");
+            };
+            anyhow::Ok(read)
+        }
+    };
+    let head = read(&executor).await?;
+    assert!(head.writable, "the pending session accepts external writes");
+    assert!(
+        archived_oplog_chunks(deps, &context, &owned, 1)
+            .await?
+            .is_empty(),
+        "the session is read first while its whole oplog is in the primary oplog"
+    );
+
+    let mut sequence = 0;
+    let mut append = async |executor: &TestWorkerExecutor| -> anyhow::Result<()> {
+        let value = golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+            format!("change-{sequence}"),
+        ))
+        .map_err(anyhow::Error::msg)?
+        .encode_to_vec();
+        let response = executor
+            .client
+            .clone()
+            .append_to_stream_slot(AppendToStreamSlotRequest {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                session: session.clone(),
+                slot: "input".into(),
+                expected_method: "echo".into(),
+                payload: Some(append_to_stream_slot_request::Payload::Values(
+                    TypedStreamSlotItems {
+                        values: vec![value],
+                    },
+                )),
+                close: false,
+                producer: Some(ExternalStreamProducer {
+                    id: "writer".into(),
+                    epoch: 0,
+                    sequence,
+                }),
+            })
+            .await?
+            .into_inner();
+        let Some(append_to_stream_slot_response::Result::Accepted(_)) = response.result else {
+            anyhow::bail!("{response:?}");
+        };
+        sequence += 1;
+        Ok(())
+    };
+
+    // Append until a commit moves the oplog prefix to the archive and drops it from the primary
+    // oplog, then append once more, so the primary oplog holds the suffix after the archive.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the oplog of {owned} was not archived"
+        );
+        append(&executor).await?;
+        let archived = archived_oplog_chunks(deps, &context, &owned, 1)
+            .await?
+            .iter()
+            .map(|(last_index, _)| *last_index)
+            .max();
+        let Some(archived) = archived else {
+            continue;
+        };
+        let last = executor.get_oplog_last_index(&source).await?;
+        let primary = agent_oplog_length(deps, &context, &owned).await?;
+        if primary > 0 && archived > 1 && primary == last - archived {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let last = executor.get_oplog_last_index(&source).await?;
+    let public_oplog = executor.get_oplog(&source, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        public_oplog
+            .iter()
+            .map(|entry| u64::from(entry.oplog_index))
+            .collect::<Vec<_>>(),
+        (1..=last).collect::<Vec<_>>(),
+        "the public oplog reads the archive and the primary oplog as one contiguous history"
+    );
+
+    // Load the agent again, as a restart or a shard reassignment does.
+    drop(executor);
+    let executor = start_with_oplog_config(deps, &context, Some(oplog_config())).await?;
+    let head = read(&executor).await?;
+    assert!(
+        head.writable,
+        "the reloaded session still accepts external writes"
+    );
+    append(&executor).await?;
+    Ok(())
+}
+
 #[test]
 #[timeout("60s")]
 async fn sliding_expiry_refreshes_are_coalesced(
