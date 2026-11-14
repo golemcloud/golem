@@ -94,9 +94,10 @@ export const authOptions = (options: AuthOptions) =>
     // default error page of Better Auth is not routed.
     onAPIError: { errorURL: "/" },
     // Better Auth limits the requests to `auth.handler` for each client address, also outside
-    // production. It reads the address from `x-forwarded-for` when the header has one address,
-    // as the gateway sets it. `POST /sign-in/github` calls the handler, not `auth.api`, so that
-    // this limit applies to it. The memory store counts on each replica.
+    // production. It reads the address from `x-forwarded-for`, which the routes set to the one
+    // client address (`clientAddress` in Http.ts) before they call the handler.
+    // `POST /sign-in/github` calls the handler, not `auth.api`, so that this limit applies to it.
+    // The memory store counts on each replica.
     rateLimit: {
       enabled: true,
       customRules: { "/sign-in/social": signInRateLimit }

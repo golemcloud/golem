@@ -379,10 +379,16 @@ also to a post without `Origin`. The webhook route of Polar does not check `Orig
 
 Better Auth limits the requests to its handler for each client address, in the memory of each
 replica. `POST /sign-in/github` goes through the handler: a client address starts at most 3 GitHub
-sign-ins in 10 seconds, and the next one redirects to `/?error=too_many_requests`. Better Auth
-reads the client address from `x-forwarded-for` only when the header has one address. The gateway
-must set it so: Envoy Gateway appends the address of the connection, so a browser gets its own
-limit. A request without a usable address counts in one limit that all such requests share.
+sign-ins in 10 seconds, and the next one redirects to `/?error=too_many_requests`.
+
+The client address is the last address of `x-forwarded-for`, or the address of the connection
+when the request has no such header (`clientAddress` in `src/Http.ts`). The app assumes one proxy
+hop: the gateway appends the address that it sees, and every address to the left of it comes from
+the client. Before the app calls the handler of Better Auth, it sets `x-forwarded-for` to the
+client address alone, because Better Auth trusts the header only when it has one address. The
+checkout also sends this address to Polar, for the local currency. The gateway must see the address
+of the client: on golem-dev the NLB of the gateway has instance targets and
+`externalTrafficPolicy: Local`, and golem-prod must do the same.
 
 ## Development
 

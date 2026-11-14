@@ -84,12 +84,29 @@ const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
   value === "on" || value === "off" || value === "not-eligible" ? value : undefined
 
 /**
- * The IP address of the browser, for the local currency of the checkout: the first address of
- * `x-forwarded-for`, which the gateway sets, or the address of the connection.
+ * The IP address of the client: the last address of `x-forwarded-for`, or the address of the
+ * connection when the request has no such header. The app has one proxy hop in front of it, the
+ * gateway, which appends the address that it sees to `x-forwarded-for`. So the last address is the
+ * client, and every address to the left of it comes from the client, which can send any value.
+ * The gateway sees the address of the client only while its load balancer keeps that address (on
+ * AWS, an NLB with instance targets and `externalTrafficPolicy: Local`).
  */
-const clientIp = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
-  const forwarded = request.headers["x-forwarded-for"]?.split(",")[0]?.trim()
-  return forwarded !== undefined && forwarded !== "" ? forwarded : Option.getOrUndefined(request.remoteAddress)
+export const clientAddress = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
+  const last = request.headers["x-forwarded-for"]?.split(",").at(-1)?.trim()
+  return last !== undefined && last !== "" ? last : Option.getOrUndefined(request.remoteAddress)
+}
+
+/**
+ * Sets `x-forwarded-for` to the client address alone, for a request to `auth.handler`. Better
+ * Auth trusts the header only when it has one address, and else counts the request in one rate
+ * limit that all such requests share, so a client could fill that limit for the others.
+ */
+const withClientAddress = (headers: Headers, address: string | undefined): Headers => {
+  headers.delete("x-forwarded-for")
+  if (address !== undefined) {
+    headers.set("x-forwarded-for", address)
+  }
+  return headers
 }
 
 const redirectWithCookies = (location: string, headers: Headers) =>
@@ -128,7 +145,12 @@ export const routes = HttpRouter.use((router) =>
     // endpoints on the server, through `auth.api` or, for the sign-in, `auth.handler`. The rest
     // of /api/auth stays unrouted: it includes get-access-token, which returns the decrypted
     // GitHub access token, and link-social and update-user, which change the user.
-    yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
+    yield* router.add("GET", "/api/auth/callback/github", (request) =>
+      HttpEffect.fromWebHandler((web) => {
+        const headers = withClientAddress(new Headers(web.headers), clientAddress(request))
+        return auth.handler(new Request(web, { headers }))
+      })
+    )
 
     // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
     // the path is the one that the Polar organization has configured. Polar signs every
@@ -227,7 +249,7 @@ export const routes = HttpRouter.use((router) =>
     // The form calls the sign-in endpoint through `auth.handler`, not `auth.api`, so that the rate
     // limit of Better Auth applies to it (`rateLimit` in `authOptions`).
     const signInSocial = (request: HttpServerRequest.HttpServerRequest) => {
-      const headers = toWebHeaders(request)
+      const headers = withClientAddress(toWebHeaders(request), clientAddress(request))
       headers.delete("content-length")
       headers.delete("transfer-encoding")
       headers.set("content-type", "application/json")
@@ -319,7 +341,7 @@ export const routes = HttpRouter.use((router) =>
               externalCustomerId: user.golemAccountId,
               customerEmail: user.email,
               customerName: user.name === "" ? undefined : user.name,
-              customerIpAddress: clientIp(request),
+              customerIpAddress: clientAddress(request),
               successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
               returnUrl: home
             })

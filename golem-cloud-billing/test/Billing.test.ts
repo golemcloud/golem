@@ -160,7 +160,8 @@ describe("Polar billing", () => {
 
       const response = await request(app.handler, jar, "POST", "/billing/checkout", {
         origin: baseUrl,
-        "x-forwarded-for": "203.0.113.7, 10.0.0.1"
+        // The client sent the first address; the gateway appended the second, which it saw.
+        "x-forwarded-for": "203.0.113.7, 198.51.100.7"
       })
 
       expect(response.status).toBe(303)
@@ -173,7 +174,7 @@ describe("Polar billing", () => {
         external_customer_id: accountId,
         customer_email: "octocat@example.com",
         customer_name: "Octo Cat",
-        customer_ip_address: "203.0.113.7",
+        customer_ip_address: "198.51.100.7",
         success_url: `${baseUrl}/?checkout_id={CHECKOUT_ID}`,
         return_url: `${baseUrl}/`,
         allow_discount_codes: true
