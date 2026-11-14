@@ -379,6 +379,9 @@ impl From<WorkerExecutorError> for RpcError {
             WorkerExecutorError::AgentAlreadyExists { agent_id } => RpcError::Denied {
                 details: format!("Worker {agent_id} already exists"),
             },
+            error @ WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => RpcError::Denied {
+                details: error.to_string(),
+            },
             WorkerExecutorError::AgentNotFound { agent_id } => RpcError::NotFound {
                 details: format!("Worker {agent_id} not found"),
             },
