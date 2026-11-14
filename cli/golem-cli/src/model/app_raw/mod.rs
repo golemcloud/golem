@@ -30,6 +30,7 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
 use golem_common::schema::ComponentConfigSchema;
+use golem_common::schema::config::ConfigCatalog;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -131,6 +132,8 @@ pub struct Application {
     pub version: Option<AppVersionSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub config: IndexMap<EnvironmentName, ConfigCatalog>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub secret_defaults: IndexMap<EnvironmentName, JsonObject>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
