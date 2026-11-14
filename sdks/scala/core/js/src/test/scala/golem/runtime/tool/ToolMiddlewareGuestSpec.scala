@@ -218,21 +218,22 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     stdout: js.UndefOr[ToolHostApi.RawToolOutputWriter] = js.undefined,
     stderr: js.UndefOr[ToolHostApi.RawToolOutputWriter] = js.undefined
   ): js.Promise[JsInvocationResult] =
-    guest
-      .invokeToolMiddleware(
-        middlewareName,
-        toolName,
-        metadata,
-        parameters,
-        commandPath,
-        invocationInput,
-        stdin,
-        stdout,
-        stderr,
-        principal,
-        underlying
-      )
-      .asInstanceOf[js.Promise[JsInvocationResult]]
+    ToolTestFixtures.withImmediateCaller(principal) {
+      guest
+        .invokeToolMiddleware(
+          middlewareName,
+          toolName,
+          metadata,
+          parameters,
+          commandPath,
+          invocationInput,
+          stdin,
+          stdout,
+          stderr,
+          underlying
+        )
+        .asInstanceOf[js.Promise[JsInvocationResult]]
+    }
 
   private final class ForwardingUniversal extends UniversalToolMiddleware {
     def invoke(

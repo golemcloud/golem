@@ -70,6 +70,7 @@ impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::Update
                         .filesystem_snapshot
                         .map(|name| name.parse())
                         .transpose()?,
+                    snapshot_bootstrap: update.snapshot_bootstrap.map(oplog_region_from_wit),
                 })
             }
             oplog::RawUpdateDescription::SnapshotBased(sbu) => Ok(Self::SnapshotBased {
@@ -141,6 +142,7 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
                 snapshot_index,
                 snapshot_revision,
                 filesystem_snapshot,
+                snapshot_bootstrap,
             } => Ok(Self::SnapshotAssistedAutomatic(
                 oplog::RawSnapshotAssistedAutomaticUpdate {
                     target_revision: target_revision.into(),
@@ -149,6 +151,7 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
                     snapshot_index: snapshot_index.into(),
                     snapshot_revision: snapshot_revision.into(),
                     filesystem_snapshot: filesystem_snapshot.map(String::from),
+                    snapshot_bootstrap: snapshot_bootstrap.map(oplog_region_to_wit),
                 },
             )),
             UpdateDescription::SnapshotBased {

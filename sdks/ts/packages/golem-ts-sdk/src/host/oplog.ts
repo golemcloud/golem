@@ -155,6 +155,7 @@ export type CreateParameters = {
 export type OplogProcessorCheckpointParameters = {
   timestamp: Datetime;
   plugin: PluginInstallationDescription;
+  sourceComponentRevision: ComponentRevision;
   targetAgentId: AgentId;
   confirmedUpTo: OplogIndex;
   sendingUpTo: OplogIndex;

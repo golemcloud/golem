@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::model::oplog::AgentError;
-use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
+use golem_common::model::{AssistedSelection, IdempotencyKey, UsableAutomaticSnapshot};
 use golem_common::schema::SchemaValue;
 use test_r::test;
 
@@ -277,6 +281,7 @@ fn assisted_pending(
                 index: OplogIndex::from_u64(7),
                 component_revision: source_revision,
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     }
@@ -663,7 +668,7 @@ fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
         into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
 
     assert!(semantic_key.is_none());
-    assert!(!storage_key.value.is_empty());
+    assert!(!storage_key.0.is_nil());
     assert!(matches!(
         payload,
         AgentInvocationPayload::ManualUpdate {
@@ -685,6 +690,7 @@ fn rejected_automatic_snapshot_uses_manual_replay_revision() {
             timestamp: Timestamp::from(1_000),
             component_revision: active_revision,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         ..Default::default()
     };
@@ -761,6 +767,22 @@ fn merging_unloaded_states_preserves_startup_failure() {
             startup_failure: Some(_)
         }
     ));
+}
+
+#[test]
+fn inactivity_outranks_unloaded_states_in_both_orders() {
+    let inactive = || FinalWorkerState::Inactive(WorkerExecutorError::runtime("inactive"));
+    for unloaded in [None, Some(WorkerExecutorError::runtime("startup failed"))] {
+        let unloaded = || FinalWorkerState::Unloaded {
+            startup_failure: unloaded.clone(),
+        };
+        for (current, requested) in [(inactive(), unloaded()), (unloaded(), inactive())] {
+            assert!(matches!(
+                merge_final_worker_state(current, requested),
+                FinalWorkerState::Inactive(error) if error.to_string().contains("inactive")
+            ));
+        }
+    }
 }
 
 #[test]
@@ -1096,9 +1118,7 @@ fn allocated_memory_includes_the_gc_heap_allocated_during_instantiation() -> any
 
 #[test]
 fn reconstructed_ephemeral_agent_is_terminal() {
-    let instance = WorkerInstance::Unloaded {
-        startup_failure: Some(inactive_ephemeral_agent_error()),
-    };
+    let instance = WorkerInstance::Inactive(inactive_ephemeral_agent_error());
 
     assert!(matches!(
         instance.startup_failure(),
@@ -1212,8 +1232,8 @@ fn post_join_runtime_retains_cleanup_health_before_stopping_completion() {
 
 #[test]
 fn ephemeral_agent_accepts_only_one_invocation_identity() {
-    let first = IdempotencyKey::fresh();
-    let second = IdempotencyKey::fresh();
+    let first = InvocationId(Uuid::new_v4());
+    let second = InvocationId(Uuid::new_v4());
     let mut state = EphemeralInvocationState::Available;
 
     assert!(state.accept(&first).is_ok());
@@ -1226,11 +1246,11 @@ fn ephemeral_agent_accepts_only_one_invocation_identity() {
 
 #[test]
 fn hydrated_invocation_result_cache_is_bounded() {
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
+    let first = InvocationId(Uuid::from_u128(1));
+    let second = InvocationId(Uuid::from_u128(2));
     let mut cache = HydratedInvocationResultCache::new(1);
     cache.insert(
-        first.clone(),
+        first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
         },
@@ -1239,7 +1259,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
     );
 
     cache.insert(
-        second.clone(),
+        second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
         },
@@ -1253,7 +1273,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
 
 #[test]
 fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
-    let key = IdempotencyKey::new("shared-result".to_string());
+    let key = InvocationId(Uuid::from_u128(3));
     let index = OplogIndex::from_u64(4);
     let status = AgentStatusRecord::default();
     let generation = status.invocation_results.revert_generation();
@@ -1270,24 +1290,24 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             invocation_status: None,
             component_revision: Some(ComponentRevision::INITIAL),
             agent_id: None,
-            idempotency_key: Some(key.clone()),
+            idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);
-    cache.insert(key.clone(), result.clone(), generation, index);
+    cache.insert(key, result.clone(), generation, index);
     let (first, found_index) = cache.get_valid(&key, &status).unwrap();
     assert_eq!(found_index, index);
     assert!(Arc::ptr_eq(first, &result));
     let follower = first.clone();
-    cache.insert(key.clone(), follower.clone(), generation, index);
+    cache.insert(key, follower.clone(), generation, index);
     assert!(Arc::ptr_eq(
         cache.get_valid(&key, &status).unwrap().0,
         &follower
     ));
 
-    cache.insert(key.clone(), result.clone(), generation + 1, index);
+    cache.insert(key, result.clone(), generation + 1, index);
     assert!(cache.get_valid(&key, &status).is_none());
     cache.remove(&key);
     assert!(cache.get_valid(&key, &status).is_none());
@@ -1313,7 +1333,7 @@ fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
     let result = validate_resolved_invocation_identity(
         AgentMode::Ephemeral,
         None,
-        &IdempotencyKey::fresh(),
+        &IdempotencyKey::new("raw-ephemeral-owner-key".to_string()),
         InvocationFreshnessDisposition::MayExist,
     );
 
@@ -1326,7 +1346,7 @@ fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
 
 #[test]
 fn known_fresh_ephemeral_invocation_requires_key_derived_phantom_id() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = IdempotencyKey::new("raw-ephemeral-owner-key".to_string());
     let expected_phantom_id = ephemeral_invocation_phantom_id(&idempotency_key);
 
     assert!(
@@ -1355,7 +1375,7 @@ fn durable_may_exist_invocation_identity_is_unchanged() {
         validate_resolved_invocation_identity(
             AgentMode::Durable,
             None,
-            &IdempotencyKey::fresh(),
+            &IdempotencyKey::new("raw-durable-owner-key".to_string()),
             InvocationFreshnessDisposition::MayExist,
         )
         .is_ok()
@@ -1376,7 +1396,7 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
         callee_environment_id: environment_id,
         callee: agent_id.clone(),
         callee_fingerprint: fingerprint,
-        idempotency_key: IdempotencyKey::new("invocation".to_string()),
+        idempotency_key: InvocationId(Uuid::from_u128(4)),
     };
     let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -1464,17 +1484,17 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
     assert!(stream_slot_session_matches(&persisted, &reissued));
 }
 
-fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
+fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(key.clone()),
+        current_idempotency_key: Some(*key),
         ..AgentStatusRecord::default()
     }
 }
 
 #[test]
 fn lookup_keeps_retrying_error_pending() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &status_with_current_key(AgentStatus::Retrying, &key),
         &key,
@@ -1495,7 +1515,7 @@ fn lookup_keeps_retrying_error_pending() {
 
 #[test]
 fn lookup_reports_terminal_error_as_failure() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &status_with_current_key(AgentStatus::Failed, &key),
         &key,
@@ -1525,7 +1545,7 @@ fn lookup_reports_terminal_error_as_failure() {
 
 #[test]
 fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let mut status = status_with_current_key(AgentStatus::Failed, &key);
     status.last_error_kind = Some(OplogErrorKind::Recovery);
     let lookup = lookup_result_from_cached_result(
@@ -1548,7 +1568,7 @@ fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
 
 #[test]
 fn reconstructed_permission_denial_keeps_its_executor_error_type() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &AgentStatusRecord::default(),
         &key,
@@ -1573,14 +1593,14 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 
 #[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
-    let rejected = IdempotencyKey::fresh();
-    let still_pending = IdempotencyKey::fresh();
+    let rejected = InvocationId(Uuid::new_v4());
+    let still_pending = InvocationId(Uuid::new_v4());
     let status = AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(still_pending.clone()),
+            idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
         }],
         ..AgentStatusRecord::default()
@@ -1915,12 +1935,12 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
     );
 }
 
-fn pending(key: &IdempotencyKey, not_before: Option<Timestamp>) -> PendingInvocationRef {
+fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocationRef {
     PendingInvocationRef {
         timestamp: Timestamp::from(1_000),
         not_before,
         oplog_index: OplogIndex::from_u64(2),
-        idempotency_key: Some(key.clone()),
+        idempotency_key: Some(*key),
         manual_update_target_revision: None,
     }
 }
@@ -1937,9 +1957,9 @@ fn pending_status(begun: bool, entries: Vec<PendingInvocationRef>) -> AgentStatu
 fn ephemeral_start_waits_for_scheduled_work_and_ignores_the_constructor_reservation() {
     use invocation_loop::{EphemeralStart, ephemeral_start_decision};
 
-    let init = IdempotencyKey::new("init-agent".to_string());
-    let method = IdempotencyKey::fresh();
-    let immediate = IdempotencyKey::fresh();
+    let init = InvocationId(Uuid::from_u128(5));
+    let method = InvocationId(Uuid::new_v4());
+    let immediate = InvocationId(Uuid::new_v4());
     let now = Timestamp::from(10_000);
     let later = Some(Timestamp::from(20_000));
     let earlier = Some(Timestamp::from(5_000));
@@ -1996,9 +2016,9 @@ fn ephemeral_start_waits_for_scheduled_work_and_ignores_the_constructor_reservat
 fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold() {
     use acquisition::never_started_ephemeral_admission;
 
-    let init = IdempotencyKey::new("init-agent".to_string());
-    let method = IdempotencyKey::fresh();
-    let other = IdempotencyKey::fresh();
+    let init = InvocationId(Uuid::from_u128(5));
+    let method = InvocationId(Uuid::new_v4());
+    let other = InvocationId(Uuid::new_v4());
     let later = Some(Timestamp::from(20_000));
     let admit = |status: AgentStatusRecord| never_started_ephemeral_admission(&status, Some(&init));
 
@@ -2007,7 +2027,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             false,
             vec![pending(&init, None), pending(&method, later)]
         )),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(false, vec![pending(&init, None)])),
@@ -2062,7 +2082,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             &pending_status(false, vec![pending(&method, later)]),
             None
         ),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(

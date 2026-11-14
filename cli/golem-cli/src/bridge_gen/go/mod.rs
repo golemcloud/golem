@@ -1141,14 +1141,14 @@ impl GoBridgeGenerator {
             ),
             trigger,
             &signature,
-            "(golem.InvocationID, error)",
+            "(golem.InvocationMetadata, error)",
             vec![format!("return {descriptor}.Trigger(c.client, {input})")],
         );
         func(
             format!("{must_trigger} is {trigger} that panics on a failed call."),
             must_trigger,
             &signature,
-            "golem.InvocationID",
+            "golem.InvocationMetadata",
             vec![format!(
                 "return {descriptor}.MustTrigger(c.client, {input})"
             )],

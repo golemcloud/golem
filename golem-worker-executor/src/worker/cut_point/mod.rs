@@ -24,8 +24,8 @@
 use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::PendingUpdateKind;
-use golem_common::model::oplog::{OplogEntry, OplogIndexRange};
-use golem_common::model::regions::DeletedRegions;
+use golem_common::model::oplog::{OplogEntry, OplogIndexRange, UpdateDescription};
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -35,6 +35,10 @@ pub enum RevertUpdateBoundaryError {
     SplitSnapshotUpdate {
         pending_index: OplogIndex,
         outcome_index: OplogIndex,
+    },
+    DroppedBootstrapRange {
+        restore_point_index: OplogIndex,
+        bootstrap: OplogRegion,
     },
 }
 
@@ -48,8 +52,59 @@ impl Display for RevertUpdateBoundaryError {
                 f,
                 "the cut point retains a snapshot-based PendingUpdate at oplog index {pending_index} but removes its outcome at oplog index {outcome_index}"
             ),
+            RevertUpdateBoundaryError::DroppedBootstrapRange {
+                restore_point_index,
+                bootstrap,
+            } => write!(
+                f,
+                "the cut point retains a restore point at oplog index {restore_point_index} but not its bootstrap range {bootstrap}"
+            ),
         }
     }
+}
+
+/// The bootstrap range that `entry` names, when it is a restore point: a `Snapshot`, a
+/// `SuccessfulUpdate`, or the strategy entry of a snapshot-assisted update, which names the
+/// range of its selected record.
+pub fn bootstrap_range_named_by(entry: &OplogEntry) -> Option<&OplogRegion> {
+    match entry {
+        OplogEntry::Snapshot { bootstrap, .. } | OplogEntry::SuccessfulUpdate { bootstrap, .. } => {
+            bootstrap.as_ref()
+        }
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotAssistedAutomatic {
+                    snapshot_bootstrap, ..
+                },
+            ..
+        } => snapshot_bootstrap.as_ref(),
+        _ => None,
+    }
+}
+
+/// Validates the bootstrap ranges of the restore points that a cut retains: the restore points
+/// at or before `cut_point` outside `deleted_regions`. Recovery from such a restore point replays
+/// its range, so the cut must retain the whole range.
+///
+/// A range may contain deleted regions: a revert inside the bootstrap block of an earlier
+/// attempt, written before the restore point, leaves the block around the deleted region, and
+/// the bootstrap cursor skips it. The executor writes every range before the restore point that
+/// names it, so a prefix cut that retains the restore point retains its range.
+pub fn validate_restore_point_ranges<'a>(
+    restore_points: impl IntoIterator<Item = (OplogIndex, &'a OplogRegion)>,
+    cut_point: OplogIndex,
+    deleted_regions: &DeletedRegions,
+) -> Result<(), RevertUpdateBoundaryError> {
+    restore_points
+        .into_iter()
+        .filter(|(index, _)| *index <= cut_point && !deleted_regions.is_in_deleted_region(*index))
+        .find(|(_, range)| range.end > cut_point)
+        .map_or(Ok(()), |(index, range)| {
+            Err(RevertUpdateBoundaryError::DroppedBootstrapRange {
+                restore_point_index: index,
+                bootstrap: range.clone(),
+            })
+        })
 }
 
 /// Validates snapshot-update boundaries. Update outcomes are paired with pending updates by the
@@ -208,8 +263,7 @@ where
             | OplogEntry::ToolAttachmentRead { .. }
             | OplogEntry::StreamRegistered { .. }
             | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamTerminal { .. }
             | OplogEntry::StreamSession { .. } => None,
         };
 
@@ -262,13 +316,15 @@ pub(crate) async fn streaming_acceptance_spans_cut(
         (
             OplogEntry::StreamSession { record, .. },
             OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             },
         ) => Ok(matches!(oplog.download_payload(record).await?,
                 StreamSessionRecord::Prepared(prepared) if prepared.attempt.session_key.idempotency_key == idempotency_key)),
         (
             OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             },
             OplogEntry::StreamSession { record, .. },
         ) => Ok(matches!(oplog.download_payload(record).await?,
@@ -313,8 +369,7 @@ where
             read(idx).await,
             OplogEntry::StreamRegistered { .. }
                 | OplogEntry::StreamItems { .. }
-                | OplogEntry::StreamEnd { .. }
-                | OplogEntry::StreamCancel { .. }
+                | OplogEntry::StreamTerminal { .. }
                 | OplogEntry::StreamSession { .. }
         ) {
             return Some(idx);

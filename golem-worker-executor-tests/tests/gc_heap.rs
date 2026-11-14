@@ -21,7 +21,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
@@ -105,13 +105,13 @@ fn errors(entries: &[PublicOplogEntryWithIndex]) -> Vec<String> {
         .collect()
 }
 
-fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> IdempotencyKey {
+fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> InvocationId {
     let keys: Vec<_> = entries
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
                 PublicAgentInvocation::AgentInitialization(invocation) => {
-                    Some(invocation.idempotency_key.clone())
+                    Some(invocation.invocation_id.clone())
                 }
                 _ => None,
             },
@@ -122,7 +122,7 @@ fn constructor_key(entries: &[PublicOplogEntryWithIndex]) -> IdempotencyKey {
     keys.into_iter().next().unwrap()
 }
 
-fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[IdempotencyKey]) {
+fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[InvocationId]) {
     let expected_keys: HashSet<_> = expected.iter().cloned().collect();
     assert_eq!(
         expected_keys.len(),
@@ -142,10 +142,10 @@ fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[Ide
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 let key = match &params.invocation {
                     PublicAgentInvocation::AgentInitialization(invocation) => {
-                        &invocation.idempotency_key
+                        &invocation.invocation_id
                     }
                     PublicAgentInvocation::AgentMethodInvocation(invocation) => {
-                        &invocation.idempotency_key
+                        &invocation.invocation_id
                     }
                     other => panic!("unexpected invocation: {other:?}"),
                 };
@@ -390,8 +390,21 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
         wait_for_memory_growth(&executor, &grown_id, control_growth + 32 * MIB).await?;
     let control_entries = executor.get_oplog(&control_id, OplogIndex::INITIAL).await?;
     let grown_entries = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
-    let mut control_keys = vec![constructor_key(&control_entries), control_read];
-    let mut grown_keys = vec![constructor_key(&grown_entries), grown_read, retain_key];
+    let mut control_keys = vec![
+        constructor_key(&control_entries),
+        executor
+            .external_invocation_key(&control_id, &control_read, "retained_kib")
+            .await?,
+    ];
+    let mut grown_keys = vec![
+        constructor_key(&grown_entries),
+        executor
+            .external_invocation_key(&grown_id, &grown_read, "retained_kib")
+            .await?,
+        executor
+            .external_invocation_key(&grown_id, &retain_key, "retain")
+            .await?,
+    ];
     assert_settled_history(&control_entries, &control_keys);
     assert_settled_history(&grown_entries, &grown_keys);
 
@@ -408,7 +421,11 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
             .invoke_and_await_agent_with_key(&component, agent, &key, "retained_kib", data_value!())
             .await?;
         assert_eq!(retained.into_typed::<u32>()?, expected);
-        keys.push(key);
+        keys.push(
+            executor
+                .external_invocation_key(worker_id, &key, "retained_kib")
+                .await?,
+        );
         let entries = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         assert_settled_history(&entries, keys);
     }
@@ -444,7 +461,11 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
         )
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 36 * 1024);
-    grown_keys.push(fresh_key);
+    grown_keys.push(
+        executor
+            .external_invocation_key(&grown_id, &fresh_key, "retain")
+            .await?,
+    );
     let entries = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
     assert_settled_history(&entries, &grown_keys);
 
@@ -480,7 +501,12 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         .await?;
     wait_for_memory_growth(&executor, &worker_id, 32 * MIB).await?;
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let mut expected_keys = vec![constructor_key(&entries), retain_key];
+    let mut expected_keys = vec![
+        constructor_key(&entries),
+        executor
+            .external_invocation_key(&worker_id, &retain_key, "retain")
+            .await?,
+    ];
     assert_settled_history(&entries, &expected_keys);
 
     // Commit explicit saved requirements through the production status owner. This varies
@@ -507,7 +533,11 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
             )
             .await?;
         assert_eq!(retained.into_typed::<u32>()?, 32 * 1024);
-        expected_keys.push(read_key);
+        expected_keys.push(
+            executor
+                .external_invocation_key(&worker_id, &read_key, "retained_kib")
+                .await?,
+        );
         let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         assert_settled_history(&entries, &expected_keys);
         let reconciled = executor
@@ -537,7 +567,11 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         )
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
-    expected_keys.push(fresh_key);
+    expected_keys.push(
+        executor
+            .external_invocation_key(&worker_id, &fresh_key, "retain")
+            .await?,
+    );
     let growth_after =
         wait_for_memory_growth(&executor, &worker_id, growth_before + 64 * MIB).await?;
     assert_eq!(
@@ -562,7 +596,11 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         )
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
-    expected_keys.push(read_key);
+    expected_keys.push(
+        executor
+            .external_invocation_key(&worker_id, &read_key, "retained_kib")
+            .await?,
+    );
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_settled_history(&entries, &expected_keys);
     Ok(())

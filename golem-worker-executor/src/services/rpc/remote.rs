@@ -29,7 +29,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
-        key: IdempotencyKey,
+        key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
         owner: &AgentId,
         auth: &AuthCtx,
@@ -44,6 +44,7 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
         auth_ctx: &AuthCtx,
@@ -73,7 +74,8 @@ impl Rpc for RemoteInvocationRpc {
                     "scheduled input cannot cross the remote worker boundary: {error}"
                 ),
             })?),
-            idempotency_key: Some(idempotency_key.clone().into()),
+            idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
+            request_key: Some(request_key.into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent,
                 env: HashMap::new(),
@@ -126,7 +128,7 @@ impl Rpc for RemoteInvocationRpc {
             match response.response {
                 Some(invocation_response::Response::Accepted(accepted)) => {
                     if accepted.agent_id != start.agent_id
-                        || accepted.idempotency_key != start.idempotency_key
+                        || accepted.idempotency_key != Some(idempotency_key.into())
                         || accepted.method_name != start.method_name
                         || accepted.component_revision.is_none()
                     {
@@ -190,7 +192,10 @@ impl Rpc for RemoteInvocationRpc {
                 config,
                 principal,
                 auth_ctx,
-                idempotency_key,
+                // The receiving executor checks a fresh ephemeral phantom against the same owner
+                // key the caller derived it from.
+                idempotency_key
+                    .map(|key| InvocationRequestKey::Internal(key).owner_key(method_name)),
                 freshness_disposition,
             )
             .await?;
@@ -279,6 +284,7 @@ impl Rpc for RemoteInvocationRpc {
                 agent_id: Some(owned_agent_id.agent_id().into()),
                 method_name: Some(method_name),
                 input: Some(method_parameters),
+                request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
                 idempotency_key: Some(idempotency_key.into()),
                 context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: Some(self_agent_id.clone().into()),
@@ -368,7 +374,7 @@ impl Rpc for RemoteInvocationRpc {
                             request = InvocationRequest {
                                 request: Some(invocation_request::Request::ResumeAttach(
                                     ResumeAttach {
-                                        idempotency_key: accepted.idempotency_key.clone(),
+                                        idempotency_key: accepted.idempotency_key,
                                         agent_id: accepted.agent_id.clone(),
                                         environment_id: accepted.environment_id,
                                         attachment_id: accepted.attachment_id,
@@ -475,10 +481,8 @@ impl Rpc for RemoteInvocationRpc {
                         break;
                     }
                     Some(invocation_response::Response::OutputItem(_))
-                    | Some(invocation_response::Response::OutputEnd(_))
-                    | Some(invocation_response::Response::OutputError(_))
-                    | Some(invocation_response::Response::InputAck(_))
-                    | Some(invocation_response::Response::StreamCancel(_)) => {}
+                    | Some(invocation_response::Response::StreamEnd(_))
+                    | Some(invocation_response::Response::InputAck(_)) => {}
                     None => unreachable!("response state validation rejects empty frames"),
                 }
             }

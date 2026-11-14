@@ -129,7 +129,7 @@ fn scope_cards_cannot_use_persistent_snapshot_transport() {
             CardId(Uuid::from_u128(10)),
             vec![CardId(Uuid::from_u128(1))],
         ),
-        IdempotencyKey::fresh(),
+        Uuid::new_v4().into(),
     );
 
     let error = entry.into_snapshot().unwrap_err();
@@ -140,20 +140,20 @@ fn scope_cards_cannot_use_persistent_snapshot_transport() {
 
 #[test]
 fn scope_card_handles_are_owned_by_the_minting_invocation() {
-    let owner = IdempotencyKey::new("owner".to_string());
+    let owner = golem_common::model::InvocationId::from(Uuid::from_u128(1));
     let card = scope_card(
         CardId(Uuid::from_u128(10)),
         vec![CardId(Uuid::from_u128(1))],
     );
 
     assert_eq!(
-        resolve_owned_scope_card(Some((card.clone(), Some(owner.clone()))), &owner).unwrap(),
+        resolve_owned_scope_card(Some((card.clone(), Some(owner))), &owner).unwrap(),
         card
     );
     assert!(
         resolve_owned_scope_card(
-            Some((card.clone(), Some(owner.clone()))),
-            &IdempotencyKey::new("different-invocation".to_string()),
+            Some((card.clone(), Some(owner))),
+            &Uuid::from_u128(2).into(),
         )
         .is_err()
     );
@@ -165,10 +165,7 @@ fn scope_card_handles_are_owned_by_the_minting_invocation() {
 
 #[test]
 fn persistent_cards_are_not_accepted_as_scope_card_arguments() {
-    assert!(
-        resolve_owned_scope_card(None, &IdempotencyKey::new("current-invocation".to_string()),)
-            .is_err()
-    );
+    assert!(resolve_owned_scope_card(None, &Uuid::from_u128(3).into()).is_err());
 }
 
 fn derive_authorization_surface() -> EffectiveSurface {
@@ -423,7 +420,7 @@ fn installed_child_request_matches_registry_canonicalization() {
             component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
             agent_id: "source-agent".to_string(),
         },
-        invocation_key: IdempotencyKey::fresh(),
+        invocation_key: Uuid::new_v4().into(),
         oplog_index: OplogIndex::from_u64(42),
     };
     let mut canonical = requested.clone();

@@ -13,6 +13,7 @@ import {
 } from "../src/internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "../src/internal/schema-model/permissionCardInternal.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const Card = ToolSchema.PermissionCard
 const Payload = Schema.Struct({
@@ -158,7 +159,6 @@ describe("permission-card ownership across tool boundaries", () => {
         undefined,
         undefined,
         undefined,
-        {},
       ),
     ).rejects.toBeDefined()
     expect(captured).toHaveLength(1)
@@ -178,7 +178,6 @@ describe("permission-card ownership across tool boundaries", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     expect(rawIn(result.result!.value)).toBe(successfulRaw)
     const received = await Effect.runPromise(retry.decode(result.result!.value))
@@ -221,6 +220,23 @@ describe("permission-card ownership across tool boundaries", () => {
     }
 
     await expect(
+      withCaller({ tag: "anonymous" }, () =>
+        toolMiddlewareGuest.invokeToolMiddleware(
+          "card-pass",
+          "card-middleware",
+          toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
+          emptyParameters(),
+          [],
+          { graph: codec.schemaGraph, value: malformed },
+          undefined,
+          undefined,
+          undefined,
+          wrapped as never,
+        ),
+      ),
+    ).rejects.toBeDefined()
+    literal.val = "canonical"
+    const result = await withCaller({ tag: "anonymous" }, () =>
       toolMiddlewareGuest.invokeToolMiddleware(
         "card-pass",
         "card-middleware",
@@ -231,23 +247,8 @@ describe("permission-card ownership across tool boundaries", () => {
         undefined,
         undefined,
         undefined,
-        { tag: "anonymous" },
         wrapped as never,
       ),
-    ).rejects.toBeDefined()
-    literal.val = "canonical"
-    const result = await toolMiddlewareGuest.invokeToolMiddleware(
-      "card-pass",
-      "card-middleware",
-      toolMiddlewareGuest.getToolMiddleware("card-pass") as never,
-      emptyParameters(),
-      [],
-      { graph: codec.schemaGraph, value: malformed },
-      undefined,
-      undefined,
-      undefined,
-      { tag: "anonymous" },
-      wrapped as never,
     )
     expect(rawIn(result.result!.value)).toBe(raw)
     expect(wrapped.invoke).toHaveBeenCalledOnce()

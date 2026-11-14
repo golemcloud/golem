@@ -14,7 +14,7 @@
 
 use crate::base_model::durable_stream::StreamConsumerObservation;
 use crate::base_model::regions::DeletedRegions;
-use crate::base_model::{IdempotencyKey, OplogIndex};
+use crate::base_model::{InvocationId, OplogIndex};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::ops::Bound::{Excluded, Included};
@@ -97,7 +97,7 @@ pub enum ToolAttachmentReadOutcome {
 pub struct ToolAttachmentReadObservation {
     pub attachment: ToolAttachmentId,
     /// The invocation that introduced the consumer binding, retained across method calls.
-    pub logical_invocation: IdempotencyKey,
+    pub logical_invocation: InvocationId,
     pub observation: StreamConsumerObservation,
     pub ordinal: u64,
     /// Native read attempt at this physical boundary. Zero cancellations leave gaps.
@@ -239,11 +239,7 @@ impl ToolAttachmentHistory {
             if deleted.is_in_deleted_region(*index) && self.source_was_removed(read) {
                 continue;
             }
-            let key = (
-                read.attachment,
-                read.logical_invocation.value.as_str(),
-                read.ordinal,
-            );
+            let key = (read.attachment, read.logical_invocation, read.ordinal);
             if read.reobserves.is_none() && originals.insert(key, index).is_some() {
                 return Err(ToolAttachmentHistoryError::DuplicateObservation);
             }

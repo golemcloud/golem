@@ -25,6 +25,8 @@ use crate::services::agent_filesystem::{
 use crate::services::resource_limits::{
     AtomicResourceEntry, MonthlyResourceCapacityError, MonthlyResourceExhaustion,
 };
+use golem_common::model::InvocationId;
+use uuid::Uuid;
 
 #[test]
 fn unavailable_monthly_policy_is_not_quota_suspension_or_ephemeral_resource_exhaustion() {
@@ -360,8 +362,8 @@ fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {
 #[test]
 fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
     use super::{
-        AgentStatusRecord, CanonicalFilePath, FileByteSelection, IdempotencyKey,
-        PendingInvocationRef, QueuedWorkerInvocation, SelectedWork,
+        AgentStatusRecord, CanonicalFilePath, FileByteSelection, PendingInvocationRef,
+        QueuedWorkerInvocation, SelectedWork,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::{PendingUpdateKind, PendingUpdateRef};
@@ -371,7 +373,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(4),
-            idempotency_key: Some(IdempotencyKey::new("method".into())),
+            idempotency_key: Some(InvocationId(Uuid::from_u128(1))),
             manual_update_target_revision: None,
         };
         let mut status = AgentStatusRecord {
@@ -426,16 +428,16 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
 #[test]
 fn filesystem_turns_preserve_initialization_and_control_priority() {
     use super::{
-        AgentStatusRecord, CanonicalFilePath, IdempotencyKey, PendingInvocationRef,
-        QueuedWorkerInvocation, SelectedWork,
+        AgentStatusRecord, CanonicalFilePath, PendingInvocationRef, QueuedWorkerInvocation,
+        SelectedWork,
     };
-    let constructor = IdempotencyKey::new("init-agent".into());
+    let constructor = InvocationId(Uuid::from_u128(2));
     let status = Arc::new(AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(constructor.clone()),
+            idempotency_key: Some(constructor),
             manual_update_target_revision: None,
         }],
         ..Default::default()
@@ -496,19 +498,19 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
 
 #[test]
 fn future_invocations_do_not_block_ready_work_or_idle() {
-    use super::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, SelectedWork};
+    use super::{AgentStatusRecord, PendingInvocationRef, SelectedWork};
     let deadline = Timestamp::from(2000);
     let future = PendingInvocationRef {
         timestamp: Timestamp::from(1000),
         not_before: Some(deadline),
         oplog_index: OplogIndex::from_u64(3),
-        idempotency_key: Some(IdempotencyKey::new("future".into())),
+        idempotency_key: Some(InvocationId(Uuid::from_u128(3))),
         manual_update_target_revision: None,
     };
     let ready = PendingInvocationRef {
         not_before: None,
         oplog_index: OplogIndex::from_u64(4),
-        idempotency_key: Some(IdempotencyKey::new("ready".into())),
+        idempotency_key: Some(InvocationId(Uuid::from_u128(4))),
         ..future.clone()
     };
     let mut queue = VecDeque::new();

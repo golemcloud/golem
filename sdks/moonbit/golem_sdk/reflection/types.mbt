@@ -51,7 +51,7 @@ pub(all) struct ParsedAgentIdParts {
 ///|
 pub(all) struct InvocationMetadata {
   agent_id : ParsedAgentId
-  idempotency_key : String
+  invocation_id : @rpc.InvocationId
 } derive(Debug, Eq)
 
 ///|

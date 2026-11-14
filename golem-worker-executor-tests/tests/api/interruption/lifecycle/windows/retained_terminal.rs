@@ -99,6 +99,9 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .context("owner not cached")?;
     let worker = active.primary();
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "await_promise")
+        .await?;
     let (outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     executor
         .invoke_agent_with_key(
@@ -204,8 +207,9 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .iter()
         .filter_map(|(index, entry)| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
-            } if idempotency_key == &key => Some(*index),
+                invocation_id: idempotency_key,
+                ..
+            } if idempotency_key == &stored_key => Some(*index),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -269,6 +273,9 @@ async fn retained_terminal(
         .context("owner not cached")?;
     let worker = active.primary();
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "await_promise")
+        .await?;
     executor
         .invoke_agent_with_key(
             &component,
@@ -338,7 +345,7 @@ async fn retained_terminal(
             .count(),
         1
     );
-    assert_eq!(entries.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+    assert_eq!(entries.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
     assert!(!entries.values().any(|entry| matches!(
         entry,
         OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }

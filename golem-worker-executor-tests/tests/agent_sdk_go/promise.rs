@@ -18,7 +18,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use golem_common::model::{AgentStatus, OplogIndex, PromiseId};
+use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -112,10 +112,9 @@ async fn go_promise_suspends_until_completed(
 
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: OplogIndex::from_u64(oplog_idx as u64),
-            },
+            &executor
+                .promise_id(&worker_id, OplogIndex::from_u64(oplog_idx as u64))
+                .await?,
             // The Go wrapper decodes the payload as JSON for a string T.
             b"\"approved\"".to_vec(),
         )

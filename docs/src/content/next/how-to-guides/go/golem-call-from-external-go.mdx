@@ -238,10 +238,10 @@ curl -X POST \
   "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
   -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"oplogIdx": <oplog_index>, "data": [<bytes>]}'
+  -d '{"oplogIdx": <oplog_index>, "fingerprint": "<fingerprint>", "data": [<bytes>]}'
 ```
 
-`"mode": "schedule"` triggers the invocation without awaiting it. For promise completion, `$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses; a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `OplogIndex`) supplies the component, the agent and the oplog index. The generated external Go client (Approach 1) builds these requests for you.
+`"mode": "schedule"` triggers the invocation without awaiting it. For promise completion, `$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses; a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `Fingerprint`, `OplogIndex`) supplies the component, the agent, the fingerprint of the agent incarnation that created the promise (as the UUID string) and the oplog index. All three body fields are required. The generated external Go client (Approach 1) builds these requests for you.
 
 ## Key Constraints
 

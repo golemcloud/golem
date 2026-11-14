@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::state::{RunningStop, StopPhase, StoppingStop};
 use crate::worker::*;
 
@@ -119,15 +123,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
                         .await;
                 }
-                if let FinalWorkerState::Unloaded { startup_failure } =
-                    unloaded.complete(final_state)
-                {
-                    self.resolve_pending_queue_on_unload(
-                        startup_failure.as_ref(),
-                        pending_live_invocations,
-                    )
+                let final_state = unloaded.complete(final_state);
+                self.resolve_pending_queue_on_stop(&final_state, pending_live_invocations)
                     .await;
-                }
                 StopResult::Stopped
             }
             StopPhase::CleanupFailed(failed) => {
@@ -141,6 +139,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 failed.retain();
                 StopResult::Stopped
             }
+            StopPhase::Inactive(inactive) => {
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
+                        .await;
+                }
+                let final_state = inactive.complete(final_state);
+                self.resolve_pending_queue_on_stop(&final_state, pending_live_invocations)
+                    .await;
+                StopResult::Stopped
+            }
             StopPhase::WaitingForPermit(waiting) => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations_for_stop(error.clone(), actor_loss_cleanup)
@@ -148,20 +156,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 let completed = waiting.complete(final_state);
-                match completed.final_state() {
-                    FinalWorkerState::Unloaded { startup_failure } => {
-                        self.resolve_pending_queue_on_unload(
-                            startup_failure.as_ref(),
-                            pending_live_invocations,
-                        )
-                        .await;
-                    }
-                    FinalWorkerState::CleanupFailed(error) => {
-                        self.resolve_pending_readiness_awaiters_on_stop(Some(error))
-                            .await;
-                    }
-                    FinalWorkerState::Deleting => {}
-                }
+                self.resolve_pending_queue_on_stop(
+                    completed.final_state(),
+                    pending_live_invocations,
+                )
+                .await;
                 StopResult::Stopped
             }
             StopPhase::Stopping(StoppingStop::InvocationLoop(stopping)) => {
@@ -174,20 +173,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.release_linear_memory_grant();
                 let (final_state, notify, pending_live_invocations) =
                     stopping.complete(final_state);
-                match final_state {
-                    FinalWorkerState::Unloaded { startup_failure } => {
-                        self.resolve_pending_queue_on_unload(
-                            startup_failure.as_ref(),
-                            pending_live_invocations,
-                        )
-                        .await;
-                    }
-                    FinalWorkerState::CleanupFailed(error) => {
-                        self.resolve_pending_readiness_awaiters_on_stop(Some(&error))
-                            .await;
-                    }
-                    FinalWorkerState::Deleting => {}
-                }
+                self.resolve_pending_queue_on_stop(&final_state, pending_live_invocations)
+                    .await;
                 notify.set();
                 StopResult::Stopped
             }
@@ -263,20 +250,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // the old generation's grant.
                         self.release_linear_memory_grant();
                         let completed = running.complete(final_state);
-                        match completed.final_state() {
-                            FinalWorkerState::Unloaded { startup_failure } => {
-                                self.resolve_pending_queue_on_unload(
-                                    startup_failure.as_ref(),
-                                    pending_live_invocations,
-                                )
-                                .await;
-                            }
-                            FinalWorkerState::CleanupFailed(error) => {
-                                self.resolve_pending_readiness_awaiters_on_stop(Some(error))
-                                    .await;
-                            }
-                            FinalWorkerState::Deleting => {}
-                        }
+                        self.resolve_pending_queue_on_stop(
+                            completed.final_state(),
+                            pending_live_invocations,
+                        )
+                        .await;
                         StopResult::Stopped
                     }
                     RunningStop::External(running) => {
@@ -336,25 +314,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
 
                 let pending_live_invocations = instance_guard.finish_external_stop();
-                match instance_guard.stop_outcome() {
-                    Some(FinalWorkerState::Unloaded { startup_failure }) => {
-                        self.resolve_pending_queue_on_unload(
-                            startup_failure.as_ref(),
-                            pending_live_invocations
-                                .unwrap_or(PendingLiveInvocationDisposition::Fail),
-                        )
-                        .await;
-                    }
-                    Some(FinalWorkerState::CleanupFailed(error)) => {
-                        self.resolve_pending_readiness_awaiters_on_stop(Some(&error))
-                            .await;
-                    }
-                    Some(FinalWorkerState::Deleting) | None => {}
+                if let Some(final_state) = instance_guard.stop_outcome() {
+                    self.resolve_pending_queue_on_stop(
+                        &final_state,
+                        pending_live_invocations.unwrap_or(PendingLiveInvocationDisposition::Fail),
+                    )
+                    .await;
                 }
                 drop(instance_guard);
 
                 notify.set();
             }
+        }
+    }
+    /// Resolves resident waiters for the final state that a stop installed.
+    async fn resolve_pending_queue_on_stop(
+        &self,
+        final_state: &FinalWorkerState,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
+        match final_state {
+            FinalWorkerState::Unloaded { startup_failure } => {
+                self.resolve_pending_queue_on_unload(
+                    startup_failure.as_ref(),
+                    pending_live_invocations,
+                )
+                .await;
+            }
+            FinalWorkerState::Inactive(error) => {
+                self.resolve_pending_queue_on_unload(Some(error), pending_live_invocations)
+                    .await;
+            }
+            FinalWorkerState::CleanupFailed(error) => {
+                self.resolve_pending_readiness_awaiters_on_stop(Some(error))
+                    .await;
+            }
+            FinalWorkerState::Deleting => {}
         }
     }
     /// Resolves all queued `AwaitReadyToProcessCommands` markers when the worker reaches the
@@ -534,7 +529,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 continue;
             }
             invocation_results.insert(
-                idempotency_key.clone(),
+                *idempotency_key,
                 InvocationResult::Cached {
                     result: Err(FailedInvocationResult {
                         trap_type: TrapType::Error {
@@ -651,6 +646,8 @@ pub(in crate::worker) fn merge_final_worker_state(
         (_, FinalWorkerState::CleanupFailed(_)) => requested,
         (FinalWorkerState::Deleting, _) => current,
         (_, FinalWorkerState::Deleting) => requested,
+        (FinalWorkerState::Inactive(_), _) => current,
+        (_, FinalWorkerState::Inactive(_)) => requested,
         (
             FinalWorkerState::Unloaded {
                 startup_failure: None,
@@ -694,13 +691,13 @@ pub(in crate::worker) fn complete_stopping_worker(
 
 pub(in crate::worker) fn invocation_keys_to_fail(
     status: &AgentStatusRecord,
-    first_key: Option<&IdempotencyKey>,
+    first_key: Option<&InvocationId>,
     include_pending_and_current: bool,
-) -> Vec<IdempotencyKey> {
+) -> Vec<InvocationId> {
     let mut keys = Vec::new();
 
     if let Some(key) = first_key {
-        keys.push(key.clone());
+        keys.push(*key);
     }
 
     if !include_pending_and_current {
@@ -713,14 +710,14 @@ pub(in crate::worker) fn invocation_keys_to_fail(
         .filter_map(|entry| entry.idempotency_key())
     {
         if !keys.contains(pending_key) {
-            keys.push(pending_key.clone());
+            keys.push(*pending_key);
         }
     }
 
     if let Some(current_key) = &status.current_idempotency_key
         && !keys.contains(current_key)
     {
-        keys.push(current_key.clone());
+        keys.push(*current_key);
     }
 
     keys

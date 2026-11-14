@@ -1638,6 +1638,29 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_accepts_every_sample_oplog_entry() {
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
+    for entry in sample_public_oplog_entries() {
+        let entry_type =
+            serde_json::to_value(&entry).expect("oplog entry should serialize")["type"].clone();
+        let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+            index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+            entry: entry.into(),
+        })
+        .expect("agent.oplog should serialize");
+        assert!(
+            validator.is_valid(&output),
+            "schema should accept the {entry_type} oplog entry: {:?}",
+            validator
+                .iter_errors(&output)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
@@ -2240,7 +2263,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::model::oplog::public_oplog_entry::*;
     use golem_common::model::oplog::*;
     use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
+    use golem_common::model::{AgentId, Empty, InvocationId, Timestamp};
     use golem_common::schema::{
         IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
@@ -2323,7 +2346,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
 
     fn method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: InvocationId(Uuid::from_u128(2)),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -2388,7 +2411,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             creation_start: OplogIndex::from_u64(1),
             slot: ToolAttachmentSlot::Stdout,
         },
-        logical_invocation: IdempotencyKey::new("attachment-read-key".to_string()),
+        logical_invocation: InvocationId(Uuid::from_u128(4)),
         observation: StreamConsumerObservation::Guest {
             parent_start_index: Some(OplogIndex::from_u64(4)),
         },
@@ -2516,6 +2539,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
                 output: typed_string_value("output"),
             }),
@@ -2529,6 +2553,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Error(ErrorParams {
             timestamp: timestamp(),
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(InvocationId(Uuid::from_u128(6))),
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state: Some(retry_policy_state),
@@ -2553,7 +2578,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             not_before: Some(timestamp()),
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-                idempotency_key: IdempotencyKey::new("init-key".to_string()),
+                invocation_id: InvocationId(Uuid::from_u128(1)),
                 constructor_parameters: typed_string_value("constructor"),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -2594,6 +2619,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 source_component_revision: ComponentRevision::new(1).unwrap(),
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(2),
+            }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
             }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
@@ -2670,7 +2699,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: timestamp(),
-            idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+            invocation_id: InvocationId(Uuid::from_u128(7)),
         }),
         PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
             timestamp: timestamp(),
@@ -2696,16 +2725,22 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             data: raw_snapshot(),
             filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
             timestamp: timestamp(),
@@ -2723,6 +2758,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
             plugin: plugin(4),
+            source_component_revision: ComponentRevision::INITIAL,
             target_agent_id: agent_id("target-agent"),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),
@@ -2738,6 +2774,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
                 snapshot: json_snapshot(),
             }),
@@ -2761,7 +2798,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-                idempotency_key: IdempotencyKey::new("process-key".to_string()),
+                invocation_id: InvocationId(Uuid::from_u128(3)),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
@@ -2773,6 +2810,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters {
                 error: Some("load failed".to_string()),
             }),
@@ -2782,6 +2820,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::ProcessOplogEntries(
                 ProcessOplogEntriesResultParameters { error: None },
             ),
@@ -2791,6 +2830,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
             method_name: Some("generated-method".to_string()),
             consumed_fuel: 104,
@@ -3527,7 +3567,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
 
-    arb_small_string()
+    any::<u128>()
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
@@ -3535,7 +3575,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
                         component_id: ComponentId(uuid::Uuid::nil()),
                         agent_id: "agent".into(),
                     },
-                    idempotency_key: key,
+                    idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,
                     status: None,
                     component_revision: None,
@@ -3549,13 +3589,13 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
 }
 
 fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::InvocationId;
     use golem_common::model::invocation_session_public::{
         PublicInvocationResult, PublicNativeToolTarget, PublicTypedValue,
     };
     use golem_common::schema::{SchemaGraph, SchemaType};
 
-    (arb_small_string(), any::<bool>())
+    (any::<u128>(), any::<bool>())
         .prop_map(|(key, success)| {
             let typed = PublicTypedValue {
                 graph: SchemaGraph::anonymous(if success {
@@ -3573,7 +3613,7 @@ fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
-                idempotency_key: IdempotencyKey::new(key),
+                idempotency_key: InvocationId(uuid::Uuid::from_u128(key)),
                 result: if success {
                     PublicInvocationResult::ToolSuccess {
                         result: Some(typed),
@@ -3768,7 +3808,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 )| crate::model::agent::stream::AgentStreamEvent {
@@ -3778,7 +3818,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 },
@@ -3805,6 +3845,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                 proptest::option::of(arb_small_u64()),
                 proptest::option::of(arb_json_value(1)),
             ),
+            proptest::option::of(arb_small_string()),
         )
             .prop_map(
                 |(
@@ -3814,6 +3855,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                     component_revision,
                     (outcome, reason, error, stream_id),
                     (parent_stream_id, path, offset, value),
+                    stderr,
                 )| {
                     crate::model::agent::invocation_session::AgentInvocationSessionEvent {
                         kind,
@@ -3823,6 +3865,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                         outcome,
                         reason,
                         error,
+                        stderr,
                         stream_id,
                         parent_stream_id,
                         path,

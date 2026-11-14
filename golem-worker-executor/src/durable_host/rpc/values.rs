@@ -19,6 +19,7 @@ use crate::preview2::golem::agent::host::RpcError;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
@@ -88,7 +89,7 @@ impl PreparedRpcInvocation {
     ) -> HostRequestGolemRpcInvoke {
         HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
-            idempotency_key: idempotency_key.clone(),
+            request_key: InvocationRequestKey::Internal(idempotency_key.clone()),
             method_name: self.method_name.clone(),
             input: strip_streams(self.input_value.clone()),
             logical_streaming_origin,

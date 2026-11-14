@@ -249,12 +249,18 @@ async fn real_rpc_retained_start_reconstruction_probe(
         (&target_a, &attempts_before[0]),
         (&target_b, &attempts_before[1]),
     ] {
-        let key = key.as_ref().unwrap();
+        let key = executor
+            .finalized_invocation_key(
+                target,
+                &InvocationRequestKey::Internal(key.clone().unwrap()),
+                "inc_after_promise",
+            )
+            .await?;
         let history = executor.get_oplog(target, OplogIndex::INITIAL).await?;
         assert_eq!(history.iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::AgentInvocationStarted(started)
                 if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                    if method.method_name == "inc_after_promise" && &method.idempotency_key == key)
+                    if method.method_name == "inc_after_promise" && method.invocation_id == key)
         )).count(), 1, "one target invocation must execute for each recorded RPC key");
         assert_eq!(
             history

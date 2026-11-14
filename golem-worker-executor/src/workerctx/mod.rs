@@ -57,8 +57,9 @@ use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -449,10 +450,10 @@ pub trait CallCountManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey);
+    async fn set_current_idempotency_key(&mut self, key: InvocationId);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
+    async fn get_current_idempotency_key(&self) -> Option<InvocationId>;
 
     /// Sets (overwrites) the current invocation context stack
     async fn set_current_invocation_context(
@@ -565,14 +566,17 @@ pub trait UpdateManagement {
         failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
-    /// update: the agent has been given up, and the update must not be reported as applied.
+    /// Called when an update attempt succeeded. `bootstrap` is the bootstrap range of the target
+    /// revision's core initializer that the update recorded. Fails when the oplog refused to
+    /// record the update: the agent has been given up, and the update must not be reported as
+    /// applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError>;
 }
 

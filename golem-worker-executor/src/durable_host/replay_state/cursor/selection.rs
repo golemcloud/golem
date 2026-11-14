@@ -81,8 +81,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
-        | OplogEntry::StreamEnd { .. }
-        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamTerminal { .. }
         | OplogEntry::StreamSession { .. } => None,
     }
 }
@@ -158,8 +157,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::ToolAttachmentRead { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
-        | OplogEntry::StreamEnd { .. }
-        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamTerminal { .. }
         | OplogEntry::StreamSession { .. } => None,
     }
 }

@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 
 fn completed_invocation_payload(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
 ) -> anyhow::Result<(OplogIndex, OplogIndex, PayloadId)> {
     let starts: Vec<_> = entries
         .iter()
         .filter_map(|(index, entry)| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key,
+                invocation_id: idempotency_key,
                 payload,
                 ..
             } if idempotency_key == key => Some((*index, payload)),

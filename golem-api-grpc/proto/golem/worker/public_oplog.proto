@@ -9,7 +9,6 @@ import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
-import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
@@ -74,8 +73,7 @@ message OplogEntry {
     CardTransferConfirmedParameters CardTransferConfirmed = 59;
     DurableStreamRecordParameters StreamRegistered = 60;
     DurableStreamRecordParameters StreamItems = 61;
-    DurableStreamRecordParameters StreamEnd = 62;
-    DurableStreamRecordParameters StreamCancel = 63;
+    DurableStreamRecordParameters StreamTerminal = 62;
     DurableStreamRecordParameters StreamSession = 64;
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;
@@ -249,6 +247,7 @@ message AgentInvocationFinishedParameters {
   int64 consumed_fuel = 3;
   uint64 component_revision = 4;
   optional string method_name = 5;
+  golem.common.UUID invocation_id = 6;
 }
 
 message PublicAgentInvocation {
@@ -264,7 +263,7 @@ message PublicAgentInvocation {
 }
 
 message PublicExternalToolInvocation {
-  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.common.UUID invocation_id = 1;
   string tool_name = 2;
   repeated string command_path = 3;
   golem.schema.TypedSchemaValue input = 4;
@@ -274,7 +273,7 @@ message PublicExternalToolInvocation {
 }
 
 message PublicAgentInitializationInvocation {
-  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.common.UUID invocation_id = 1;
   golem.schema.TypedSchemaValue constructor_parameters = 2;
   string trace_id = 3;
   repeated string trace_states = 4;
@@ -282,7 +281,7 @@ message PublicAgentInitializationInvocation {
 }
 
 message PublicAgentMethodInvocation {
-  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.common.UUID invocation_id = 1;
   string method_name = 2;
   golem.schema.TypedSchemaValue function_input = 3;
   string trace_id = 4;
@@ -295,7 +294,7 @@ message LoadSnapshotInvocationParameters {
 }
 
 message ProcessOplogEntriesInvocationParameters {
-  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.common.UUID invocation_id = 1;
 }
 
 message ManualUpdateInvocationParameters {
@@ -423,6 +422,12 @@ message ErrorParameters {
   uint64 retry_from = 3;
   optional RetryPolicyState retry_policy_state = 5;
   OplogErrorKind kind = 6;
+  optional golem.common.UUID invocation_id = 7;
+}
+
+message OplogRegion {
+  uint64 start = 1;
+  uint64 end = 2;
 }
 
 message JumpParameters {
@@ -627,6 +632,7 @@ message SuccessfulUpdateParameters {
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
   optional SnapshotAssistedUpdateDetails snapshot_assisted_details = 11;
+  optional OplogRegion bootstrap = 12;
 }
 
 message SnapshotAssistedUpdateDetails {
@@ -697,7 +703,7 @@ message RevertParameters {
 
 message CancelInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
-  IdempotencyKey idempotency_key = 2;
+  golem.common.UUID invocation_id = 2;
 }
 
 enum OplogLogLevel {
@@ -732,6 +738,7 @@ message SnapshotDataParameters {
     MultipartSnapshotData multipart = 4;
   }
   optional string filesystem_snapshot = 5;
+  optional OplogRegion bootstrap = 6;
 }
 
 message SnapshotConfirmedParameters {
@@ -780,6 +787,7 @@ message OplogProcessorCheckpointParameters {
   uint64 confirmed_up_to = 4;
   uint64 sending_up_to = 5;
   uint64 last_batch_start = 6;
+  uint64 source_component_revision = 7;
 }
 
 message OplogEntryWithIndex {

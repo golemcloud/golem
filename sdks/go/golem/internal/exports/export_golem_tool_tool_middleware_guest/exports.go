@@ -21,7 +21,6 @@
 package export_golem_tool_tool_middleware_guest
 
 import (
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
@@ -51,7 +50,6 @@ var Exports struct {
 		stdin Stdin,
 		stdout Stdout,
 		stderr Stderr,
-		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
 }
@@ -82,10 +80,9 @@ func InvokeToolMiddleware(
 	stdin Stdin,
 	stdout Stdout,
 	stderr Stderr,
-	principal common.Principal,
 	wrapped *underlying.UnderlyingTool,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	mustBeSet("invoke-tool-middleware", Exports.InvokeToolMiddleware != nil)
 	return Exports.InvokeToolMiddleware(middlewareName, toolName, toolMetadata, parameters,
-		commandPath, input, stdin, stdout, stderr, principal, wrapped)
+		commandPath, input, stdin, stdout, stderr, wrapped)
 }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::{IdempotencyKey, InvocationId};
+
 mod acquisition;
 mod ingress;
 mod persistence;
@@ -156,13 +158,13 @@ use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
 use crate::worker::lifecycle::state::{
-    LifecycleTransition, StopOrigin, WaitingPhase, WorkerLifecycle,
+    LifecycleTransition, StartupFailure, StopOrigin, WaitingPhase, WorkerLifecycle,
 };
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
-    revert_validation_regions, update_status_with_new_entries,
+    InvocationRequests, calculate_last_known_status_with_checkpoint,
+    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -210,9 +212,9 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
+    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
+    ShardAssignment, ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -552,7 +554,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Holds captured origins rather than `tracing::Span`s: a durable invocation can
     /// be picked up long after the request that enqueued it returned. See
     /// [`TraceOrigin`].
-    external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
+    external_invocation_origins: Arc<RwLock<HashMap<InvocationId, TraceOrigin>>>,
 
     hydrated_invocation_results: Arc<RwLock<HydratedInvocationResultCache>>,
     ephemeral_invocation: StdMutex<EphemeralInvocationState>,
@@ -901,9 +903,13 @@ impl Drop for WorkerStatusMetric {
 enum WorkerInstance {
     Unresolved,
     Initializing(Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>),
+    /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
+    /// admission returns it until the next start, which runs the agent again.
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    /// An ephemeral agent that must never start again (`StartupFailure::Inactive`).
+    Inactive(WorkerExecutorError),
     CleanupFailed(WorkerExecutorError),
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
@@ -922,6 +928,7 @@ enum WorkerRuntime {
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
+    Inactive(WorkerExecutorError),
 }
 
 impl WorkerInstance {
@@ -930,6 +937,7 @@ impl WorkerInstance {
             Self::Unloaded {
                 startup_failure: Some(err),
             }
+            | Self::Inactive(err)
             | Self::CleanupFailed(err) => Some(err),
             _ => None,
         }
@@ -1142,6 +1150,7 @@ pub(crate) enum FinalWorkerState {
     Unloaded {
         startup_failure: Option<WorkerExecutorError>,
     },
+    Inactive(WorkerExecutorError),
     CleanupFailed(WorkerExecutorError),
     Deleting,
 }
@@ -1180,14 +1189,14 @@ enum InvocationResult {
 /// Bounded cache of invocation result payloads loaded from the oplog. The status membership only
 /// stores result oplog indexes; this cache avoids repeatedly loading and decoding those entries.
 struct HydratedInvocationResultCache {
-    values: HashMap<IdempotencyKey, HydratedInvocationResultCacheEntry>,
-    insertion_order: VecDeque<IdempotencyKey>,
+    values: HashMap<InvocationId, HydratedInvocationResultCacheEntry>,
+    insertion_order: VecDeque<InvocationId>,
     capacity: usize,
     /// Committed completions the published status may not include yet, by the oplog index of
     /// their result. The early commit receipt publishes a completion before its fold, and a failed
     /// fold leaves the status detached with the key still current. Payload eviction must not make
     /// such a key look unresolved, or terminal cleanup would fail an invocation that succeeded.
-    unprojected_completions: HashMap<IdempotencyKey, UnprojectedCompletion>,
+    unprojected_completions: HashMap<InvocationId, UnprojectedCompletion>,
 }
 
 struct UnprojectedCompletion {
@@ -1342,7 +1351,7 @@ pub(crate) const INACTIVE_EPHEMERAL_AGENT_ERROR: &str =
 #[derive(Debug)]
 enum EphemeralInvocationState {
     Available,
-    Accepted(Option<IdempotencyKey>),
+    Accepted(Option<InvocationId>),
 }
 
 #[derive(Debug)]

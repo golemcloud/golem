@@ -18,7 +18,7 @@ use golem_common::model::card::RdbmsVerb;
 /// The ID of the runtime card that the durable call at `oplog_index` derives.
 pub(crate) fn derived_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -32,7 +32,7 @@ pub(crate) fn derived_card_id(
 /// The ID of the card transfer that the durable call at `oplog_index` performs.
 pub(crate) fn transfer_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid(
@@ -46,7 +46,7 @@ pub(crate) fn transfer_id(
 /// The ID of the child card that the durable call at `oplog_index` installs.
 pub(crate) fn installed_child_card_id(
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> CardId {
     CardId(derive_permission_uuid(
@@ -60,7 +60,7 @@ pub(crate) fn installed_child_card_id(
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn derive_scope_card_id(
         &self,
-        invocation_key: &IdempotencyKey,
+        invocation_key: &golem_common::model::InvocationId,
         ordinal: u64,
     ) -> CardId {
         CardId(derive_permission_uuid_for_sequence(
@@ -1082,7 +1082,7 @@ fn missing_agent_initial_card_error(
 pub(in crate::durable_host) fn derive_permission_uuid(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     oplog_index: OplogIndex,
 ) -> Uuid {
     derive_permission_uuid_for_sequence(
@@ -1096,11 +1096,12 @@ pub(in crate::durable_host) fn derive_permission_uuid(
 pub(in crate::durable_host) fn derive_permission_uuid_for_sequence(
     context: &'static str,
     owned_agent_id: &OwnedAgentId,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &golem_common::model::InvocationId,
     sequence: u64,
 ) -> Uuid {
     let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
-    let invocation_key = invocation_key.value.as_bytes();
+    let invocation_key = invocation_key.to_string();
+    let invocation_key = invocation_key.as_bytes();
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(owned_agent_id.environment_id.0.as_bytes());
     hasher.update(owned_agent_id.agent_id.component_id.0.as_bytes());

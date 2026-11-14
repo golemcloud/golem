@@ -5,6 +5,8 @@ pub(all) struct ApprovalPromiseId {
   component_id_high_bits : UInt64
   component_id_low_bits : UInt64
   agent_id : String
+  fingerprint_high_bits : UInt64
+  fingerprint_low_bits : UInt64
   oplog_idx : UInt64
 }
 
@@ -14,6 +16,8 @@ fn ApprovalPromiseId::from_host(id : @api.PromiseId) -> ApprovalPromiseId {
     component_id_high_bits: id.agent_id.component_id.uuid.high_bits,
     component_id_low_bits: id.agent_id.component_id.uuid.low_bits,
     agent_id: id.agent_id.agent_id,
+    fingerprint_high_bits: id.fingerprint.high_bits,
+    fingerprint_low_bits: id.fingerprint.low_bits,
     oplog_idx: id.oplog_idx,
   }
 }
@@ -29,6 +33,10 @@ fn ApprovalPromiseId::to_host(self : Self) -> @api.PromiseId {
         },
       },
       agent_id: self.agent_id,
+    },
+    fingerprint: {
+      high_bits: self.fingerprint_high_bits,
+      low_bits: self.fingerprint_low_bits,
     },
     oplog_idx: self.oplog_idx,
   }
