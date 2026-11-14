@@ -486,7 +486,7 @@ async fn calling_owner_context_isolated_across_environments(
 
 #[test]
 #[timeout("3m")]
-async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
+async fn returned_middleware_cannot_reuse_underlying_handle_across_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
@@ -512,6 +512,11 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
     })
     .await
     .expect("stale handle checkpoint");
+    let returned = tokio::time::timeout(std::time::Duration::from_secs(30), stale)
+        .await
+        .expect("middleware returns without waiting for its spawned task")??;
+    assert_eq!(returned.nested.label, "stale-return");
+    assert_eq!(leaf_effect_count(&fixture), 0);
 
     let fresh = invoke_chain_for(
         &fixture,
@@ -535,19 +540,11 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
             Vec::new(),
         )
         .await?;
-    let stale_error = tokio::time::timeout(std::time::Duration::from_secs(30), stale)
-        .await
-        .expect("stale operation settles after rejected use")?
-        .expect_err("post-return underlying handle unexpectedly remained active");
-    assert!(
-        stale_error
-            .to_string()
-            .contains("underlying-tool capability is no longer active"),
-        "unexpected stale-handle failure: {stale_error}"
-    );
+    let fresh = invoke_chain(&fixture, "same-owner", "normal").await?;
+    assert_eq!(fresh.nested.label, "U1>U2>P1>P2>normal");
     assert_eq!(
         leaf_effect_count(&fixture),
-        1,
+        2,
         "the post-return handle reached the leaf"
     );
     Ok(())

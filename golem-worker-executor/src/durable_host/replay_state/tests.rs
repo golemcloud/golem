@@ -8413,13 +8413,19 @@ async fn claim_of_a_call_cancelled_before_delivery_drains_its_host_internal_call
     // completed wait replays the read itself, and a call that makes no host-internal calls
     // drains nothing.
     let cases = [
-        // (read closed, wait cancelled, host-internal calls, read left unclaimed)
-        (true, true, true, false),
-        (false, true, true, false),
-        (true, true, false, true),
-        (true, false, true, true),
+        // (read closed, wait cancelled/completed/incomplete, host-internal calls,
+        // completed-tool abandonment, read left unclaimed)
+        (true, Some(true), true, false, false),
+        (false, Some(true), true, false, false),
+        (true, Some(true), false, false, true),
+        (true, Some(false), true, false, true),
+        (true, Some(false), true, true, true),
+        (true, None, true, false, true),
+        (true, None, true, true, false),
+        (false, None, true, true, false),
+        (true, None, false, true, true),
     ];
-    for (read_closed, wait_cancelled, host_internal_calls, read_left) in cases {
+    for (read_closed, wait_cancelled, host_internal_calls, abandoned, read_left) in cases {
         let mut entries = vec![
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
@@ -8430,26 +8436,34 @@ async fn claim_of_a_call_cancelled_before_delivery_drains_its_host_internal_call
         if read_closed {
             entries.push(end_for(3, 43));
         }
-        entries.push(if wait_cancelled {
-            cancelled_for(2)
-        } else {
-            end_for(2, 42)
-        });
+        if let Some(cancelled) = wait_cancelled {
+            entries.push(if cancelled {
+                cancelled_for(2)
+            } else {
+                end_for(2, 42)
+            });
+        }
         let rs = replay_state_over(entries).await;
         let claim = StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
         )
-        .with_host_internal_calls(host_internal_calls);
+        .with_host_internal_calls(host_internal_calls)
+        .with_abandoned_host_internal_calls(abandoned);
         let ReplayStartClaimOutcome::Claimed { handle: wait, .. } =
             rs.claim_start_for_store(claim, false).await.unwrap()
         else {
             panic!("expected the wait's Start to be claimed");
         };
         assert_eq!(wait.start_idx(), OplogIndex::from_u64(2));
-        match rs.await_resolution(wait).await.unwrap() {
-            Resolution::Cancelled { partial: None, .. } => assert!(wait_cancelled),
-            Resolution::Completed { .. } => assert!(!wait_cancelled),
+        match rs.await_resolution_outcome(wait).await.unwrap() {
+            ResolutionOutcome::Resolved(Resolution::Cancelled { partial: None, .. }) => {
+                assert_eq!(wait_cancelled, Some(true))
+            }
+            ResolutionOutcome::Resolved(Resolution::Completed { .. }) => {
+                assert_eq!(wait_cancelled, Some(false))
+            }
+            ResolutionOutcome::Incomplete => assert_eq!(wait_cancelled, None),
             other => panic!("unexpected resolution {other:?}"),
         }
         assert_eq!(
@@ -8457,8 +8471,8 @@ async fn claim_of_a_call_cancelled_before_delivery_drains_its_host_internal_call
                 .await
                 .unwrap(),
             read_left.then(|| OplogIndex::from_u64(3)),
-            "read closed: {read_closed}, wait cancelled: {wait_cancelled}, \
-             host-internal calls: {host_internal_calls}"
+            "read closed: {read_closed}, wait cancelled: {wait_cancelled:?}, \
+             host-internal calls: {host_internal_calls}, abandoned: {abandoned}"
         );
     }
 }
@@ -13473,7 +13487,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
         *rs.cursor.retained_claim_miss.lock().unwrap() = Some(missed);
         let replay = rs.clone();
         let operation = operation.clone();
-        let claim = claim.clone();
+        let claim = claim.clone().with_abandoned_host_internal_calls(true);
         contenders.push(tokio::spawn(async move {
             replay
                 .claim_start_for_store_with_admission(

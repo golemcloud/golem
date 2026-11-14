@@ -159,6 +159,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 && self.runtime != OwnerRuntime::Agent)
     }
 
+    pub(crate) fn parks_incomplete_tool_guest_replay(&self) -> bool {
+        matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        ) && self.entity_invocation_scope().map(|scope| scope.mode())
+            == Some(InvocationExecutionMode::ReplayingCompleted)
+    }
+
     pub(crate) fn prepare_live_continuation_at_replay_tail(
         &self,
         replay_ended: bool,

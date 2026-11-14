@@ -369,6 +369,9 @@ pub(crate) struct AccessClaimOptions {
     /// a `Cancelled` without a partial result, the replay claim drains their records, because a
     /// replayed call parks at that terminal and never makes them again.
     pub(crate) host_internal_calls: bool,
+    /// Opts audited host-internal observations into inert replay when completed tool
+    /// reconstruction parks an outer guest call that has no recorded terminal.
+    pub(crate) abandon_incomplete_host_internal_calls: bool,
     /// The invocation id this call records in its `Start`s and claims them by on replay.
     pub(crate) invocation_id: InvocationIdSource,
     /// The denial a live call records in its `Start` (see [`OplogEntry::Start`]). A call that

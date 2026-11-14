@@ -6399,7 +6399,11 @@ impl Oplog for TestOplog {
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, golem_worker_executor::services::oplog::OplogError>
     {
-        self.oplog.add_durable_stream_batch(make_batch).await
+        let entries = self.oplog.add_durable_stream_batch(make_batch).await?;
+        for (_, entry) in &entries {
+            self.pause_at_test_append(entry, true).await?;
+        }
+        Ok(entries)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

@@ -7,6 +7,16 @@ are relative to `golem-worker-executor/src/` unless stated.
 authorized, ambient or underlying; middleware descendants also retain the original calling
 principal, but the principal is identity, not authority.
 
+### Host-observed tool return stops Store driving
+
+`worker/invocation.rs::run_tool_guest_call` uses the existing `run_concurrent` driver and returns when the host observes the tool or middleware export result. The executor never drives that Store again. This is not an instruction-exact fence at canonical `task.return`: the unchanged runtime may run a same-dispatch suffix before the host observes the result. SDK function return and guest task exit are also distinct boundaries. Agents still use `run_guest_call_settled` and retain their existing tail semantics.
+
+Finish accepted host obligations without resuming the guest. Frontend publications retain their accepted items and receipts in host-owned tasks outside the Store driver. Each frontend orders its return terminal after its own accepted publications; an unused backpressured frontend must not withhold a recorded sibling's End. Projection admission closes with frontend retirement, even if resources retain sender clones. No new Wasmtime API or bridge opt-in is used.
+
+`ToolFrontendScope` keeps recording tokens separate from body-private frontends. Accepted child inputs capture recording ownership before their independent execution task starts and stage input before body-admission gates. Tool stdin pumps finish copied items after cutoff closes queue admission; table-held, untransferred stdin switches from Pending to bounded Completion mode so an absent reader cannot prevent settlement. Returned result drains and recording settle before frontend retirement. Retirement releases unused frontends and blocked publishers; unexpected source closure remains an error.
+
+Return preparation abandons still-open tool writers through their normal durable terminal path and preserves explicit terminals. The raw-return latch survives subsequent host materialization errors: the runner destroys the Store structurally and retains its original context for host-only cleanup instead of retaining a runnable Store. During completed tool or middleware reconstruction, an incomplete guest import parks before repair authorization or live admission; this includes writer imports. Host-internal accepted attachment reconstruction and required cleanup still validate their recorded terminals. Only monotonic-clock `wait-for` permits its incomplete internal deadline-read subtree to remain inert during completed reconstruction. Agents and incomplete entity reconstruction retain ordinary repair. A crash before the entity terminal re-executes the body under the existing replay contract and reaches a new host-observed return; no durable return marker is added. Never weaken strict matching or retain all Store futures to repair an ownership gap.
+
 ### Authorization of every admission
 
 `prepare_tool_call` builds one Tool permission target for both `ToolCallTarget` variants. The

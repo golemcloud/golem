@@ -30,11 +30,47 @@ use super::{
 };
 
 impl<Ctx: WorkerCtx> ToolStdinStreamPumpTask<Ctx> {
-    pub(super) async fn run<U: Send + 'static>(
-        mut self,
-        _accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    pub(super) fn spawn<U: Send + 'static>(
+        self,
+        access: &mut wasmtime::component::Access<'_, U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
-        while let Some(ToolStdinStreamItem { item, acknowledged }) = self.items.recv().await {
+        let ctx = access.get();
+        if let Some(scope) = &ctx.tool_frontends {
+            let recording = scope.recording();
+            let cutoff = scope.cutoff();
+            ctx.public_state.worker().tasks.spawn(async move {
+                let _recording = recording;
+                self.run(Some(cutoff)).await;
+            });
+        } else {
+            access.spawn(async move |_| {
+                self.run(None).await;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn run(mut self, cutoff: Option<tokio_util::sync::CancellationToken>) {
+        loop {
+            let item = tokio::select! {
+                biased;
+                _ = async {
+                    match &cutoff {
+                        Some(cutoff) => cutoff.cancelled().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Successful sends transferred these items to host ownership.
+                    // Freeze new admissions, then finish that accepted prefix.
+                    self.items.close();
+                    self.items.recv().await
+                },
+                item = self.items.recv() => item,
+            };
+            let Some(ToolStdinStreamItem { item, acknowledged }) = item else {
+                break;
+            };
             let terminal = item.is_err();
             let result = match item {
                 Ok(bytes) if bytes.is_empty() => Ok(()),
@@ -42,11 +78,11 @@ impl<Ctx: WorkerCtx> ToolStdinStreamPumpTask<Ctx> {
                 Err(reason) => self.producer.fail(reason),
             };
             if result.is_err() {
-                return Ok(());
+                return;
             }
             let _ = acknowledged.send(());
             if terminal {
-                return Ok(());
+                return;
             }
         }
         let _ = match self
@@ -67,7 +103,6 @@ impl<Ctx: WorkerCtx> ToolStdinStreamPumpTask<Ctx> {
                 .fail(ByteStreamFailure::Failed(format!("{value:?}"))),
             None => self.producer.finish(),
         };
-        Ok(())
     }
 }
 
@@ -507,7 +542,7 @@ where
             source_cancel: None,
             _ctx: std::marker::PhantomData,
         };
-        access.spawn(async move |access| task.run(access).await)?;
+        task.spawn(&mut access)?;
         Ok(stdin)
     })
 }
@@ -564,7 +599,7 @@ where
             source_cancel: Some(source_cancel),
             _ctx: std::marker::PhantomData,
         };
-        access.spawn(async move |access| task.run(access).await)?;
+        task.spawn(&mut access)?;
         Ok(stdin)
     })
 }
@@ -591,4 +626,133 @@ where
         })?;
         Ok((target, consumer))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::tool::attachment::AttachmentRead;
+    use crate::workerctx::default::Context;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn tool_return_bounds_copied_stdin_without_a_reader() {
+        let (producer, consumer, observer) = attachment_pair(4, AttachmentMemory::inert());
+        let controller = consumer.controller();
+        let (items, received) = mpsc::unbounded_channel();
+        let (first_ack, first) = oneshot::channel();
+        let (second_ack, mut second) = oneshot::channel();
+        for (bytes, acknowledged) in [(b"abcd".to_vec(), first_ack), (b"XYZ".to_vec(), second_ack)]
+        {
+            items
+                .send(ToolStdinStreamItem {
+                    item: Ok(bytes),
+                    acknowledged,
+                })
+                .unwrap_or_else(|_| panic!("stdin queue closed"));
+        }
+        let task = ToolStdinStreamPumpTask::<Context> {
+            producer,
+            items: received,
+            source_cancel: None,
+            _ctx: std::marker::PhantomData,
+        };
+        let cutoff = tokio_util::sync::CancellationToken::new();
+        let pump = task.run(Some(cutoff.clone()));
+        tokio::pin!(pump);
+        assert!(futures::poll!(&mut pump).is_pending());
+        first.await.unwrap();
+        assert!(futures::poll!(&mut second).is_pending());
+        cutoff.cancel();
+        assert!(futures::poll!(&mut pump).is_pending());
+        assert!(controller.configure_completion());
+        pump.await;
+        assert!(second.await.is_err());
+        assert!(items.is_closed());
+        assert!(matches!(
+            observer.wait_terminal().await,
+            super::super::ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted)
+        ));
+        assert!(controller.publish_completion());
+        assert!(
+            matches!(consumer.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"abcd")
+        );
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::ResourceExhausted))
+        ));
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn tool_return_drains_copied_stdin_and_closes_without_sender_drop() {
+        for failed in [false, true] {
+            let (producer, consumer, observer) = attachment_pair(4, AttachmentMemory::inert());
+            producer.configure_live();
+            let (items, received) = mpsc::unbounded_channel();
+            let (first_ack, first) = oneshot::channel();
+            let (second_ack, mut second) = oneshot::channel();
+            items
+                .send(ToolStdinStreamItem {
+                    item: Ok(b"abcd".to_vec()),
+                    acknowledged: first_ack,
+                })
+                .unwrap_or_else(|_| panic!("stdin queue closed"));
+            items
+                .send(ToolStdinStreamItem {
+                    item: Ok(b"XYZ".to_vec()),
+                    acknowledged: second_ack,
+                })
+                .unwrap_or_else(|_| panic!("stdin queue closed"));
+            if failed {
+                let (acknowledged, _) = oneshot::channel();
+                items
+                    .send(ToolStdinStreamItem {
+                        item: Err(ByteStreamFailure::Failed("source failed".into())),
+                        acknowledged,
+                    })
+                    .unwrap_or_else(|_| panic!("stdin queue closed"));
+            }
+            let task = ToolStdinStreamPumpTask::<Context> {
+                producer,
+                items: received,
+                source_cancel: None,
+                _ctx: std::marker::PhantomData,
+            };
+            let cutoff = tokio_util::sync::CancellationToken::new();
+            let pump = task.run(Some(cutoff.clone()));
+            tokio::pin!(pump);
+            assert!(futures::poll!(&mut pump).is_pending());
+            first.await.unwrap();
+            assert!(futures::poll!(&mut second).is_pending());
+            cutoff.cancel();
+            assert!(
+                matches!(consumer.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"abcd")
+            );
+            pump.await;
+            second.await.unwrap();
+            assert!(
+                items.is_closed(),
+                "frozen sender clones must not keep the pump alive"
+            );
+            assert!(
+                matches!(consumer.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"XYZ")
+            );
+            if failed {
+                assert!(
+                    matches!(consumer.read_next().await, AttachmentRead::Item(Err(ByteStreamFailure::Failed(message))) if message == "stream producer failed")
+                );
+                assert!(
+                    matches!(observer.wait_terminal().await, super::super::ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(message)) if message == "stream producer failed")
+                );
+            } else {
+                assert!(matches!(consumer.read_next().await, AttachmentRead::End));
+                assert!(matches!(
+                    observer.wait_terminal().await,
+                    super::super::ByteStreamCloseCause::Finished
+                ));
+            }
+        }
+    }
 }

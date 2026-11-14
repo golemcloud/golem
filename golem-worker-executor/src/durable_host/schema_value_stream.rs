@@ -80,14 +80,16 @@ pub(crate) struct ExecutorProjectionStreams {
     pub(crate) durable_receives: Option<mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
 }
 
-struct ProjectionReceiveDispatcher(mpsc::UnboundedReceiver<DurableInputReceiveAdmission>);
+struct ProjectionReceiveDispatcher {
+    receiver: mpsc::UnboundedReceiver<DurableInputReceiveAdmission>,
+}
 
 impl ProjectionReceiveDispatcher {
     async fn run<U: Send + 'static, Ctx: WorkerCtx>(
         mut self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
-        while let Some(request) = self.0.recv().await {
+        while let Some(request) = self.receiver.recv().await {
             accessor.spawn(async move |accessor| request.run(accessor).await)?;
         }
         Ok(())
@@ -106,7 +108,7 @@ impl ExecutorProjectionStreams {
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let task = ProjectionReceiveDispatcher(receiver);
+        let task = ProjectionReceiveDispatcher { receiver };
         accessor.spawn(async move |accessor| task.run(accessor).await)?;
         Ok(accessor.with(|mut access| {
             let ctx = access.get();
@@ -223,6 +225,7 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
         } else {
             let source = stream.take_host_endpoint::<LiveStreamEndpoint>()?;
             let source_lifecycle = source.lifecycle();
+            source_lifecycle.forward_to(&target_lifecycle, publisher.retirement());
             let activity = source.external_activity();
             let mut source = source.activate();
             tokio::spawn(async move {
@@ -526,6 +529,9 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     interrupt,
                 )
                 .map_err(wasmtime::Error::msg)?;
+                if let Some(scope) = &access.get().tool_frontends {
+                    consumer.retain_for_tool_return(scope);
+                }
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -571,7 +577,11 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                         .take_host_endpoint::<LiveStreamEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
                     let interrupt = access.get().create_interrupt_signal();
-                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint, interrupt))
+                    let disposable_tool = access.get().tool_frontends.is_some();
+                    StreamReader::new(
+                        &mut access,
+                        LiveInputProducer::new(endpoint, interrupt, disposable_tool),
+                    )
                 }
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))

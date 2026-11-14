@@ -341,6 +341,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }));
         let store_alive_guard = StoreAliveGuard::new(&runtime);
+        let tool_frontends = (runtime != OwnerRuntime::Agent)
+            .then(|| Arc::new(stream_transport::ToolFrontendScope::default()));
 
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -361,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
+            tool_frontends,
             primary_invocation_start_index: None,
             invocation_principal: None,
             invocation_id: None,

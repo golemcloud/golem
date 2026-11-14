@@ -1187,6 +1187,14 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         self.store.into_data()
     }
 
+    pub(crate) fn into_returned_context(self) -> ObservedPrimaryStore<Ctx> {
+        self.store
+            .data()
+            .durable_ctx()
+            .begin_stream_runtime_teardown();
+        self.store.into_data()
+    }
+
     pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
@@ -1387,11 +1395,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         {
             hook.mutate_completed_reconstruction_response(response);
         }
-        // A trapped or cancelled body keeps its scope through original-context host-only cleanup.
-        let retained_cleanup = matches!(
-            &result,
-            Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled))
-        ) || matches!(&result, Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) if super::entity_invocation::is_trapped_tool_response(response));
+        // A returned export cannot re-enter the Store, even when later materialization
+        // fails. Keep its scope through original-context cleanup after Store destruction.
+        let retained_cleanup = self
+            .store
+            .data()
+            .durable_ctx()
+            .entity_body_finalization
+            .guest_returned()
+            || matches!(
+                &result,
+                Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled
+                    | super::entity_invocation::EntityBodyOutcome::Completed(
+                        _
+                    )))
+            );
         let cleanup = if retained_cleanup {
             Ok(())
         } else {

@@ -18,7 +18,6 @@ use super::{
 };
 use crate::durable_host::durable_session::{StreamSession, strip_typed_streams};
 use crate::durable_host::schema_value_stream::contains_stream;
-use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -31,45 +30,22 @@ use golem_common::model::oplog::payload::HostResponseEntityInvocation;
 use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
-use tokio::sync::oneshot;
-use wasmtime::component::Accessor;
 
-pub(super) struct MaterializeResponse {
-    pub streams: StreamSession,
-    pub revision: ComponentRevision,
-    pub response: ToolInvokeResponse,
-    pub completed: oneshot::Sender<Result<HostResponseEntityInvocation, WorkerExecutorError>>,
-    pub activity: TailActivity,
-}
-
-impl MaterializeResponse {
-    pub(super) async fn run<Ctx: WorkerCtx>(
-        self,
-        _accessor: &Accessor<Ctx>,
-    ) -> wasmtime::Result<()> {
-        let Self {
-            streams,
-            revision,
-            response,
-            completed,
-            activity: _activity,
-        } = self;
-        let result = async {
-            let response = materialize_response(&streams, revision, response).await?;
-            let response = response.map(|result| SerializableToolStructuredResult {
-                result: result
-                    .result
-                    .as_deref()
-                    .map(SerializableToolResultValue::from_typed)
-                    .transpose()
-                    .expect("a materialized tool result is serializable"),
-            });
-            encode_tool_operation_terminal(response).await
-        }
-        .await;
-        let _ = completed.send(result);
-        Ok(())
-    }
+pub(super) async fn materialize_terminal(
+    streams: &StreamSession,
+    revision: ComponentRevision,
+    response: ToolInvokeResponse,
+) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
+    let response = materialize_response(streams, revision, response).await?;
+    let response = response.map(|result| SerializableToolStructuredResult {
+        result: result
+            .result
+            .as_deref()
+            .map(SerializableToolResultValue::from_typed)
+            .transpose()
+            .expect("a materialized tool result is serializable"),
+    });
+    encode_tool_operation_terminal(response).await
 }
 
 pub(super) async fn session<Ctx: WorkerCtx>(

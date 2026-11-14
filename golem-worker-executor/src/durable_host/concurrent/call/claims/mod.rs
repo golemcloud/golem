@@ -690,7 +690,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(claim
             .with_observational_owner(execution_scope.observational_owner)
             .with_invocation_id(execution_scope.invocation_id)
-            .with_host_internal_calls(claim_options.host_internal_calls))
+            .with_host_internal_calls(claim_options.host_internal_calls)
+            .with_abandoned_host_internal_calls(
+                claim_options.abandon_incomplete_host_internal_calls,
+            ))
     }
 
     pub(super) async fn reproduce_refusal_for_claimed_start<Ctx: WorkerCtx>(

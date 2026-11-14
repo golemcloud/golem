@@ -32,16 +32,30 @@ use wasmtime::component::Instance;
 
 /// Once a guest result is observed, local abort must not discard its settlement or cleanup.
 #[derive(Clone, Default)]
-pub(crate) struct EntityBodyFinalization(Arc<std::sync::atomic::AtomicBool>);
+pub(crate) struct EntityBodyFinalization {
+    begun: Arc<std::sync::atomic::AtomicBool>,
+    guest_returned: Arc<std::sync::atomic::AtomicBool>,
+}
 
 impl EntityBodyFinalization {
     pub(crate) fn begin(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::Release);
+        self.begun.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn begin_guest_return(&self) {
+        self.guest_returned
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.begin();
+    }
+
+    pub(crate) fn guest_returned(&self) -> bool {
+        self.guest_returned
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) async fn abortable(&self, abort: &tokio_util::sync::CancellationToken) {
         abort.cancelled().await;
-        if self.0.load(std::sync::atomic::Ordering::Acquire) {
+        if self.begun.load(std::sync::atomic::Ordering::Acquire) {
             std::future::pending::<()>().await;
         }
     }
@@ -391,10 +405,12 @@ where
                             .invoke_scoped_registered_retained(scope, registration, self.body)
                             .await;
                         body_finalization.begin();
-                        if matches!(&result, Ok(EntityBodyOutcome::Cancelled))
-                            || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response)) {
+                        if body_finalization.guest_returned()
+                            || matches!(&result, Ok(EntityBodyOutcome::Cancelled | EntityBodyOutcome::Completed(_))) {
+                            let trapped = matches!(&result, Ok(EntityBodyOutcome::Cancelled))
+                                || matches!(&result, Ok(EntityBodyOutcome::Completed(response)) if is_trapped_tool_response(response));
                             let mut retained = RetainedDisposedContext {
-                                context: retained.into_cleanup_context(),
+                                context: if trapped { retained.into_cleanup_context() } else { retained.into_returned_context() },
                                 execution,
                                 invocation,
                                 prepared: false,

@@ -68,6 +68,83 @@ async fn sleep_ms(millis: u32) {
     golem_rust::wasip3::clocks::monotonic_clock::wait_for(u64::from(millis) * 1_000_000).await;
 }
 
+async fn start_pending_return_tail(tail: impl Future<Output = ()> + 'static) {
+    let started = Rc::new(Cell::new(false));
+    let signal = started.clone();
+    spawn_local(async move {
+        let mut tail = std::pin::pin!(tail);
+        std::future::poll_fn(|cx| {
+            assert!(tail.as_mut().poll(cx).is_pending());
+            signal.set(true);
+            std::task::Poll::Ready(())
+        })
+        .await;
+        tail.await;
+    });
+    while !started.get() {
+        golem_rust::wasip3::wit_bindgen::yield_async().await;
+    }
+    // Let the queued host import establish its history before publishing the
+    // result. The integration test checks the recorded Start and internal read.
+    for _ in 0..2_000 {
+        golem_rust::wasip3::wit_bindgen::yield_async().await;
+    }
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait ReturnBoundaryProbe {
+    async fn valid(&self) -> String;
+    async fn malformed(&self) -> String;
+}
+
+struct ReturnBoundaryProbeImpl;
+
+#[tool_implementation]
+impl ReturnBoundaryProbe for ReturnBoundaryProbeImpl {
+    async fn valid(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    async fn malformed(&self) -> String {
+        unreachable!("the raw invoker handles this command")
+    }
+
+    // Return raw wire data so the SDK cannot turn the malformed payload into a typed error.
+    fn __tool_invoke(
+        command_path: Vec<String>,
+        _input: wire::TypedSchemaValue,
+        _stdin: Option<InputStream>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _principal: Principal,
+    ) -> golem_rust::agentic::ToolInvokeFuture {
+        Box::pin(async move {
+            start_pending_return_tail(async {
+                sleep_ms(1_000).await;
+                let _ = golem_rust::create_promise();
+            })
+            .await;
+            let mut result = golem_rust::encode_typed_schema_value(
+                &"raw-return-control"
+                    .to_string()
+                    .into_typed_schema_value()
+                    .unwrap(),
+            )
+            .unwrap();
+            if command_path == ["malformed"] {
+                result.graph.root = i32::MAX;
+            }
+            Ok(
+                golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
+                    result: Some(result),
+                    stdout: None,
+                    stderr: None,
+                },
+            )
+        })
+    }
+}
+
 async fn fetch_checkpoint(authority: &str) -> String {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_bindgen::StreamResult;
@@ -983,37 +1060,45 @@ struct TypedOutputStreamImpl;
 impl TypedOutputStream for TypedOutputStreamImpl {
     async fn produce(&self, tag: String) -> AgentStream<TypedOutputItem> {
         let (mut writer, output) = AgentStream::new();
-        spawn_local(async move {
+        let wrapped = wire::SchemaValueStream::wrap(output.into_raw().await.unwrap()).await;
+        let wrapped = if tag == "return-cutoff-roundtrip" {
+            let raw = wire::SchemaValueStream::unwrap(wrapped).await;
+            wire::SchemaValueStream::wrap(raw).await
+        } else {
+            wrapped
+        };
+        // These finite fixtures fit in the frontend buffer. Every item belongs to
+        // the host before publication; no guest producer may continue afterward.
+        for (ordinal, suffix, asymmetric_extra) in [
+            (11, "first", 1_001),
+            (29, "second", 2_003),
+            (47, "third", 4_009),
+        ] {
             writer
                 .write_one(TypedOutputItem {
-                    ordinal: 11,
-                    label: format!("{tag}-first"),
-                    asymmetric_extra: 1_001,
+                    ordinal,
+                    label: if tag == "return-cutoff-roundtrip" {
+                        format!("{tag}-{ordinal}")
+                    } else {
+                        format!("{tag}-{suffix}")
+                    },
+                    asymmetric_extra,
                 })
                 .await
-                .expect("write first typed tool output item");
-            if std::env::var("PROVIDER_PROMISE_CHECKPOINT_PORT").is_ok() {
-                wait_at_promise_checkpoint("typed-output-after-first").await;
-            } else {
-                wait_at_crash_checkpoint(&tag, "typed-output-after-first").await;
-            }
-            writer
-                .write_all([
-                    TypedOutputItem {
-                        ordinal: 29,
-                        label: format!("{tag}-second"),
-                        asymmetric_extra: 2_003,
-                    },
-                    TypedOutputItem {
-                        ordinal: 47,
-                        label: format!("{tag}-third"),
-                        asymmetric_extra: 4_009,
-                    },
-                ])
-                .await
-                .expect("write remaining typed tool output items");
-        });
-        output
+                .expect("accept typed item before return");
+        }
+        drop(writer);
+        if tag == "tcp-restart" {
+            start_pending_return_tail(async move {
+                sleep_ms(250).await;
+                let _ = golem_rust::create_promise();
+            })
+            .await;
+        }
+        AgentStream::from_schema_stream_with_wire_decoder(
+            golem_rust::schema::SchemaValueStream::from_wrapped(wrapped),
+            |tree| golem_rust::schema::wit::direct::decode(tree).map_err(|error| error.to_string()),
+        )
     }
 }
 
@@ -1812,6 +1897,48 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         principal: golem_rust::agentic::Principal,
     ) -> Result<StreamSummary, StreamingError> {
+        if let Some(tail) = mode.strip_prefix("return-cutoff-") {
+            stdout
+                .write(MARKER.to_vec())
+                .await
+                .expect("accepted prefix");
+            match tail {
+                "finished" => stdout.clone().finish().await.expect("explicit finish"),
+                "failed" => stdout
+                    .clone()
+                    .fail(ByteStreamFailure::Failed("explicit failure".into()))
+                    .await
+                    .expect("explicit failure"),
+                "unused-live" => {
+                    let (writer, output) = AgentStream::<Vec<String>>::new();
+                    let wrapped =
+                        wire::SchemaValueStream::wrap(output.into_raw().await.unwrap()).await;
+                    let raw = wire::SchemaValueStream::unwrap(wrapped).await;
+                    let rewrapped = wire::SchemaValueStream::wrap(raw).await;
+                    // Keep the unused bridge and guest writer pending until Store teardown.
+                    std::mem::forget((writer, rewrapped));
+                }
+                "late" | "infinite" => {}
+                _ => panic!("unknown return cutoff mode"),
+            }
+            let late = tail == "late";
+            start_pending_return_tail(async move {
+                if late {
+                    sleep_ms(1_000).await;
+                    stdout.write(b"late".to_vec()).await.expect("late write");
+                    stdout.finish().await.expect("late finish");
+                } else {
+                    let _stdout = stdout;
+                    std::future::pending::<()>().await;
+                }
+            })
+            .await;
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
         if let Some(arguments) = mode.strip_prefix("rdbms-drop-trap:") {
             use golem_rust::bindings::golem::rdbms::postgres::DbConnection;
             let (address, table) = arguments.split_once('|').expect("database and table");
@@ -2358,6 +2485,27 @@ impl CapableStreaming for CapableStreamingImpl {
             };
             chunks_read += 1;
             bytes.extend(chunk);
+        }
+
+        if let Some(path) = path.strip_prefix("return-cutoff-file:") {
+            write_owner_file(path, b"before").expect("write before return");
+            stdout.write(bytes.clone()).await.expect("accepted stdout");
+            stdout
+                .finish()
+                .await
+                .expect("explicit finish before return");
+            let path = path.to_string();
+            start_pending_return_tail(async move {
+                sleep_ms(1_000).await;
+                write_owner_file(&format!("{path}-late"), b"late").expect("delayed file creation");
+                append_owner_file(&path, b":late").expect("delayed filesystem effect");
+            })
+            .await;
+            return Ok(StreamSummary {
+                chunks_read,
+                bytes_read: bytes.len() as u64,
+                output_closed: false,
+            });
         }
 
         if path == "cancel-stdout-over" {

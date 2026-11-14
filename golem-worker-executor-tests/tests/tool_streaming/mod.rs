@@ -28,7 +28,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalRecord};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_import::{McpImport, McpImportSource};
@@ -798,6 +798,56 @@ struct CliToolEvidence {
 struct TypedOutputEvidence {
     label: String,
     ordinal: u32,
+}
+
+fn typed_output_records(
+    entries: &[PublicOplogEntryWithIndex],
+) -> Vec<(
+    OplogIndex,
+    golem_common::model::durable_stream::StreamItemsRecord,
+)> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamItems(params) => Some((
+                entry.oplog_index,
+                golem_common::model::durable_stream::StreamItemsRecord::from_value(
+                    params.record.value(),
+                )
+                .expect("decode durable typed output record"),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_provider_typed_item(
+    record: &golem_common::model::durable_stream::StreamItemsRecord,
+    label: &str,
+    ordinal: u32,
+    extra: u64,
+) {
+    use golem_common::model::durable_stream::StreamItemsPayload;
+    use prost::Message;
+
+    #[derive(Debug, FromSchema)]
+    struct ProviderItem {
+        ordinal: u32,
+        label: String,
+        asymmetric_extra: u64,
+    }
+    let StreamItemsPayload::Values(values) = &record.payload else {
+        panic!("expected typed values, got {:?}", record.payload);
+    };
+    assert_eq!(values.len(), 1);
+    let value = golem_schema::proto::golem::schema::SchemaValue::decode(values[0].as_slice())
+        .expect("decode durable typed item");
+    let value = SchemaValue::try_from(value).expect("convert durable typed item");
+    let item = ProviderItem::from_value(&value).expect("decode provider item");
+    assert_eq!(
+        (item.label.as_str(), item.ordinal, item.asymmetric_extra),
+        (label, ordinal, extra)
+    );
 }
 
 #[derive(Debug, PartialEq, Eq, FromSchema)]
@@ -4373,11 +4423,13 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = || TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+        })),
         ..Default::default()
     };
     let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let (provider_checkpoint_port, provider_checkpoint_server, mut provider_checkpoints) =
-        start_promise_checkpoint_server().await;
     let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
         start_promise_checkpoint_server().await;
     let provider_component = executor
@@ -4428,16 +4480,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         caller_component.revision,
         Some(plain_deployment.clone()),
     );
-    let env = HashMap::from([
-        (
-            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
-            provider_checkpoint_port.to_string(),
-        ),
-        (
-            "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
-            caller_checkpoint_port.to_string(),
-        ),
-    ]);
+    let env = HashMap::from([(
+        "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+        caller_checkpoint_port.to_string(),
+    )]);
     let direct_id = agent_id!("ToolStreamingCaller", "typed-output-direct");
     let direct_worker = executor
         .start_agent_with(
@@ -4448,6 +4494,14 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         )
         .await?;
     let _output = executor.capture_output(&direct_worker).await?;
+    let mut recording = executor
+        .gate_after_next_append(&direct_worker, |entry| {
+            matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::StreamItems { .. }
+            )
+        })
+        .await;
     let direct_executor = executor.clone();
     let direct_component = caller_component.clone();
     let direct_invocation_id = direct_id.clone();
@@ -4461,8 +4515,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    let provider =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    tokio::time::timeout(Duration::from_secs(30), recording.entered()).await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4474,12 +4527,15 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     );
     assert!(
         !direct_call.is_finished(),
-        "the invocation result must remain hidden while the producer is gated"
+        "the invocation result must remain hidden while the recording receipt is gated"
     );
     {
         let oplog = executor
             .get_oplog(&direct_worker, OplogIndex::INITIAL)
             .await?;
+        let recorded = typed_output_records(&oplog);
+        assert_eq!(recorded.len(), 1);
+        assert_provider_typed_item(&recorded[0].1, "direct-first", 11, 1_001);
         let entity_starts = oplog
             .iter()
             .filter_map(|entry| matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke").then_some(entry.oplog_index))
@@ -4487,17 +4543,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         assert!(
             !entity_starts.is_empty()
                 && oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_starts.contains(&parameters.start_index))),
-            "the tool entity must remain unterminated while its producer gate is blocked"
+            "the tool entity must remain unterminated while its recording receipt is blocked"
         );
     }
-    executor
-        .complete_promise(
-            &executor
-                .promise_id(&direct_worker, provider.oplog_idx)
-                .await?,
-            Vec::new(),
-        )
-        .await?;
+    drop(recording);
     let caller = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4569,6 +4618,14 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let decorated_worker = executor
         .start_agent_with(&caller_component.id, decorated_id.clone(), env, Vec::new())
         .await?;
+    let mut recording = executor
+        .gate_after_next_append(&decorated_worker, |entry| {
+            matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::StreamItems { .. }
+            )
+        })
+        .await;
     let key = IdempotencyKey::fresh();
     let invocation_executor = executor.clone();
     let invocation_component = caller_component.clone();
@@ -4585,8 +4642,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    let provider_promise =
-        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    tokio::time::timeout(Duration::from_secs(30), recording.entered()).await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4600,6 +4656,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let blocked_oplog = executor
         .get_oplog(&decorated_worker, OplogIndex::INITIAL)
         .await?;
+    let recorded = typed_output_records(&blocked_oplog);
+    assert_eq!(recorded.len(), 1);
+    let first_provider_record = recorded[0].clone();
+    assert_provider_typed_item(&first_provider_record.1, "decorated-first", 11, 1_001);
     let blocked_entity_starts = blocked_oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -4642,6 +4702,9 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     }
     invocation.abort();
     let _ = invocation.await;
+    recording.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(recording);
     drop(executor);
 
     let executor = start_with_overrides(deps, &context, overrides()).await?;
@@ -4660,14 +4723,6 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             )
             .await
     });
-    executor
-        .complete_promise(
-            &executor
-                .promise_id(&decorated_worker, provider_promise.oplog_idx)
-                .await?,
-            Vec::new(),
-        )
-        .await?;
     let caller_promise = next_promise_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4696,6 +4751,19 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let oplog = executor
         .get_oplog(&decorated_worker, OplogIndex::INITIAL)
         .await?;
+    let recorded = typed_output_records(&oplog);
+    assert!(recorded.contains(&first_provider_record));
+    let provider_records: Vec<_> = recorded
+        .iter()
+        .filter(|(_, record)| record.stream_id == first_provider_record.1.stream_id)
+        .collect();
+    assert_eq!(provider_records.len(), 3);
+    for (offset, (_, record)) in provider_records.iter().enumerate() {
+        assert_eq!(
+            record.first_sequence,
+            first_provider_record.1.first_sequence + offset as u64
+        );
+    }
     let entity_start_indices = oplog
         .iter()
         .filter_map(|entry| matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke").then_some(entry.oplog_index))
@@ -4713,9 +4781,19 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         entity_ends, 3,
         "universal middleware, typed middleware, and provider terminate once each"
     );
-    assert!(provider_checkpoints.try_recv().is_err());
+    let provider_terminals: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamTerminal(terminal) => {
+                let record = StreamTerminalRecord::from_value(terminal.record.value()).unwrap();
+                (record.stream_id == first_provider_record.1.stream_id).then_some(record)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(provider_terminals.len(), 1);
+    assert_eq!(provider_terminals[0].terminal, StreamTerminal::Finished);
     assert!(caller_checkpoints.try_recv().is_err());
-    provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
     Ok(())
 }
@@ -4734,15 +4812,14 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = || TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            config.oplog.max_operations_before_commit = 1;
+        })),
         ..Default::default()
     };
     let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
-    let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoints,
-    ) = start_crash_checkpoint_server().await;
     let (
         caller_checkpoint_port,
         caller_checkpoint_gate_port,
@@ -4833,14 +4910,6 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             agent_id.clone(),
             HashMap::from([
                 (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
                     "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
                     caller_checkpoint_port.to_string(),
                 ),
@@ -4852,6 +4921,14 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             Vec::new(),
         )
         .await?;
+    let mut recording = executor
+        .gate_after_next_append(&worker_id, |entry| {
+            matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::StreamItems { .. }
+            )
+        })
+        .await;
     let key = IdempotencyKey::fresh();
     let invocation_executor = executor.clone();
     let invocation_component = caller_component.clone();
@@ -4868,8 +4945,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             )
             .await
     });
-    let provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    tokio::time::timeout(Duration::from_secs(30), recording.entered()).await?;
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4880,7 +4956,48 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         "the typed stream must not reach the caller before producer completion"
     );
     assert!(!invocation.is_finished());
+    // The provider's 250 ms timer started before return. Keep its accepted item
+    // gated past that deadline, so finalization cannot hide guest scheduling.
+    tokio::time::sleep(Duration::from_millis(750)).await;
     let before_crash = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let timers: Vec<_> = before_crash
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        timers.len(),
+        1,
+        "the provider tail entered its timer before returning"
+    );
+    let clock_reads: Vec<_> = before_crash
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.parent_start_index == Some(timers[0])
+                    && start.function_name.ends_with("monotonic-clock::now") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clock_reads.len(), 1);
+    assert!(before_crash.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock_reads[0])
+    ), "the timer's deadline must be established before return");
+    assert!(before_crash.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::api::create_promise")), "a returned provider must not run its timer continuation during a blocked append");
+    assert!(before_crash.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::End(end) if timers.contains(&end.start_index))), "the returned provider must not keep driving its timer import");
+    let recorded = typed_output_records(&before_crash);
+    assert_eq!(recorded.len(), 1);
+    let first_provider_record = recorded[0].clone();
+    assert_provider_typed_item(&first_provider_record.1, "tcp-restart-first", 11, 1_001);
     let entity_starts = before_crash
         .iter()
         .filter_map(|entry| {
@@ -4898,10 +5015,20 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
 
     invocation.abort();
     let _ = invocation.await;
-    drop(provider_gate.release);
+    recording.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(recording);
     drop(executor);
 
     let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    let mut recording = executor
+        .gate_after_next_append(&worker_id, |entry| {
+            matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::StreamItems { .. }
+            )
+        })
+        .await;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = agent_id.clone();
@@ -4917,8 +5044,41 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
             )
             .await
     });
-    let replayed_provider_gate =
-        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    tokio::time::timeout(Duration::from_secs(30), recording.entered()).await?;
+    let replayed_prefix = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    // Incomplete reconstruction may repair the timer before the export returns again.
+    // Stream recording starts after that return, when guest execution must stop.
+    let promise_starts = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::api::create_promise" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let promises_at_return = promise_starts(&replayed_prefix);
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    let after_return = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        promise_starts(&after_return),
+        promises_at_return,
+        "the reconstructed provider must not resume guest work after returning"
+    );
+    let recorded = typed_output_records(&replayed_prefix);
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0], first_provider_record);
+    assert_eq!(recorded[1].1.stream_id, first_provider_record.1.stream_id);
+    assert_eq!(
+        recorded[1].1.first_sequence,
+        first_provider_record.1.first_sequence + 1
+    );
+    assert_provider_typed_item(&recorded[1].1, "tcp-restart-second", 29, 2_003);
+    assert!(!resumed.is_finished());
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(200),
@@ -4928,10 +5088,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         .is_err(),
         "the replayed typed stream must not reach the caller before producer completion"
     );
-    replayed_provider_gate
-        .release
-        .send(())
-        .expect("release replayed provider TCP atomic gate");
+    drop(recording);
     let replayed_caller_gate = next_crash_checkpoint(
         &mut caller_checkpoints,
         "caller-consumed-first-typed-output",
@@ -4960,19 +5117,51 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         ]
     );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let entity_ends = oplog
+    let recorded = typed_output_records(&oplog);
+    assert!(recorded.contains(&first_provider_record));
+    let provider_records: Vec<_> = recorded
         .iter()
-        .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_starts.contains(&parameters.start_index))
+        .filter(|(_, record)| record.stream_id == first_provider_record.1.stream_id)
+        .collect();
+    assert_eq!(provider_records.len(), 3);
+    for (offset, (_, record)) in provider_records.iter().enumerate() {
+        assert_eq!(
+            record.first_sequence,
+            first_provider_record.1.first_sequence + offset as u64
+        );
+    }
+    for start in &entity_starts {
+        let ends = oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(parameters) if parameters.start_index == *start)
+            })
+            .count();
+        assert_eq!(ends, 1, "entity {start} must settle exactly once");
+    }
+    assert_provider_typed_item(&provider_records[2].1, "tcp-restart-third", 47, 4_009);
+    let provider_terminals: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::StreamTerminal(terminal) => {
+                let record = StreamTerminalRecord::from_value(terminal.record.value()).unwrap();
+                (record.stream_id == first_provider_record.1.stream_id).then_some(record)
+            }
+            _ => None,
         })
-        .count();
+        .collect();
     assert_eq!(
-        entity_ends, 3,
-        "every middleware and provider layer settles once"
+        provider_terminals.len(),
+        1,
+        "the provider stream must have one normal terminal after reconstruction"
     );
-    assert!(provider_checkpoints.try_recv().is_err());
+    assert_eq!(provider_terminals[0].terminal, StreamTerminal::Finished);
+    assert_eq!(
+        promise_starts(&oplog),
+        promises_at_return,
+        "finishing the returned stream must not resume guest work"
+    );
     assert!(caller_checkpoints.try_recv().is_err());
-    provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
     Ok(())
 }
@@ -14679,6 +14868,9 @@ async fn typescript_generated_client_streams_live(
     );
 
     let agent_id = agent_id!("TsToolStreamingCaller", "ts-live");
+    let worker = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
     let evidence: TsStreamEvidence = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -14690,6 +14882,51 @@ async fn typescript_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, b"ts-marker:typescript-live");
     assert_eq!(evidence.bytes_read, 15);
+
+    for await_timer in [false, true] {
+        let evidence: TsStreamEvidence = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "timerExportBoundary",
+                data_value!(await_timer),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(evidence.output, b"ts-before-return:");
+        assert_eq!(evidence.bytes_read, 0);
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let promises = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::api::create_promise" =>
+                {
+                    Some((entry.oplog_index, start.parent_start_index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            promises.len(),
+            usize::from(await_timer) + 1,
+            "the JavaScript binding drains referenced timers before export publication"
+        );
+        let (promise, parent) = promises.last().unwrap();
+        let parent = parent.expect("the timer belongs to its tool entity");
+        assert!(oplog.iter().any(|entry| entry.oplog_index == parent
+            && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::entity::invoke")));
+        let promise_end = oplog
+            .iter()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == *promise))
+            .expect("the timer creates its promise successfully");
+        let entity_end = oplog
+            .iter()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == parent))
+            .expect("the tool returns successfully");
+        assert!(promise_end.oplog_index < entity_end.oplog_index);
+    }
 
     let failure: String = executor
         .invoke_and_await_agent(

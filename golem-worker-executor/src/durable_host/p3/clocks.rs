@@ -176,6 +176,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
                 DurableFunctionType::ReadLocal,
                 AccessClaimOptions {
                     host_internal_calls: true,
+                    abandon_incomplete_host_internal_calls: store.with(|mut access| {
+                        super::durable_worker_ctx::<Ctx, U>(access.data_mut())
+                            .parks_incomplete_tool_guest_replay()
+                    }),
                     ..Default::default()
                 },
                 HostRequestMonotonicClockDuration {

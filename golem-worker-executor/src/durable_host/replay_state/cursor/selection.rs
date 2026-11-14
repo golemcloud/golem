@@ -955,7 +955,13 @@ impl CursorTx<'_> {
         }
         if claim.is_custom_invocation()
             || (claim.makes_host_internal_calls()
-                && cancelled_before_delivery(self.cursor, &self.st, handle.start_idx()).await?)
+                && host_internal_calls_are_replay_inert(
+                    self.cursor,
+                    &self.st,
+                    handle.start_idx(),
+                    claim.abandons_incomplete_host_internal_calls(),
+                )
+                .await?)
         {
             self.register_replay_inert_subtree_root(handle.start_idx());
         }

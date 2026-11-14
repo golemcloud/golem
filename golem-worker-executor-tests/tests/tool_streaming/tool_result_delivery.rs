@@ -20,6 +20,158 @@ use golem_common::model::durable_stream::{StreamItemsPayload, StreamItemsRecord}
 use prost::Message;
 use test_r::test;
 
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn malformed_raw_tool_return_does_not_resume_guest_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            configure: Some(Arc::new(|config| {
+                // Observe one returned Store, not a later incomplete-reconstruction attempt.
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|tool| {
+            tool.commands
+                .nodes
+                .first()
+                .is_some_and(|root| root.name == "return-boundary-probe")
+        })
+        .expect("raw return probe is exported")
+        .clone();
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    for command in ["valid", "malformed"] {
+        let agent = agent_id!("ToolStreamingCaller", format!("raw-return-{command}"));
+        let worker = executor.start_agent(&caller_component.id, agent).await?;
+        let fingerprint = executor.get_worker_metadata(&worker).await?.fingerprint;
+        let mut disposals = executor.probe_entity_store_disposal(&worker);
+        let path = vec![command.to_string()];
+        let index = definition
+            .command_index_by_path(&path)
+            .expect("probe command");
+        let schema = definition.canonical_input_record_schema(index)?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            executor.invoke_external_tool(
+                &worker,
+                fingerprint,
+                IdempotencyKey::fresh(),
+                ToolName::try_from("return-boundary-probe").unwrap(),
+                path,
+                TypedSchemaValue::new(schema, SchemaValue::Record { fields: vec![] }),
+                InvocationContextStack::fresh(),
+                Principal::GolemUser(GolemUserPrincipal {
+                    account_id: context.account_id,
+                }),
+                None,
+            ),
+        )
+        .await?;
+        if command == "valid" {
+            let AgentInvocationResult::ExternalTool { result: Ok(result) } = result?.result else {
+                panic!("valid raw return must succeed");
+            };
+            assert_eq!(
+                result.result.unwrap().value(),
+                &SchemaValue::String("raw-return-control".into())
+            );
+        } else {
+            let error = result.expect_err("host decoding must reject the raw payload");
+            assert!(
+                format!("{error:?}").contains("tool guest returned an invalid result payload"),
+                "{error:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let entity_starts: Vec<_> = entries.iter().filter_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")
+                .then_some(entry.oplog_index)
+        }).collect();
+        assert_eq!(entity_starts.len(), 1);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), disposals.recv()).await?,
+            Some(entity_starts[0]),
+            "the returned Store must be destroyed while the executor remains alive: {command}"
+        );
+        let timers: Vec<_> = entries.iter().filter_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name.ends_with("monotonic-clock::wait-for"))
+                .then_some(entry.oplog_index)
+        }).collect();
+        assert_eq!(
+            timers.len(),
+            1,
+            "the pending tail must have started: {command}"
+        );
+        let reads: Vec<_> = entries.iter().filter_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start) if start.parent_start_index == Some(timers[0]) && start.function_name.ends_with("monotonic-clock::now"))
+                .then_some(entry.oplog_index)
+        }).collect();
+        assert_eq!(reads.len(), 1);
+        assert!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == reads[0])),
+            "the timer deadline must be established before return: {command}");
+        assert!(
+            !entries.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == timers[0],
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == timers[0],
+                _ => false,
+            }),
+            "the returned timer must remain incomplete: {command}"
+        );
+        assert!(
+            !entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(start) if start.function_name == "golem::api::create_promise")),
+            "the pending guest tail must not resume after raw return: {command}"
+        );
+    }
+    Ok(())
+}
+
 fn recorded_string_items(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<String>> {
     let mut items = Vec::new();
     for entry in entries {
@@ -42,6 +194,250 @@ fn recorded_string_items(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Resul
         }
     }
     Ok(items)
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn tool_return_stops_guest_tails_and_reconstructs_incomplete_imports(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment.clone()),
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            config.limits.tail_work_settle_timeout = Duration::from_millis(500);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "return-cutoff");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    // The generated Rust wrapper finishes stdout before export publication,
+    // even when a spawned task retains a clone of the writer.
+    for (mode, terminal) in [
+        ("late", "finished"),
+        ("infinite", "finished"),
+        ("unused-live", "finished"),
+        ("finished", "finished"),
+        (
+            "failed",
+            "failed:ByteStreamFailure::Failed(\"stream producer failed\")",
+        ),
+    ] {
+        let evidence: RedactionEvidence = tokio::time::timeout(
+            Duration::from_secs(20),
+            executor.invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "redaction_stream_case",
+                data_value!(format!("return-cutoff-{mode}")),
+            ),
+        )
+        .await??
+        .into_typed()?;
+        assert_eq!(evidence.output, b"marker:", "{mode}");
+        assert_eq!(evidence.stdout_terminal, terminal, "{mode}");
+        assert_eq!(evidence.outcome, "ok", "{mode}");
+    }
+    let typed: Vec<TypedOutputEvidence> = {
+        let typed = executor.invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "consume_typed_output",
+            data_value!(false, "return-cutoff-roundtrip"),
+        );
+        tokio::pin!(typed);
+        let checkpoint = tokio::select! {
+            result = typed.as_mut() => panic!("typed caller finished before checkpoint: {result:?}"),
+            checkpoint = next_promise_checkpoint(&mut checkpoints, "caller-consumed-first-typed-output") => checkpoint?,
+        };
+        executor
+            .complete_promise(
+                &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
+                Vec::new(),
+            )
+            .await?;
+        typed.await?.into_typed()?
+    };
+    assert_eq!(
+        typed.iter().map(|item| item.ordinal).collect::<Vec<_>>(),
+        [11, 29, 47]
+    );
+    assert_eq!(
+        typed
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "return-cutoff-roundtrip-11",
+            "return-cutoff-roundtrip-29",
+            "return-cutoff-roundtrip-47",
+        ]
+    );
+    let evidence: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "collect_capable",
+            data_value!("return-cutoff-file:/return-cutoff", vec![17_u8, 201, 0, 43]),
+        )
+        .await?
+        .into_typed()?;
+    assert_evidence(&evidence, &[17, 201, 0, 43], 1, 4);
+    let contents: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "read_owner_file",
+            data_value!("/return-cutoff"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(contents, "before");
+    assert!(
+        executor
+            .get_file_contents(&worker, "/return-cutoff-late")
+            .await
+            .is_err()
+    );
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let timers: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        timers.len(),
+        2,
+        "both tails must enter a timer import before return"
+    );
+    for timer in &timers {
+        let reads: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.parent_start_index == Some(*timer)
+                        && start.function_name.ends_with("monotonic-clock::now") =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reads.len(),
+            1,
+            "cutoff must follow the timer's internal clock read"
+        );
+        assert!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == reads[0])));
+        assert!(
+            !entries.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == *timer,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == *timer,
+                _ => false,
+            }),
+            "a return cutoff must leave its ordinary timer incomplete"
+        );
+    }
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let replayed: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(replayed, "replayed");
+    let contents: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "read_owner_file",
+            data_value!("/return-cutoff"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        contents, "before",
+        "reconstruction must not run the file-writing suffix"
+    );
+    assert!(
+        executor
+            .get_file_contents(&worker, "/return-cutoff-late")
+            .await
+            .is_err()
+    );
+    let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    for timer in timers {
+        assert!(
+            !replayed.iter().any(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == timer,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == timer,
+                _ => false,
+            }),
+            "completed reconstruction must not repair or cancel a cutoff timer"
+        );
+    }
+    assert!(
+        !replayed
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Error(_)))
+    );
+    checkpoint_server.abort();
+    Ok(())
 }
 
 #[test]

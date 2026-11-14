@@ -653,6 +653,25 @@ impl StreamSession {
         Ok(result)
     }
 
+    pub(crate) fn retain_input_recording(
+        value: &SchemaValue,
+        graph: &SchemaGraph,
+        root: &SchemaType,
+    ) -> Result<Vec<tokio_util::task::task_tracker::TaskTrackerToken>, SessionError> {
+        let mut recordings = Vec::new();
+        encode_recursive_stream_value_with_schema(value, graph, root, |stream, _| {
+            if let Ok(Some(recording)) =
+                stream.with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| {
+                    endpoint.lifecycle().recording()
+                })
+            {
+                recordings.push(recording);
+            }
+            Ok(0)
+        })?;
+        Ok(recordings)
+    }
+
     /// Replaces input stream handles with consumers backed by this session journal.
     pub async fn materialize_agent_input(
         &self,
@@ -663,6 +682,7 @@ impl StreamSession {
     ) -> Result<SessionValue, SessionError> {
         preflight_recursive_stream_value(value)?;
         let mut next_stream_index = 0u64;
+        let recordings = Self::retain_input_recording(value, graph, root)?;
         let retained_bytes =
             encode_recursive_stream_value_with_schema(value, graph, root, |_stream, _path| {
                 let index = next_stream_index;
@@ -676,30 +696,46 @@ impl StreamSession {
         let value = value.clone();
         let graph = graph.clone();
         let root = root.clone();
-        self.producer
-            .run_admitted(
-                None,
-                retained_bytes,
-                false,
-                move |_, admission| async move {
-                    let _guard = session.session_lock.lock().await;
-                    let session_for_write = session.clone();
-                    admission
-                        .submit(move |_, context| async move {
-                            session_for_write
-                                .materialize_agent_input_owned(
-                                    &context,
-                                    value,
-                                    graph,
-                                    root,
-                                    component_revision,
-                                )
-                                .await
-                        })
-                        .await
-                },
-            )
-            .await
+        let retain_recording = !recordings.is_empty();
+        let producer = self.producer.clone();
+        let materialize = async move {
+            let _recordings = recordings;
+            producer
+                .run_admitted(
+                    None,
+                    retained_bytes,
+                    false,
+                    move |_, admission| async move {
+                        let _guard = session.session_lock.lock().await;
+                        let session_for_write = session.clone();
+                        admission
+                            .submit(move |_, context| async move {
+                                session_for_write
+                                    .materialize_agent_input_owned(
+                                        &context,
+                                        value,
+                                        graph,
+                                        root,
+                                        component_revision,
+                                    )
+                                    .await
+                            })
+                            .await
+                    },
+                )
+                .await
+        };
+        if retain_recording {
+            let (reply, result) = tokio::sync::oneshot::channel();
+            self.producer.tasks().spawn(async move {
+                let _ = reply.send(materialize.await);
+            });
+            result
+                .await
+                .map_err(|_| SessionError::from("tool input recording stopped".to_string()))?
+        } else {
+            materialize.await
+        }
     }
 
     async fn materialize_agent_input_owned(
@@ -735,7 +771,11 @@ impl StreamSession {
                 let (endpoint, forwarded_input) = match forwarded {
                     Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None => (
-                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                        Some(
+                            stream
+                                .take_host_endpoint::<LiveStreamEndpoint>()?
+                                .into_recording(),
+                        ),
                         None,
                     ),
                 };

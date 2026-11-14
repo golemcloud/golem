@@ -808,6 +808,38 @@ fn classify_guest_call_settlement<R>(
     })
 }
 
+/// Returns at the host-observed export result without draining guest tasks.
+pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> wasmtime::Result<R>,
+) -> Result<wasmtime::Result<R>, GuestCallSettlementError> {
+    let ctx = store.data().durable_ctx();
+    let runtime = ctx.runtime_suspension.clone();
+    let root_runtime = runtime.clone();
+    let entity = ctx
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = ctx.suspension_policy();
+    let driver = store
+        .as_context_mut()
+        .run_concurrent(async move |accessor| {
+            if let (Some(runtime), Some(activity)) = (&root_runtime, accessor.runtime_activity()) {
+                runtime.certify_root(activity);
+            }
+            fun(accessor).await
+        });
+    let result = match runtime {
+        Some(runtime) => runtime.drive(driver, entity.as_ref(), policy).await,
+        None => driver.await,
+    };
+    let ctx = store.data().durable_ctx();
+    if matches!(&result, Ok(Ok(_))) {
+        ctx.entity_body_finalization.begin_guest_return();
+    }
+    let interrupted = ctx.is_interrupting() || ctx.invocation_deadline_exceeded();
+    classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
+}
+
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
 /// returning.
 ///

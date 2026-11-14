@@ -9,7 +9,7 @@ mod settling;
 
 pub(super) use commit::is_auto_skippable_hint;
 use reads::is_active_stream_observation;
-use retained::{cancelled_before_delivery, custom_subtree_entry_is_drainable};
+use retained::{custom_subtree_entry_is_drainable, host_internal_calls_are_replay_inert};
 pub(super) use selection::{
     head_owner, scope_entry_owner, start_parent, terminal_kind, terminal_start_index,
 };
