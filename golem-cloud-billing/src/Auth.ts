@@ -26,6 +26,12 @@ export interface AuthOptions {
   readonly log: (level: AuthLogLevel, message: string, args: ReadonlyArray<unknown>) => void
 }
 
+/**
+ * The GitHub sign-ins that one client address can start: Better Auth's default rule for its
+ * `/sign-in` paths. The landing page tells a refused client how long to wait.
+ */
+export const signInRateLimit = { window: 10, max: 3 } as const
+
 export const authOptions = (options: AuthOptions) =>
   ({
     appName: "Golem Cloud",
@@ -87,6 +93,15 @@ export const authOptions = (options: AuthOptions) =>
     // Errors that end the OAuth flow redirect to the landing page with `?error=<code>`. The
     // default error page of Better Auth is not routed.
     onAPIError: { errorURL: "/" },
+    // Better Auth limits the requests to `auth.handler` for each client address, also outside
+    // production. It reads the address from `x-forwarded-for`, which the routes set to the one
+    // client address (`clientAddress` in Http.ts) before they call the handler.
+    // `POST /sign-in/github` calls the handler, not `auth.api`, so that this limit applies to it.
+    // The memory store counts on each replica.
+    rateLimit: {
+      enabled: true,
+      customRules: { "/sign-in/social": signInRateLimit }
+    },
     telemetry: { enabled: false }
   }) satisfies BetterAuthOptions
 

@@ -1,6 +1,7 @@
 import { symmetricDecrypt } from "better-auth/crypto"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { signInRateLimit } from "../src/Auth.ts"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import { breakAtHyphens } from "../src/Page.ts"
 import { closePool, RegistryDatabase } from "./registry.ts"
@@ -10,6 +11,7 @@ import {
   CookieJar,
   FakeUpstreams,
   makeApp,
+  newClientAddress,
   newGitHubIdentity,
   queryPool,
   request,
@@ -261,6 +263,66 @@ describe("GitHub sign-in", () => {
     })
 
     expect(response.status).toBe(403)
+  })
+
+  it("limits the GitHub sign-ins that one client address starts", async () => {
+    const client = { origin: baseUrl, "x-forwarded-for": newClientAddress() }
+    const states = async () =>
+      Number(
+        (await pool.query<{ count: string }>(`SELECT count(*) FROM "${config.db.schema}"."verification"`)).rows[0]!
+          .count
+      )
+    const before = await states()
+
+    const locations: Array<string | null> = []
+    for (let attempt = 0; attempt <= signInRateLimit.max; attempt++) {
+      const response = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", client)
+      expect(response.status).toBe(303)
+      locations.push(response.headers.get("location"))
+    }
+
+    for (const location of locations.slice(0, signInRateLimit.max)) {
+      expect(location).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+    }
+    expect(locations[signInRateLimit.max]).toBe("/?error=too_many_requests")
+    expect(await states()).toBe(before + signInRateLimit.max)
+    const page = await request(app.handler, new CookieJar(), "GET", "/?error=too_many_requests")
+    expect(await page.text()).toContain(`Wait ${signInRateLimit.window} seconds, then try again.`)
+    const otherClient = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", {
+      origin: baseUrl,
+      "x-forwarded-for": newClientAddress()
+    })
+    expect(otherClient.headers.get("location")).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+  })
+
+  /** Posts the sign-in form with this `x-forwarded-for`, and returns where the app redirects. */
+  const startSignIn = async (forwardedFor: string) =>
+    (
+      await request(app.handler, new CookieJar(), "POST", "/sign-in/github", {
+        origin: baseUrl,
+        "x-forwarded-for": forwardedFor
+      })
+    ).headers.get("location")
+
+  const toGitHub = /^https:\/\/github\.com\/login\/oauth\/authorize\?/
+
+  // The client sends the first address. The gateway appends the second, the address that it sees.
+  it("counts a sign-in against the last X-Forwarded-For address, which the gateway appends", async () => {
+    for (const sent of ["203.0.113.9", "192.0.2.1", "203.0.113.9"]) {
+      expect(await startSignIn(`${sent}, 198.51.100.7`)).toMatch(toGitHub)
+    }
+
+    expect(await startSignIn("192.0.2.1, 198.51.100.7")).toBe("/?error=too_many_requests")
+    expect(await startSignIn("198.51.100.7")).toBe("/?error=too_many_requests")
+  })
+
+  it("gives two clients that send the same first X-Forwarded-For address their own limits", async () => {
+    for (let attempt = 0; attempt < signInRateLimit.max; attempt++) {
+      expect(await startSignIn("203.0.113.9, 198.51.100.20")).toMatch(toGitHub)
+    }
+
+    expect(await startSignIn("203.0.113.9, 198.51.100.20")).toBe("/?error=too_many_requests")
+    expect(await startSignIn("203.0.113.9, 198.51.100.21")).toMatch(toGitHub)
   })
 
   it("signs out", async () => {

@@ -155,6 +155,8 @@ export class FakeUpstreams {
   github: GitHubIdentity = newGitHubIdentity(4242)
   readonly registryAccounts = new Map<string, RegistryAccount>()
   registryLoginStatus = 200
+  /** The status of `GET /v1/accounts/{account_id}`; with another status than 200, the read fails. */
+  accountReadStatus = 200
   /** The plan of each account ID; an account starts on the free plan. */
   readonly registryPlans = new Map<string, RegistryPlan>()
   /** Whether the permission share of the billing account exists; without it the registry answers 404. */
@@ -338,6 +340,9 @@ export class FakeUpstreams {
           }
         }
         if (match[2] === undefined && request.method === "GET") {
+          if (this.accountReadStatus !== 200) {
+            return Response.json({ error: "unavailable" }, { status: this.accountReadStatus })
+          }
           // The billing token sees every account, also one that never signed in to the app.
           return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
         }
@@ -471,15 +476,28 @@ export const request = async (
   return response
 }
 
+let clientAddresses = 0
+
+/**
+ * A new client address, as the gateway sets it in `x-forwarded-for`. Better Auth limits the
+ * sign-ins of each address, so each sign-in of the tests comes from its own address.
+ */
+export const newClientAddress = (): string => {
+  clientAddresses++
+  return `198.18.${Math.floor(clientAddresses / 256)}.${clientAddresses % 256}`
+}
+
 /**
  * Runs the browser side of the GitHub sign-in: posts the sign-in form, lets the fake GitHub
  * authorize, and follows the callback. Returns the callback response.
  */
 export const signInWithGitHub = async (
   handler: (request: Request) => Promise<Response>,
-  jar: CookieJar
+  jar: CookieJar,
+  clientAddress: string = newClientAddress()
 ): Promise<Response> => {
-  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl })
+  const forwardedFor = { "x-forwarded-for": clientAddress }
+  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl, ...forwardedFor })
   if (start.status !== 303) {
     throw new Error(`The sign-in form returned ${start.status}: ${await start.text()}`)
   }
@@ -488,5 +506,5 @@ export const signInWithGitHub = async (
     throw new Error(`The sign-in form redirected to ${authorize.href}`)
   }
   const state = authorize.searchParams.get("state")!
-  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`)
+  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`, forwardedFor)
 }

@@ -1,10 +1,20 @@
 import { readFileSync } from "node:fs"
-import { Effect, Option } from "effect"
-import { Cookies, HttpEffect, HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { Auth } from "./Auth.ts"
+import { ByteSize, Effect, Option } from "effect"
+import {
+  Cookies,
+  HttpEffect,
+  HttpIncomingMessage,
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerError,
+  HttpServerRequest,
+  HttpServerResponse
+} from "effect/http"
+import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
 import { Database } from "./Database.ts"
 import {
+  canCheckOut,
   cliBootstrapCommand,
   type OverageNotice,
   type PlanState,
@@ -56,16 +66,47 @@ const toWebHeaders = (request: HttpServerRequest.HttpServerRequest): Headers =>
 
 const crossOrigin = () => HttpServerResponse.text("Cross-origin request", { status: 403 })
 
+/** The Standard Webhooks headers that Polar sends with every delivery. */
+const webhookSignatureHeaders = ["webhook-id", "webhook-timestamp", "webhook-signature"] as const
+
+/**
+ * The largest webhook body that the app reads. A delivery of Polar is a few kilobytes: one
+ * subscription or order with its product and customer.
+ */
+export const webhookBodyLimit = ByteSize.mebibytes(1)
+
+const isBodyTooLarge = (error: unknown): boolean =>
+  error instanceof HttpServerError.HttpServerError &&
+  error.reason._tag === "RequestParseError" &&
+  error.reason.reason === "BodyTooLarge"
+
 const overageNoticeOf = (value: string | null): OverageNotice | undefined =>
   value === "on" || value === "off" || value === "not-eligible" ? value : undefined
 
 /**
- * The IP address of the browser, for the local currency of the checkout: the first address of
- * `x-forwarded-for`, which the gateway sets, or the address of the connection.
+ * The IP address of the client: the last address of `x-forwarded-for`, or the address of the
+ * connection when the request has no such header. The app has one proxy hop in front of it, the
+ * gateway, which appends the address that it sees to `x-forwarded-for`. So the last address is the
+ * client, and every address to the left of it comes from the client, which can send any value.
+ * The gateway sees the address of the client only while its load balancer keeps that address (on
+ * AWS, an NLB with instance targets and `externalTrafficPolicy: Local`).
  */
-const clientIp = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
-  const forwarded = request.headers["x-forwarded-for"]?.split(",")[0]?.trim()
-  return forwarded !== undefined && forwarded !== "" ? forwarded : Option.getOrUndefined(request.remoteAddress)
+export const clientAddress = (request: HttpServerRequest.HttpServerRequest): string | undefined => {
+  const last = request.headers["x-forwarded-for"]?.split(",").at(-1)?.trim()
+  return last !== undefined && last !== "" ? last : Option.getOrUndefined(request.remoteAddress)
+}
+
+/**
+ * Sets `x-forwarded-for` to the client address alone, for a request to `auth.handler`. Better
+ * Auth trusts the header only when it has one address, and else counts the request in one rate
+ * limit that all such requests share, so a client could fill that limit for the others.
+ */
+const withClientAddress = (headers: Headers, address: string | undefined): Headers => {
+  headers.delete("x-forwarded-for")
+  if (address !== undefined) {
+    headers.set("x-forwarded-for", address)
+  }
+  return headers
 }
 
 const redirectWithCookies = (location: string, headers: Headers) =>
@@ -94,27 +135,45 @@ export const routes = HttpRouter.use((router) =>
       return "other"
     }
 
-    // The billing app's own form posts carry no CSRF token; a browser sends `Origin` on every
-    // POST, so a cross-site post is rejected here.
-    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) => {
-      const origin = request.headers["origin"]
-      return origin === undefined || origin === config.baseUrl.origin
-    }
+    // The billing app's own form posts carry no CSRF token. A browser sends `Origin` on every
+    // form post, so a post without `Origin`, with `Origin: null`, or from another origin is
+    // rejected here, also when the browser sends the session cookie.
+    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) =>
+      request.headers["origin"] === config.baseUrl.origin
 
     // The browser reaches Better Auth only for the OAuth callback. The pages call the other
-    // endpoints on the server through `auth.api`. The rest of /api/auth stays unrouted: it
-    // includes get-access-token, which returns the decrypted GitHub access token, and
-    // link-social and update-user, which change the user.
-    yield* router.add("GET", "/api/auth/callback/github", HttpEffect.fromWebHandler(auth.handler))
+    // endpoints on the server, through `auth.api` or, for the sign-in, `auth.handler`. The rest
+    // of /api/auth stays unrouted: it includes get-access-token, which returns the decrypted
+    // GitHub access token, and link-social and update-user, which change the user.
+    yield* router.add("GET", "/api/auth/callback/github", (request) =>
+      HttpEffect.fromWebHandler((web) => {
+        const headers = withClientAddress(new Headers(web.headers), clientAddress(request))
+        return auth.handler(new Request(web, { headers }))
+      })
+    )
 
     // Polar delivers the webhooks here. The handler is the app's own, not a Better Auth endpoint;
-    // the path is the one that the Polar organization has configured.
+    // the path is the one that the Polar organization has configured. Polar signs every
+    // delivery, so a request without the signature headers is rejected before the app reads its
+    // body, and the app reads at most `webhookBodyLimit` of a body.
     yield* router.add("POST", "/api/auth/polar/webhooks", (request) =>
-      request.text.pipe(
-        Effect.flatMap((body) => handleWebhook(body, request.headers)),
-        Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
-        Effect.catch(() => Effect.succeed(HttpServerResponse.text("cannot read the body", { status: 400 })))
-      )
+      webhookSignatureHeaders.every((name) => request.headers[name] !== undefined)
+        ? request.text.pipe(
+            Effect.provideService(HttpIncomingMessage.MaxBodySize, webhookBodyLimit),
+            Effect.flatMap((body) => handleWebhook(body, request.headers)),
+            Effect.map((response) => HttpServerResponse.text(response.body, { status: response.status })),
+            Effect.catch((error) =>
+              Effect.succeed(
+                isBodyTooLarge(error)
+                  ? HttpServerResponse.text("the body is too large", { status: 413 })
+                  : HttpServerResponse.text("cannot read the body", { status: 400 })
+              )
+            )
+          )
+        : Effect.logWarning("Rejected a webhook").pipe(
+            Effect.annotateLogs({ status: 403, reason: "no signature headers" }),
+            Effect.as(HttpServerResponse.text("rejected", { status: 403 }))
+          )
     )
 
     yield* router.add("GET", "/", (request) =>
@@ -187,20 +246,42 @@ export const routes = HttpRouter.use((router) =>
       )
     )
 
+    // The form calls the sign-in endpoint through `auth.handler`, not `auth.api`, so that the rate
+    // limit of Better Auth applies to it (`rateLimit` in `authOptions`).
+    const signInSocial = (request: HttpServerRequest.HttpServerRequest) => {
+      const headers = withClientAddress(toWebHeaders(request), clientAddress(request))
+      headers.delete("content-length")
+      headers.delete("transfer-encoding")
+      headers.set("content-type", "application/json")
+      return auth.handler(
+        new Request(new URL("/api/auth/sign-in/social", config.baseUrl), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ provider: "github", callbackURL: "/", errorCallbackURL: "/" })
+        })
+      )
+    }
+
     yield* router.add("POST", "/sign-in/github", (request) =>
       isSameOrigin(request)
-        ? Effect.tryPromise(() =>
-            auth.api.signInSocial({
-              body: { provider: "github", callbackURL: "/", errorCallbackURL: "/" },
-              headers: toWebHeaders(request),
-              returnHeaders: true
-            })
-          ).pipe(
-            Effect.flatMap(({ headers, response }) =>
-              response.url === undefined
-                ? Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
-                : Effect.succeed(redirectWithCookies(response.url, headers))
-            ),
+        ? Effect.tryPromise(() => signInSocial(request)).pipe(
+            Effect.flatMap((response) => {
+              if (response.status === 429) {
+                return Effect.logWarning("Refused a GitHub sign-in over the rate limit").pipe(
+                  Effect.as(HttpServerResponse.redirect("/?error=too_many_requests", { status: 303 }))
+                )
+              }
+              if (!response.ok) {
+                return Effect.fail(new Error(`Better Auth answered ${response.status}`))
+              }
+              return Effect.tryPromise(() => response.json() as Promise<{ readonly url?: unknown }>).pipe(
+                Effect.flatMap((body) =>
+                  typeof body.url === "string"
+                    ? Effect.succeed(redirectWithCookies(body.url, response.headers))
+                    : Effect.fail(new Error("Better Auth returned no GitHub authorization URL"))
+                )
+              )
+            }),
             Effect.catch((error) =>
               Effect.logError("Cannot start the GitHub sign-in").pipe(
                 Effect.annotateLogs({ error: String(error) }),
@@ -214,17 +295,53 @@ export const routes = HttpRouter.use((router) =>
     yield* router.add("POST", "/billing/checkout", (request) =>
       isSameOrigin(request)
         ? Effect.gen(function* () {
-            const signedIn = yield* getSignedIn(toWebHeaders(request))
+            // The route accepts only a checkout that the page offers. When the registry or the
+            // database fails, the session or the plan is not known, so the route refuses the
+            // checkout, as it refuses a request without a sign-in.
+            const signedIn = yield* getSignedIn(toWebHeaders(request)).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the session for the checkout").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.as(Option.none<SignedIn>())
+                )
+              )
+            )
             if (Option.isNone(signedIn)) {
               return HttpServerResponse.redirect("/", { status: 303 })
             }
             const user = signedIn.value
+            const offered = yield* Effect.gen(function* () {
+              const account = yield* registry.getAccount(user.golemToken, user.golemAccountId)
+              const subscription = yield* subscriptions.latest(user.golemAccountId, config.polar.productId)
+              const plan = planOf(account)
+              if (!canCheckOut(plan, subscription)) {
+                yield* Effect.logWarning("Refused a checkout that the page does not offer").pipe(
+                  Effect.annotateLogs({
+                    golemAccountId: user.golemAccountId,
+                    plan,
+                    subscriptionStatus: subscription?.status
+                  })
+                )
+                return false
+              }
+              return true
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Cannot read the plan for the checkout").pipe(
+                  Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
+                  Effect.as(false)
+                )
+              )
+            )
+            if (!offered) {
+              return HttpServerResponse.redirect("/", { status: 303 })
+            }
             const url = yield* polar.createCheckout({
               productId: config.polar.productId,
               externalCustomerId: user.golemAccountId,
               customerEmail: user.email,
               customerName: user.name === "" ? undefined : user.name,
-              customerIpAddress: clientIp(request),
+              customerIpAddress: clientAddress(request),
               successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
               returnUrl: home
             })
