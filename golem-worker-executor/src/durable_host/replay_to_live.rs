@@ -125,7 +125,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         reset: bool,
     ) -> Result<(), WorkerExecutorError> {
         if self.runtime == OwnerRuntime::Agent {
-            reconcile_primary_memory(&self.public_state, &self.linear_memory, reset).await?;
+            self.public_state
+                .worker()
+                .reconcile_memory_accounting(&self.linear_memory, reset)
+                .await?;
         }
         Ok(())
     }
@@ -465,23 +468,6 @@ async fn await_incomplete_tool_attachment_reconstruction(
     Ok(())
 }
 
-async fn reconcile_primary_memory<Ctx: WorkerCtx>(
-    public_state: &PublicDurableWorkerState<Ctx>,
-    linear_memory: &LinearMemoryTracker,
-    reset: bool,
-) -> Result<(), WorkerExecutorError> {
-    linear_memory
-        .start_memory_accounting(reset, |bytes| {
-            let commit = public_state.worker().request_memory_reconciliation(bytes);
-            async move {
-                commit.await.map_err(|_| {
-                    WorkerExecutorError::runtime("Memory reconciliation acknowledgement stopped")
-                })?
-            }
-        })
-        .await
-}
-
 pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
     store_replay_state: &StoreReplayState,
     tool_entity: bool,
@@ -506,7 +492,10 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
     let finalization = store_replay_state.finalization(tool_entity, tool_operation)?;
     let outcome = match store_replay_state {
         StoreReplayState::Primary => {
-            reconcile_primary_memory(public_state, linear_memory, false).await?;
+            public_state
+                .worker()
+                .reconcile_memory_accounting(linear_memory, false)
+                .await?;
             replay_state.publish_primary_live(linear_memory).await?
         }
         _ => {

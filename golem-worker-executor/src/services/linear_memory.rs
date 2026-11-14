@@ -17,10 +17,7 @@ use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::MeteringTime;
 use crate::services::resource_limits::{AgentMemoryLimitTarget, AtomicResourceEntry};
 use crate::services::resource_usage_metering::ResourceUsageLiveActivation;
-use futures::FutureExt;
-use futures::future::{BoxFuture, Shared};
 use golem_common::model::agent::AgentMode;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -72,8 +69,6 @@ struct Inner {
     reconciling: AtomicBool,
     replaying: AtomicBool,
     accounting_started: AtomicBool,
-    accounting_transition:
-        tokio::sync::Mutex<Option<Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>>>,
     usage_live: AtomicBool,
     guest_bodies: AtomicU64,
     live_activation: Mutex<Option<ResourceUsageLiveActivation>>,
@@ -190,7 +185,6 @@ impl LinearMemoryTracker {
             reconciling: AtomicBool::new(true),
             replaying: AtomicBool::new(replaying),
             accounting_started: AtomicBool::new(false),
-            accounting_transition: tokio::sync::Mutex::new(None),
             usage_live: AtomicBool::new(!replaying),
             guest_bodies: AtomicU64::new(0),
             live_activation: Mutex::new(None),
@@ -230,41 +224,24 @@ impl LinearMemoryTracker {
     }
 
     /// Enqueues the absolute baseline and enables subsequent delta recording in one transition.
-    /// Storage completion is awaited without holding the synchronous growth lock.
-    pub(crate) async fn start_memory_accounting<F, Fut>(
+    /// The caller owns the enqueue result and any storage-completion barrier it represents.
+    pub(crate) fn start_memory_accounting<R>(
         &self,
         reset: bool,
-        enqueue: F,
-    ) -> Result<(), WorkerExecutorError>
-    where
-        F: FnOnce(u64) -> Fut,
-        Fut: Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
-    {
-        let mut accounting = self.inner.accounting_transition.lock().await;
-        if let Some(commit) = accounting.as_ref() {
-            commit.clone().await?;
-        }
+        enqueue: impl FnOnce(u64) -> R,
+    ) -> Option<R> {
+        let _transition = self.inner.transitions.lock().unwrap();
         if !reset && self.inner.accounting_started.load(Ordering::Acquire) {
-            return Ok(());
+            return None;
         }
-        let commit = {
-            let _transition = self.inner.transitions.lock().unwrap();
-            let bytes = self.current_bytes();
-            let commit = if reset || bytes != self.inner.persisted_startup_bytes {
-                Some(enqueue(bytes).boxed().shared())
-            } else {
-                None
-            };
-            self.inner.accounting_started.store(true, Ordering::Release);
-            commit
+        let bytes = self.current_bytes();
+        let result = if reset || bytes != self.inner.persisted_startup_bytes {
+            Some(enqueue(bytes))
+        } else {
+            None
         };
-        // Keep the receipt when the initiating native task is cancelled. Another publisher
-        // must still join that storage barrier rather than treating "enqueued" as "committed".
-        *accounting = commit;
-        if let Some(commit) = accounting.as_ref() {
-            commit.clone().await?;
-        }
-        Ok(())
+        self.inner.accounting_started.store(true, Ordering::Release);
+        result
     }
 
     /// The initially-live primary has already persisted its instantiation growth.
@@ -743,104 +720,6 @@ mod tests {
 
     fn grant() -> Arc<Mutex<MemoryGrant>> {
         Arc::new(Mutex::new(MemoryGrant::inert(0)))
-    }
-
-    #[test]
-    async fn accounting_cutover_captures_growth_and_survives_publisher_cancellation() {
-        for saved in [40, 80] {
-            let tracker = LinearMemoryTracker::new(
-                saved,
-                saved,
-                AgentMode::Durable,
-                true,
-                Arc::new(AtomicResourceEntry::new(0, 200, 0, 0, 0)),
-                Arc::new(Mutex::new(MemoryGrant::inert(saved))),
-                Instant::now(),
-            );
-            tracker.begin_instantiation(false);
-            tracker.reconcile(40, Instant::now());
-            let entries = Arc::new(Mutex::new(Vec::new()));
-            let (release, gate) = tokio::sync::oneshot::channel();
-            let baseline_entries = entries.clone();
-            let mut publication = Box::pin(tracker.start_memory_accounting(false, move |bytes| {
-                baseline_entries.lock().unwrap().push((true, bytes));
-                async move {
-                    gate.await.unwrap();
-                    Ok(())
-                }
-            }));
-            assert_eq!(futures::poll!(&mut publication).is_pending(), saved != 40);
-            tracker.grow_and_record(20, Instant::now(), |delta| {
-                entries.lock().unwrap().push((false, delta));
-            });
-            drop(publication);
-            let mut retry = Box::pin(tracker.start_memory_accounting(false, |_| async {
-                panic!("a second publisher must join the existing cutover")
-            }));
-            if saved != 40 {
-                assert!(futures::poll!(&mut retry).is_pending());
-                release.send(()).unwrap();
-            }
-            retry.await.unwrap();
-            tracker.switch_to_live();
-            tracker.grow_and_record(7, Instant::now(), |delta| {
-                entries.lock().unwrap().push((false, delta));
-            });
-            let entries = entries.lock().unwrap();
-            let mut persisted = saved;
-            for &(absolute, bytes) in entries.iter() {
-                if absolute {
-                    persisted = bytes;
-                } else {
-                    persisted += bytes;
-                }
-            }
-            assert_eq!(persisted, 67);
-            assert_eq!(tracker.current_bytes(), 67);
-            assert_eq!(
-                entries.iter().filter(|(absolute, _)| *absolute).count(),
-                usize::from(saved != 40)
-            );
-            assert_eq!(
-                entries
-                    .iter()
-                    .filter(|(absolute, _)| !*absolute)
-                    .map(|(_, bytes)| bytes)
-                    .copied()
-                    .collect::<Vec<_>>(),
-                vec![20, 7]
-            );
-        }
-    }
-
-    #[test]
-    async fn accounting_commit_failure_remains_a_publication_barrier() {
-        let tracker = LinearMemoryTracker::new(
-            80,
-            80,
-            AgentMode::Durable,
-            true,
-            Arc::new(AtomicResourceEntry::new(0, 200, 0, 0, 0)),
-            grant(),
-            Instant::now(),
-        );
-        tracker.reconcile(40, Instant::now());
-        assert!(
-            tracker
-                .start_memory_accounting(false, |_| async {
-                    Err(WorkerExecutorError::runtime("refused commit"))
-                })
-                .await
-                .is_err()
-        );
-        assert!(
-            tracker
-                .start_memory_accounting(false, |_| async {
-                    panic!("a refused commit must remain authoritative")
-                })
-                .await
-                .is_err()
-        );
     }
 
     #[test]

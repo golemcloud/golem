@@ -979,6 +979,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             snapshot_exclusions: StdMutex::new(SnapshotExclusions::default()),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
+            memory_accounting: residency::MemoryAccounting::default(),
             memory_limit_interrupt_queued: AtomicBool::new(false),
             current_component,
             read_only_cache,
