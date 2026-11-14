@@ -3739,9 +3739,7 @@ async fn reobserved_input_allows_source_loss_overlay() {
                     parent_start_index: None,
                 },
                 reobserves: None,
-                session_key: StreamRegistrationInvocation::Local(
-                    key.session_key.idempotency_key.clone(),
-                ),
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
                 reader_id,
                 source_offset: offsets[1],
                 consumer_read_ordinal: 1,
