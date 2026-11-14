@@ -28,6 +28,23 @@ hostModules.push([
         };
       `,
 ]);
+// Every Future callback runs through GolemExecutionContext, which captures and
+// installs the runtime's current scope. Fixtures run only at the root, as in
+// a world without durability exchange; opening a scope is unexpected.
+hostModules.push([
+  "wasm-rquickjs:custom-invocation-context",
+  `
+        const root = Object.freeze({});
+        const unavailable = () => {
+          throw new Error("Unexpected host call: wasm-rquickjs:custom-invocation-context");
+        };
+        export const capture = () => root;
+        export const swap = () => root;
+        export const run = (_token, fn) => fn();
+        export const enterLive = unavailable;
+        export const close = unavailable;
+      `,
+]);
 register("./host-module-hooks.mjs", import.meta.url, {
   data: { modules: hostModules },
 });

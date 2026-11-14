@@ -222,10 +222,10 @@ object RemoteAgentClient {
       try {
         FutureInterop
           .fromPromise(futureResult.get())
-          .map(_.toOption)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          .map(_.toOption)(golem.concurrent.GolemExecutionContext.global)
           .recoverWith { case JavaScriptException(e) =>
             Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))
-          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          }(golem.concurrent.GolemExecutionContext.global)
       } catch {
         case JavaScriptException(e) =>
           Future.failed(JavaScriptException(s"async RPC failed: ${WasmRpcApi.decodeRpcError(e)}"))

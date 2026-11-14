@@ -17,7 +17,7 @@ Since Golem Scala apps compile to JavaScript, the global `fetch` function is ava
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
+import golem.concurrent.Implicits.global
 
 def fetchData(url: String): Future[String] = {
   val options = js.Dynamic.literal(
@@ -184,7 +184,7 @@ import golem.BaseAgent
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits._
 import scala.concurrent.Future
-import scala.concurrent.ExecutionContext.Implicits.global
+import golem.concurrent.Implicits.global
 
 @agentDefinition(mount = "/weather/{value}")
 trait WeatherAgent extends BaseAgent {

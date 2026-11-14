@@ -21,8 +21,13 @@ import golem.host.js.schema.JsTypedSchemaValue
 import golem.schema.{FromSchema, IntoSchema, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
 
-import scala.concurrent.{ExecutionContext, Future}
+import golem.concurrent.{CustomInvocationContext, CustomInvocationToken, GolemExecutionContext}
+
+import scala.collection.mutable
+import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.scalajs.js
+import scala.util.control.NonFatal
+import scala.util.{Failure, Success, Try}
 import scala.scalajs.js.annotation.JSImport
 
 /**
@@ -107,7 +112,7 @@ object DurabilityApi {
     final case class Replayed(invocation: PersistedDurableFunctionInvocation) extends CustomDurableInvocation
   }
 
-  private final class LiveCustomDurableInvocation(private val raw: JsLiveCustomDurableInvocation) {
+  private final class LiveCustomDurableInvocation(val raw: JsLiveCustomDurableInvocation) {
     private var active = true
 
     def finish(response: TypedSchemaValue, forcedCommit: Boolean): Unit = {
@@ -116,6 +121,17 @@ object DurabilityApi {
         throw new IllegalStateException("custom durable invocation is no longer active")
       active = false
       JsLiveCustomDurableInvocation.finish(raw, jsResponse, forcedCommit)
+    }
+
+    /**
+     * Persists the response; the invocation stays owned and must be dropped
+     * afterwards.
+     */
+    def finishAsync(response: TypedSchemaValue, forcedCommit: Boolean): Future[Unit] = {
+      val jsResponse = typedToJs(response)
+      if (!active)
+        throw new IllegalStateException("custom durable invocation is no longer active")
+      JsLiveCustomDurableInvocation.finishAsync(raw, jsResponse, forcedCommit).toFuture
     }
 
     def drop(): Unit =
@@ -140,6 +156,11 @@ object DurabilityApi {
       request: js.Any,
       functionType: js.Any
     ): JsCustomDurableInvocation = js.native
+    def beginCustomDurableInvocationAsync(
+      functionName: String,
+      request: js.Any,
+      functionType: js.Any
+    ): js.Promise[JsCustomDurableInvocation] = js.native
   }
 
   @js.native
@@ -150,6 +171,11 @@ object DurabilityApi {
       response: JsTypedSchemaValue,
       forcedCommit: Boolean
     ): Unit = js.native
+    def finishAsync(
+      invocation: golem.host.js.JsLiveCustomDurableInvocation,
+      response: JsTypedSchemaValue,
+      forcedCommit: Boolean
+    ): js.Promise[Unit] = js.native
   }
 
   // --- Typed public API ---
@@ -179,10 +205,11 @@ object DurabilityApi {
   }
 
   /**
-   * Runs a custom operation sequentially. Properly nested calls are supported;
-   * do not start detached futures or callbacks that outlive the body, including
-   * on failure. See [[durableAsync]] for the concurrency restriction, which
-   * also applies if synchronous code starts asynchronous work.
+   * Runs a custom operation whose body is synchronous. The body may open nested
+   * synchronous operations; it must not start [[durableAsync]] operations,
+   * which fail with `IllegalStateException`. Futures and callbacks that the
+   * body starts continue in the caller's scope, so their host calls are not
+   * part of this operation.
    */
   def durable[Request, Response](
     iface: String,
@@ -200,7 +227,10 @@ object DurabilityApi {
     beginCustomDurableInvocation(functionName, requestSchema.toTyped(request), functionType) match {
       case CustomDurableInvocation.Live(invocation) =>
         try {
-          val result = body
+          synchronousBodies += 1
+          val result =
+            try body
+            finally synchronousBodies -= 1
           invocation.finish(responseSchema.toTyped(result), forcedCommit)
           result
         } catch {
@@ -214,14 +244,23 @@ object DurabilityApi {
   }
 
   /**
-   * Runs a custom operation with sequential, properly nested execution only.
-   * The body may await host calls when no unrelated guest work runs during the
-   * wait. Do not overlap it with other futures or callbacks, including ordinary
-   * host calls: sibling effects can acquire the wrong scope and cause incorrect
-   * replay or invocation failure. Misuse is not reliably detected. Await each
-   * nested operation and do not detach work. All outstanding work must
-   * terminate before the body exits, including on failure; a failed Future does
-   * not cancel its siblings.
+   * Runs a custom operation whose body is asynchronous.
+   *
+   * The body, every `Future` callback it registers through a
+   * [[golem.concurrent.GolemExecutionContext]], and every host call made from
+   * those callbacks belong to this operation, also while sibling operations or
+   * other root-level work run concurrently. The body receives such an execution
+   * context as a context parameter; it takes precedence over an imported one.
+   * The returned `Future` completes in the caller's scope.
+   *
+   * Operations started in the body are nested. The operation finishes, or is
+   * dropped on failure, only after all of them have finished, so a nested
+   * operation that never completes keeps this one open. Callbacks run by other
+   * execution contexts, including `ExecutionContext.parasitic`, are not
+   * attributed to this operation. Work that is still running after the
+   * operation closed continues in the nearest open enclosing operation, or at
+   * the root; host calls from work that escapes an outermost operation are not
+   * supported, because replay skips the completed body.
    */
   def durableAsync[Request, Response](
     iface: String,
@@ -229,41 +268,145 @@ object DurabilityApi {
     functionType: DurableFunctionType,
     request: Request,
     forcedCommit: Boolean = false
-  )(body: => Future[Response])(implicit
+  )(body: ExecutionContext ?=> Future[Response])(implicit
     requestSchema: IntoSchema[Request],
     responseSchema: IntoSchema[Response],
-    responseDecoder: FromSchema[Response],
-    executionContext: ExecutionContext
-  ): Future[Response] = {
-    observeFunctionCall(iface, function)
-    val functionName = durableFunctionName(iface, function)
-    beginCustomDurableInvocation(functionName, requestSchema.toTyped(request), functionType) match {
-      case CustomDurableInvocation.Live(invocation) =>
-        try
-          body.transform(
-            result =>
-              try {
-                invocation.finish(responseSchema.toTyped(result), forcedCommit)
-                result
-              } catch {
-                case error: Throwable =>
-                  invocation.drop()
-                  throw error
-              },
-            error => {
-              invocation.drop()
-              error
-            }
+    responseDecoder: FromSchema[Response]
+  ): Future[Response] =
+    if (synchronousBodies > 0)
+      Future.failed(
+        new IllegalStateException(
+          s"durableAsync operation '${durableFunctionName(iface, function)}' cannot run inside a synchronous durable body"
+        )
+      )
+    else {
+      implicit val ec: ExecutionContext = GolemExecutionContext.global
+      val parent                        = openScope(CustomInvocationContext.capture())
+      parent.foreach(_.childStarted())
+      val functionName = durableFunctionName(iface, function)
+      val admitted     = attempt {
+        observeFunctionCall(iface, function)
+        DurabilityModule
+          .beginCustomDurableInvocationAsync(
+            functionName,
+            typedToJs(requestSchema.toTyped(request)),
+            DurableFunctionType.toJs(functionType)
           )
-        catch {
-          case error: Throwable =>
-            invocation.drop()
-            throw error
+          .toFuture
+      }
+      admitted.transformWith { outcome =>
+        val live =
+          outcome.toOption.map(raw => raw: js.Any).filter(_.asInstanceOf[JsCustomDurableInvocation].tag == "live")
+        live match {
+          case Some(raw) =>
+            val invocation = new LiveCustomDurableInvocation(raw.asInstanceOf[JsCustomDurableInvocationLive].value)
+            runLive(invocation, parent, forcedCommit)(body)
+          case None =>
+            parent.foreach(_.childClosed())
+            Future.fromTry(outcome.map { raw =>
+              raw.tag match {
+                case "replayed" =>
+                  val persisted = raw.asInstanceOf[JsCustomDurableInvocationReplayed].value
+                  decodeReplay(persistedFromJs(persisted), functionName, functionType)
+                case other => throw new IllegalArgumentException(s"Unknown CustomDurableInvocation tag: $other")
+              }
+            })
         }
-      case CustomDurableInvocation.Replayed(invocation) =>
-        Future.successful(decodeReplay(invocation, functionName, functionType))
+      }
+    }
+
+  // Runs in the parent's scope. Every callback registered here captures the operation's scope.
+  private def runLive[Response](
+    invocation: LiveCustomDurableInvocation,
+    parent: Option[OpenScope],
+    forcedCommit: Boolean
+  )(body: ExecutionContext ?=> Future[Response])(implicit
+    responseSchema: IntoSchema[Response],
+    ec: ExecutionContext
+  ): Future[Response] = {
+    val token =
+      try CustomInvocationContext.enterLive(invocation.raw)
+      catch {
+        case error: Throwable =>
+          invocation.drop()
+          parent.foreach(_.childClosed())
+          throw error
+      }
+    val scope = new OpenScope(token)
+    openScopes += scope
+    CustomInvocationContext.run(
+      token,
+      () =>
+        attempt(body)
+          .transformWith(result => scope.bodyFinished().transformWith(_ => complete(invocation, result, forcedCommit)))
+          .transform(result => close(invocation, scope, parent, result))
+    )
+  }
+
+  private def complete[Response](
+    invocation: LiveCustomDurableInvocation,
+    result: Try[Response],
+    forcedCommit: Boolean
+  )(implicit responseSchema: IntoSchema[Response], ec: ExecutionContext): Future[Response] =
+    result match {
+      case Success(value) =>
+        attempt(invocation.finishAsync(responseSchema.toTyped(value), forcedCommit)).map(_ => value)
+      case Failure(error) => Future.failed(error)
+    }
+
+  // Drops the invocation in its own scope, then closes the scope and releases the parent.
+  private def close[Response](
+    invocation: LiveCustomDurableInvocation,
+    scope: OpenScope,
+    parent: Option[OpenScope],
+    result: Try[Response]
+  ): Try[Response] = {
+    val closed = Try {
+      try invocation.drop()
+      finally {
+        openScopes -= scope
+        CustomInvocationContext.close(scope.token)
+      }
+    }
+    parent.foreach(_.childClosed())
+    (result, closed) match {
+      case (Success(_), Failure(error)) => Failure(error)
+      case _                            => result
     }
   }
+
+  /** An open asynchronous operation and the nested operations it waits for. */
+  private final class OpenScope(val token: CustomInvocationToken) {
+    private var openChildren = 0
+    private var finished     = Option.empty[Promise[Unit]]
+
+    def childStarted(): Unit = openChildren += 1
+
+    def childClosed(): Unit = {
+      openChildren -= 1
+      settle()
+    }
+
+    def bodyFinished(): Future[Unit] = {
+      val done = Promise[Unit]()
+      finished = Some(done)
+      settle()
+      done.future
+    }
+
+    private def settle(): Unit =
+      if (openChildren == 0) finished.foreach(_.trySuccess(()))
+  }
+
+  private val openScopes        = mutable.ArrayBuffer.empty[OpenScope]
+  private var synchronousBodies = 0
+
+  private def openScope(token: CustomInvocationToken): Option[OpenScope] =
+    openScopes.find(_.token eq token)
+
+  private def attempt[A](future: => Future[A]): Future[A] =
+    try future
+    catch { case NonFatal(error) => Future.failed(error) }
 
   private def durableFunctionName(iface: String, function: String): String =
     if (iface.isEmpty) function else s"$iface::$function"

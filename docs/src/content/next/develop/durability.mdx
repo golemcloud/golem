@@ -118,11 +118,28 @@ def catalogRevision(readRevision: String => String): String =
 
 An adapter exception leaves the operation unfinished instead of recording an error result.
 
-Use `DurabilityApi.durable` and `durableAsync` sequentially; do not overlap them with other futures or callbacks. A custom operation's execution scope remains installed while its body waits. Unrelated guest work, including ordinary host calls, can be attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does not reliably detect this misuse.
+Use `durableAsync` for an asynchronous body. Concurrent `durableAsync` operations within one invocation are supported: each body, every `Future` callback it registers through a `golem.concurrent.GolemExecutionContext`, and every host call made from those callbacks belong to that operation, in any completion order. Ordinary host calls made outside the operation stay outside it. The body receives the scoped execution context as a context parameter, and it takes precedence over an imported one. Use `import golem.concurrent.Implicits.global` in agent code, and `GolemExecutionContext.wrap` for an execution context of your own.
 
-Sequential and properly nested custom operations are supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+```scala
+import golem.concurrent.Implicits.global
+import golem.host.DurabilityApi
+import golem.host.DurabilityApi.DurableFunctionType
+import scala.concurrent.Future
 
-Do not leave detached futures or callbacks running after the body exits, including on failure or cancellation. Stop and join outstanding work before closing the operation. Fail-fast combinators do not necessarily wait for surviving work, and joining at the end does not make concurrent custom scopes supported.
+def bothRevisions(read: String => Future[String]): Future[List[String]] = {
+  def revision(name: String) =
+    DurabilityApi.durableAsync("catalog-library", "read-revision", DurableFunctionType.ReadRemote, name)(read(name))
+  Future.sequence(List(revision("public"), revision("internal")))
+}
+```
+
+Operations started in a body are nested. A parent finishes, or is dropped on failure, only after its nested operations have finished, so a nested operation that never completes keeps its parent open. `durable` is for synchronous bodies only; starting a `durableAsync` operation inside it fails.
+
+The remaining limits:
+
+- Callbacks run by other execution contexts, including `ExecutionContext.parasitic`, are not attributed to the operation that registered them.
+- Work still running after its operation closed continues in the nearest open enclosing operation, or at the root. Host calls from work that escapes an outermost operation are not supported, because replay skips the completed body.
+- Only Scala `Future` callbacks are covered. ZIO and Cats Effect fibers are not attributed to the operation that started them.
 </Tabs.Tab>
 <Tabs.Tab>
 Import `golemcloud/golem_sdk/api` as `@api` in the package configuration.
