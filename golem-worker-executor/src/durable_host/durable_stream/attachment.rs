@@ -98,115 +98,11 @@ impl DurableStreamStore {
             return Err(StreamStoreError::InvalidAttachmentState);
         }
         let mut index = self
-            .index_for([ProducerMetadataKey::ConsumerHead(
-                key.session_key.clone(),
-                reader_id,
-            )])
+            .index_for([
+                ProducerMetadataKey::Session(key.session_key.clone()),
+                ProducerMetadataKey::ConsumerHead(key.session_key.clone(), reader_id),
+            ])
             .await?;
-        let current = self.oplog.current_oplog_index().await;
-        let mut source_offsets = Vec::new();
-        let mut overlay = None;
-        if current.is_defined() {
-            for (oplog_index, entry) in self
-                .oplog
-                .read_exact(OplogIndex::INITIAL, current.as_u64())
-                .await?
-            {
-                if self
-                    .fork_lineage
-                    .deleted_regions()
-                    .is_in_deleted_region(oplog_index)
-                {
-                    continue;
-                }
-                let OplogEntry::StreamSession { record, .. } = entry else {
-                    continue;
-                };
-                let record = self
-                    .oplog
-                    .download_payload(record)
-                    .await
-                    .map_err(StreamStoreError::Oplog)?;
-                Self::validate_consumer_reobservation(self.oplog.as_ref(), oplog_index, &record)
-                    .await?;
-                if record.reobserves().is_some() {
-                    continue;
-                }
-                match record {
-                    StreamSessionRecord::ConsumerItemValue(record)
-                        if record.session_key.qualify(
-                            key.consumer_environment_id,
-                            &key.consumer,
-                            key.expected_consumer_fingerprint,
-                        ) == key.session_key
-                            && record.reader_id == reader_id =>
-                    {
-                        if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(StreamStoreError::CorruptHistory(
-                                "consumer value journal contains a read-ordinal gap".to_string(),
-                            ));
-                        }
-                        for index in 0..record.logical_item_count() {
-                            source_offsets.push(record.source_offset_at(index).ok_or_else(
-                                || {
-                                    StreamStoreError::CorruptHistory(
-                                        "packed-u8 consumer journal offset range is invalid"
-                                            .to_string(),
-                                    )
-                                },
-                            )?);
-                        }
-                    }
-                    StreamSessionRecord::ConsumerTerminal(record)
-                        if record.session_key.qualify(
-                            key.consumer_environment_id,
-                            &key.consumer,
-                            key.expected_consumer_fingerprint,
-                        ) == key.session_key
-                            && record.reader_id == reader_id =>
-                    {
-                        if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(StreamStoreError::CorruptHistory(
-                                "consumer terminal journal contains a read-ordinal gap".to_string(),
-                            ));
-                        }
-                        source_offsets.push(record.source_offset);
-                    }
-                    StreamSessionRecord::SourceUnavailable(record)
-                        if record.session_key == session_key && record.reader_id == reader_id =>
-                    {
-                        if record.consumer_read_ordinal != source_offsets.len() as u64 {
-                            return Err(StreamStoreError::CorruptHistory(
-                                "source-unavailable overlay contains a read-ordinal gap"
-                                    .to_string(),
-                            ));
-                        }
-                        match &overlay {
-                            Some(existing) if existing != &record => {
-                                return Err(StreamStoreError::CorruptHistory(
-                                    "conflicting source-unavailable overlays".to_string(),
-                                ));
-                            }
-                            Some(_) => {}
-                            None => overlay = Some(record),
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if let Some(existing) = overlay {
-            return if existing.source_offset == source_offset
-                && existing.consumer_read_ordinal == consumer_read_ordinal
-            {
-                Ok(true)
-            } else {
-                Err(StreamStoreError::AttachmentConflict)
-            };
-        }
-        if source_offsets.len() as u64 != consumer_read_ordinal {
-            return Err(StreamStoreError::ConsumerJournalAdvanced);
-        }
         let record = StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key,
@@ -222,7 +118,24 @@ impl DurableStreamStore {
         )
         .expect("source-unavailable record always identifies a session");
         let entity_parent_start_index = index.session_entity_parent_start_index(&session_key);
-        index.apply_session_references(
+        let mut staged = index.clone();
+        self.refresh_consumer_journals(&mut staged, std::slice::from_ref(&record))
+            .await?;
+        if let Some(journal) = staged
+            .consumer_journals
+            .get(&(session_key.clone(), reader_id))
+            && let Some(existing) = journal.source_unavailable
+        {
+            return if existing == source_offset
+                && journal.next_read_ordinal == consumer_read_ordinal
+            {
+                *index = staged;
+                Ok(true)
+            } else {
+                Err(StreamStoreError::AttachmentConflict)
+            };
+        }
+        staged.apply_session_references(
             entity_parent_start_index,
             &record,
             self.environment_id,
@@ -239,6 +152,7 @@ impl DurableStreamStore {
             ))
             .await?;
         self.commit(context).await?;
+        *index = staged;
         self.notify_session_records_changed(Some(context));
         Ok(false)
     }
@@ -698,17 +612,18 @@ impl DurableStreamStore {
                     open_streams.into_iter().enumerate()
                 {
                     let oplog_index = OplogIndex::from_u64(first_index.as_u64() + position as u64);
-                    records.push(DurableStreamOplogRecord::Cancel(
+                    records.push(DurableStreamOplogRecord::Terminal(
                         entity_parent_start_index,
-                        StreamCancelRecord {
+                        StreamTerminalRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             stream_id,
                             sequence,
                             offset: StreamOffset::new(oplog_index, 0),
-                            authored_by: StreamTerminalAuthor::Protocol,
-                            role: StreamCancelRole::System,
-                            reason: StreamCancelReason::ProducerDeleting,
-                            details: None,
+                            authored_by: StreamTerminalAuthor::Host,
+                            origin: StreamTerminalOrigin::Control,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                                "producer deleting".into(),
+                            )),
                         },
                     ));
                 }
@@ -732,7 +647,7 @@ impl DurableStreamStore {
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
-                OplogEntry::StreamCancel {
+                OplogEntry::StreamTerminal {
                     entity_parent_start_index,
                     record,
                     ..
@@ -742,7 +657,7 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    terminal_events.push(index.apply_cancel(
+                    terminal_events.push(index.apply_terminal(
                         oplog_index,
                         entity_parent_start_index,
                         record,

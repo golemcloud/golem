@@ -273,16 +273,18 @@ fn decode_result(response: &Value) -> BashResult {
     serde_json::from_value(value).unwrap()
 }
 
-// Enqueue a bash run under a fixed key and return once it is accepted, without awaiting it.
-async fn trigger(ctx: &TestContext, cwd: &str, script: &str, key: &str) {
-    trigger_on(ctx, OWNER, cwd, script, key).await;
+// Enqueue a bash run under a request seed and return its accepted invocation UUID.
+async fn trigger(ctx: &TestContext, cwd: &str, script: &str, key: &str) -> String {
+    trigger_on(ctx, OWNER, cwd, script, key).await
 }
 
-async fn trigger_on(ctx: &TestContext, owner: &str, cwd: &str, script: &str, key: &str) {
+async fn trigger_on(ctx: &TestContext, owner: &str, cwd: &str, script: &str, key: &str) -> String {
     let output = ctx
         .cli_with_input(
             [
                 flag::YES,
+                "--format",
+                "json",
                 cmd::TOOL,
                 cmd::INVOKE,
                 "--agent",
@@ -302,6 +304,10 @@ async fn trigger_on(ctx: &TestContext, owner: &str, cwd: &str, script: &str, key
         )
         .await;
     assert!(output.success(), "{}", output.stderr_text());
+    let document: Value = serde_json::from_slice(output.stdout()).unwrap();
+    let accepted = document["response"]["idempotencyKey"].as_str().unwrap();
+    uuid::Uuid::parse_str(accepted).expect("trigger returns the accepted invocation UUID");
+    accepted.to_string()
 }
 
 // Observe an existing invocation by key; input-free lookup never starts a replacement.
@@ -333,6 +339,141 @@ async fn lookup_on(ctx: &TestContext, owner: &str, key: &str) -> Value {
     assert!(output.success(), "{}", output.stderr_text());
     let response: Value = serde_json::from_slice(output.stdout()).unwrap();
     response["response"].clone()
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
+    let ctx = context().await;
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"]["builtin-bash:owner"]["tools"] =
+        serde_json::json!({"bash": {"filesystemAccess": "allowed"}});
+    std::fs::write(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    deploy(&ctx).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/count",
+                get(move || {
+                    let observed = observed.clone();
+                    async move {
+                        format!(
+                            "execution={}\n",
+                            observed.fetch_add(1, Ordering::SeqCst) + 1
+                        )
+                    }
+                }),
+            ),
+        )
+        .with_graceful_shutdown(async {
+            let _ = stopped.await;
+        })
+        .await
+        .unwrap();
+    });
+    let seed = "component-tool-final-lookup-not-a-uuid";
+    let script = format!("curl -s -m 10 http://{address}/count");
+    let output = ctx
+        .cli_with_input(
+            [
+                flag::YES,
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "builtin-bash:owner",
+                "--idempotency-key",
+                seed,
+                "bash",
+                "--",
+                "run",
+                "--timeout",
+                "10",
+                "--",
+                &script,
+            ],
+            &[],
+        )
+        .await;
+    assert!(output.success(), "{}", output.stderr_text());
+    let document: Value = serde_json::from_slice(output.stdout()).unwrap();
+    let receipt = &document["response"];
+    let owner: golem_common::model::AgentId =
+        serde_json::from_value(receipt["agentId"].clone()).unwrap();
+    let key = receipt["idempotencyKey"].as_str().unwrap();
+    assert_ne!(key, seed);
+    uuid::Uuid::parse_str(key).expect("the receipt contains the final invocation UUID");
+    assert_result(&decode_result(receipt), "execution=1\n", "", 0);
+    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    for _ in 0..2 {
+        let found = lookup_on(&ctx, &owner, key).await;
+        assert_eq!(found["agentId"], receipt["agentId"]);
+        assert_eq!(found["idempotencyKey"], receipt["idempotencyKey"]);
+        assert_eq!(found["result"], receipt["result"]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    let live_input = ctx.cwd_path_join("live-tool-stdin");
+    std::fs::write(&live_input, []).unwrap();
+    let output = ctx
+        .cli_with_input(
+            [
+                flag::YES,
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "builtin-bash:owner",
+                "--idempotency-key",
+                "component-tool-live-final-lookup-not-a-uuid",
+                "--stdin",
+                live_input.to_str().unwrap(),
+                "bash",
+                "--",
+                "run",
+                "--timeout",
+                "10",
+                "--",
+                &script,
+            ],
+            &[],
+        )
+        .await;
+    assert!(output.success(), "{}", output.stderr_text());
+    let live: Value = serde_json::from_slice(output.stdout()).unwrap();
+    let target: golem_common::model::invocation_session_public::PublicNativeToolTarget =
+        serde_json::from_value(live["target"].clone()).unwrap();
+    let golem_common::model::invocation_session_public::PublicNativeToolTarget::Agent {
+        component_id,
+        agent_id,
+    } = target
+    else {
+        panic!("live receipt must contain the actual accepted owner: {live:#}")
+    };
+    let key = live["idempotencyKey"].as_str().unwrap();
+    uuid::Uuid::parse_str(key).expect("live receipt contains the accepted invocation UUID");
+    assert_ne!(key, "component-tool-live-final-lookup-not-a-uuid");
+    let owner = format!("{component_id}:{agent_id}");
+    for _ in 0..2 {
+        let found = lookup_on(&ctx, &owner, key).await;
+        assert_eq!(found["agentId"]["agentId"], agent_id);
+        assert_eq!(found["agentId"]["componentId"], component_id.to_string());
+        assert_eq!(found["idempotencyKey"], key);
+        assert_result(&decode_result(&found), "execution=2\n", "", 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    let _ = stop.send(());
+    server.await.unwrap();
 }
 
 async fn await_completion(ctx: &TestContext, key: &str) -> BashResult {
@@ -1229,8 +1370,8 @@ async fn bound_bash_recovers_a_crash_while_a_sibling_is_pending() {
         printf diagnostic >&2
         exit 9
     "#};
-    trigger(&ctx, &incoming.cwd, &piped_script, piped_key).await;
-    let piped = crash_at_checkpoint(&ctx, &mut arrived, piped_key).await;
+    let piped_key = trigger(&ctx, &incoming.cwd, &piped_script, piped_key).await;
+    let piped = crash_at_checkpoint(&ctx, &mut arrived, &piped_key).await;
     assert_result(&piped, "completed|pipestatus=0 0", "diagnostic", 9);
     assert_eq!(piped.cwd, "/tmp/builtin-bash/recovery");
 
@@ -1251,14 +1392,14 @@ async fn bound_bash_recovers_a_crash_while_a_sibling_is_pending() {
     );
     // Reader closure must not cancel the accepted sibling call, before or after the crash.
     let closed_key = "bash-pending-closed";
-    trigger(&ctx, &incoming.cwd, &closed_script("closed"), closed_key).await;
-    let closed = crash_at_checkpoint(&ctx, &mut arrived, closed_key).await;
+    let closed_key = trigger(&ctx, &incoming.cwd, &closed_script("closed"), closed_key).await;
+    let closed = crash_at_checkpoint(&ctx, &mut arrived, &closed_key).await;
     assert_result(&closed, &control.stdout, &control.stderr, control.exit_code);
 
     // Crash after completion: the same keys return the recorded results without a new request.
     simulate_crash(&ctx).await;
     for (key, expected) in [(piped_key, &piped), (closed_key, &closed)] {
-        let recorded = await_completion(&ctx, key).await;
+        let recorded = await_completion(&ctx, &key).await;
         assert_result(
             &recorded,
             &expected.stdout,
@@ -1436,8 +1577,8 @@ async fn bound_bash_recovers_a_crash_while_a_background_job_waits() {
     let script = formatdoc! {r#"
         fixture checkpoint "$PWD/background" {address} & wait $!; echo status=$?
     "#};
-    trigger(&ctx, &incoming.cwd, &script, recovered_key).await;
-    let recovered = crash_at_checkpoint(&ctx, &mut arrived, recovered_key).await;
+    let recovered_key = trigger(&ctx, &incoming.cwd, &script, recovered_key).await;
+    let recovered = crash_at_checkpoint(&ctx, &mut arrived, &recovered_key).await;
     // The job shares the script's stdout, so the sibling's output precedes the waiter's line.
     assert_result(&recovered, "completedstatus=0\n", "", 0);
 
@@ -1540,11 +1681,11 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     // recovery re-issues it rather than trying to replay a result that was never recorded.
     let get_key = "bash-http-get-replay";
     let get_script = format!("curl -s http://{address}/checkpoint >/dev/null; echo status=$?");
-    trigger(&ctx, "", &get_script, get_key).await;
+    let get_key = trigger(&ctx, "", &get_script, get_key).await;
     let first_get = next_http_arrival(&mut arrived).await;
     assert_eq!(first_get.method, "GET");
     assert!(!first_get.idempotency_key.is_empty());
-    let pending = lookup(&ctx, get_key).await;
+    let pending = lookup(&ctx, &get_key).await;
     assert_eq!(pending["status"], "pending", "{pending:#}");
     simulate_crash(&ctx).await;
     let resent_get = next_http_arrival(&mut arrived).await;
@@ -1555,7 +1696,7 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     assert_eq!(resent_get.idempotency_key, first_get.idempotency_key);
     drop(first_get);
     resent_get.release.send(()).unwrap();
-    let get_result = await_completion(&ctx, get_key).await;
+    let get_result = await_completion(&ctx, &get_key).await;
     assert_result(&get_result, "status=0\n", "", 0);
 
     // POST: Golem does not assume a POST is idempotent, so an interrupted one is recovered by
@@ -1575,7 +1716,7 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
         let post_key = format!("bash-http-post-replay-{cycle}");
         let post_script =
             format!("curl -s -X POST http://{address}/checkpoint >/dev/null; echo status=$?");
-        trigger_on(&ctx, &owner, "", &post_script, &post_key).await;
+        let post_key = trigger_on(&ctx, &owner, "", &post_script, &post_key).await;
         let first_post = next_http_arrival(&mut arrived).await;
         assert_eq!(first_post.method, "POST", "cycle {cycle}");
         assert!(!first_post.idempotency_key.is_empty(), "cycle {cycle}");
@@ -1608,10 +1749,10 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
         .cli([flag::YES, cmd::AGENT, cmd::INVOKE, keyed_owner, "name"])
         .await;
     assert!(created.success_or_dump());
-    trigger_on(&ctx, keyed_owner, "", &keyed_script, keyed_key).await;
+    let keyed_key = trigger_on(&ctx, keyed_owner, "", &keyed_script, keyed_key).await;
     let first_keyed = next_http_arrival(&mut arrived).await;
     assert_eq!(first_keyed.idempotency_key, "order-42");
-    let pending = lookup_on(&ctx, keyed_owner, keyed_key).await;
+    let pending = lookup_on(&ctx, keyed_owner, &keyed_key).await;
     assert_eq!(pending["status"], "pending", "{pending:#}");
     simulate_crash_on(&ctx, keyed_owner).await;
     drop(first_keyed.release);
@@ -1619,7 +1760,7 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     assert_eq!(resent_keyed.method, "POST");
     assert_eq!(resent_keyed.idempotency_key, "order-42");
     resent_keyed.release.send(()).unwrap();
-    let keyed_result = await_completion_on(&ctx, keyed_owner, keyed_key).await;
+    let keyed_result = await_completion_on(&ctx, keyed_owner, &keyed_key).await;
     assert_result(&keyed_result, "status=0\n", "", 0);
 
     let _ = stop.send(());

@@ -1164,12 +1164,13 @@ impl ReplayState {
         }
     }
 
-    /// Reads the `AgentInvocationFinished` that ends the replayed invocation `invocation_id`.
-    /// A recorded terminal naming another invocation is a divergence.
+    /// The index and result of the `AgentInvocationFinished` for `invocation_id`, or `None`
+    /// when no replay remains or at the natural replay tail. A recorded terminal naming another
+    /// invocation is a divergence.
     pub async fn get_oplog_entry_agent_invocation_finished(
         &self,
         invocation_id: &golem_common::model::InvocationId,
-    ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
+    ) -> Result<Option<(OplogIndex, AgentInvocationResult)>, WorkerExecutorError> {
         // The walk to the finished marker tolerates live-only abandoned durable-call records
         // (see `AbandonedStarts`): the replayed guest has already produced its invocation
         // result, so any still-unclaimed `Start` (and its terminal) can never be claimed and is
@@ -1178,7 +1179,7 @@ impl ReplayState {
         let mut abandoned = AbandonedStarts::default();
         loop {
             if self.has_replay_remaining() {
-                let Some((_, oplog_entry)) = self
+                let Some((index, oplog_entry)) = self
                     .get_oplog_entry_at_invocation_boundary(&mut abandoned)
                     .await?
                 else {
@@ -1211,7 +1212,7 @@ impl ReplayState {
                                 ))
                             })?;
 
-                        break Ok(Some(result));
+                        break Ok(Some((index, result)));
                     }
                     entry if entry.is_hint() => {}
                     _ => {

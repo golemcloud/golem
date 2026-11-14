@@ -69,7 +69,7 @@ impl CallKey {
     }
 }
 
-/// An input that never has data and never ends: the stdin stays open until it is cancelled.
+/// An input that never has data and never ends: the stdin stays open until it is stopped.
 struct OpenInput;
 
 impl tokio::io::AsyncRead for OpenInput {
@@ -83,7 +83,7 @@ impl tokio::io::AsyncRead for OpenInput {
 }
 
 /// Runs one `run` call through the live session and gives its accepted key to `key`. With
-/// `stdin`, the call has an open, empty stdin and `stop` cancels it, which asks the tool to stop
+/// `stdin`, the call has an open, empty stdin and `stop` fails it, which asks the tool to stop
 /// the script; without it `stop` does nothing. `give_up` leaves the call running and returns the
 /// transport's `Interrupted` error.
 #[allow(clippy::too_many_arguments)]
@@ -118,6 +118,7 @@ pub(super) async fn run_live(
             version: INVOCATION_SESSION_VERSION,
         }),
         session_token: None,
+        accepted_invocation: None,
     };
     let requests = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
     open_and_drive(
@@ -250,6 +251,7 @@ mod tests {
                 version: INVOCATION_SESSION_VERSION,
             }),
             session_token: None,
+            accepted_invocation: None,
         };
         let call = open_and_drive(
             Arc::new(Unreachable(address)),

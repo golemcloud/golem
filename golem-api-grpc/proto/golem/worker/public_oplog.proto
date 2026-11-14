@@ -73,8 +73,7 @@ message OplogEntry {
     CardTransferConfirmedParameters CardTransferConfirmed = 59;
     DurableStreamRecordParameters StreamRegistered = 60;
     DurableStreamRecordParameters StreamItems = 61;
-    DurableStreamRecordParameters StreamEnd = 62;
-    DurableStreamRecordParameters StreamCancel = 63;
+    DurableStreamRecordParameters StreamTerminal = 62;
     DurableStreamRecordParameters StreamSession = 64;
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;
@@ -425,6 +424,11 @@ message ErrorParameters {
   optional golem.common.UUID invocation_id = 7;
 }
 
+message OplogRegion {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
 message JumpParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start = 2;
@@ -627,6 +631,7 @@ message SuccessfulUpdateParameters {
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
   optional SnapshotAssistedUpdateDetails snapshot_assisted_details = 11;
+  optional OplogRegion bootstrap = 12;
 }
 
 message SnapshotAssistedUpdateDetails {
@@ -727,6 +732,7 @@ message SnapshotDataParameters {
     MultipartSnapshotData multipart = 4;
   }
   optional string filesystem_snapshot = 5;
+  optional OplogRegion bootstrap = 6;
 }
 
 message SnapshotConfirmedParameters {
@@ -775,6 +781,7 @@ message OplogProcessorCheckpointParameters {
   uint64 confirmed_up_to = 4;
   uint64 sending_up_to = 5;
   uint64 last_batch_start = 6;
+  uint64 source_component_revision = 7;
 }
 
 message OplogEntryWithIndex {

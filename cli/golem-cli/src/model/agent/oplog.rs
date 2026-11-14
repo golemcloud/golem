@@ -519,6 +519,12 @@ impl TextOutput for PublicOplogEntry {
                         format_id(&details.snapshot_index),
                     ));
                 }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
+                }
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
@@ -730,6 +736,12 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(name) = &params.filesystem_snapshot {
                     logln(format!("{pad}filesystem:        {}", format_id(name)));
                 }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
+                }
                 log_snapshot_data(pad, &params.data);
             }
             PublicOplogEntry::SnapshotConfirmed(params) => {
@@ -899,19 +911,8 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.record)
                 ));
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                logln(format_message_highlight("STREAM END"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}record:            {}",
-                    typed_schema_value_to_string(&params.record)
-                ));
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                logln(format_message_highlight("STREAM CANCEL"));
+            PublicOplogEntry::StreamTerminal(params) => {
+                logln(format_message_highlight("STREAM TERMINAL"));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -1647,7 +1648,7 @@ mod tests {
     #[test]
     fn oplog_typed_values_show_safe_secret_metadata() {
         let secret_id = uuid::Uuid::from_u128(1);
-        let permission_card_id = uuid::Uuid::from_u128(2);
+        let permission_card_id = uuid::Uuid::from_u128(0xca4d);
         let schema = SchemaType::record(vec![
             NamedFieldType {
                 name: "credential".to_string(),

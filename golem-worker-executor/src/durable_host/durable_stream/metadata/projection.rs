@@ -563,7 +563,7 @@ pub(crate) async fn project_producer_metadata(
                     )
                     .map_err(|error| error.to_string())?;
             }
-            OplogEntry::StreamEnd {
+            OplogEntry::StreamTerminal {
                 entity_parent_start_index,
                 record,
                 ..
@@ -579,26 +579,7 @@ pub(crate) async fn project_producer_metadata(
                 projection.stream(stream_id).await?;
                 projection
                     .index
-                    .apply_end(*index, *entity_parent_start_index, record, fingerprint)
-                    .map_err(|error| error.to_string())?;
-            }
-            OplogEntry::StreamCancel {
-                entity_parent_start_index,
-                record,
-                ..
-            } => {
-                let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                let stream_id = qualify_local_stream(
-                    record.stream_id,
-                    owner.environment_id,
-                    &owner.agent_id,
-                    fingerprint,
-                )
-                .map_err(|error| error.to_string())?;
-                projection.stream(stream_id).await?;
-                projection
-                    .index
-                    .apply_cancel(*index, *entity_parent_start_index, record, fingerprint)
+                    .apply_terminal(*index, *entity_parent_start_index, record, fingerprint)
                     .map_err(|error| error.to_string())?;
             }
             OplogEntry::StreamSession {

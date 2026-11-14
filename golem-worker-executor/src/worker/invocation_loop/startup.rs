@@ -249,9 +249,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         *self.parent.unload_cleanup.lock().unwrap() = Some(cleanup);
                         FinalWorkerState::CleanupFailed(err.clone())
                     } else {
-                        FinalWorkerState::Unloaded {
-                            startup_failure: Some(err.clone()),
-                        }
+                        StartupFailure::new(self.parent.agent_mode(), err.clone()).into()
                     };
                     self.parent
                         .stop_internal(

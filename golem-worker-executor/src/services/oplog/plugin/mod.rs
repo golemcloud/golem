@@ -100,6 +100,7 @@ struct LivePluginState {
     sending_up_to: OplogIndex,
     send_in_progress: bool,
     last_batch_start: OplogIndex,
+    delivery: Option<Vec<u8>>,
 }
 
 #[async_trait]

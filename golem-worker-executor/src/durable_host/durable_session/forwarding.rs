@@ -284,31 +284,6 @@ pub fn durable_stream_mapping_from_proto(
     })
 }
 
-pub(super) fn stream_cancel_reason_to_proto(
-    reason: StreamCancelReason,
-) -> golem_api_grpc::proto::golem::worker::StreamCancelReason {
-    match reason {
-        StreamCancelReason::Cancelled => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::Cancelled
-        }
-        StreamCancelReason::GuestDrop => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop
-        }
-        StreamCancelReason::Protocol => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol
-        }
-        StreamCancelReason::InvocationFailed => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::InvocationFailed
-        }
-        StreamCancelReason::SourceUnavailable => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-        }
-        StreamCancelReason::ProducerDeleting => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
-        }
-    }
-}
-
 impl ForwardedDurableInput {
     /// Selects a stable owner-journal destination without activating its attachment.
     pub(super) async fn prepare_mapping_owned(

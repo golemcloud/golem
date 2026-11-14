@@ -484,7 +484,7 @@ paths:
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
         The data field is sent back to the worker, and it has no predefined meaning.
       parameters:
       - name: component_id
@@ -4104,11 +4104,16 @@ components:
       title: CompleteParameters
       required:
       - oplogIdx
+      - fingerprint
       - data
       properties:
         oplogIdx:
           type: integer
           format: uint64
+        fingerprint:
+          type: string
+          format: uuid
+          description: Fingerprint of the agent incarnation that created the promise.
         data:
           type: array
           items:
@@ -6533,8 +6538,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -6593,8 +6597,7 @@ components:
           ToolAttachmentControl: '#/components/schemas/PublicOplogEntry_r#ToolAttachmentControlParams'
           StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
           StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
-          StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
-          StreamCancel: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+          StreamTerminal: '#/components/schemas/PublicOplogEntry_r#StreamTerminalParams'
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
@@ -7225,30 +7228,6 @@ components:
             - Start
             example: Start
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StreamCancelParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - StreamCancel
-            example: StreamCancel
-      - $ref: '#/components/schemas/r#StreamCancelParams'
-    PublicOplogEntry_r#StreamEndParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - StreamEnd
-            example: StreamEnd
-      - $ref: '#/components/schemas/r#StreamEndParams'
     PublicOplogEntry_r#StreamItemsParams:
       allOf:
       - type: object
@@ -7285,6 +7264,18 @@ components:
             - StreamSession
             example: StreamSession
       - $ref: '#/components/schemas/r#StreamSessionParams'
+    PublicOplogEntry_r#StreamTerminalParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StreamTerminal
+            example: StreamTerminal
+      - $ref: '#/components/schemas/r#StreamTerminalParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -10754,6 +10745,7 @@ components:
       required:
       - timestamp
       - plugin
+      - sourceComponentRevision
       - targetAgentId
       - confirmedUpTo
       - sendingUpTo
@@ -10764,6 +10756,9 @@ components:
           format: date-time
         plugin:
           $ref: '#/components/schemas/PluginInstallationDescription'
+        sourceComponentRevision:
+          type: integer
+          format: uint64
         targetAgentId:
           $ref: '#/components/schemas/AgentId'
         confirmedUpTo:
@@ -10938,6 +10933,8 @@ components:
           $ref: '#/components/schemas/PublicSnapshotData'
         filesystemSnapshot:
           type: string
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SpanClosedParams:
       type: object
       title: r#SpanClosedParams
@@ -10982,30 +10979,6 @@ components:
           $ref: '#/components/schemas/PublicSpanStarted'
         denial:
           type: string
-    r#StreamCancelParams:
-      type: object
-      title: r#StreamCancelParams
-      required:
-      - timestamp
-      - record
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
-    r#StreamEndParams:
-      type: object
-      title: r#StreamEndParams
-      required:
-      - timestamp
-      - record
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        record:
-          $ref: '#/components/schemas/TypedSchemaValue'
     r#StreamItemsParams:
       type: object
       title: r#StreamItemsParams
@@ -11042,6 +11015,18 @@ components:
           format: date-time
         record:
           $ref: '#/components/schemas/TypedSchemaValue'
+    r#StreamTerminalParams:
+      type: object
+      title: r#StreamTerminalParams
+      required:
+      - timestamp
+      - record
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
     r#SuccessfulUpdateParams:
       type: object
       title: r#SuccessfulUpdateParams
@@ -11066,6 +11051,8 @@ components:
             $ref: '#/components/schemas/PluginInstallationDescription'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
+        bootstrap:
+          $ref: '#/components/schemas/OplogRegion'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

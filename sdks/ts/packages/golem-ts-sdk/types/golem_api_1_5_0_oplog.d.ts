@@ -528,6 +528,8 @@ declare module 'golem:api/oplog@1.5.0' {
     newComponentSize: bigint;
     newActivePlugins: PluginInstallationDescription[];
     snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+    /** The entries of the durable calls that the target revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -684,6 +686,8 @@ declare module 'golem:api/oplog@1.5.0' {
     data: SnapshotData;
     /** The filesystem snapshot taken with the application snapshot, if any */
     filesystemSnapshot?: string;
+    /** The entries of the durable calls that the running revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   /**
    * The store holds the named filesystem snapshot from this point
@@ -704,6 +708,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     plugin: PluginInstallationDescription;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
@@ -900,6 +905,12 @@ declare module 'golem:api/oplog@1.5.0' {
     transition: TypedSchemaValue;
   };
   export type DurableStreamOutcome = "success" | "error";
+  export type DurableStreamTerminalOutcome = "finished" | "failed" | "consumer-cancelled";
+  export type StreamTerminalOrigin = "source" | "control";
+  export type DurableStreamTerminalSummary = {
+    outcome: DurableStreamTerminalOutcome;
+    origin: StreamTerminalOrigin;
+  };
   export type DurableStreamEventSummary =
   {
     tag: 'registered'
@@ -909,11 +920,8 @@ declare module 'golem:api/oplog@1.5.0' {
     val: bigint
   } |
   {
-    tag: 'end'
-    val: DurableStreamOutcome
-  } |
-  {
-    tag: 'cancelled'
+    tag: 'terminal'
+    val: DurableStreamTerminalSummary
   } |
   {
     tag: 'session-result'
@@ -980,6 +988,8 @@ declare module 'golem:api/oplog@1.5.0' {
     snapshotRevision: ComponentRevision;
     /** The filesystem snapshot of the selected record, if it has one */
     filesystemSnapshot?: string;
+    /** The bootstrap range of the selected record, if it has one */
+    snapshotBootstrap?: OplogRegion;
   };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;
@@ -1017,6 +1027,8 @@ declare module 'golem:api/oplog@1.5.0' {
     newComponentSize: bigint;
     newActivePlugins: EnvironmentPluginGrantId[];
     snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+    /** The entries of the durable calls that the target revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type ResourceTypeId = {
     name: string;
@@ -1052,14 +1064,18 @@ declare module 'golem:api/oplog@1.5.0' {
     activeCards: Uint8Array[];
     walletGeneration: bigint;
     filesystemSnapshot?: string;
+    /** The entries of the durable calls that the running revision's initializer made, if any */
+    bootstrap?: OplogRegion;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
     pluginGrantId: EnvironmentPluginGrantId;
+    sourceComponentRevision: ComponentRevision;
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
     lastBatchStart: OplogIndex;
+    delivery?: Uint8Array;
   };
   export type OplogEntry =
   /** The initial agent oplog entry */
@@ -1299,14 +1315,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'stream-items'
     val: RawDurableStreamRecordParameters
   } |
-  /** Records a durable stream end terminal */
+  /** Records the unique outcome or consumer cancellation of a durable stream */
   {
-    tag: 'stream-end'
-    val: RawDurableStreamRecordParameters
-  } |
-  /** Records a durable stream cancellation terminal */
-  {
-    tag: 'stream-cancel'
+    tag: 'stream-terminal'
     val: RawDurableStreamRecordParameters
   } |
   /** Records durable Stream Session state and consumer-journal facts */
@@ -1579,14 +1590,9 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'stream-items'
     val: DurableStreamRecordParameters
   } |
-  /** Records a durable stream end terminal */
+  /** Records the unique outcome or consumer cancellation of a durable stream */
   {
-    tag: 'stream-end'
-    val: DurableStreamRecordParameters
-  } |
-  /** Records a durable stream cancellation terminal */
-  {
-    tag: 'stream-cancel'
+    tag: 'stream-terminal'
     val: DurableStreamRecordParameters
   } |
   /** Records durable Stream Session state and consumer-journal facts */

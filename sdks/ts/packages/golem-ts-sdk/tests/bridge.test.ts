@@ -150,15 +150,14 @@ describe('public bridge runtime', () => {
       graph: { defs: new Map(), root: bridge.t.string() },
       value: bridge.v.string('ok'),
     });
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => Promise.resolve({ result: wire }),
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => Promise.resolve({ result: wire }),
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const invocation = runtime.start(
       ['status'],
       {
@@ -175,7 +174,7 @@ describe('public bridge runtime', () => {
 
   it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
     const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
-    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
       throw error;
     });
     const transport = bridge.createToolClientTransport('invalid name');
@@ -206,15 +205,14 @@ describe('public bridge runtime', () => {
       {},
       { wait: vi.fn(() => consumptionClosed) },
     ] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => new Promise<never>(() => {}),
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => new Promise<never>(() => {}),
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const cancelSource = vi.fn();
     let markReadStarted!: () => void;
     const readStarted = new Promise<void>((resolve) => {
@@ -251,15 +249,14 @@ describe('public bridge runtime', () => {
       {},
       { wait: vi.fn(() => new Promise(() => undefined)) },
     ] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: getResult,
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: getResult,
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array());
@@ -293,15 +290,14 @@ describe('public bridge runtime', () => {
       {},
       { wait: vi.fn(() => new Promise(() => undefined)) },
     ] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => new Promise<never>(() => {}),
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => new Promise<never>(() => {}),
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.error(new bridge.ToolStreamError(failure));
@@ -324,15 +320,14 @@ describe('public bridge runtime', () => {
       {},
       { wait: vi.fn(() => new Promise(() => undefined)) },
     ] as never);
-    vi.mocked(ToolRpc).mockImplementationOnce(
-      () =>
-        ({
-          asyncInvokeAndAwait: vi.fn(() => ({
-            get: () => new Promise<never>(() => {}),
-            cancel: vi.fn(),
-          })),
-        }) as never,
-    );
+    vi.mocked(ToolRpc).mockImplementationOnce(function () {
+      return {
+        asyncInvokeAndAwait: vi.fn(() => ({
+          get: () => new Promise<never>(() => {}),
+          cancel: vi.fn(),
+        })),
+      } as never;
+    });
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.error(new Error('unknown source failure'));

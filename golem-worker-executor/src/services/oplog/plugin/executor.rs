@@ -34,7 +34,6 @@ type WorkerKey = (EnvironmentId, PluginRegistrationId);
 #[derive(Debug, Clone)]
 struct RunningPlugin {
     pub owned_agent_id: OwnedAgentId,
-    pub configuration: BTreeMap<String, String>,
     pub component_revision: ComponentRevision,
 }
 
@@ -88,7 +87,6 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                         };
                         let running_plugin = RunningPlugin {
                             owned_agent_id: owned_agent_id.clone(),
-                            configuration: plugin.parameters.clone(),
                             component_revision: plugin_component_revision,
                         };
                         workers.insert(key, running_plugin.clone());
@@ -199,8 +197,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     AgentInvocation::ProcessOplogEntries {
                         idempotency_key,
                         account_id,
-                        config: running_plugin
-                            .configuration
+                        config: plugin
+                            .parameters
                             .iter()
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect(),
@@ -295,8 +293,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     running_plugin.component_revision,
                     idempotency_key,
                     worker_metadata.created_by,
-                    running_plugin
-                        .configuration
+                    plugin
+                        .parameters
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),

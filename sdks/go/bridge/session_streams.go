@@ -36,34 +36,44 @@ type inputStream struct {
 	token       string
 	channel     uint32
 
-	next         uint64
-	pending      *pendingInput
-	ended        bool
-	cancelled    bool
-	cancelReason string
-	pumping      bool
+	next      uint64
+	pending   *pendingInput
+	ended     bool
+	cancelled bool
+	pumping   bool
 	// endAfter is set when the source ended while a packed batch was being
 	// filled; the end is sent after that batch.
-	endAfter bool
-	wake     chan struct{}
+	endAfter      bool
+	sourceFailure error
+	failureBytes  int
+	wake          chan struct{}
 }
 
 type pendingInput struct {
 	first    uint64
 	count    uint64
 	terminal bool
-	lane     lane
-	value    json.RawMessage
-	payload  []byte
-	mime     *string
-	bytes    int
+	// A packed batch may carry the source failure that follows its bytes.
+	failure error
+	lane    lane
+	value   json.RawMessage
+	payload []byte
+	mime    *string
+	bytes   int
 }
 
 func (p *pendingInput) frame(channel uint32) (outFrame, error) {
 	sequence := strconv.FormatUint(p.first, 10)
 	switch {
 	case p.terminal:
-		data, err := encodeMessage("inputStreamEnd", map[string]any{"channel": channel, "sequence": sequence})
+		outcome := map[string]any{"kind": "finished"}
+		if p.failure != nil {
+			outcome = map[string]any{"kind": "failed", "error": map[string]any{"kind": "interrupted", "message": p.failure.Error()}}
+		}
+		data, err := encodeMessage("stream-end", map[string]any{"channel": channel, "direction": "input", "outcome": outcome, "sequence": sequence})
+		if err == nil && len(data) > maxMessageBytes {
+			err = errors.New("golem: the input stream terminal exceeds the frame budget")
+		}
 		return outFrame{data: data}, err
 	case p.lane == laneU8:
 		data, err := encodeBinary("input-u8", channel, p.first, len(p.payload), nil, p.payload)
@@ -94,11 +104,15 @@ func (in *inputStream) sendPending() {
 
 // release forgets the range in flight. Called with s.mu held.
 func (in *inputStream) release() {
-	if in.pending == nil {
-		return
+	if in.cancelled && in.failureBytes != 0 {
+		in.s.unacked -= in.failureBytes
+		in.failureBytes = 0
+		in.sourceFailure = nil
 	}
-	in.s.unacked -= in.pending.bytes
-	in.pending = nil
+	if in.pending != nil {
+		in.s.unacked -= in.pending.bytes
+		in.pending = nil
+	}
 	for _, other := range in.s.byToken {
 		poke(other.wake)
 	}
@@ -131,6 +145,9 @@ func (in *inputStream) remap(channel uint32, high uint64, terminal bool) error {
 	if p != nil && !p.terminal && (high < p.first || high > p.first+p.count) {
 		return protocolErrorf("the input high-water conflicts with the range in flight")
 	}
+	if p != nil && p.terminal && high != p.first {
+		return protocolErrorf("the input high-water conflicts with the terminal in flight")
+	}
 	if terminal && !in.ended {
 		return protocolErrorf("the server reports an input end that was never sent")
 	}
@@ -149,9 +166,6 @@ func (in *inputStream) remap(channel uint32, high uint64, terminal bool) error {
 		}
 	}
 	in.sendPending()
-	if in.cancelReason != "" && !terminal {
-		in.s.sendCancel(channel, in.cancelReason)
-	}
 	if !in.pumping && !in.ended {
 		in.pumping = true
 		go in.pump()
@@ -175,6 +189,9 @@ func (in *inputStream) acknowledge(high uint64, terminal bool) error {
 	if !p.terminal && (high < p.first || high > p.first+p.count) {
 		return protocolErrorf("an input acknowledgement conflicts with the range in flight")
 	}
+	if p.terminal && high != p.first {
+		return protocolErrorf("an input acknowledgement conflicts with the terminal in flight")
+	}
 	if terminal && !in.ended {
 		return protocolErrorf("an input acknowledgement reports an end that was never sent")
 	}
@@ -195,7 +212,7 @@ func (in *inputStream) pump() {
 		p, err := in.produce()
 		if err != nil {
 			if in.s.life.Err() == nil {
-				in.unavailable()
+				in.unavailable(err)
 				// An item its schema does not accept, or one the protocol
 				// cannot send, is the caller's mistake, not the source's, so
 				// the call fails with it.
@@ -214,7 +231,8 @@ func (in *inputStream) pump() {
 }
 
 // idle waits until the next range may be read: nothing in flight, and the
-// session's unacknowledged budget not spent.
+// session's unacknowledged budget not spent. A deferred terminal already
+// holds its reservation and needs no further budget.
 func (in *inputStream) idle() bool {
 	s := in.s
 	s.mu.Lock()
@@ -223,7 +241,7 @@ func (in *inputStream) idle() bool {
 			s.mu.Unlock()
 			return false
 		}
-		if in.pending == nil && s.unacked < maxUnacked {
+		if in.pending == nil && (in.failureBytes != 0 || s.unacked < maxUnacked) {
 			s.mu.Unlock()
 			return true
 		}
@@ -238,7 +256,10 @@ func (in *inputStream) idle() bool {
 
 func (in *inputStream) produce() (*pendingInput, error) {
 	if in.endAfter {
-		return &pendingInput{terminal: true}, nil
+		in.s.mu.Lock()
+		failure := in.sourceFailure
+		in.s.mu.Unlock()
+		return &pendingInput{terminal: true, failure: failure}, nil
 	}
 	v, ok, err := in.h.next(in.s.life)
 	if err != nil {
@@ -254,10 +275,18 @@ func (in *inputStream) produce() (*pendingInput, error) {
 			return nil, &StreamItemError{Err: Mismatch("u8", v)}
 		}
 		payload := []byte{b.Value}
+		var failure error
 		for len(payload) < maxPackedBytes && in.h.ready() {
 			v, ok, err := in.h.next(in.s.life)
 			if err != nil {
-				return nil, err
+				var invalid *EncodeError
+				var unsendable *StreamItemError
+				if errors.As(err, &invalid) || errors.As(err, &unsendable) {
+					return nil, err
+				}
+				in.endAfter = true
+				failure = errors.New(err.Error())
+				break
 			}
 			if !ok {
 				in.endAfter = true
@@ -269,7 +298,7 @@ func (in *inputStream) produce() (*pendingInput, error) {
 			}
 			payload = append(payload, b.Value)
 		}
-		return &pendingInput{count: uint64(len(payload)), lane: laneU8, payload: payload, bytes: len(payload)}, nil
+		return &pendingInput{count: uint64(len(payload)), lane: laneU8, payload: payload, bytes: len(payload), failure: failure}, nil
 	case laneBinary:
 		b, ok := v.(schema.BinaryValue)
 		if !ok {
@@ -302,11 +331,43 @@ func (in *inputStream) produce() (*pendingInput, error) {
 func (in *inputStream) reserve(p *pendingInput) bool {
 	s := in.s
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.over || in.cancelled {
+		s.mu.Unlock()
 		return false
 	}
 	p.first = in.next
+	failure := p.failure
+	if failure != nil && in.failureBytes == 0 {
+		// Charge the complete escaped frame, including the largest channel
+		// number a new attachment can assign. Replays keep the same charge.
+		terminal := pendingInput{first: in.next + p.count, terminal: true, failure: failure}
+		var frame outFrame
+		var err error
+		if len(failure.Error()) > maxUnacked {
+			err = errors.New("golem: the input stream failure diagnostic exceeds the unacknowledged input budget")
+		} else {
+			frame, err = terminal.frame(^uint32(0))
+		}
+		if err == nil && (len(frame.data) > maxMessageBytes || len(frame.data) > maxUnacked || len(frame.data) > maxUnacked-s.unacked-p.bytes) {
+			err = errors.New("golem: the input stream failure diagnostic exceeds the unacknowledged input or frame budget")
+		}
+		if err != nil {
+			s.mu.Unlock()
+			s.abort(&StreamItemError{Err: err})
+			return false
+		}
+		in.failureBytes = len(frame.data)
+		s.unacked += in.failureBytes
+	}
+	if p.terminal && p.failure != nil {
+		p.bytes = in.failureBytes
+		in.failureBytes = 0
+		in.sourceFailure = nil
+		// The diagnostic is already charged; ownership moves to the terminal.
+		s.unacked -= p.bytes
+	} else if p.failure != nil {
+		in.sourceFailure = p.failure
+	}
 	in.next += p.count
 	in.pending = p
 	s.unacked += p.bytes
@@ -314,22 +375,14 @@ func (in *inputStream) reserve(p *pendingInput) bool {
 		in.ended = true
 	}
 	in.sendPending()
+	s.mu.Unlock()
 	return true
 }
 
-// unavailable reports a source that failed: the server sees the input
-// cancelled as source-unavailable.
-func (in *inputStream) unavailable() {
-	s := in.s
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	in.cancelReason = "source-unavailable"
-	in.cancelled = true
-	in.ended = true
-	in.release()
-	if in.channel != 0 {
-		s.sendCancel(in.channel, in.cancelReason)
-	}
+// unavailable retains the sequenced producer failure until terminal ACK,
+// exactly like EOF, so a lost attachment cannot turn a failure into EOF.
+func (in *inputStream) unavailable(err error) {
+	in.reserve(&pendingInput{terminal: true, failure: errors.New(err.Error())})
 }
 
 // registerNested gives each stream inside an input item a provisional
@@ -886,7 +939,7 @@ func mapTypedStreams(
 // CallStreaming invokes a method that takes or returns a stream, over an
 // invocation session, and decodes what it returns. It returns once the result
 // arrives; streams in the result go on reading from the session. Cancelling
-// ctx before then cancels the call and its streams.
+// ctx before then detaches the socket without cancelling the invocation.
 func CallStreaming[T any](ctx context.Context, a *Agent, method string, params schema.SchemaValue, f Decoder[T]) (T, error) {
 	var zero T
 	s, err := openSession(a, method, params)

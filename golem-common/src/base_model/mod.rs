@@ -332,17 +332,9 @@ impl AsRef<AgentId> for &AgentId {
     }
 }
 
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
+// The schema of `PromiseId` is implemented in `schema::common_impls`: it follows the WIT
+// `promise-id` record, whose `fingerprint` is a plain `uuid`.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -352,18 +344,30 @@ impl AsRef<AgentId> for &AgentId {
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
     pub agent_id: AgentId,
+    /// The incarnation of the agent that created the promise. A re-created agent keeps its
+    /// agent ID but gets a new fingerprint, so this tells apart the promises of the two.
+    pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
     pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.agent_id.to_redis_key(), self.oplog_idx)
+        format!(
+            "{}:{}:{}",
+            self.agent_id.to_redis_key(),
+            self.fingerprint,
+            self.oplog_idx
+        )
     }
 }
 
 impl Display for PromiseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
+        write!(
+            f,
+            "{}/{}/{}",
+            self.agent_id, self.fingerprint, self.oplog_idx
+        )
     }
 }
 

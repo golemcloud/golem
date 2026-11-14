@@ -32,7 +32,7 @@ use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::oplog::{
     self, AgentResourceId, FilesystemSnapshotName, OplogEntry, OplogIndex, QueuedCardEvent,
 };
-use crate::model::regions::DeletedRegions;
+use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
     AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
@@ -40,7 +40,7 @@ use crate::model::{
     RetryConfig, RetryPolicyState, Timestamp,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
@@ -144,17 +144,7 @@ impl AgentFilter {
                 result
             }
             AgentFilter::Or(AgentOrFilter { filters }) => {
-                let mut result = true;
-                if !filters.is_empty() {
-                    result = false;
-                    for filter in filters {
-                        if filter.matches(metadata) {
-                            result = true;
-                            break;
-                        }
-                    }
-                }
-                result
+                filters.iter().any(|filter| filter.matches(metadata))
             }
         }
     }
@@ -503,6 +493,8 @@ pub struct AutomaticSnapshot {
     pub component_revision: ComponentRevision,
     /// The filesystem snapshot that the entry names, with its confirmation.
     pub files: SnapshotFiles,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
@@ -554,6 +546,7 @@ impl AutomaticSnapshot {
             index: self.index,
             component_revision: self.component_revision,
             filesystem_snapshot,
+            bootstrap: self.bootstrap,
         })
     }
 }
@@ -570,6 +563,8 @@ pub struct UsableAutomaticSnapshot {
     /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
     /// `None` when the entry has no filesystem snapshot name.
     pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    /// The bootstrap range that the entry names.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 /// Contains status information about a worker according to a given oplog index.
@@ -600,8 +595,10 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
-    pub pending_durable_stream_cancellations:
-        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    pub pending_durable_stream_cancellations: HashMap<
+        (crate::model::durable_stream::StreamRecordReference, u64),
+        Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
+    >,
     pub current_idempotency_key: Option<InvocationId>,
     /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
     pub current_invocation_started_at: Option<OplogIndex>,
@@ -670,7 +667,7 @@ impl Default for AgentStatusRecord {
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
-            pending_durable_stream_cancellations: HashSet::new(),
+            pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             current_invocation_started_at: None,
             component_revision: ComponentRevision::INITIAL,
@@ -1350,6 +1347,11 @@ pub struct AuthoritativeSnapshot {
     /// snapshot-assisted automatic update selected.
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
+    /// The bootstrap range that the successful update names: the entries of the durable calls
+    /// that the target revision's core initializer claimed while the update instantiated it, its
+    /// own block for a snapshot-based update and the selected record's block for a
+    /// snapshot-assisted one.
+    pub bootstrap: Option<OplogRegion>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1369,6 +1371,7 @@ pub struct OplogProcessorCheckpointState {
     pub confirmed_up_to: OplogIndex,
     pub sending_up_to: OplogIndex,
     pub last_batch_start: OplogIndex,
+    pub delivery: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1429,6 +1432,7 @@ impl PendingUpdateKind {
                 snapshot_index,
                 snapshot_revision,
                 filesystem_snapshot,
+                snapshot_bootstrap,
                 ..
             } => Self::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index: *source_revision_start_index,
@@ -1436,6 +1440,7 @@ impl PendingUpdateKind {
                     index: *snapshot_index,
                     component_revision: *snapshot_revision,
                     filesystem_snapshot: filesystem_snapshot.clone(),
+                    bootstrap: snapshot_bootstrap.clone(),
                 },
             })),
             oplog::UpdateDescription::SnapshotBased {

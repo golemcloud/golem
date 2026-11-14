@@ -65,3 +65,13 @@ func TestEntriesSwitchOnTheCaseConstants(t *testing.T) {
 		t.Fatalf("unexpected tag %d", e.Tag())
 	}
 }
+
+func TestCheckpointPreservesSourceComponentRevision(t *testing.T) {
+	const revision uint64 = 9007199254740993
+	entry := oplogwit.MakePublicOplogEntryOplogProcessorCheckpoint(oplogwit.OplogProcessorCheckpointParameters{
+		SourceComponentRevision: revision,
+	})
+	if got := entry.OplogProcessorCheckpoint().SourceComponentRevision; got != revision {
+		t.Fatalf("source component revision = %d, want %d", got, revision)
+	}
+}

@@ -35,8 +35,7 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
 use crate::model::Empty;
 use crate::model::card::CardId;
@@ -57,9 +56,8 @@ use crate::model::oplog::public_oplog_entry::{
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
@@ -331,6 +329,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             })
                         })
                         .transpose()?,
+                    bootstrap: successful_update.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -522,6 +521,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
                     filesystem_snapshot: snapshot.filesystem_snapshot,
+                    bootstrap: snapshot.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::SnapshotConfirmed(value) => Ok(
@@ -545,6 +545,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     plugin: value.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    source_component_revision: value.source_component_revision.try_into()?,
                     target_agent_id: value
                         .target_agent_id
                         .ok_or("Missing target_agent_id field")?
@@ -755,14 +756,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
             }
-            oplog_entry::Entry::StreamEnd(params) => {
-                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
-                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
-                    record: params.record.ok_or("Missing record field")?.try_into()?,
-                }))
-            }
-            oplog_entry::Entry::StreamCancel(params) => {
-                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+            oplog_entry::Entry::StreamTerminal(params) => {
+                Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
@@ -1001,6 +996,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                         snapshot_index: details.snapshot_index.into(),
                                     }
                                 }),
+                            bootstrap: successful_update.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -1242,6 +1238,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
                             filesystem_snapshot: snapshot.filesystem_snapshot,
+                            bootstrap: snapshot.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -1277,6 +1274,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::OplogProcessorCheckpointParameters {
                             timestamp: Some(params.timestamp.into()),
                             plugin: Some(params.plugin.into()),
+                            source_component_revision: params.source_component_revision.into(),
                             target_agent_id: Some(params.target_agent_id.into()),
                             confirmed_up_to: params.confirmed_up_to.into(),
                             sending_up_to: params.sending_up_to.into(),
@@ -1488,19 +1486,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
+            PublicOplogEntry::StreamTerminal(params) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamEnd(
-                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
-                            timestamp: Some(params.timestamp.into()),
-                            record: Some(params.record.try_into()?),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamCancel(
+                    entry: Some(oplog_entry::Entry::StreamTerminal(
                         golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
                             timestamp: Some(params.timestamp.into()),
                             record: Some(params.record.try_into()?),
@@ -2035,6 +2023,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                             snapshot_index: details.snapshot_index,
                         }
                     }),
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
@@ -2190,6 +2179,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .filesystem_snapshot
                         .map(|name| name.parse())
                         .transpose()?,
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
@@ -2206,10 +2196,12 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
                     plugin_grant_id: p.plugin.environment_plugin_grant_id,
+                    source_component_revision: p.source_component_revision,
                     target_agent_id: p.target_agent_id,
                     confirmed_up_to: p.confirmed_up_to,
                     sending_up_to: p.sending_up_to,
                     last_batch_start: p.last_batch_start,
+                    delivery: None,
                 })
             }
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
@@ -2316,26 +2308,15 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     record: OplogPayload::Inline(Box::new(record)),
                 })
             }
-            PublicOplogEntry::StreamEnd(p) => {
+            PublicOplogEntry::StreamTerminal(p) => {
                 use crate::schema::FromSchema as _;
-                let record = StreamEndRecord::from_value(p.record.value())
+                let record = StreamTerminalRecord::from_value(p.record.value())
                     .map_err(|error| error.to_string())?;
-                Ok(OplogEntry::StreamEnd {
+                Ok(OplogEntry::StreamTerminal {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::end(&record)),
+                    summary: Some(DurableStreamEventSummary::terminal(&record)),
                     record: OplogPayload::Inline(Box::new(record)),
-                })
-            }
-            PublicOplogEntry::StreamCancel(p) => {
-                use crate::schema::FromSchema as _;
-                Ok(OplogEntry::StreamCancel {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::Cancelled),
-                    record: OplogPayload::Inline(Box::new(StreamCancelRecord::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
                 })
             }
             PublicOplogEntry::StreamSession(p) => {

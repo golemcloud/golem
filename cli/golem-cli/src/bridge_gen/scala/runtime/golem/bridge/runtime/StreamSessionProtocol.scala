@@ -44,18 +44,32 @@ private[runtime] object StreamSessionProtocol {
   def validateServerMessage(json: Json): String = {
     val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
     kind match {
-      case "invocationAccepted" => validate(json, kind, Set("attemptId", "idempotencyKey", "mappings", "sessionToken"))
+      case "invocationAccepted" => validate(json, kind, Set("attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"))
       case "invocationRejected" => validate(json, kind, Set("code", "message", "retryable"), Set("attemptId", "stderr"))
       case "invocationResult" => validate(json, kind, Set("mappings", "result"))
       case "outputStreamItem" => validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
-      case "outputStreamEnd" => validate(json, kind, Set("channel", "outcome", "sequence"), Set("cursorToken"))
+      case "stream-end" => serverStreamEnd(json)
       case "inputStreamAck" => validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
-      case "streamCancel" => validate(json, kind, Set("channel", "reason"))
       case "attachmentRevoked" => validate(json, kind, Set("reason"))
       case "invocationFinished" => validate(json, kind, Set("outcome"))
       case _ => throw BridgeException(s"unsupported stream session message: $kind")
     }
     kind
+  }
+
+  def acceptanceIdentity(json: Json, attemptId: String, previous: Option[(AgentId, String)]): (AgentId, String) = {
+    val attempt = Json.requireField(json, "attemptId").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    if (attempt != attemptId) throw BridgeException("attempt-conflict: acceptance attempt does not match")
+    val owner = Json.requireField(json, "agentId").fold(e => throw BridgeException(e), identity)
+    validateObject(owner, Set("componentId", "agentId"), "accepted agent identity")
+    val agentId = AgentId.fromJson(owner).fold(e => throw BridgeException(e), identity)
+    if (agentId.componentId.isEmpty || agentId.agentId.isEmpty) throw BridgeException("malformed-message: invalid accepted agent identity")
+    val key = Json.requireField(json, "idempotencyKey").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+    if (!key.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+      throw BridgeException("malformed-message: accepted idempotency key is not a UUID")
+    val accepted = (agentId, key)
+    if (previous.exists(_ != accepted)) throw BridgeException("idempotency-conflict: accepted invocation identity changed")
+    accepted
   }
 
   private def optionalString(json: Json, name: String): Option[String] =
@@ -86,6 +100,71 @@ private[runtime] object StreamSessionProtocol {
 
   def message(kind: String, fields: Vector[(String, Json)] = Vector.empty): String =
     Json.obj((fields :+ ("type" -> Json.string(kind)) :+ ("version" -> Json.fromInt(1))).sortBy(_._1)).render
+
+  private def string(json: Json, name: String): String =
+    Json.requireField(json, name).flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
+
+  def streamEnd(channel: Long, direction: String, sequence: BigInt, outcome: Json): String =
+    message("stream-end", Vector("channel" -> Json.fromLong(channel), "direction" -> Json.string(direction),
+      "sequence" -> Json.string(unsigned(sequence)), "outcome" -> outcome))
+
+  def streamOutcome(outcome: Json): StreamOutcome = string(outcome, "kind") match {
+    case "finished" =>
+      validateObject(outcome, Set("kind"), "stream outcome")
+      StreamOutcome.Finished
+    case "consumer-cancelled" =>
+      validateObject(outcome, Set("kind"), "stream outcome", Set("details"))
+      StreamOutcome.ConsumerCancelled(Json.field(outcome, "details").map(v => Json.asString(v).fold(e => throw BridgeException(e), identity)))
+    case "failed" =>
+      validateObject(outcome, Set("kind", "error"), "stream outcome")
+      val error = Json.requireField(outcome, "error").fold(e => throw BridgeException(e), identity)
+      val kind = string(error, "kind")
+      val parsed = kind match {
+        case "failed" =>
+          validateObject(error, Set("kind", "value"), "stream error")
+          val typed = Json.requireField(error, "value").fold(e => throw BridgeException(e), identity)
+          validateObject(typed, Set("graph", "value"), "typed stream error")
+          val graph = Json.requireField(typed, "graph").fold(e => throw BridgeException(e), identity)
+          val codec = PublicValueCodec.fromSchemaGraphJson(graph.render)
+          val raw = Json.requireField(typed, "value").fold(e => throw BridgeException(e), identity)
+          def rejectStreams(value: Json): Unit = {
+            if (Json.field(value, "kind").flatMap(Json.asString(_).toOption).contains("stream"))
+              throw BridgeException("typed stream failures must not contain stream references")
+            Json.asObject(value).foreach(_.foreach { case (_, child) => rejectStreams(child) })
+            Json.asArray(value).foreach(_.foreach(rejectStreams))
+          }
+          rejectStreams(raw)
+          val value = codec.decode(raw)
+          StreamError.Failed(graph, value)
+        case "trapped" | "interrupted" | "resource-exhausted" =>
+          validateObject(error, Set("kind", "message"), "stream error")
+          val message = string(error, "message")
+          kind match {
+            case "trapped" => StreamError.Trapped(message)
+            case "interrupted" => StreamError.Interrupted(message)
+            case _ => StreamError.ResourceExhausted(message)
+          }
+        case "cancelled" | "abandoned" =>
+          validateObject(error, Set("kind"), "stream error")
+          if (kind == "cancelled") StreamError.Cancelled else StreamError.Abandoned
+        case _ => throw BridgeException("invalid stream error kind")
+      }
+      StreamOutcome.Failed(parsed)
+    case _ => throw BridgeException("invalid stream outcome kind")
+  }
+
+  def serverStreamEnd(json: Json): (String, StreamOutcome, Option[String]) = {
+    validate(json, "stream-end", Set("channel", "direction", "sequence", "outcome"), Set("cursorToken"))
+    channel(json)
+    u64(json, "sequence")
+    val direction = string(json, "direction")
+    val outcome = streamOutcome(Json.requireField(json, "outcome").fold(e => throw BridgeException(e), identity))
+    if (direction != "output" && direction != "input")
+      throw BridgeException("invalid server stream terminal direction")
+    val cursor = Json.field(json, "cursorToken").map(v => Json.asString(v).fold(e => throw BridgeException(e), identity))
+    cursor.foreach(validateOpaqueToken(_, "cursor token"))
+    (direction, outcome, cursor)
+  }
 
   val MaxU64: BigInt = (BigInt(1) << 64) - 1
   private val Mime = "^[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+$".r

@@ -41,8 +41,9 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
-    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamRegistrationInvocation,
-    StreamResumeCursor, StreamResumeOperation,
+    StreamCancellationRequest, StreamEndpointSide, StreamItemsPayload,
+    StreamRegistrationInvocation, StreamResumeCursor, StreamResumeOperation, StreamTerminal,
+    StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -157,13 +158,13 @@ use admission::decode_invocation_freshness_disposition;
 use admission::{AcceptanceRace, publish_acceptance, race_invocation_acceptance};
 
 mod request;
-#[cfg(test)]
-use request::effective_session_identity;
 pub(crate) use request::{build_durable_streaming_request, decode_invocation_input};
 use request::{
-    build_resume_attempt, request_agent_id, request_idempotency_key,
-    require_expected_callee_fingerprint, resumed_input_schema, route_durable_request,
+    build_resume_attempt, request_agent_id, request_idempotency_key, resumed_input_schema,
+    route_durable_request,
 };
+#[cfg(test)]
+use request::{effective_session_identity, require_expected_callee_fingerprint};
 
 mod response;
 use response::{

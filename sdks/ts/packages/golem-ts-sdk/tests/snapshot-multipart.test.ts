@@ -40,6 +40,7 @@ describe('explicit multipart snapshots', () => {
             componentId: { uuid: { highBits: 18446744073709551615n, lowBits: 2n } },
             agentId: 'Waiting("snapshot")',
           },
+          fingerprint: { highBits: 9007199254740993n, lowBits: 18446744073709551615n },
           oplogIdx: 9007199254740993n,
         },
         controls: ['9007199254740993', 9007199254740993n, 0n, -123n],

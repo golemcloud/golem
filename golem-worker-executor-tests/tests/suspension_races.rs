@@ -14,7 +14,7 @@ use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogE
 use golem_common::model::{
     IdempotencyKey, OwnedAgentId, PromiseId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
 };
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::serialization::deserialize;
 use golem_common::{data_value, model::AgentStatus};
 use golem_test_framework::dsl::TestDsl;
@@ -332,14 +332,8 @@ async fn invocation_deadline_unwinds_parked_p3_wait(
     Ok(())
 }
 
-fn promise_oplog_index(value: &SchemaValue) -> OplogIndex {
-    let SchemaValue::Record { fields } = value else {
-        panic!("expected promise id record")
-    };
-    let SchemaValue::U64(oplog_index) = fields[1] else {
-        panic!("expected promise id oplog index")
-    };
-    OplogIndex::from_u64(oplog_index)
+fn promise_id_from_value(value: &SchemaValue) -> PromiseId {
+    PromiseId::from_value(value).expect("expected a promise ID returned by the guest")
 }
 
 async fn assert_single_await_promise_completion(
@@ -698,13 +692,7 @@ async fn status_follows_threshold_commits_while_the_invocation_runs(
     );
 
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: promise_oplog_index(&promise_id),
-            },
-            vec![5],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id), vec![5])
         .await?;
     let params = crate::raw_params(vec![SchemaValue::U64(CALLS), promise_id]);
     assert_eq!(
@@ -749,13 +737,7 @@ async fn promise_completed_before_wait_returns_without_suspending(
         .expect("create_promise must return an id");
     let boundary = executor.oplog_max_index(&worker_id).await?;
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: promise_oplog_index(&promise_id),
-            },
-            vec![3, 1, 4],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id), vec![3, 1, 4])
         .await?;
     let key = IdempotencyKey::fresh();
     let params = crate::raw_params(vec![promise_id]);
@@ -861,13 +843,7 @@ async fn promise_completion_during_suspend_handoff_is_not_lost(
     let loads = executor.instance_load_count(&worker_id);
     let completion = tokio::time::timeout(
         Duration::from_secs(5),
-        executor.complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: promise_oplog_index(&promise_id),
-            },
-            vec![2, 7, 1, 8],
-        ),
+        executor.complete_promise(&promise_id_from_value(&promise_id), vec![2, 7, 1, 8]),
     )
     .await;
     gate.release();
@@ -934,13 +910,7 @@ async fn promise_completion_after_unload_resumes_with_exact_data(
     .await?;
     assert!(!executor.worker_is_loaded(&owned).await);
     executor
-        .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: promise_oplog_index(&promise_id),
-            },
-            vec![9, 2, 6, 5],
-        )
+        .complete_promise(&promise_id_from_value(&promise_id), vec![9, 2, 6, 5])
         .await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))

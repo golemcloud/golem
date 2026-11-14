@@ -795,6 +795,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &promise_id.agent_id.agent_id,
                 &CompleteParameters {
                     oplog_idx: promise_id.oplog_idx.as_u64(),
+                    fingerprint: promise_id.fingerprint.0,
                     data,
                 },
             )

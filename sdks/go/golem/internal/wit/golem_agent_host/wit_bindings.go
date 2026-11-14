@@ -20411,7 +20411,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 }
 
 //go:wasmimport golem:agent/host@2.0.0 create-webhook
-func wasm_import_create_webhook(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 uintptr)
+func wasm_import_create_webhook(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 int64, arg7 uintptr)
 
 func CreateWebhook(promiseId golem_core_types.PromiseId) witTypes.Result[string, WebhookError] {
 	pinner := &runtime.Pinner{}
@@ -20420,7 +20420,7 @@ func CreateWebhook(promiseId golem_core_types.PromiseId) witTypes.Result[string,
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(((promiseId).AgentId).AgentId))
 	pinner.Pin(utf8)
-	wasm_import_create_webhook(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64((promiseId).OplogIdx), returnArea)
+	wasm_import_create_webhook(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx), returnArea)
 	var result witTypes.Result[string, WebhookError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
