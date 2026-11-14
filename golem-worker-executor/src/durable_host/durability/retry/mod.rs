@@ -582,6 +582,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         let entry = OplogEntry::error(
             self.entity_parent_start_index(),
             OplogErrorKind::Invocation,
+            self.state.get_current_idempotency_key(),
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state,
@@ -876,6 +877,10 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub retry_point: OplogIndex,
     /// Entity invocation that initiated this task, if any.
     pub entity_parent_start_index: Option<OplogIndex>,
+    /// The agent invocation whose work the task retries; its error entries name it. A task can
+    /// outlive this invocation, and the status of the agent ignores an error entry that names an
+    /// invocation which no longer runs.
+    pub invocation_id: Option<golem_common::model::InvocationId>,
     /// Environment state service for lazy policy fetching
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
@@ -942,6 +947,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
             OplogErrorKind::Invocation,
+            self.invocation_id,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             retry_policy_state.clone(),

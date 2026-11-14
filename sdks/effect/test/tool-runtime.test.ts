@@ -64,7 +64,6 @@ describe("registered tool guest runtime", () => {
       undefined,
       undefined,
       undefined,
-      {},
     )
     const codec = Effect.runSync(compile(Schema.String))
     await expect(Effect.runPromise(codec.decode(result.result!.value))).resolves.toBe("value!")
@@ -92,7 +91,7 @@ describe("registered tool guest runtime", () => {
         layer,
       )
 
-    await invokeRegistered("scoped", [], input(), undefined, undefined, undefined, {})
+    await invokeRegistered("scoped", [], input(), undefined, undefined, undefined)
     expect(finalized).toBe(true)
   })
 
@@ -102,7 +101,7 @@ describe("registered tool guest runtime", () => {
       .implement({ failure: () => Effect.fail(err("rejected", { reason: "no" })) })
 
     await expect(
-      invokeRegistered("failure", [], input(), undefined, undefined, undefined, {}),
+      invokeRegistered("failure", [], input(), undefined, undefined, undefined),
     ).rejects.toMatchObject({
       tag: "custom-error",
       val: { name: "rejected" },
@@ -115,7 +114,7 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input({ required: true }).output({ required: true }))
       .implement({ requiredStreams: requiredHandler })
     await expect(
-      invokeRegistered("required-streams", [], input(), undefined, undefined, undefined, {}),
+      invokeRegistered("required-streams", [], input(), undefined, undefined, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(requiredHandler).not.toHaveBeenCalled()
 
@@ -126,15 +125,7 @@ describe("registered tool guest runtime", () => {
     const supplied = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered(
-        "absent-streams",
-        [],
-        input(),
-        supplied.value,
-        stdout as never,
-        undefined,
-        {},
-      ),
+      invokeRegistered("absent-streams", [], input(), supplied.value, stdout as never, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(absentHandler).not.toHaveBeenCalled()
     expect(supplied.return_).toHaveBeenCalledOnce()
@@ -146,21 +137,13 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input())
       .implement({ streams: () => Effect.void })
     const unused = iterator()
-    await invokeRegistered("streams", [], input(), unused.value, undefined, undefined, {})
+    await invokeRegistered("streams", [], input(), unused.value, undefined, undefined)
     expect(unused.return_).toHaveBeenCalledOnce()
 
     const rejected = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered(
-        "streams",
-        ["missing"],
-        input(),
-        rejected.value,
-        stdout as never,
-        undefined,
-        {},
-      ),
+      invokeRegistered("streams", ["missing"], input(), rejected.value, stdout as never, undefined),
     ).rejects.toMatchObject({ tag: "invalid-command-path" })
     expect(rejected.return_).toHaveBeenCalledOnce()
     expect(stdout.finish).toHaveBeenCalledOnce()
@@ -180,7 +163,7 @@ describe("registered tool guest runtime", () => {
     }
 
     await expect(
-      invokeRegistered("empty-stdin-chunk", [], input(), stdin, undefined, undefined, {}),
+      invokeRegistered("empty-stdin-chunk", [], input(), stdin, undefined, undefined),
     ).rejects.toMatchObject({ tag: "invalid-input" })
   })
 
@@ -226,7 +209,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         stdout as never,
         stderr as never,
-        {},
       ).finally(() => (settled = true))
       await bothTerminalsStarted
       expect(stdout.finish).toHaveBeenCalledOnce()
@@ -264,7 +246,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         outputs[0] as never,
         outputs[1] as never,
-        {},
       )
       if (declared) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
       else await expect(invocation).resolves.toEqual({ result: undefined })
@@ -310,7 +291,6 @@ describe("registered tool guest runtime", () => {
         undefined,
         stdout as never,
         stderr as never,
-        {},
       )
       const malformed = ["result", "error-payload", "undeclared"].includes(kind)
       if (malformed) await expect(invocation).rejects.toMatchObject({ tag: "invalid-result" })
@@ -351,7 +331,6 @@ describe("registered tool guest runtime", () => {
           undefined,
           stdout as never,
           stderr as never,
-          {},
         )
         if (fault === "interrupt")
           await expect(invocation).rejects.not.toMatchObject({ tag: "invalid-result" })
@@ -408,7 +387,6 @@ describe("registered tool guest runtime", () => {
         stdin.value,
         stdout.writer as never,
         stderr.writer as never,
-        {},
       ).then(
         (result) => ({ tag: "success" as const, result }),
         (error) => ({ tag: "failure" as const, error }),

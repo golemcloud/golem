@@ -15,7 +15,17 @@ pub(all) struct AgentClient {
 ///|
 pub(all) struct InvocationMetadata {
   agent_id : String
-  idempotency_key : String
+  invocation_id : InvocationId
+}
+
+///|
+fn invocation_metadata(
+  metadata : @agentHost.InvocationMetadata,
+) -> InvocationMetadata {
+  {
+    agent_id: metadata.agent_id,
+    invocation_id: InvocationId::from_host(metadata),
+  }
 }
 
 ///|
@@ -215,15 +225,14 @@ pub async fn AgentClient::invoke_and_await(
     errdefer invocation.future.cancel()
     invocation.future.get()
   }
-  match result {
-    Ok(value) => {
-      let metadata : InvocationMetadata = {
-        agent_id: invocation.metadata.agent_id,
-        idempotency_key: invocation.metadata.idempotency_key,
-      }
-      { metadata, value, }
-    }
-    Err(e) => panic_on_rpc_error(e)
+  match (result, invocation.metadata) {
+    (Ok(value), Some(metadata)) =>
+      { metadata: invocation_metadata(metadata), value, }
+    (Ok(_), None) =>
+      abort(
+        "RPC protocol error: completed invocation has no invocation metadata",
+      )
+    (Err(e), _) => panic_on_rpc_error(e)
   }
 }
 
@@ -234,8 +243,7 @@ pub fn AgentClient::invoke(
   input : @types.SchemaValueTree,
 ) -> InvocationMetadata {
   match self.rpc.invoke(function_name, input, None) {
-    Ok(value) =>
-      { agent_id: value.agent_id, idempotency_key: value.idempotency_key, }
+    Ok(value) => invocation_metadata(value)
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -248,13 +256,7 @@ pub fn AgentClient::schedule_invocation(
   input : @types.SchemaValueTree,
 ) -> ScheduledInvocationReceipt {
   match self.rpc.schedule_invocation(scheduled_at, function_name, input, None) {
-    Ok(value) =>
-      {
-        metadata: {
-          agent_id: value.metadata.agent_id,
-          idempotency_key: value.metadata.idempotency_key,
-        },
-      }
+    Ok(value) => { metadata: invocation_metadata(value.metadata), }
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -275,10 +277,7 @@ pub fn AgentClient::schedule_cancelable_invocation(
     ) {
     Ok(value) =>
       {
-        metadata: {
-          agent_id: value.metadata.agent_id,
-          idempotency_key: value.metadata.idempotency_key,
-        },
+        metadata: invocation_metadata(value.metadata),
         cancellation_token: value.cancellation_token,
       }
     Err(e) => panic_on_rpc_error(e)

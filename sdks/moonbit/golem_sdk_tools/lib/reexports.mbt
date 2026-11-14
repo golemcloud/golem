@@ -64,7 +64,7 @@ pub fn generate_component_reexports(
       "wasmExportGetDefinitionPostReturn" if !has_agents =>
         Some("post_definition")
       "wasmExportInitialize" | "wasmExportInvokeGolemAgentGuest" if !has_agents =>
-        Some("invoke")
+        Some("invoke_agent")
       "wasmExportAsyncInitialize"
       | "wasmExportAsyncInvokeGolemAgentGuest"
       | "wasmExportAsyncSave"

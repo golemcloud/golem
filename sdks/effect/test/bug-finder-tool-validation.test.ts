@@ -13,6 +13,7 @@ import {
   universal,
 } from "../src/internal/tool/middleware.js"
 import { byteItems } from "./tool-middleware-test-support.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const reverseObjectKeys = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(reverseObjectKeys)
@@ -658,25 +659,30 @@ describe("tool metadata WIT validation", () => {
       commands: { nodes: [] },
       schema: { root: 0, typeNodes: [] },
     }
-    await toolMiddlewareGuest.invokeToolMiddleware(
-      "audit",
-      "target",
-      metadata,
-      emptyParameters(),
-      [],
-      { graph: metadata.schema, value: { node: 0 } as never },
-      byteItems(
-        (async function* () {
-          yield 1
-          yield 2
-        })(),
+    await withCaller({ tag: "anonymous" }, () =>
+      toolMiddlewareGuest.invokeToolMiddleware(
+        "audit",
+        "target",
+        metadata,
+        emptyParameters(),
+        [],
+        { graph: metadata.schema, value: { node: 0 } as never },
+        byteItems(
+          (async function* () {
+            yield 1
+            yield 2
+          })(),
+        ),
+        undefined,
+        undefined,
+        {
+          invoke: async () => [
+            { get: async () => undefined, cancel: vi.fn() },
+            undefined,
+            undefined,
+          ],
+        } as never,
       ),
-      undefined,
-      undefined,
-      { tag: "anonymous" },
-      {
-        invoke: async () => [{ get: async () => undefined, cancel: vi.fn() }, undefined, undefined],
-      } as never,
     )
     const exit = await Effect.runPromiseExit(
       escaped!.invoke([], { graph: metadata.schema, value: { node: 0 } as never }),
@@ -717,29 +723,30 @@ describe("tool metadata WIT validation", () => {
     })
     const cancel = vi.fn()
     const dispose = vi.fn()
-    await toolMiddlewareGuest.invokeToolMiddleware(
-      "cleanup",
-      "target",
-      {
-        version: "0.1.0",
-        requiresFilesystem: false,
-        commands: { nodes: [] },
-        schema: { root: 0, typeNodes: [], defs: [] },
-      },
-      emptyParameters(),
-      [],
-      typedUnit,
-      byteItems(iterable(stdinReturn)),
-      undefined,
-      undefined,
-      { tag: "anonymous" },
-      {
-        invoke: async () => [
-          { get: async () => undefined, cancel, [Symbol.dispose]: dispose },
-          byteItems(iterable(stdoutReturn)),
-          undefined,
-        ],
-      } as never,
+    await withCaller({ tag: "anonymous" }, () =>
+      toolMiddlewareGuest.invokeToolMiddleware(
+        "cleanup",
+        "target",
+        {
+          version: "0.1.0",
+          requiresFilesystem: false,
+          commands: { nodes: [] },
+          schema: { root: 0, typeNodes: [], defs: [] },
+        },
+        emptyParameters(),
+        [],
+        typedUnit,
+        byteItems(iterable(stdinReturn)),
+        undefined,
+        undefined,
+        {
+          invoke: async () => [
+            { get: async () => undefined, cancel, [Symbol.dispose]: dispose },
+            byteItems(iterable(stdoutReturn)),
+            undefined,
+          ],
+        } as never,
+      ),
     )
     expect(stdinReturn).toHaveBeenCalledOnce()
     expect(stdoutReturn).toHaveBeenCalledOnce()

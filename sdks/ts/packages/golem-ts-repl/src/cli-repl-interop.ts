@@ -216,6 +216,7 @@ export class CliReplInterop {
       request.agentTypeName,
       parameters,
       idempotencyKey,
+      request.methodName,
     ];
     if (request.phantomId) {
       args.push(request.phantomId);
@@ -248,8 +249,15 @@ export class CliReplInterop {
     });
   }
 
-  async stopAgentStream(request: base.AgentInvocationRequest) {
+  /**
+   * The accepted invocation ID selects the invocation whose output the stream shows. Without it,
+   * as when the call failed, the stream shows nothing more.
+   */
+  async stopAgentStream(request: base.AgentInvocationRequest, invocationId?: string) {
     const key = getAgentStreamKey(request);
+    if (invocationId) {
+      this.agentStreams.get(key)?.setTarget(invocationId);
+    }
     await this.stopAgentStreamByKey(key);
   }
 
@@ -336,6 +344,7 @@ type CommandHook = {
 };
 
 type AgentStreamState = {
+  setTarget: (invocationId: string) => void;
   stop: () => void;
   onStdout: (chunk: Buffer) => void;
   onStderr: (chunk: Buffer) => void;
@@ -366,7 +375,16 @@ function createAgentStreamState(child: ChildProcess, onSigint: () => void): Agen
     }
   };
 
+  // The child may already have exited; a failed write only means it shows nothing more.
+  child.stdin?.on('error', () => {});
+  const setTarget = (invocationId: string) => {
+    if (child.exitCode === null && child.stdin?.writable) {
+      child.stdin.write(`${invocationId}\n`);
+    }
+  };
+
   return {
+    setTarget,
     stop,
     onStdout,
     onStderr,

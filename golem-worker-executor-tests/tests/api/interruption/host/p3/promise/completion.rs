@@ -51,6 +51,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
     })
     .await?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -67,7 +68,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Some(record) = history::promise_record(&entries, &key, &id, false, 0)? {
+                if let Some(record) = history::promise_record(&entries, &stored_key, &id, false, 0)? {
                     return Ok::<_, anyhow::Error>(record);
                 }
                 ensure!(!invocation.is_finished());
@@ -85,7 +86,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
         executor.commit_oplog(&id).await?;
-        ensure!(history::promise_record(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &key, &id, true, 0)? == Some(original.clone()));
+        ensure!(history::promise_record(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &stored_key, &id, true, 0)? == Some(original.clone()));
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -115,9 +116,9 @@ async fn durable_p3_promise_completion_before_quota_stop(
         refresh.await?;
         ensure!(!worker.is_loaded().await);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::promise_record(&completed, &key, &id, true, 1)? == Some(original.clone()));
+        ensure!(history::promise_record(&completed, &stored_key, &id, true, 1)? == Some(original.clone()));
         history::settled(&completed)?;
-        history::invocation(&completed, &key, 1)?;
+        history::invocation(&completed, &stored_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!()).await?;
         ensure!(cached.into_typed::<Vec<u8>>()? == PAYLOAD);

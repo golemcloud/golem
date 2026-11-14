@@ -15,7 +15,7 @@
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
     SchemaFingerprintV1, SchemaType, SchemaValue, TypeId,
@@ -26,7 +26,27 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
+pub use golem_schema::{StreamError, StreamOutcome};
+
 pub const DURABLE_STREAM_FORMAT_VERSION: u8 = 1;
+/// Canonical route identity. JSON tuple encoding preserves all field boundaries.
+pub fn durable_stream_route_scope(environment: &str, revision: &str, route: &str) -> String {
+    serde_json::to_string(&(environment, revision, route)).expect("string tuple is serializable")
+}
+
+pub fn validate_durable_stream_route_scope(scope: &str) -> Result<(), String> {
+    let (environment, revision, route): (String, String, String) = serde_json::from_str(scope)
+        .map_err(|_| "invalid durable stream route scope".to_string())?;
+    if environment.is_empty()
+        || revision.is_empty()
+        || route.is_empty()
+        || durable_stream_route_scope(&environment, &revision, &route) != scope
+    {
+        return Err("invalid durable stream route scope".to_string());
+    }
+    Ok(())
+}
+
 pub const STREAM_ID_NAMESPACE_V1: Uuid = Uuid::from_u128(0x7125b775_3cb6_58b6_82c8_e7584ae91b2a);
 pub const ATTACHMENT_ID_NAMESPACE_V1: Uuid =
     Uuid::from_u128(0xde596c85_8f1b_55ab_9430_63aced239572);
@@ -119,14 +139,15 @@ impl AttachmentId {
     pub fn primary(
         callee_environment_id: EnvironmentId,
         callee: &AgentId,
-        invocation_key: &IdempotencyKey,
+        invocation_key: &InvocationId,
     ) -> Result<Self, DurableStreamIdentityError> {
         let agent_name = callee.agent_id.as_bytes();
         let agent_name_length: u32 = agent_name
             .len()
             .try_into()
             .map_err(|_| DurableStreamIdentityError::AgentNameTooLong)?;
-        let invocation_key = invocation_key.value.as_bytes();
+        let invocation_key = invocation_key.to_string();
+        let invocation_key = invocation_key.as_bytes();
         let invocation_key_length: u32 = invocation_key
             .len()
             .try_into()
@@ -325,7 +346,7 @@ pub struct StreamInvocationId {
     pub callee_environment_id: EnvironmentId,
     pub callee: AgentId,
     pub callee_fingerprint: AgentFingerprint,
-    pub idempotency_key: IdempotencyKey,
+    pub idempotency_key: InvocationId,
 }
 
 pub type StreamSessionKey = StreamInvocationId;
@@ -463,12 +484,12 @@ pub struct StreamSessionMapping {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamRegistrationInvocation {
-    Local(IdempotencyKey),
+    Local(InvocationId),
     Remote(StreamInvocationId),
 }
 
 impl StreamRegistrationInvocation {
-    pub fn idempotency_key(&self) -> &IdempotencyKey {
+    pub fn idempotency_key(&self) -> &InvocationId {
         match self {
             Self::Local(idempotency_key) => idempotency_key,
             Self::Remote(invocation) => &invocation.idempotency_key,
@@ -486,7 +507,7 @@ impl StreamRegistrationInvocation {
                 callee_environment_id: owner_environment_id,
                 callee: owner.clone(),
                 callee_fingerprint: owner_fingerprint,
-                idempotency_key: idempotency_key.clone(),
+                idempotency_key: *idempotency_key,
             },
             Self::Remote(invocation) => invocation.clone(),
         }
@@ -596,71 +617,84 @@ impl StreamItemsPayload {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamEndRecord {
-    pub format_version: u8,
-    pub stream_id: LocalStreamId,
-    pub sequence: u64,
-    pub offset: StreamOffset,
-    pub authored_by: StreamTerminalAuthor,
-    pub result: StreamEndResult,
-}
-
 #[derive(
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamTerminalAuthor {
     Guest,
+    Host,
     Protocol,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamEndResult {
-    Ok,
-    ErrorContext(Vec<u8>),
+pub enum StreamTerminalOrigin {
+    /// The source must reproduce this terminal during strict replay.
+    Source,
+    /// Control selected this terminal independently of the source.
+    Control,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamCancelRecord {
+pub struct StreamTerminalRecord {
     pub format_version: u8,
     pub stream_id: LocalStreamId,
     pub sequence: u64,
     pub offset: StreamOffset,
     pub authored_by: StreamTerminalAuthor,
-    pub role: StreamCancelRole,
-    pub reason: StreamCancelReason,
-    pub details: Option<String>,
+    pub origin: StreamTerminalOrigin,
+    pub terminal: StreamTerminal,
+}
+
+/// The first terminal wins, whether authored by the producer or its consumer.
+#[derive(Clone, Debug, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamTerminal {
+    Finished,
+    Failed(StreamError),
+    ConsumerCancelled { details: Option<String> },
+}
+
+impl PartialEq for StreamTerminal {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Terminal identity must survive retries and cancellation receipts,
+            // including declared failures containing NaNs or signed zero.
+            (Self::Failed(StreamError::Failed(a)), Self::Failed(StreamError::Failed(b))) => {
+                a.graph() == b.graph() && a.value().bitwise_eq(b.value())
+            }
+            (Self::Finished, Self::Finished) => true,
+            (Self::Failed(a), Self::Failed(b)) => a == b,
+            (Self::ConsumerCancelled { details: a }, Self::ConsumerCancelled { details: b }) => {
+                a == b
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamCancellationRequest {
+    pub direction: SessionStreamRole,
+    pub side: StreamEndpointSide,
+    pub authored_by: StreamTerminalAuthor,
+    pub terminal: StreamTerminal,
 }
 
 #[derive(
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamCancelRole {
-    InputProducer,
-    InputConsumer,
-    OutputProducer,
-    OutputConsumer,
-    System,
-}
-
-#[derive(
-    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
-)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamCancelReason {
-    Cancelled,
-    GuestDrop,
-    Protocol,
-    InvocationFailed,
-    SourceUnavailable,
-    ProducerDeleting,
+pub enum StreamEndpointSide {
+    Producer,
+    Consumer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -739,8 +773,9 @@ impl StreamSessionExpiryPolicy {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
+    pub route_scope: Option<String>,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub attempt: StartAttemptDescriptor,
@@ -752,8 +787,9 @@ pub struct StreamSessionPreparedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionExpiryRefreshedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
+    pub route_scope: String,
     pub expected_deadline_millis: u64,
     pub refreshed_at_millis: u64,
     pub deadline_millis: u64,
@@ -764,8 +800,9 @@ pub struct StreamSessionExpiryRefreshedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionExpiredRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub public_session_id: String,
+    pub route_scope: String,
     pub expected_deadline_millis: u64,
     pub expired_at_millis: u64,
 }
@@ -871,7 +908,7 @@ pub enum StreamAttachmentFinalizationReason {
     Reconciled,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamAttachmentControlRequest {
@@ -929,7 +966,8 @@ pub enum DurableStreamReadRequest {
     AuthorizedExport(Box<StreamHandleReadRequest>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
+#[allow(clippy::large_enum_variant)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamAttachmentControlOperation {
     Prepare {
@@ -945,9 +983,7 @@ pub enum StreamAttachmentControlOperation {
     },
     Cancel {
         key: StreamAttachmentKey,
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
+        cancellation: StreamCancellationRequest,
     },
     Finalize {
         key: StreamAttachmentKey,
@@ -1068,7 +1104,7 @@ pub struct StreamTopologyActivatedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionAttachedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attachment_id: AttachmentId,
     pub attempt_id: AttemptId,
     pub epoch: u64,
@@ -1111,7 +1147,7 @@ pub struct ResumeAttemptDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionResumeAttemptRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attempt: ResumeAttemptDescriptor,
     pub accepted_epoch: u64,
 }
@@ -1121,7 +1157,7 @@ pub struct StreamSessionResumeAttemptRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionDetachedRecord {
     pub format_version: u8,
-    pub session_key: IdempotencyKey,
+    pub session_key: InvocationId,
     pub attachment_id: AttachmentId,
     pub owner_attempt_id: AttemptId,
     pub epoch: u64,
@@ -1221,7 +1257,7 @@ impl StreamConsumerItemValueRecord {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerTerminalRecord {
@@ -1232,7 +1268,8 @@ pub struct StreamConsumerTerminalRecord {
     pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
-    pub terminal: StreamConsumerTerminal,
+    pub authored_by: StreamTerminalAuthor,
+    pub terminal: StreamTerminal,
 }
 
 /// The containing record that must publish an owner-journal forwarding destination.
@@ -1299,38 +1336,25 @@ pub struct StreamReaderForwardIntentRecord {
     pub destination: StreamReaderForwardDestination,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerCancelIntentRecord {
     pub format_version: u8,
     pub session_key: StreamRegistrationInvocation,
     /// The consumer's invocation, relative to the oplog owner.
-    pub consumer_invocation: IdempotencyKey,
+    pub consumer_invocation: InvocationId,
     pub source: StreamRecordReference,
     pub epoch: u64,
-    pub role: StreamCancelRole,
-    pub reason: StreamCancelReason,
-    pub details: Option<String>,
+    pub cancellation: StreamCancellationRequest,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerCancelAppliedRecord {
     pub format_version: u8,
     pub intent: StreamConsumerCancelIntentRecord,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamConsumerTerminal {
-    End(StreamEndResult),
-    Cancel {
-        role: StreamCancelRole,
-        reason: StreamCancelReason,
-        details: Option<String>,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1410,6 +1434,7 @@ pub struct StreamExportFork {
     pub source_fingerprint: AgentFingerprint,
     pub source_path: String,
     pub session: String,
+    pub route_scope: String,
     pub slot: String,
     pub expected_method: String,
     pub requested_offset: Option<StreamOffset>,
@@ -1429,7 +1454,7 @@ pub struct StreamExportForkCandidate {
     pub cut: OplogIndex,
     pub selected: StreamId,
     pub source_invocation: StreamInvocationId,
-    pub target_session_key: IdempotencyKey,
+    pub target_session_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
     pub retained_through: Option<StreamOffset>,
@@ -1454,14 +1479,15 @@ pub struct StreamExportForkAdmittedRecord {
 pub struct StreamExportForkInitializedRecord {
     pub format_version: u8,
     pub public_session_id: String,
-    pub session_key: IdempotencyKey,
+    pub route_scope: String,
+    pub session_key: InvocationId,
     pub source_invocation: StreamInvocationId,
     pub request_hash: Vec<u8>,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamSessionRecord {
     CallerAttempt(StreamCallerAttemptRecord),
@@ -1535,7 +1561,7 @@ impl StreamSessionRecord {
     }
 
     /// Identifies records that can change this owner's callee-side session lifecycle.
-    pub fn local_session_key(&self) -> Option<&IdempotencyKey> {
+    pub fn local_session_key(&self) -> Option<&InvocationId> {
         let reference = match self {
             Self::Prepared(record) => return Some(&record.session_key),
             Self::ExpiryRefreshed(record) => return Some(&record.session_key),
@@ -1650,6 +1676,10 @@ impl StreamSessionRecord {
                     .collect::<HashSet<_>>();
                 !record.public_session_id.is_empty()
                     && record
+                        .route_scope
+                        .as_deref()
+                        .is_none_or(|scope| validate_durable_stream_route_scope(scope).is_ok())
+                    && record
                         .expiry_policy
                         .accepts_deadline(record.expiry_deadline_millis)
                     && supported_attempt(&record.attempt)
@@ -1685,10 +1715,12 @@ impl StreamSessionRecord {
             }
             Self::ExpiryRefreshed(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.refreshed_at_millis <= record.deadline_millis
             }
             Self::Expired(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.expired_at_millis >= record.expected_deadline_millis
             }
             Self::Mapping(record) => record.mapping.source.has_supported_format(),
@@ -1870,6 +1902,7 @@ impl StreamSessionRecord {
             }
             Self::ExportForkInitialized(record) => {
                 !record.public_session_id.is_empty()
+                    && validate_durable_stream_route_scope(&record.route_scope).is_ok()
                     && record.request_hash.len() == 32
                     && record
                         .expiry_policy
@@ -1914,21 +1947,258 @@ fn topology_mapping_matches(
 #[cfg(test)]
 mod tests {
     use super::{
-        AttachmentId, AttemptId, DurableStreamHandle, LocalStreamReaderId,
+        AttachmentId, AttemptId, DurableStreamHandle, LocalStreamId, LocalStreamReaderId,
         PersistedInvocationTarget, PersistedStreamInvocationDescriptor,
         STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionStreamRole, StartAttemptDescriptor,
         StreamAttachmentKey, StreamBindingRecord, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamId, StreamInvocationId, StreamOffset, StreamOffsetError,
-        StreamRecordReference, StreamRegistrationInvocation, StreamSessionExpiryPolicy,
+        StreamConsumerObservation, StreamConsumerTerminalRecord, StreamError, StreamId,
+        StreamInvocationId, StreamOffset, StreamOffsetError, StreamRecordReference,
+        StreamRegistrationInvocation, StreamSessionExpiryPolicy,
         StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+        StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
-    use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
-    use golem_schema::schema::SchemaFingerprintV1;
+    use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
+    use golem_schema::schema::{FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaFingerprintV1};
     use proptest::prelude::*;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn stream_terminal_preserves_outcome_and_author_in_schema_and_binary() {
+        let declared = (73u32, "producer rejected input".to_string())
+            .into_typed_schema_value()
+            .unwrap();
+        let terminals = [
+            StreamTerminal::Finished,
+            StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
+            StreamTerminal::Failed(StreamError::Failed(
+                vec![Some((
+                    f32::from_bits(0x7fc0_0001),
+                    f64::from_bits(0x7ff8_0000_0000_0001),
+                ))]
+                .into_typed_schema_value()
+                .unwrap()
+                .into(),
+            )),
+            StreamTerminal::Failed(StreamError::Trapped("producer trapped".into())),
+            StreamTerminal::Failed(StreamError::Cancelled),
+            StreamTerminal::Failed(StreamError::Abandoned),
+            StreamTerminal::Failed(StreamError::Interrupted("source unavailable".into())),
+            StreamTerminal::Failed(StreamError::ResourceExhausted("retained bytes".into())),
+            StreamTerminal::ConsumerCancelled {
+                details: Some("reader dropped".into()),
+            },
+            StreamTerminal::ConsumerCancelled { details: None },
+        ];
+        for authored_by in [
+            StreamTerminalAuthor::Guest,
+            StreamTerminalAuthor::Host,
+            StreamTerminalAuthor::Protocol,
+        ] {
+            for (origin, terminal) in [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+                .into_iter()
+                .flat_map(|origin| terminals.iter().map(move |terminal| (origin, terminal)))
+            {
+                let record = StreamTerminalRecord {
+                    format_version: 1,
+                    stream_id: LocalStreamId(OplogIndex::from_u64(19)),
+                    sequence: 7,
+                    offset: StreamOffset::new(OplogIndex::from_u64(31), 0),
+                    authored_by,
+                    origin,
+                    terminal: terminal.clone(),
+                };
+                let other_origin = StreamTerminalRecord {
+                    origin: match origin {
+                        StreamTerminalOrigin::Source => StreamTerminalOrigin::Control,
+                        StreamTerminalOrigin::Control => StreamTerminalOrigin::Source,
+                    },
+                    ..record.clone()
+                };
+                assert_ne!(record, other_origin);
+                assert_ne!(record.to_value(), other_origin.to_value());
+                #[cfg(feature = "full")]
+                assert_ne!(
+                    crate::serialization::serialize(&record).unwrap(),
+                    crate::serialization::serialize(&other_origin).unwrap()
+                );
+                assert_eq!(
+                    StreamTerminalRecord::from_value(&record.to_value()).unwrap(),
+                    record
+                );
+                #[cfg(feature = "full")]
+                assert_eq!(
+                    crate::serialization::deserialize::<StreamTerminalRecord>(
+                        &crate::serialization::serialize(&record).unwrap()
+                    )
+                    .unwrap(),
+                    record
+                );
+                let consumer = StreamConsumerTerminalRecord {
+                    format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                    observation: StreamConsumerObservation::Guest {
+                        parent_start_index: None,
+                    },
+                    reobserves: None,
+                    session_key: StreamRegistrationInvocation::Local(InvocationId(
+                        Uuid::from_u128(0xc0),
+                    )),
+                    reader_id: LocalStreamReaderId {
+                        introducing_oplog_index: OplogIndex::from_u64(17),
+                        binding_slot: 0,
+                    },
+                    source_offset: record.offset,
+                    consumer_read_ordinal: record.sequence,
+                    authored_by,
+                    terminal: terminal.clone(),
+                };
+                assert_eq!(
+                    StreamConsumerTerminalRecord::from_value(&consumer.to_value()).unwrap(),
+                    consumer
+                );
+                #[cfg(feature = "full")]
+                assert_eq!(
+                    crate::serialization::deserialize::<StreamConsumerTerminalRecord>(
+                        &crate::serialization::serialize(&consumer).unwrap(),
+                    )
+                    .unwrap(),
+                    consumer
+                );
+                let other_author = StreamConsumerTerminalRecord {
+                    authored_by: match authored_by {
+                        StreamTerminalAuthor::Guest => StreamTerminalAuthor::Host,
+                        _ => StreamTerminalAuthor::Guest,
+                    },
+                    ..consumer.clone()
+                };
+                assert_ne!(consumer, other_author);
+                assert_ne!(consumer.to_value(), other_author.to_value());
+                #[cfg(feature = "full")]
+                assert_ne!(
+                    crate::serialization::serialize(&consumer).unwrap(),
+                    crate::serialization::serialize(&other_author).unwrap()
+                );
+                let session = StreamSessionRecord::ConsumerTerminal(consumer.clone());
+                assert_eq!(
+                    StreamSessionRecord::from_value(&session.to_value()).unwrap(),
+                    session
+                );
+                #[cfg(feature = "full")]
+                assert_eq!(
+                    crate::serialization::deserialize::<StreamSessionRecord>(
+                        &crate::serialization::serialize(&session).unwrap(),
+                    )
+                    .unwrap(),
+                    session
+                );
+                assert!(
+                    !StreamSessionRecord::ConsumerTerminal(other_author)
+                        .matches_reobserved(&StreamSessionRecord::ConsumerTerminal(consumer),)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stream_terminal_declared_failure_equality_uses_float_bits_and_schema() {
+        let terminal = |a, b| {
+            StreamTerminal::Failed(StreamError::Failed(
+                vec![Some((a, b))].into_typed_schema_value().unwrap().into(),
+            ))
+        };
+        let nan32 = f32::from_bits(0x7fc0_0001);
+        let nan64 = f64::from_bits(0x7ff8_0000_0000_0001);
+        let failure = terminal(nan32, nan64);
+        assert_eq!(failure, failure.clone());
+        assert_ne!(failure, terminal(f32::from_bits(0x7fc0_0002), nan64));
+        assert_ne!(
+            failure,
+            terminal(nan32, f64::from_bits(0x7ff8_0000_0000_0002))
+        );
+        assert_ne!(terminal(0.0, nan64), terminal(-0.0, nan64));
+        assert_ne!(terminal(nan32, 0.0), terminal(nan32, -0.0));
+
+        let positive = vec![Some((0.0f32, 0.0f64))]
+            .into_typed_schema_value()
+            .unwrap();
+        let negative = vec![Some((-0.0f32, -0.0f64))]
+            .into_typed_schema_value()
+            .unwrap();
+        assert_eq!(positive, negative);
+        if let StreamTerminal::Failed(StreamError::Failed(value)) = &failure {
+            assert_ne!(value, &value.clone());
+        }
+
+        use golem_schema::schema::schema_type::{NumericBound, NumericRestrictions};
+        use golem_schema::schema::{SchemaType, TypedSchemaValue};
+        // Both integer schemas accept the same value tree, but differ in constraints.
+        let plain = 7u32.into_typed_schema_value().unwrap();
+        let mut constrained_graph = plain.graph().clone();
+        if let SchemaType::U32 { restrictions, .. } = &mut constrained_graph.root {
+            *restrictions = Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(1)),
+                ..Default::default()
+            });
+        } else {
+            panic!("expected u32 schema");
+        }
+        let constrained = TypedSchemaValue::new(constrained_graph, plain.value().clone());
+        assert_ne!(
+            StreamTerminal::Failed(StreamError::Failed(Box::new(plain))),
+            StreamTerminal::Failed(StreamError::Failed(Box::new(constrained)))
+        );
+    }
+
+    #[test]
+    fn cancellation_request_preserves_endpoint_authority_independently_of_terminal() {
+        for direction in [SessionStreamRole::Input, SessionStreamRole::Output] {
+            for side in [
+                super::StreamEndpointSide::Producer,
+                super::StreamEndpointSide::Consumer,
+            ] {
+                for authored_by in [
+                    StreamTerminalAuthor::Guest,
+                    StreamTerminalAuthor::Host,
+                    StreamTerminalAuthor::Protocol,
+                ] {
+                    for terminal in [
+                        StreamTerminal::Failed(StreamError::Interrupted("session deleted".into())),
+                        StreamTerminal::Failed(StreamError::Failed(
+                            vec![Some((f32::NAN, f64::NAN))]
+                                .into_typed_schema_value()
+                                .unwrap()
+                                .into(),
+                        )),
+                        StreamTerminal::ConsumerCancelled {
+                            details: Some("reader dropped".into()),
+                        },
+                    ] {
+                        let request = super::StreamCancellationRequest {
+                            direction,
+                            side,
+                            authored_by,
+                            terminal,
+                        };
+                        assert_eq!(
+                            super::StreamCancellationRequest::from_value(&request.to_value())
+                                .unwrap(),
+                            request
+                        );
+                        #[cfg(feature = "full")]
+                        assert_eq!(
+                            crate::serialization::deserialize::<super::StreamCancellationRequest>(
+                                &crate::serialization::serialize(&request).unwrap()
+                            )
+                            .unwrap(),
+                            request
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn stream_and_attachment_id_golden_vectors() {
@@ -1957,7 +2227,7 @@ mod tests {
             AttachmentId::primary(
                 environment_id,
                 &agent_id,
-                &IdempotencyKey::new("550e8400-e29b-41d4-a716-446655440000".to_string()),
+                &InvocationId(uuid::uuid!("550e8400-e29b-41d4-a716-446655440000")),
             )
             .unwrap()
             .to_string(),
@@ -2065,7 +2335,7 @@ mod tests {
                 agent_id: "consumer".to_string(),
             },
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
-            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
         };
         let mut record = StreamConsumerItemValueRecord {
             format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
@@ -2114,7 +2384,7 @@ mod tests {
             callee_environment_id: session_environment_id,
             callee: session_authority.clone(),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(13)),
-            idempotency_key: IdempotencyKey::new("child-session".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543211)),
         };
         let consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
         let consumer = AgentId {
@@ -2126,7 +2396,7 @@ mod tests {
             callee_environment_id: consumer_environment_id,
             callee: consumer.clone(),
             callee_fingerprint: consumer_fingerprint,
-            idempotency_key: IdempotencyKey::new("parent-invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
         };
         let attachment_id = AttachmentId::primary(
             session_environment_id,
@@ -2154,7 +2424,7 @@ mod tests {
             AttachmentId::primary(
                 consumer_environment_id,
                 &consumer,
-                &IdempotencyKey::new("parent-invocation".to_string()),
+                &InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
             )
             .unwrap()
         );
@@ -2166,7 +2436,7 @@ mod tests {
 
         let mut relabelled_session = key;
         relabelled_session.session_key.idempotency_key =
-            IdempotencyKey::new("different-child-session".to_string());
+            InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543213));
         assert!(!relabelled_session.is_well_formed());
     }
 
@@ -2179,7 +2449,7 @@ mod tests {
             agent_id: "agent".to_string(),
         };
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
-        let idempotency_key = IdempotencyKey::new("invocation".to_string());
+        let idempotency_key = InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210));
         let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
@@ -2199,8 +2469,9 @@ mod tests {
         };
         let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
-            public_session_id: session_key.idempotency_key.value.clone(),
+            session_key: session_key.idempotency_key,
+            public_session_id: session_key.idempotency_key.to_string(),
+            route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
@@ -2245,7 +2516,7 @@ mod tests {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
             callee_fingerprint: fingerprint,
-            idempotency_key: IdempotencyKey::new("tool-invocation".to_string()),
+            idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         };
         let attachment_id =
             AttachmentId::primary(environment_id, &agent_id, &session_key.idempotency_key).unwrap();
@@ -2265,8 +2536,9 @@ mod tests {
         let argument = handle(6);
         let mut prepared = StreamSessionPreparedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
-            public_session_id: session_key.idempotency_key.value.clone(),
+            session_key: session_key.idempotency_key,
+            public_session_id: session_key.idempotency_key.to_string(),
+            route_scope: None,
             expiry_policy: StreamSessionExpiryPolicy::None,
             expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {

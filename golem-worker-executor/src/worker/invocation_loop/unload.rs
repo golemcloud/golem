@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 return true;
             }
             if matches!(kind, InterruptKind::Interrupt(_))
-                && let Some(key) = status.current_idempotency_key.clone()
+                && let Some(key) = status.current_idempotency_key
             {
                 self.parent
                     .store_invocation_failure(&key, &TrapType::Interrupt(kind))

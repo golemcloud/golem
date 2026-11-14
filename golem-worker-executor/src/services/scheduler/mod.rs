@@ -23,11 +23,10 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::StreamExt;
+use golem_common::model::InvocationId;
 use golem_common::model::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    AgentFingerprint, IdempotencyKey, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
-};
+use golem_common::model::{AgentFingerprint, OwnedAgentId, ScheduleId, ScheduledAction, ShardId};
 use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -83,7 +82,7 @@ pub trait SchedulerWorkerAccess {
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -131,7 +130,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         owned_agent_id: &OwnedAgentId,
         target_agent_fingerprint: AgentFingerprint,
         public_session_id: String,
-        session_key: IdempotencyKey,
+        session_key: InvocationId,
         expected_deadline_millis: u64,
     ) -> Result<(), WorkerExecutorError> {
         self.deref()

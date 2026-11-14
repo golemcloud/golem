@@ -17,8 +17,7 @@ use crate::durable_host::concurrent::{
     finish_prepared_access_to_live_at,
 };
 use crate::durable_host::durability::{
-    ClassifiedHostError, DurabilityHost, DurableCallTrapContext, HostFailureKind,
-    InFunctionRetryHost,
+    DurabilityHost, DurableCallTrapContext, InFunctionRetryHost,
 };
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
@@ -52,26 +51,27 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, Shared, try_join_all};
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamHandle as ProtoDurableStreamHandle, DurableStreamMapping,
-    InputStreamHighWater as ProtoInputStreamHighWater, InvocationResponse, OutputStreamEnd,
-    OutputStreamError, OutputStreamItem, StreamCancel, StreamInvocationIdentity, StreamMappingRole,
+    InputStreamHighWater as ProtoInputStreamHighWater, InvocationResponse, OutputStreamItem,
+    StreamDirection, StreamEnd, StreamInvocationIdentity, StreamMappingRole,
     ToolByteStreamRole as ProtoToolByteStreamRole, invocation_response,
 };
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
     InputStreamHighWater, LocalStreamReaderId, MAX_NEW_STREAM_HANDLES_PER_VALUE,
     MAX_PACKED_U8_STREAM_ITEM_SIZE, STREAM_CONSUMER_RECORD_FORMAT_VERSION, SessionStreamRole,
-    StreamAttachmentKey, StreamBindingRecord, StreamCallerAttemptRecord, StreamCancelReason,
-    StreamCancelRole, StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
-    StreamConsumerItemValueRecord, StreamConsumerObservation, StreamConsumerTerminal,
-    StreamConsumerTerminalRecord, StreamEndResult, StreamInvocationId, StreamItemsPayload,
-    StreamOffset, StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+    StreamAttachmentKey, StreamBindingRecord, StreamCallerAttemptRecord, StreamCancellationRequest,
+    StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
+    StreamConsumerItemValueRecord, StreamConsumerObservation, StreamConsumerTerminalRecord,
+    StreamEndpointSide, StreamError, StreamInvocationId, StreamItemsPayload, StreamOffset,
+    StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
     StreamReaderForwardPublication, StreamRecordReference, StreamRegistrationCoordinate,
     StreamRegistrationInvocation, StreamResumeOperation, StreamRootKind,
     StreamSessionDetachedRecord, StreamSessionInvocationResultRecord, StreamSessionKey,
     StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
     StreamSessionRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
-    StreamSourceKind, StreamTopologyActivatedRecord, StreamTopologyPreparedRecord,
-    StreamValuePathStep, ToolByteStreamRole,
+    StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin,
+    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
+    ToolByteStreamRole,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
@@ -111,8 +111,8 @@ mod output_replay;
 
 pub(crate) use forwarding::strip_typed_streams;
 use forwarding::{
-    collect_stream_paths, forwarded_durable_input_reference, stream_cancel_reason_to_proto,
-    stream_element_schema, validate_forwarded_durable_input_schemas,
+    collect_stream_paths, forwarded_durable_input_reference, stream_element_schema,
+    validate_forwarded_durable_input_schemas,
 };
 pub use forwarding::{
     durable_stream_mapping_from_proto, durable_stream_mapping_to_proto, strip_streams,
@@ -799,15 +799,15 @@ pub struct DurableInputProducer {
     pending_activity: Option<Arc<OnceLock<RuntimeActivityId>>>,
     live_admission: Option<oneshot::Receiver<Result<(), WorkerExecutorError>>>,
     pending_drop: Option<BoxFuture<'static, Result<(), SessionError>>>,
-    pending_guest_value: Option<DurableInputItem>,
+    pending_guest_value: Option<wasmtime::Result<DurableInputItem>>,
     guest_delivery: Option<oneshot::Receiver<Result<StreamReadObserver, WorkerExecutorError>>>,
     pending_observation: Option<PendingConsumerObservation>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
-    /// Receives the reason of a cancel by the input's producer before the end is returned.
-    producer_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
+    /// Receives the producer's failure before the byte source returns its end.
+    producer_cancel: Option<Arc<OnceLock<StreamError>>>,
     /// See [`Self::with_pending_reads_past_a_completed_record`].
     pending_past_a_completed_record: bool,
 }
@@ -837,8 +837,10 @@ struct DurableInputLiveAdmission<Ctx> {
 #[derive(Debug)]
 pub(crate) enum DurableInputEvent {
     Item(SchemaValue),
-    End,
-    Cancelled,
+    Terminal {
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
+    },
 }
 
 pub(crate) struct DurableInputReceiveAdmission {
@@ -854,7 +856,8 @@ pub struct DroppedDurableInput {
     streams: StreamSession,
     transport_stream_id: u64,
     consumer_read_ordinal: u64,
-    role: StreamCancelRole,
+    direction: SessionStreamRole,
+    side: StreamEndpointSide,
 }
 
 struct DurableInputDropTask {
@@ -875,8 +878,8 @@ pub struct DurableByteInputProducer(pub DurableInputProducer);
 #[derive(Debug)]
 enum ToolStdinDelivery {
     Chunk(Vec<u8>),
-    /// The one item that says that the stdin was cancelled. The stream ends after it.
-    Cancelled,
+    /// The producer's failure item. The stream ends after it.
+    Failed(ByteStreamFailure),
     End(StreamResult),
 }
 
@@ -899,8 +902,8 @@ enum ToolStdinDelivery {
 /// later attempt of the same call finds the stdin as the client left it.
 pub struct DurableToolStdinProducer {
     input: DurableInputProducer,
-    producer_cancel: Arc<OnceLock<StreamCancelReason>>,
-    /// The `cancelled` item was handed over. The next read ends the stream.
+    producer_cancel: Arc<OnceLock<StreamError>>,
+    /// The failure item was handed over. The next read ends the stream.
     ended: bool,
 }
 

@@ -12,7 +12,6 @@ interface guest {
   use common.{tool, tool-error, invocation-result};
   use streams.{byte-stream-item, tool-output-writer};
   use golem:core/types@2.0.0.{typed-schema-value};
-  use golem:agent/common@2.0.0.{principal};
 
   /// Enumerate the tools this component exposes. The returned metadata
   /// is complete (full command tree and schema graph).
@@ -46,9 +45,8 @@ interface guest {
   /// writer abandons it. The first selected terminal is immutable.
   /// `stderr` follows the same independent attachment contract as `stdout`.
   ///
-  /// `principal` carries the caller's authenticated identity for
-  /// authorization and audit, identical in semantics to the parameter
-  /// of the same name in `golem:agent/guest.invoke`.
+  /// The caller's authenticated identity, for authorization and audit, is
+  /// available from `golem:agent/invocation-context.caller`.
   invoke: async func(
     tool-name:    string,
     command-path: list<string>,
@@ -56,13 +54,13 @@ interface guest {
     stdin:        option<stream<byte-stream-item>>,
     stdout:       option<own<tool-output-writer>>,
     stderr:       option<own<tool-output-writer>>,
-    principal:    principal,
   ) -> result<invocation-result, tool-error>;
 }
 
 world tool-guest {
   import golem:api/host@1.5.0;
   import golem:agent/host@2.0.0;
+  import golem:agent/invocation-context@2.0.0;
   import host;
   import common;
   export guest;

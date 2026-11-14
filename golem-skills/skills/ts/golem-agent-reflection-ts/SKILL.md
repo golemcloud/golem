@@ -68,7 +68,7 @@ const invocation = await counter.method('add').invoke({ by: 5 });
 
 console.log(invocation.value);
 console.log(invocation.metadata.agentId);
-console.log(invocation.metadata.idempotencyKey);
+console.log(invocation.metadata.invocationId.toString()); // <agent-id>.<uuid>
 ```
 
 Pass optional creation-time overrides as a second factory argument, with one canonical JSON value per declared path:
@@ -217,7 +217,7 @@ const request = requestType.client.newPhantom({ route: 'summarize' });
 if ('client' in request) throw new Error('unexpected durable phantom wrapper');
 
 const result = await request.method('run').invoke({ text: 'hello' });
-console.log(result.metadata.agentId, result.metadata.idempotencyKey);
+console.log(result.metadata.agentId, result.metadata.invocationId.toString());
 ```
 
 `getPhantom` is also available when the caller already holds the phantom ID.

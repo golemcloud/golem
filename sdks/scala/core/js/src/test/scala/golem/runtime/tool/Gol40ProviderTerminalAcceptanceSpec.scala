@@ -333,8 +333,7 @@ object Gol40ProviderTerminalAcceptanceSpec extends ZIOSpecDefault {
         emptyInput(tool),
         stdin.stdin,
         stdout.stdout,
-        stderr.stdout,
-        js.Dynamic.literal("tag" -> "anonymous")
+        stderr.stdout
       )
       .asInstanceOf[js.Promise[JsInvocationResult]]
 

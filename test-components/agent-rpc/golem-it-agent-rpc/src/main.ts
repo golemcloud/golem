@@ -27,6 +27,7 @@ const PromiseIdSchema = z.object({
     }),
     agentId: z.string(),
   }),
+  fingerprint: z.object({ highBits: s.u64(), lowBits: s.u64() }),
   oplogIdx: s.u64(),
 });
 
@@ -68,7 +69,7 @@ export const ChildAgentImpl = ChildAgent.implement({
 const EphemeralReuseReport = z.object({
   value: z.string(),
   agentId: z.string(),
-  idempotencyKey: z.string(),
+  invocationId: z.string(),
   category: z.string(),
   errorTag: z.string(),
   details: z.string(),
@@ -87,7 +88,7 @@ const ReflectionDiscoveryReport = z.object({
 const ReflectedEphemeralReport = z.object({
   value: z.string(),
   agentId: z.string(),
-  idempotencyKey: z.string(),
+  invocationId: z.string(),
   proxyHasAgentId: z.boolean(),
 });
 
@@ -195,7 +196,7 @@ export const TestAgentImpl = TestAgent.implement({
         return {
           value: first.value,
           agentId: first.metadata.agentId,
-          idempotencyKey: first.metadata.idempotencyKey,
+          invocationId: first.metadata.invocationId.toString(),
           category: error.cause.tag,
           errorTag: error.cause.error.tag,
           details: error.cause.error.details,
@@ -278,7 +279,7 @@ export const TestAgentImpl = TestAgent.implement({
       return {
         value: invocation.value,
         agentId: invocation.metadata.agentId,
-        idempotencyKey: invocation.metadata.idempotencyKey,
+        invocationId: invocation.metadata.invocationId.toString(),
         proxyHasAgentId,
       };
     },

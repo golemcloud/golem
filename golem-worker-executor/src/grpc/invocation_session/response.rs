@@ -164,7 +164,7 @@ pub(super) async fn send_unvalidated_rejection(
     responses: &mpsc::Sender<InvocationResponse>,
     reason: InvocationRejectionReason,
     error: String,
-    idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    idempotency_key: Option<golem_schema::proto::golem::common::Uuid>,
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
     worker_error: Option<WorkerExecutionError>,
 ) {
@@ -204,7 +204,17 @@ pub(super) async fn send_rejection_with_worker_error(
         responses,
         reason,
         error,
-        start.idempotency_key.clone(),
+        (start.mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32)
+            .then(|| {
+                start
+                    .idempotency_key
+                    .as_ref()?
+                    .value
+                    .parse::<golem_common::model::InvocationId>()
+                    .ok()
+                    .map(Into::into)
+            })
+            .flatten(),
         start.agent_id.clone(),
         worker_error,
     )

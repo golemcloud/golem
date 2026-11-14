@@ -66,21 +66,23 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRequest, ForkStreamSlotResponse,
 };
 use golem_common::base_model::oplog::QueuedCardEvent;
-use golem_common::base_model::regions::DeletedRegionsBuilder;
+use golem_common::base_model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::durable_stream::{
+    StreamSessionRecord, StreamTerminal, StreamTerminalAuthor,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     CreateRequest, DurableInvocationId, DurableStreamEventSummary, FilesystemSnapshotName,
     OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentFingerprint, AgentMetadata, InvocationId, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -814,10 +816,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
-        let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
+        let mut pending_invocation_keys: Vec<(InvocationId, OplogIndex)> = Vec::new();
         // The entries that the update queue reads, kept from the copy, so the fold over them
         // after the copy, when the deleted regions are known, reads no entry again.
         let mut update_entries: Vec<(OplogIndex, KeptUpdateEntry)> = Vec::new();
+        // The bootstrap ranges that the copied restore points name.
+        let mut restore_points: Vec<(OplogIndex, OplogRegion)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -884,6 +888,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
             }
+            if let Some(range) = crate::worker::cut_point::bootstrap_range_named_by(&entry) {
+                restore_points.push((oplog_index, range.clone()));
+            }
 
             // For pending invocations, deleted regions don't matter - both inputs
             // and outputs in deleted regions are still accounted for (see calculate_pending_invocations).
@@ -897,17 +904,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             };
             match &entry {
                 OplogEntry::PendingAgentInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } if manual_update.is_none() => {
-                    pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
+                    pending_invocation_keys.push((*idempotency_key, oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
                 OplogEntry::CancelPendingInvocation {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
@@ -921,6 +931,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // The update queue pairs the update entries as the status fold does: entries in a
         // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
+        crate::worker::cut_point::validate_restore_point_ranges(
+            restore_points.iter().map(|(index, range)| (*index, range)),
+            oplog_index_cut_off,
+            &deleted_regions,
+        )
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {oplog_index_cut_off}: {error}"
+            ))
+        })?;
         let (cancellations, baseline) = update_entries
             .into_iter()
             .fold(ForkUpdates::default(), |updates, (oplog_index, entry)| {
@@ -971,7 +991,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             new_oplog
                 .add(OplogEntry::CancelPendingInvocation {
                     timestamp: now,
-                    idempotency_key,
+                    invocation_id: idempotency_key,
                 })
                 .await?;
         }
@@ -1022,7 +1042,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     &mapping.handle.source_invocation,
                     mapping.handle.stream_id,
                     candidate.initial.clone(),
-                    candidate.export.closed,
+                    candidate
+                        .export
+                        .closed
+                        .then_some((StreamTerminalAuthor::Protocol, StreamTerminal::Finished)),
                     None,
                 )
                 .await
@@ -1482,14 +1505,20 @@ const CANCELLED_BY_FORK: &str = "cancelled by fork";
 
 #[cfg(test)]
 mod tests {
+    use golem_common::model::{IdempotencyKey, InvocationId};
+    use uuid::Uuid;
+    fn test_invocation_id(value: String) -> InvocationId {
+        InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+    }
+
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::agent::Principal;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogPayload, UpdateDescription};
-    use golem_common::model::{AgentInvocationPayload, IdempotencyKey};
     use golem_common::schema::SchemaValue;
     use std::collections::HashSet;
     use test_r::test;
@@ -1507,7 +1536,7 @@ mod tests {
         let target = agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("fork-wallet-pin".to_string()),
+            invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
@@ -1669,6 +1698,7 @@ mod tests {
                 snapshot_index: index(snapshot),
                 snapshot_revision: revision(1),
                 filesystem_snapshot: name,
+                snapshot_bootstrap: None,
             },
             Some(index(admission)),
         )
@@ -1690,7 +1720,7 @@ mod tests {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -1701,7 +1731,7 @@ mod tests {
     }
 
     fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     /// The updates of the prefix `entries` from oplog index 2, with the regions in `deleted`.
@@ -1860,7 +1890,7 @@ mod tests {
         let invocation = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -1932,7 +1962,7 @@ mod tests {
         let stored = OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::now_utc(),
             not_before: None,
-            idempotency_key: IdempotencyKey::fresh(),
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::ManualUpdate {

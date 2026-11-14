@@ -20,6 +20,7 @@ import {
 import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 import { componentConfiguration } from "../build/component.mjs"
 import config from "../vitest.config.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdk = resolve(root, "dist/component")
@@ -169,7 +170,9 @@ describe("capability-sensitive component exports", () => {
       const principal = { tag: "anonymous" }
       const path = "revisions/release-17/file.txt"
       const input = schemaValueToWit(v.record([v.string(path)]))
-      await runtime.golemAgent200Guest.initialize("RuntimeMetadata", input, principal)
+      await withCaller(principal, () =>
+        runtime.golemAgent200Guest.initialize("RuntimeMetadata", input),
+      )
       __setGetConfigValueImpl((configPath, graph) => {
         if (configPath.join("/") === "apiUrl")
           return schemaValueToWit(v.string("https://example.test/api"))
@@ -179,10 +182,8 @@ describe("capability-sensitive component exports", () => {
       })
       expect(
         schemaValueFromWit(
-          await runtime.golemAgent200Guest.invoke(
-            "configured",
-            schemaValueToWit(v.record([])),
-            principal,
+          await withCaller(principal, () =>
+            runtime.golemAgent200Guest.invoke("configured", schemaValueToWit(v.record([]))),
           ),
         ),
       ).toEqual(v.record([v.string("https://example.test/api"), v.bool(true)]))
@@ -193,19 +194,18 @@ describe("capability-sensitive component exports", () => {
       await restored.loadSnapshot.load(snapshot)
       expect(
         schemaValueFromWit(
-          await restored.golemAgent200Guest.invoke(
-            "path",
-            schemaValueToWit(v.record([])),
-            principal,
+          await withCaller(principal, () =>
+            restored.golemAgent200Guest.invoke("path", schemaValueToWit(v.record([]))),
           ),
         ),
       ).toEqual(v.string(path))
       for (const invalid of ["workspace/", "other/file.txt"]) {
         const rejected = instantiate()
-        await rejected.golemAgent200Guest.initialize(
-          "RuntimeMetadata",
-          schemaValueToWit(v.record([v.string(invalid)])),
-          principal,
+        await withCaller(principal, () =>
+          rejected.golemAgent200Guest.initialize(
+            "RuntimeMetadata",
+            schemaValueToWit(v.record([v.string(invalid)])),
+          ),
         )
         await expect(rejected.saveSnapshot.save()).rejects.toBeDefined()
       }
@@ -223,12 +223,12 @@ describe("capability-sensitive component exports", () => {
       v.option(v.string("29")),
     ])
     const input = schemaValueToWit(v.record([payload]))
-    await runtime.golemAgent200Guest.initialize(
-      "ConcreteAgent",
-      schemaValueToWit(v.record([])),
-      principal,
+    await withCaller(principal, () =>
+      runtime.golemAgent200Guest.initialize("ConcreteAgent", schemaValueToWit(v.record([]))),
     )
-    const result = await runtime.golemAgent200Guest.invoke("echo", input, principal)
+    const result = await withCaller(principal, () =>
+      runtime.golemAgent200Guest.invoke("echo", input),
+    )
     expect(schemaValueFromWit(result)).toEqual(v.ok(payload))
     for (const optional of [
       v.record([v.option(undefined), v.option(undefined), v.option(undefined)]),
@@ -241,10 +241,11 @@ describe("capability-sensitive component exports", () => {
     ]) {
       expect(
         schemaValueFromWit(
-          await runtime.golemAgent200Guest.invoke(
-            "optionalFields",
-            schemaValueToWit(v.record([optional])),
-            principal,
+          await withCaller(principal, () =>
+            runtime.golemAgent200Guest.invoke(
+              "optionalFields",
+              schemaValueToWit(v.record([optional])),
+            ),
           ),
         ),
       ).toEqual(optional)
@@ -266,7 +267,9 @@ describe("capability-sensitive component exports", () => {
     })
     const invokeTool = async () =>
       schemaValueFromWit(
-        await runtime.golemAgent200Guest.invoke("tool", schemaValueToWit(v.record([])), principal),
+        await withCaller(principal, () =>
+          runtime.golemAgent200Guest.invoke("tool", schemaValueToWit(v.record([]))),
+        ),
       )
     try {
       expect(await invokeTool()).toEqual(v.ok(v.f64(71)))
@@ -292,20 +295,19 @@ describe("capability-sensitive component exports", () => {
     const text = v.variant(0, { tag: "text", text: "hello", language: "en" })
     expect(
       schemaValueFromWit(
-        await runtime.golemAgent200Guest.invoke(
-          "text",
-          schemaValueToWit(v.record([text])),
-          principal,
+        await withCaller(principal, () =>
+          runtime.golemAgent200Guest.invoke("text", schemaValueToWit(v.record([text]))),
         ),
       ),
     ).toEqual(text)
     await expect(
-      runtime.golemAgent200Guest.invoke(
-        "text",
-        schemaValueToWit(
-          v.record([v.variant(0, { tag: "text", text: "bonjour", language: "fr" })]),
+      withCaller(principal, () =>
+        runtime.golemAgent200Guest.invoke(
+          "text",
+          schemaValueToWit(
+            v.record([v.variant(0, { tag: "text", text: "bonjour", language: "fr" })]),
+          ),
         ),
-        principal,
       ),
     ).rejects.toBeDefined()
     const content = v.list([
@@ -318,31 +320,30 @@ describe("capability-sensitive component exports", () => {
     ])
     expect(
       schemaValueFromWit(
-        await runtime.golemAgent200Guest.invoke(
-          "content",
-          schemaValueToWit(v.record([content])),
-          principal,
+        await withCaller(principal, () =>
+          runtime.golemAgent200Guest.invoke("content", schemaValueToWit(v.record([content]))),
         ),
       ),
     ).toEqual(v.list([v.string("count:38"), v.string("text:5"), v.string("binary:2")]))
     await expect(
-      runtime.golemAgent200Guest.invoke(
-        "content",
-        schemaValueToWit(
-          v.record([
-            v.list([
-              v.variant(
-                1,
-                v.variant(0, {
-                  tag: "binary",
-                  bytes: new Uint8Array([3]),
-                  mimeType: "text/plain",
-                }),
-              ),
+      withCaller(principal, () =>
+        runtime.golemAgent200Guest.invoke(
+          "content",
+          schemaValueToWit(
+            v.record([
+              v.list([
+                v.variant(
+                  1,
+                  v.variant(0, {
+                    tag: "binary",
+                    bytes: new Uint8Array([3]),
+                    mimeType: "text/plain",
+                  }),
+                ),
+              ]),
             ]),
-          ]),
+          ),
         ),
-        principal,
       ),
     ).rejects.toBeDefined()
     __setRpcResponder((call) => {
@@ -354,10 +355,8 @@ describe("capability-sensitive component exports", () => {
     try {
       expect(
         schemaValueFromWit(
-          await runtime.golemAgent200Guest.invoke(
-            "remote",
-            schemaValueToWit(v.record([v.f64(17)])),
-            principal,
+          await withCaller(principal, () =>
+            runtime.golemAgent200Guest.invoke("remote", schemaValueToWit(v.record([v.f64(17)]))),
           ),
         ),
       ).toEqual(v.ok(v.f64(41)))
@@ -380,10 +379,8 @@ describe("capability-sensitive component exports", () => {
     ])
     expect(
       schemaValueFromWit(
-        await runtime.golemAgent200Guest.invoke(
-          "rich",
-          schemaValueToWit(v.record([rich])),
-          principal,
+        await withCaller(principal, () =>
+          runtime.golemAgent200Guest.invoke("rich", schemaValueToWit(v.record([rich]))),
         ),
       ),
     ).toEqual(rich)
@@ -391,14 +388,15 @@ describe("capability-sensitive component exports", () => {
     const fixed = wrongListTag.valueNodes.findIndex((n) => n.tag === "fixed-list-value")
     wrongListTag.valueNodes[fixed] = { tag: "list-value", val: [0, 1] }
     await expect(
-      runtime.golemAgent200Guest.invoke("rich", wrongListTag, principal),
+      withCaller(principal, () => runtime.golemAgent200Guest.invoke("rich", wrongListTag)),
     ).rejects.toBeDefined()
-    const failure = await runtime.golemAgent200Guest.invoke(
-      "echo",
-      schemaValueToWit(
-        v.record([v.record([v.variant(0, v.record([v.string("denied")])), v.option(undefined)])]),
+    const failure = await withCaller(principal, () =>
+      runtime.golemAgent200Guest.invoke(
+        "echo",
+        schemaValueToWit(
+          v.record([v.record([v.variant(0, v.record([v.string("denied")])), v.option(undefined)])]),
+        ),
       ),
-      principal,
     )
     expect(schemaValueFromWit(failure)).toEqual(v.err(v.string("denied")))
 
@@ -415,24 +413,23 @@ describe("capability-sensitive component exports", () => {
         }),
       },
     }
-    const collected = await runtime.golemAgent200Guest.invoke(
-      "collect",
-      {
+    const collected = await withCaller(principal, () =>
+      runtime.golemAgent200Guest.invoke("collect", {
         root: 1,
         valueNodes: [
           { tag: "stream-value", val: stream },
           { tag: "record-value", val: [0] },
         ],
-      },
-      principal,
+      }),
     )
     expect(schemaValueFromWit(collected)).toEqual(v.list([v.f64(17), v.f64(41)]))
     expect(closed).not.toHaveBeenCalled()
     await expect(
-      runtime.golemAgent200Guest.invoke(
-        "echo",
-        schemaValueToWit(v.record([v.record([v.variant(0), v.option(undefined)])])),
-        principal,
+      withCaller(principal, () =>
+        runtime.golemAgent200Guest.invoke(
+          "echo",
+          schemaValueToWit(v.record([v.record([v.variant(0), v.option(undefined)])])),
+        ),
       ),
     ).rejects.toBeDefined()
     const reads: string[] = []
@@ -443,10 +440,8 @@ describe("capability-sensitive component exports", () => {
       return { root: 0, valueNodes: [{ tag: "secret-value", val: {} }] }
     })
     try {
-      const configured = await runtime.golemAgent200Guest.invoke(
-        "configured",
-        schemaValueToWit(v.record([])),
-        principal,
+      const configured = await withCaller(principal, () =>
+        runtime.golemAgent200Guest.invoke("configured", schemaValueToWit(v.record([]))),
       )
       expect(schemaValueFromWit(configured)).toEqual(v.record([v.f64(46), v.bool(true)]))
       expect(reads).toEqual(["nested/number", "token", "token"])
@@ -496,14 +491,20 @@ describe("capability-sensitive component exports", () => {
         await expect(runtime.loadSnapshot.load()).rejects.toThrow("no agent")
       } else {
         const input = schemaValueToWit(v.record([v.f64(17)]))
-        await runtime.golemAgent200Guest.initialize("CapabilityCounter", input, {
-          tag: "anonymous",
-        })
+        await withCaller(
+          {
+            tag: "anonymous",
+          },
+          () => runtime.golemAgent200Guest.initialize("CapabilityCounter", input),
+        )
         expect(
           schemaValueFromWit(
-            await runtime.golemAgent200Guest.invoke("get", schemaValueToWit(v.record([])), {
-              tag: "anonymous",
-            }),
+            await withCaller(
+              {
+                tag: "anonymous",
+              },
+              () => runtime.golemAgent200Guest.invoke("get", schemaValueToWit(v.record([]))),
+            ),
           ),
         ).toEqual(v.f64(17))
         const snapshot = await runtime.saveSnapshot.save()
@@ -513,9 +514,12 @@ describe("capability-sensitive component exports", () => {
         await restored.loadSnapshot.load(snapshot)
         expect(
           schemaValueFromWit(
-            await restored.golemAgent200Guest.invoke("get", schemaValueToWit(v.record([])), {
-              tag: "anonymous",
-            }),
+            await withCaller(
+              {
+                tag: "anonymous",
+              },
+              () => restored.golemAgent200Guest.invoke("get", schemaValueToWit(v.record([]))),
+            ),
           ),
         ).toEqual(v.f64(17))
       }
@@ -524,53 +528,57 @@ describe("capability-sensitive component exports", () => {
           compile(EffectRuntime.Schema.Struct({ value: EffectRuntime.Schema.Number })),
         )
         const value = EffectRuntime.Effect.runSync(codec.encode({ value: 19 }))
-        const result = await runtime.golemTool010Guest.invoke(
-          "double",
-          [],
-          { graph: codec.schemaGraph, value },
-          undefined,
-          undefined,
-          undefined,
-          { tag: "anonymous" },
+        const result = await withCaller({ tag: "anonymous" }, () =>
+          runtime.golemTool010Guest.invoke(
+            "double",
+            [],
+            { graph: codec.schemaGraph, value },
+            undefined,
+            undefined,
+            undefined,
+          ),
         )
         expect(schemaValueFromWit(result.result.value)).toEqual(v.f64(38))
         const asymmetric = EffectRuntime.Effect.runSync(
           compile(EffectRuntime.Schema.Struct({ value: EffectRuntime.Schema.String })),
         )
         await expect(
-          runtime.golemTool010Guest.invoke(
-            "double",
-            [],
-            { graph: asymmetric.schemaGraph, value },
-            undefined,
-            undefined,
-            undefined,
-            { tag: "anonymous" },
+          withCaller({ tag: "anonymous" }, () =>
+            runtime.golemTool010Guest.invoke(
+              "double",
+              [],
+              { graph: asymmetric.schemaGraph, value },
+              undefined,
+              undefined,
+              undefined,
+            ),
           ),
         ).rejects.toMatchObject({ tag: "invalid-input" })
         await expect(
-          runtime.golemTool010Guest.invoke(
-            "double",
-            [],
-            { graph: { typeNodes: [], defs: [], root: 99 }, value },
-            undefined,
-            undefined,
-            undefined,
-            { tag: "anonymous" },
+          withCaller({ tag: "anonymous" }, () =>
+            runtime.golemTool010Guest.invoke(
+              "double",
+              [],
+              { graph: { typeNodes: [], defs: [], root: 99 }, value },
+              undefined,
+              undefined,
+              undefined,
+            ),
           ),
         ).rejects.toMatchObject({ tag: "invalid-input" })
         await expect(
-          runtime.golemTool010Guest.invoke(
-            "double",
-            [],
-            {
-              graph: { typeNodes: [], defs: [], root: 99 },
-              value: { valueNodes: [{ tag: "record-value", val: [] }], root: 0 },
-            },
-            undefined,
-            undefined,
-            undefined,
-            { tag: "anonymous" },
+          withCaller({ tag: "anonymous" }, () =>
+            runtime.golemTool010Guest.invoke(
+              "double",
+              [],
+              {
+                graph: { typeNodes: [], defs: [], root: 99 },
+                value: { valueNodes: [{ tag: "record-value", val: [] }], root: 0 },
+              },
+              undefined,
+              undefined,
+              undefined,
+            ),
           ),
         ).rejects.toMatchObject({ tag: "invalid-input" })
       }
@@ -589,18 +597,19 @@ describe("capability-sensitive component exports", () => {
           { get: async () => input, cancel() {}, [Symbol.dispose]() {} },
           undefined,
         ])
-        const result = await runtime.toolMiddlewareGuest.invokeToolMiddleware(
-          "passthrough",
-          "target",
-          {},
-          input,
-          ["nested"],
-          input,
-          undefined,
-          undefined,
-          undefined,
-          { tag: "anonymous" },
-          { invoke },
+        const result = await withCaller({ tag: "anonymous" }, () =>
+          runtime.toolMiddlewareGuest.invokeToolMiddleware(
+            "passthrough",
+            "target",
+            {},
+            input,
+            ["nested"],
+            input,
+            undefined,
+            undefined,
+            undefined,
+            { invoke },
+          ),
         )
         expect(invoke).toHaveBeenCalledOnce()
         expect(invoke.mock.calls[0]).toEqual([["nested"], input, undefined])

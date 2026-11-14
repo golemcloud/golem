@@ -185,6 +185,9 @@ pub(super) struct BegunCallExecutionScope {
     /// when it begins, in guest call order, so live execution and replay agree on it. `None`
     /// outside an entity Store with logical key positions, and for accessor calls.
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// The agent invocation that runs when the call begins. The call's retry errors name it, also
+    /// when the call outlives it.
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -199,6 +202,7 @@ impl BegunCallExecutionScope {
             observational_owner: self.observational_owner,
             invocation_id: self.invocation_id,
             logical_key_position: self.logical_key_position,
+            agent_invocation: self.agent_invocation,
         }
     }
 }
@@ -218,6 +222,8 @@ pub(super) struct CallExecutionScope {
     pub(super) invocation_id: Option<DurableInvocationId>,
     /// See [`BegunCallExecutionScope::logical_key_position`].
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// See [`BegunCallExecutionScope::agent_invocation`].
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl CallExecutionScope {

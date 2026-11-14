@@ -16,15 +16,18 @@ mod endpoints;
 mod memory;
 mod publication;
 mod queue;
+mod state;
 mod stream_producer;
 
 use queue::close_cause_eq;
+use state::{AttachmentMode, AttachmentTerminalState};
 
 use crate::preview2::golem::tool::host::{
     ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
 };
 use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
+#[cfg(test)]
 use bytes::Bytes;
 use golem_common::model::oplog::attachment::{AcceptedAttachmentWriteEnd, ToolAttachmentId};
 use std::collections::{BTreeSet, VecDeque};
@@ -110,15 +113,6 @@ struct AttachmentCharge {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AttachmentMode {
-    Pending,
-    Live,
-    Completion { published: bool },
-    TerminalOnly,
-    Discard,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolAttachmentModeMetadata {
     Pending,
     Live,
@@ -187,13 +181,8 @@ struct AttachmentState {
     accepted_completion_bytes: usize,
     accepted_bytes: u64,
     delivered_bytes: u64,
-    terminal: Option<ByteStreamCloseCause>,
-    terminal_pending: bool,
-    owner_terminal_reserved: bool,
-    terminal_end: Option<golem_common::model::OplogIndex>,
+    terminal: AttachmentTerminalState,
     owner_fenced: bool,
-    host_resource_exhausted: bool,
-    terminal_item_delivered: bool,
     producer_active: bool,
     consumer_active: bool,
     guest_watchers: usize,
@@ -328,6 +317,7 @@ pub(super) enum AttachmentStreamRead {
     },
 }
 
+#[cfg(test)]
 pub(crate) struct RawAttachmentStreamProducer {
     source: AttachmentStreamProducer,
     remainder: Bytes,

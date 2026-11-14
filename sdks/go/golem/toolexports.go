@@ -17,7 +17,6 @@ package golem
 import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
@@ -39,7 +38,7 @@ func init() {
 	}
 	toolExports.Exports.Invoke = func(
 		toolName string, _ []string, _ types.TypedSchemaValue,
-		_ toolExports.Stdin, _ toolExports.Stdout, _ toolExports.Stderr, _ common.Principal,
+		_ toolExports.Stdin, _ toolExports.Stdout, _ toolExports.Stderr,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 	}
@@ -52,7 +51,7 @@ func init() {
 	mwExports.Exports.InvokeToolMiddleware = func(
 		middlewareName string, _ string, _ toolCommon.Tool, _ types.TypedSchemaValue, _ []string,
 		_ types.TypedSchemaValue, _ mwExports.Stdin, _ mwExports.Stdout, _ mwExports.Stderr,
-		_ common.Principal, _ *underlying.UnderlyingTool,
+		_ *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(middlewareName))
 	}

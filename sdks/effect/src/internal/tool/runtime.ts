@@ -3,6 +3,7 @@ import type * as Host from "golem:tool/host@0.1.0"
 import type * as Streams from "golem:tool/streams@0.1.0"
 import { Cause, Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
+import { immediateCaller } from "../../host/InvocationContextClient.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
 const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
@@ -37,7 +38,6 @@ export async function invokeRegistered(
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   stdout: Streams.ToolOutputWriter | undefined,
   stderr: Streams.ToolOutputWriter | undefined,
-  principal: unknown,
 ): Promise<Common.InvocationResult> {
   const stdinIterator = stdin?.[Symbol.asyncIterator]()
   const output = (name: "stdout" | "stderr", writer: Streams.ToolOutputWriter | undefined) => {
@@ -170,7 +170,7 @@ export async function invokeRegistered(
         .decodeInput(input)
         .pipe(Effect.mapError((cause) => asError({ tag: "invalid-input", val: String(cause) })))
       const invocation = handler(decoded, {
-        principal,
+        principal: yield* immediateCaller,
         stdin: bytes(stdinIterator),
         stdout: stdoutOutput.consume,
         stderr: stderrOutput.consume,

@@ -21,7 +21,6 @@ use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 #[cfg(feature = "export_golem_agentic")]
-use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::tool::streams::{
     ByteStreamFailure, StreamWriteError, ToolOutputWriter,
 };
@@ -92,9 +91,9 @@ pub fn install_tool_exports() {
     let _ = super::exports::TOOL.set(super::exports::ToolHooks {
         discover: ToolRuntime::discover_tools,
         get: ToolRuntime::get_tool,
-        invoke: |name, path, input, stdin, stdout, stderr, principal| {
+        invoke: |name, path, input, stdin, stdout, stderr| {
             Box::pin(ToolRuntime::invoke(
-                name, path, input, stdin, stdout, stderr, principal,
+                name, path, input, stdin, stdout, stderr,
             ))
         },
     });
@@ -122,10 +121,10 @@ impl Guest for ToolRuntime {
         stdin: Option<InputStream>,
         stdout: Option<ToolOutputWriter>,
         stderr: Option<ToolOutputWriter>,
-        principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         let invoker = get_tool_invoker_by_name(&tool_name)
             .ok_or_else(|| ToolError::InvalidToolName(tool_name.clone()))?;
+        let principal = crate::agentic::immediate_caller();
         invoker(command_path, input, stdin, stdout, stderr, principal).await
     }
 }

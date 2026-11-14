@@ -14,7 +14,7 @@
 
 use super::{
     AccountId, ActivatePluginRequest, AgentInvocation, AgentMetadataDto, AgentMetadataForGuests,
-    AuthCtx, DeactivatePluginRequest, HasAll, IdempotencyKey, OplogIndex, PluginPriority,
+    AuthCtx, DeactivatePluginRequest, HasAll, OplogIndex, PluginPriority,
     ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, extract_principal,
 };
@@ -80,7 +80,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
             })?;
 
-        let idempotency_key: IdempotencyKey = request
+        let idempotency_key: golem_common::model::InvocationId = request
             .idempotency_key
             .ok_or(WorkerExecutorError::invalid_request(
                 "idempotency_key not found",
@@ -95,7 +95,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid account_id: {e}"))
             })?;
 
-        let config: Vec<(String, String)> = request.config.into_iter().collect();
+        let mut config: Vec<(String, String)> = request.config.into_iter().collect();
+        config.sort();
 
         let metadata_dto: AgentMetadataDto = request
             .metadata
@@ -105,10 +106,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid metadata: {e}"))
             })?;
 
+        let mut env: Vec<_> = metadata_dto.env.into_iter().collect();
+        env.sort();
         let metadata = AgentMetadataForGuests {
             agent_id: metadata_dto.agent_id,
             args: vec![],
-            env: metadata_dto.env.into_iter().collect(),
+            env,
             config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
             status: metadata_dto.status,
             component_revision: metadata_dto.component_revision,

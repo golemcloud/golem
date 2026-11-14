@@ -20,7 +20,7 @@ use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
-use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
+use crate::base_model::{Empty, InvocationId, OplogIndex, Timestamp};
 use crate::schema::TypedSchemaValue;
 use crate::{declare_structs, declare_unions};
 use golem_schema_derive::{FromSchema, IntoSchema};
@@ -223,8 +223,7 @@ impl PublicOplogEntry {
             Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
             Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
-            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
-            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
             _ => {}
         }
@@ -288,6 +287,7 @@ mod host_managed_redaction_tests {
     fn public_oplog_redacts_external_tool_custom_error() {
         let mut entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
             result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
                 result: PublicExternalToolResult::Failure(
                     SerializableToolRpcError::RemoteToolError(Box::new(
@@ -717,7 +717,7 @@ impl From<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPoli
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInitializationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub constructor_parameters: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
@@ -729,7 +729,7 @@ pub struct AgentInitializationParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethodInvocationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub method_name: String,
     pub function_input: TypedSchemaValue,
     pub trace_id: TraceId,
@@ -750,7 +750,7 @@ pub struct LoadSnapshotParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessOplogEntriesParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     // TODO
 }
 
@@ -767,7 +767,7 @@ pub struct ManualUpdateParameters {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalToolInvocationParameters {
-    pub idempotency_key: IdempotencyKey,
+    pub invocation_id: InvocationId,
     pub tool_name: String,
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,

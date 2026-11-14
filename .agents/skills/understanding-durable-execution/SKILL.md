@@ -121,9 +121,28 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -2188,6 +2207,63 @@ cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 (`CompletionDelivery::prepare_delivery`), which makes "crash after End, before delivery" safe
 without re-executing.
 
+## Invocation identity
+
+An invocation's owner-qualified identity is `OwnedInvocationId`: the owner agent and an
+`InvocationId`, the UUID-backed unique part. The server prints the owner-qualified identity as
+`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only `InvocationId`, in
+the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
+`AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
+dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
+input to the ID; the raw key is not stored.
+
+A request carries an `InvocationRequestKey`, and admission finalizes it with
+`finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
+(`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
+`durable_host/rpc/schedule.rs`):
+
+| Variant | Source | Unique part |
+|---|---|---|
+| `External { scope, key }` | an authenticated caller's key; `IdempotencyScope` is `user:`, `agent:` or `admin:…:as:` (`AuthCtx::idempotency_scope`) | UUIDv5 of (fingerprint, scope, operation, key) |
+| `Internal(key)` | a key Golem derived, such as `derive_idempotency_key` of the parent ID and the call's `Start` index | the same, with the fixed scope `internal` |
+| `RouteSession { scope, key }` | a Durable Streams session, scoped to the route for every caller | the same, with `route:<scope>` |
+| `Unkeyed(uuid)` | no key, or a caller without a scope: `AuthCtx::System`, and the HTTP route (`custom_api`) and MCP paths, which pass no scope | the retained random UUID |
+
+`InvocationRequestKey::external` turns a key from a caller without a scope into `Unkeyed`: such a
+key is ignored, never rejected or deduped. The operation is the method name, or
+`tool:<tool-name>/<command path>` for an agent-hosted tool. Every field is length-prefixed. The
+fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral or phantom owner
+has no fingerprint before it exists, so its owner ID comes from `owner_key(operation)`; the CLI
+derives the same owner to subscribe to its events. Keep the prepared request key, not the final ID,
+when a request is retried or forwarded: every retry finalizes it again against the same target.
+
+A key that is already accepted with a different request is an `IdempotencyConflict` (REST 422):
+`worker/ingress.rs::ensure_matching_invocation_payload` compares the stored request with
+`AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
+sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
+is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+or the request position kept with every result (`InvocationResultPosition::request`, in the
+in-memory membership and in the persisted result index). The status fold sets it to the
+`AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
+one cancelled or denied before it started (`fields.rs::InvocationRequests`). A duplicate check
+therefore reads the same number of entries however long the invocation ran.
+
+Terminals name their invocation. Replay rejects an `AgentInvocationFinished` whose ID differs from
+the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
+An invocation `Error` is a hint: a background retry task can outlive its invocation, so an `Error`
+naming a finished invocation is legal. The status fold attributes it only while that invocation
+runs, or for the agent's `PermissionDenied` rejection of a cancelled pending invocation
+(`worker/status/fields.rs`). A `Recovery` error never names an invocation (`check_well_formed`).
+
+Guests read their identity and caller through `golem:agent/invocation-context`
+(`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
+invocation start recorded, so they are not durable calls. An entity Store answers for its
+enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
+(initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
+`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
+
 ## Invocation queue and results
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
 (anything other than `LookupResult::New` returns without appending), then append
@@ -2267,8 +2343,8 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Streaming RPC consumes this hint during target preparation, before it builds stream mappings
    with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
-   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
-   never random.
+   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
+   `owner_key(operation)` — deterministic, never random.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
@@ -2372,6 +2448,85 @@ record. A record with a name on an executor without filesystem snapshots gives `
   replays the remaining old history against the new component; success is recorded during that
   replay.
 - No pending update — `try_load_snapshot` loads the selected periodic record.
+
+### Bootstrap blocks
+
+The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
+any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
+that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the
+instantiation; the *bootstrap range* is the region from the first to the last entry the
+initializer claimed or appended (hints inside it belong to the main history). Durability is never
+suppressed for `instantiate`.
+
+Every restore point names its range, and the status records carry it: `Snapshot.bootstrap` (the
+range of the generation that wrote the periodic record), `SuccessfulUpdate.bootstrap` (the
+target's own block for a snapshot-based update, the selected record's range for a
+snapshot-assisted one), and
+`SnapshotAssistedAutomatic.snapshot_bootstrap` in the strategy entry. On these entries `None` means
+the initializer made no durable call; the `SuccessfulUpdate` of a plain automatic update always
+names `None`.
+
+`ReplayBaseline.bootstrap` (`BootstrapSource`, filled by `plan_start`) decides where the
+initializer runs; `ReplayBaseline::initializer_replay` and `attempt_region` turn it into the
+cursor choice (`worker/filesystem_snapshots/mod.rs`):
+
+| Source | Baselines | Initializer runs on | Main cursor also skips |
+|---|---|---|---|
+| `Recorded(range)` | `Periodic`, `AssistedPending` (the selected record's range), `ManualPromoted`, `AssistedPromoted` (also under a plain `Automatic` head) | A `BootstrapTail::Strict` bootstrap cursor over the range; `None` is an empty strict cursor | — (the range lies in the skipped prefix of a periodic record, or in the regions a successful update committed) |
+| `Attempt { anchor }` | `ManualPending` (anchor `P`) | A `BootstrapTail::Live` cursor after the anchor: it replays what an interrupted earlier attempt recorded, then appends live | The attempt region `anchor+1..=horizon` |
+| `Positional` | `InitialFiles` | The main cursor, in its position | — |
+
+The bootstrap cursor (`ReplayState::new_for_bootstrap`) skips `1..=skip_through` and the deleted
+regions; a `Live` cursor also skips what the status skips after its anchor
+(`bootstrap_skipped_regions`), so it never replays the block of an earlier update in the queue. It
+has no owner wallet, records no replay events (so its `ReplayFinished` never reaches
+`replay_application::reserve`), and switches to live locally without publishing the
+generation's liveness or touching linear-memory reconciliation. `runtime.rs` installs it with
+`enter_bootstrap_phase` around `instantiate` and restores the main cursor with
+`finish_bootstrap_phase`, which checks that every recorded call of the block was claimed
+(`ensure_bootstrap_consumed`) and records the observed range on `DurableWorkerCtx`. While a
+bootstrap cursor is installed, only direct `ReadLocal`/`ReadRemote` calls outside the
+permission-card and fork families are admitted, and accessor calls are refused. The rule holds on
+the live cursor of a pending manual update too: every later start from the update replays the
+block on a strict cursor, which holds no invocation and no owner wallet, so it can return a
+recorded result but cannot repair a write or rebuild its pending state. A language runtime's
+initializer (Go's, Rust's) reads the environment, the arguments, clocks and random values, and
+those calls pass; a core initializer that makes a durable write fails a manual update and makes
+periodic records unusable, so its agent recovers by full replay. A refusal or a
+divergence is `RawStartError::Replay { diverged: true }`: a periodic record is rejected, a pending
+update fails (`UPDATE_REPLAY_FAILED` for a plain automatic one, `UPDATE_SNAPSHOT_INCOMPATIBLE` for
+a snapshot-assisted one, a failed update without a code for a manual one), and any other start ends
+with the error. No invocation is current during the phase.
+
+A pending snapshot-assisted update replays the source tail after its selected record on the
+target. That tail was recorded with the inputs of the record's bootstrap block, so the target's
+initializer replays that block strictly and records none of its own; its calls replay recorded
+results and run no live authorization. A target whose initializer makes other durable calls fails
+with `UPDATE_SNAPSHOT_INCOMPATIBLE`, as a plain automatic update fails when its initializer
+diverges from the original revision's block.
+
+The writers: `invocation_loop/snapshots.rs` writes the generation's range into every periodic
+`Snapshot`; `finalize_pending_snapshot_update` writes it into the snapshot-based
+`SuccessfulUpdate`, and `reserve` the replayed range into the snapshot-assisted one. `reserve` never takes a
+`SnapshotBased` update, so no `ReplayFinished` of the main cursor takes a manual update; only
+`finalize_pending_snapshot_update` finalizes it.
+`status/regions.rs` commits a successful snapshot-based update's `2..=P` with its bootstrap range,
+and a successful snapshot-assisted update's `2..=S`, which holds its range, as skipped; a failed
+snapshot-based update commits its attempt region `max(P, last_outcome)+1..=F-1`, where
+`last_outcome` is the latest outcome that ended a queue element, so the source revision never
+replays the target's calls. A snapshot-assisted attempt appends no target entry.
+`cut_point::validate_restore_point_ranges` refuses a revert or fork cut that retains a restore
+point but not its whole range.
+
+Tests: `tests/durability.rs::automatic_snapshot_every_2nd_invocation` (the initializer seed hash
+survives periodic recovery), and in `tests/hot_update.rs` the
+`a_snapshot_based_update_*`, `a_snapshot_assisted_update_*` (among them
+`a_snapshot_assisted_update_replays_a_source_tail_that_depends_on_the_initializer_seed`),
+`a_restart_right_after_a_snapshot_based_update_recovers_the_target_initializer_state`, `a_failed_snapshot_*_update_keeps_the_source_and_its_initializer_state`,
+`an_interrupted_snapshot_based_update_attempt_replays_its_initializer_calls_on_the_next_attempt`,
+`a_manual_update_whose_target_initializer_makes_a_write_fails_and_keeps_the_source` and
+`a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot` tests, and
+`tests/durability.rs::a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected`.
 
 Every start failure goes through `worker/start_outcome.rs::decide(role, head, RawStartError,
 lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `ManualPromoted`,
@@ -2845,7 +3000,15 @@ update then fails as a failed update, and the agent stays on its revision: chang
 `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
 agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
 the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+(`invocation_loop/snapshots.rs::snapshot_baseline_timestamp`). A periodic snapshot is needed only
+when an invocation that can change the state, not a `read_only` method, finished after the
+automatic record that a start would select (`invocation_loop/snapshots.rs::state_changed_since_snapshot`,
+`snapshot_selection::periodic_snapshot_holding_state`), so an idle agent writes no record. A record
+whose upload failed or that a start rejected does not count, so the next period takes the snapshot
+again. The
+Store records the index of that `AgentInvocationFinished` entry for replayed and live invocations
+alike (`DurableWorkerCtx::last_state_change`), so a change replayed after a restart still takes its
+pending snapshot. A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
@@ -3126,7 +3289,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two owner-relative journals are authoritative, nothing else.** A producer records
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` in its own oplog. Its persisted
+  `StreamRegistered`/`StreamItems`/`StreamTerminal` in its own oplog. Its persisted
   `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every
   cross-record source is explicit `StreamRecordReference::{Local, Foreign}`; a received handle
   remains `Foreign` even when it happens to name the receiving oplog's owner. Consumer records
@@ -3145,8 +3308,9 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
-  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; the first selected
+  terminal fences competing terminals. Completed replay still validates the recorded terminal.
+  Terminal outputs reconstruct from committed records without reattachment.
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
@@ -3342,7 +3506,9 @@ Four exactly-once contracts coexist and must not be conflated: RPC exactly-once 
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
 exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
-stream, protocol terminal fencing guest terminals). A change that
+stream, the first terminal fencing competing terminals). Terminal origin is independent of
+author and outcome: reconstruction validates the recorded prefix, then reproduces a `Source`
+terminal exactly or stops at a `Control` terminal without waiting for the source. A change that
 satisfies one does not imply the others.
 
 Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
@@ -3359,8 +3525,16 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
-range and key across retries, independently of a rebuilt per-executor processor cache.
+otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
+installed plugin and source metadata, including the guest-visible status, revision, environment
+and configuration. Its status contains only the guest-visible status, revision and latest retry
+state. Historical host indexes and processor checkpoints are excluded so snapshot size does not
+grow with source history. Reconstruction reuses this snapshot rather than current source metadata, even
+when the plugin is no longer attached. Both local and remote ambiguous failures retain the recorded
+target: a missing response does not prove that admission failed. Confirmation clears the snapshot
+but retains `source_component_revision`; public rendering resolves the installation at that revision,
+even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
 
 ## Permission-card handles
 
@@ -3447,6 +3621,7 @@ incomplete decision decides at its own `Start`. Tests:
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
 | "A snapshot load is just a fast-forwarded replay, so its host calls are recorded/consumed like any other." | Snapshotting mode (`durability_is_suppressed`) neither appends nor consumes; the loaded state replaces skipped history from a revision-scoped baseline. | `tests/hot_update.rs::{auto_update_invalidates_snapshot_from_previous_revision, automatic_snapshot_invalid_entry_fallback_recreates_replay_context}` |
+| "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; a snapshot-based update target records and replays its own block, and a snapshot-assisted one replays the selected record's block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target}` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |

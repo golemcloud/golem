@@ -241,13 +241,99 @@ func TestRemoteAgentErrorKeepsItsCause(t *testing.T) {
 	}
 }
 
-// TestInvocationIDFromProjects — invocationIDFrom projects the host's invocation metadata onto the SDK's
-// public InvocationID. Pure, so it is pinned here rather than left to
-// integration.
-func TestInvocationIDFromProjects(t *testing.T) {
-	got := invocationIDFrom(host.InvocationMetadata{AgentId: "agent-7", IdempotencyKey: "key-9"})
-	if got.AgentID != "agent-7" || got.IdempotencyKey != "key-9" {
-		t.Fatalf("invocationIDFrom = %+v, want {agent-7, key-9}", got)
+// TestInvocationMetadataFromProjects — invocationMetadataFrom projects the
+// host's invocation metadata onto the SDK's public InvocationMetadata: the
+// invocation ID takes the metadata's agent ID and the host ID's UUID. Pure, so
+// it is pinned here rather than left to integration.
+func TestInvocationMetadataFromProjects(t *testing.T) {
+	got := invocationMetadataFrom(testHostInvocationMetadata)
+	if got != testInvocationMetadata {
+		t.Fatalf("invocationMetadataFrom = %+v, want %+v", got, testInvocationMetadata)
+	}
+}
+
+// TestAsyncInvocationMetadataIsAbsentForARejectedCall — the host reports no
+// metadata for a call it rejected before it started; the future then has no
+// identity rather than a zero one.
+func TestAsyncInvocationMetadataIsAbsentForARejectedCall(t *testing.T) {
+	if m := asyncInvocationMetadata(witTypes.None[host.InvocationMetadata]()); m != nil {
+		t.Fatalf("asyncInvocationMetadata(none) = %+v, want nil", *m)
+	}
+	m := asyncInvocationMetadata(witTypes.Some(testHostInvocationMetadata))
+	if m == nil || *m != testInvocationMetadata {
+		t.Fatalf("asyncInvocationMetadata(some) = %v, want %+v", m, testInvocationMetadata)
+	}
+}
+
+var testInvocationUUID = UUID{0x0b, 0x9f, 0x3d, 0x9e, 0x5f, 0x43, 0x4c, 0x3a, 0x9e, 0x7c, 0x0d, 0x6f, 0x1f, 0x2a, 0x3b, 0x4c}
+
+var testHostInvocationMetadata = host.InvocationMetadata{
+	AgentId: "agent-7",
+	InvocationId: types.InvocationId{
+		Owner: types.MakeInvocationOwnerTool("ignored"),
+		Id:    uuidToWit(testInvocationUUID),
+	},
+}
+
+var testInvocationMetadata = InvocationMetadata{
+	AgentID:      "agent-7",
+	InvocationID: InvocationID{AgentID: "agent-7", UUID: testInvocationUUID},
+}
+
+// TestInvocationIDTextFormRoundTrips — the text form is <agent-id>.<uuid>, and
+// parsing splits off the trailing UUID, so an agent ID with ".", "/" and quotes
+// comes back unchanged.
+func TestInvocationIDTextFormRoundTrips(t *testing.T) {
+	id := InvocationID{AgentID: `shop.v2/cart("a.b", "x/y")`, UUID: testInvocationUUID}
+	const text = `shop.v2/cart("a.b", "x/y").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c`
+	if got := id.String(); got != text {
+		t.Fatalf("String() = %q, want %q", got, text)
+	}
+	parsed, err := ParseInvocationID(text)
+	if err != nil {
+		t.Fatalf("ParseInvocationID(%q): %v", text, err)
+	}
+	if parsed != id {
+		t.Fatalf("ParseInvocationID(%q) = %+v, want %+v", text, parsed, id)
+	}
+}
+
+// TestParseInvocationIDAcceptsUpperCaseHex — the UUID part may use upper-case
+// hex; the parsed ID prints the canonical lower-case form.
+func TestParseInvocationIDAcceptsUpperCaseHex(t *testing.T) {
+	const text = `shop.v2/cart("a.b").0B9F3D9E-5F43-4C3A-9E7C-0D6F1F2A3B4C`
+	parsed, err := ParseInvocationID(text)
+	if err != nil {
+		t.Fatalf("ParseInvocationID(%q): %v", text, err)
+	}
+	want := InvocationID{AgentID: `shop.v2/cart("a.b")`, UUID: testInvocationUUID}
+	if parsed != want {
+		t.Fatalf("ParseInvocationID(%q) = %+v, want %+v", text, parsed, want)
+	}
+	const canonical = `shop.v2/cart("a.b").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c`
+	if got := parsed.String(); got != canonical {
+		t.Fatalf("String() = %q, want %q", got, canonical)
+	}
+}
+
+// TestParseInvocationIDRejectsMalformedText — a missing ".", a bad or
+// non-hyphenated UUID and an empty agent ID are errors.
+func TestParseInvocationIDRejectsMalformedText(t *testing.T) {
+	for _, text := range []string{
+		"",
+		"0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		".0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		"agent-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4",
+		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4g",
+		"agent.0b9f3d9e+5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c.",
+		"agent.0b9f3d9e5f434c3a9e7c0d6f1f2a3b4c",
+		"agent.abc.0b9f3d9e5f434c3a9e7c0d6f1f2a3b4c",
+	} {
+		if got, err := ParseInvocationID(text); err == nil {
+			t.Errorf("ParseInvocationID(%q) = %+v, want an error", text, got)
+		}
 	}
 }
 

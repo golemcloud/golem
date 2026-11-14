@@ -129,10 +129,11 @@ mod definition_owned_matrix_proxy {
 #[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
 mod bounded_stream;
 
-#[unsafe(export_name = "_initialize")]
-pub extern "C" fn initialize_component_baseline_clock() {
+#[ctor::ctor]
+fn initialize_component_baseline_clock() {
     if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
-        // Observe the reactor initializer independently of any agent constructor.
+        // Observe the reactor `_initialize`, which runs the constructors, independently of any
+        // agent constructor.
         std::hint::black_box(std::time::Instant::now());
     }
 }

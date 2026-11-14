@@ -33,6 +33,7 @@ import { getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError, RemoteOutputError } from '../src/client';
 import { Uuid } from '../src/uuid';
 import { ParsedAgentId } from '../src/agentId';
+import { hostInvocationMetadata, sdkInvocationMetadata } from './invocationMetadataTestSupport';
 
 const stringGraph: SchemaGraph = { defs: new Map(), root: t.string() };
 
@@ -166,7 +167,7 @@ describe('agent reflection', () => {
     const client = reflected.client.get({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('ReflectedEcho(one)'),
       future: {
         get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
         cancel: vi.fn(),
@@ -174,7 +175,7 @@ describe('agent reflection', () => {
     });
 
     await expect(client.method('echo').invokeJson({ message: 'hello' })).resolves.toEqual({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
+      metadata: sdkInvocationMetadata('ReflectedEcho(one)'),
       value: 'hello',
     });
   });
@@ -209,7 +210,7 @@ describe('agent reflection', () => {
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
 
     rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'missing' },
+      metadata: hostInvocationMetadata('ReflectedEcho(one)'),
       future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
     });
     await expect(
@@ -217,7 +218,7 @@ describe('agent reflection', () => {
     ).rejects.toBeInstanceOf(RemoteOutputError);
 
     rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'malformed' },
+      metadata: hostInvocationMetadata('ReflectedEcho(one)'),
       future: { get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(1))), cancel: vi.fn() },
     });
     await expect(
@@ -245,7 +246,7 @@ describe('agent reflection', () => {
     const client = getAgentType('ReflectedEcho')!.client.get({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'unit' },
+      metadata: hostInvocationMetadata('ReflectedEcho(one)'),
       future: {
         get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
         cancel: vi.fn(),
@@ -284,7 +285,7 @@ describe('agent reflection', () => {
     const client = agentId.dynamicClient();
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('ReflectedEcho(one)'),
       future: {
         get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(7))),
         cancel: vi.fn(),
@@ -443,7 +444,7 @@ describe('agent reflection', () => {
     const fresh = reflected.client.newPhantom({ id: 'two' });
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: 'ReflectedEcho(two)[final]', idempotencyKey: 'key' },
+      metadata: hostInvocationMetadata('ReflectedEcho(two)[final]'),
       future: {
         get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
         cancel: vi.fn(),
@@ -455,7 +456,7 @@ describe('agent reflection', () => {
     if ('client' in fresh) throw new Error('ephemeral newPhantom returned a durable wrapper');
     expect(fresh).not.toHaveProperty('agentId');
     await expect(fresh.method('echo').invoke({ message: 'hello' })).resolves.toEqual({
-      metadata: { agentId: 'ReflectedEcho(two)[final]', idempotencyKey: 'key' },
+      metadata: sdkInvocationMetadata('ReflectedEcho(two)[final]'),
       value: 'hello',
     });
   });

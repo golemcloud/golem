@@ -24,11 +24,15 @@ impl DurableStreamStore {
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         payload: Option<StreamItemsPayload>,
-        close: bool,
+        terminal: Option<(StreamTerminalAuthor, StreamTerminal)>,
         producer: Option<ExternalProducer>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         Self::validate_external_input(payload.as_ref())?;
-        let retained_bytes = Self::external_input_reservation(payload.as_ref(), producer.as_ref());
+        let retained_bytes = Self::external_input_reservation(
+            payload.as_ref(),
+            terminal.as_ref(),
+            producer.as_ref(),
+        )?;
         let session_key = session_key.clone();
         self.run_owned(context, retained_bytes, move |owner, context| async move {
             owner
@@ -37,7 +41,7 @@ impl DurableStreamStore {
                     &session_key,
                     stream_id,
                     payload,
-                    close,
+                    terminal,
                     producer,
                     None,
                 )
@@ -71,8 +75,16 @@ impl DurableStreamStore {
     /// Bytes an admission has to reserve while the batch is queued and committed.
     pub(crate) fn external_input_reservation(
         payload: Option<&StreamItemsPayload>,
+        terminal: Option<&(StreamTerminalAuthor, StreamTerminal)>,
         producer: Option<&ExternalProducer>,
-    ) -> usize {
+    ) -> Result<usize, StreamStoreError> {
+        let terminal_bytes = match terminal {
+            Some((_, StreamTerminal::ConsumerCancelled { .. })) => {
+                return Err(StreamStoreError::EventConflict);
+            }
+            Some((_, terminal)) => super::terminals::terminal_retained_bytes(terminal)?,
+            None => 0,
+        };
         let payload_bytes = match payload {
             Some(StreamItemsPayload::Values(values)) => {
                 values.iter().map(Vec::len).sum::<usize>() * 2
@@ -82,11 +94,12 @@ impl DurableStreamStore {
             }
             None => 0,
         };
-        payload_bytes
+        Ok(payload_bytes
+            + terminal_bytes
             + producer.map_or(0, |producer| match &producer.id {
                 ExternalProducerId::Client(id) => id.len(),
                 ExternalProducerId::Attached => 0,
-            })
+            }))
     }
 
     /// Commits one externally sequenced input under an admission the caller already holds.
@@ -99,7 +112,7 @@ impl DurableStreamStore {
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         payload: Option<StreamItemsPayload>,
-        close: bool,
+        terminal: Option<(StreamTerminalAuthor, StreamTerminal)>,
         producer: Option<ExternalProducer>,
         expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
@@ -112,7 +125,7 @@ impl DurableStreamStore {
                         &session_key,
                         stream_id,
                         payload,
-                        close,
+                        terminal,
                         producer,
                         expiry_refresh,
                     )
@@ -127,10 +140,17 @@ impl DurableStreamStore {
         session_key: &StreamSessionKey,
         stream_id: StreamId,
         payload: Option<StreamItemsPayload>,
-        close: bool,
+        terminal: Option<(StreamTerminalAuthor, StreamTerminal)>,
         producer: Option<ExternalProducer>,
         expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
+        if matches!(
+            terminal,
+            Some((_, StreamTerminal::ConsumerCancelled { .. }))
+        ) {
+            return Err(StreamStoreError::EventConflict);
+        }
+        let close = terminal.is_some();
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         if let Some(producer) = &producer {
             if matches!(&producer.id, ExternalProducerId::Client(id) if id.is_empty()) {
@@ -170,11 +190,13 @@ impl DurableStreamStore {
             return Err(StreamStoreError::InvalidValueBatch);
         }
         if stream.terminal {
-            if close
+            if let Some((authored_by, requested_terminal)) = &terminal
                 && let Some(event) = &stream.terminal_event
+                && event.terminal_origin == Some(StreamTerminalOrigin::Source)
+                && event.terminal_author == Some(*authored_by)
                 && matches!(
-                    event.payload,
-                    CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                    &event.payload,
+                    CommittedProducerStreamEventPayload::Terminal(selected) if selected == requested_terminal
                 )
             {
                 if payload.is_none() && producer.is_none() {
@@ -202,6 +224,22 @@ impl DurableStreamStore {
                         });
                     }
                 }
+            }
+            if terminal.is_some()
+                && let Some(request) = &producer
+                && request.id == ExternalProducerId::Attached
+                && let Some(event) = &stream.terminal_event
+                && event.terminal_origin == Some(StreamTerminalOrigin::Source)
+                && let Some(head) = index.external_producer_heads.get(&(
+                    session_key.clone(),
+                    stream_id,
+                    request.id.clone(),
+                ))
+                && head.epoch == request.epoch
+                && head.last_sequence == request.sequence
+                && head.last_offset == event.offset
+            {
+                return Err(StreamStoreError::EventConflict);
             }
             return Ok(ExternalAppendOutcome::Closed);
         }
@@ -357,16 +395,17 @@ impl DurableStreamStore {
                         },
                     )),
                 ));
-                if close {
-                    records.push(DurableStreamOplogRecord::End(
+                if let Some((authored_by, terminal)) = terminal {
+                    records.push(DurableStreamOplogRecord::Terminal(
                         entity_parent_start_index,
-                        StreamEndRecord {
+                        StreamTerminalRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             stream_id: local_stream_id,
                             sequence: terminal_sequence,
                             offset: resulting_offset,
-                            authored_by: StreamTerminalAuthor::Protocol,
-                            result: StreamEndResult::Ok,
+                            authored_by,
+                            origin: StreamTerminalOrigin::Source,
+                            terminal,
                         },
                     ));
                 }

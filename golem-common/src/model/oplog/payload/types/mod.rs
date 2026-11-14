@@ -28,7 +28,8 @@ use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 
 use crate::base_model::TransactionId;
 use crate::base_model::durable_stream::{
-    StreamBindingRecord, StreamCancelRole, StreamConsumerObservation, StreamRegistrationInvocation,
+    SessionStreamRole, StreamBindingRecord, StreamConsumerObservation, StreamEndpointSide,
+    StreamRegistrationInvocation,
 };
 use crate::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentTerminal};
 pub use crate::base_model::tool::{
@@ -981,7 +982,8 @@ pub enum SerializableToolAdmissionRefusal {
     BeforeDurableInputDisposal {
         session: StreamRegistrationInvocation,
         binding: Box<StreamBindingRecord>,
-        role: StreamCancelRole,
+        direction: SessionStreamRole,
+        side: StreamEndpointSide,
     },
 }
 
