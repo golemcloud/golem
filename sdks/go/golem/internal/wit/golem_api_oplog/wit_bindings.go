@@ -753,6 +753,11 @@ type GrowMemoryParameters struct {
 	Timestamp wasi_clocks_0_3_0_system_clock.Instant
 	Delta     uint64
 }
+
+type MemorySizeReconciledParameters struct {
+	Timestamp wasi_clocks_0_3_0_system_clock.Instant
+	Bytes     uint64
+}
 type AgentResourceId = uint64
 
 type CreateResourceParameters struct {
@@ -1664,77 +1669,78 @@ const (
 	// An update failed to be applied
 	OplogEntryFailedUpdate uint8 = 15
 	// Increased total linear memory size
-	OplogEntryGrowMemory uint8 = 16
+	OplogEntryGrowMemory           uint8 = 16
+	OplogEntryMemorySizeReconciled uint8 = 17
 	// Created a resource instance
-	OplogEntryCreateResource uint8 = 17
+	OplogEntryCreateResource uint8 = 18
 	// Dropped a resource instance
-	OplogEntryDropResource uint8 = 18
+	OplogEntryDropResource uint8 = 19
 	// The agent emitted a log message
-	OplogEntryLog uint8 = 19
+	OplogEntryLog uint8 = 20
 	// The agent has been restarted, forgetting all its history
-	OplogEntryRestart uint8 = 20
+	OplogEntryRestart uint8 = 21
 	// An unfinished durable invocation was admitted to resume
-	OplogEntryResumed uint8 = 21
+	OplogEntryResumed uint8 = 22
 	// Activates a plugin
-	OplogEntryActivatePlugin uint8 = 22
+	OplogEntryActivatePlugin uint8 = 23
 	// Deactivates a plugin
-	OplogEntryDeactivatePlugin uint8 = 23
+	OplogEntryDeactivatePlugin uint8 = 24
 	// Revert an agent to a previous state
-	OplogEntryRevert uint8 = 24
+	OplogEntryRevert uint8 = 25
 	// Cancel a pending invocation
-	OplogEntryCancelPendingInvocation uint8 = 25
+	OplogEntryCancelPendingInvocation uint8 = 26
 	// Begins a transaction operation
-	OplogEntryBeginRemoteTransaction uint8 = 26
+	OplogEntryBeginRemoteTransaction uint8 = 27
 	// Pre-Commit of the transaction, indicating that the transaction will be committed
-	OplogEntryPreCommitRemoteTransaction uint8 = 27
+	OplogEntryPreCommitRemoteTransaction uint8 = 28
 	// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
-	OplogEntryPreRollbackRemoteTransaction uint8 = 28
+	OplogEntryPreRollbackRemoteTransaction uint8 = 29
 	// Committed transaction operation, indicating that the transaction was committed
-	OplogEntryCommittedRemoteTransaction uint8 = 29
+	OplogEntryCommittedRemoteTransaction uint8 = 30
 	// Rolled back transaction operation, indicating that the transaction was rolled back
-	OplogEntryRolledBackRemoteTransaction uint8 = 30
+	OplogEntryRolledBackRemoteTransaction uint8 = 31
 	// A snapshot of the agent's state
-	OplogEntrySnapshot uint8 = 31
+	OplogEntrySnapshot uint8 = 32
 	// Checkpoint for oplog processor plugin delivery tracking
-	OplogEntryOplogProcessorCheckpoint uint8 = 32
+	OplogEntryOplogProcessorCheckpoint uint8 = 33
 	// Sets or overwrites a named retry policy
-	OplogEntrySetRetryPolicy uint8 = 33
+	OplogEntrySetRetryPolicy uint8 = 34
 	// Removes a named retry policy by name
-	OplogEntryRemoveRetryPolicy uint8 = 34
+	OplogEntryRemoveRetryPolicy uint8 = 35
 	// Durable queue entry for pending permission-card work
-	OplogEntryCardEventQueued uint8 = 35
+	OplogEntryCardEventQueued uint8 = 36
 	// Records successful installation of a permission card into the agent wallet
-	OplogEntryCardInstalled uint8 = 36
+	OplogEntryCardInstalled uint8 = 37
 	// Records failed installation of a permission card into the agent wallet
-	OplogEntryCardInstallFailed uint8 = 37
+	OplogEntryCardInstallFailed uint8 = 38
 	// Records that a permission card used by the agent has been revoked
-	OplogEntryCardRevoked uint8 = 38
+	OplogEntryCardRevoked uint8 = 39
 	// Records that a permission card used by the agent has expired
-	OplogEntryCardExpired uint8 = 39
+	OplogEntryCardExpired uint8 = 40
 	// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
 	// attached to the durable host call identified by its start entry's index
-	OplogEntryHostStreamFrame       uint8 = 40
-	OplogEntryToolAttachmentRead    uint8 = 41
-	OplogEntryToolAttachmentControl uint8 = 42
+	OplogEntryHostStreamFrame       uint8 = 41
+	OplogEntryToolAttachmentRead    uint8 = 42
+	OplogEntryToolAttachmentControl uint8 = 43
 	// Registers a durable stream before exposing its handle
-	OplogEntryStreamRegistered uint8 = 43
+	OplogEntryStreamRegistered uint8 = 44
 	// Records committed durable stream values or a packed-u8 batch
-	OplogEntryStreamItems uint8 = 44
+	OplogEntryStreamItems uint8 = 45
 	// Records the unique outcome or consumer cancellation of a durable stream
-	OplogEntryStreamTerminal uint8 = 45
+	OplogEntryStreamTerminal uint8 = 46
 	// Records durable Stream Session state and consumer-journal facts
-	OplogEntryStreamSession uint8 = 46
+	OplogEntryStreamSession uint8 = 47
 	// The successful completion of the durable host call started by the matching `start`
 	// was persisted, but its response was never delivered to the agent (the agent dropped
 	// the completion future after the `end` was recorded)
-	OplogEntryCompletionDiscarded uint8 = 47
+	OplogEntryCompletionDiscarded uint8 = 48
 	// The successful completion of the durable host call started by the matching `start`
 	// was delivered to the agent at this point in the recorded execution
-	OplogEntryCompletionDelivered uint8 = 48
+	OplogEntryCompletionDelivered uint8 = 49
 	// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
-	OplogEntrySnapshotConfirmed uint8 = 49
+	OplogEntrySnapshotConfirmed uint8 = 50
 	// The agent released a host resource and its span closed; the release is not a durable call
-	OplogEntrySpanClosed uint8 = 50
+	OplogEntrySpanClosed uint8 = 51
 )
 
 type OplogEntry struct {
@@ -1847,6 +1853,12 @@ func (self OplogEntry) GrowMemory() GrowMemoryParameters {
 		panic("tag mismatch")
 	}
 	return self.value.(GrowMemoryParameters)
+}
+func (self OplogEntry) MemorySizeReconciled() MemorySizeReconciledParameters {
+	if self.tag != OplogEntryMemorySizeReconciled {
+		panic("tag mismatch")
+	}
+	return self.value.(MemorySizeReconciledParameters)
 }
 func (self OplogEntry) CreateResource() RawCreateResourceParameters {
 	if self.tag != OplogEntryCreateResource {
@@ -2104,6 +2116,9 @@ func MakeOplogEntryFailedUpdate(value FailedUpdateParameters) OplogEntry {
 func MakeOplogEntryGrowMemory(value GrowMemoryParameters) OplogEntry {
 	return OplogEntry{OplogEntryGrowMemory, value}
 }
+func MakeOplogEntryMemorySizeReconciled(value MemorySizeReconciledParameters) OplogEntry {
+	return OplogEntry{OplogEntryMemorySizeReconciled, value}
+}
 func MakeOplogEntryCreateResource(value RawCreateResourceParameters) OplogEntry {
 	return OplogEntry{OplogEntryCreateResource, value}
 }
@@ -2246,77 +2261,78 @@ const (
 	// An update failed to be applied
 	PublicOplogEntryFailedUpdate uint8 = 15
 	// Increased total linear memory size
-	PublicOplogEntryGrowMemory uint8 = 16
+	PublicOplogEntryGrowMemory           uint8 = 16
+	PublicOplogEntryMemorySizeReconciled uint8 = 17
 	// Created a resource instance
-	PublicOplogEntryCreateResource uint8 = 17
+	PublicOplogEntryCreateResource uint8 = 18
 	// Dropped a resource instance
-	PublicOplogEntryDropResource uint8 = 18
+	PublicOplogEntryDropResource uint8 = 19
 	// The agent emitted a log message
-	PublicOplogEntryLog uint8 = 19
+	PublicOplogEntryLog uint8 = 20
 	// The agent's has been restarted, forgetting all its history
-	PublicOplogEntryRestart uint8 = 20
+	PublicOplogEntryRestart uint8 = 21
 	// An unfinished durable invocation was admitted to resume
-	PublicOplogEntryResumed uint8 = 21
+	PublicOplogEntryResumed uint8 = 22
 	// Activates a plugin
-	PublicOplogEntryActivatePlugin uint8 = 22
+	PublicOplogEntryActivatePlugin uint8 = 23
 	// Deactivates a plugin
-	PublicOplogEntryDeactivatePlugin uint8 = 23
+	PublicOplogEntryDeactivatePlugin uint8 = 24
 	// Revert an agent to a previous state
-	PublicOplogEntryRevert uint8 = 24
+	PublicOplogEntryRevert uint8 = 25
 	// Cancel a pending invocation
-	PublicOplogEntryCancelPendingInvocation uint8 = 25
+	PublicOplogEntryCancelPendingInvocation uint8 = 26
 	// Begins a transaction operation
-	PublicOplogEntryBeginRemoteTransaction uint8 = 26
+	PublicOplogEntryBeginRemoteTransaction uint8 = 27
 	// Pre-Commit of the transaction, indicating that the transaction will be committed
-	PublicOplogEntryPreCommitRemoteTransaction uint8 = 27
+	PublicOplogEntryPreCommitRemoteTransaction uint8 = 28
 	// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
-	PublicOplogEntryPreRollbackRemoteTransaction uint8 = 28
+	PublicOplogEntryPreRollbackRemoteTransaction uint8 = 29
 	// Committed transaction operation, indicating that the transaction was committed
-	PublicOplogEntryCommittedRemoteTransaction uint8 = 29
+	PublicOplogEntryCommittedRemoteTransaction uint8 = 30
 	// Rolled back transaction operation, indicating that the transaction was rolled back
-	PublicOplogEntryRolledBackRemoteTransaction uint8 = 30
+	PublicOplogEntryRolledBackRemoteTransaction uint8 = 31
 	// A snapshot of the worker's state
-	PublicOplogEntrySnapshot uint8 = 31
+	PublicOplogEntrySnapshot uint8 = 32
 	// Checkpoint for oplog processor plugin delivery tracking
-	PublicOplogEntryOplogProcessorCheckpoint uint8 = 32
+	PublicOplogEntryOplogProcessorCheckpoint uint8 = 33
 	// Sets or overwrites a named retry policy
-	PublicOplogEntrySetRetryPolicy uint8 = 33
+	PublicOplogEntrySetRetryPolicy uint8 = 34
 	// Removes a named retry policy by name
-	PublicOplogEntryRemoveRetryPolicy uint8 = 34
+	PublicOplogEntryRemoveRetryPolicy uint8 = 35
 	// Durable queue entry for pending permission-card work
-	PublicOplogEntryCardEventQueued uint8 = 35
+	PublicOplogEntryCardEventQueued uint8 = 36
 	// Records successful installation of a permission card into the agent wallet
-	PublicOplogEntryCardInstalled uint8 = 36
+	PublicOplogEntryCardInstalled uint8 = 37
 	// Records failed installation of a permission card into the agent wallet
-	PublicOplogEntryCardInstallFailed uint8 = 37
+	PublicOplogEntryCardInstallFailed uint8 = 38
 	// Records that a permission card used by the agent has been revoked
-	PublicOplogEntryCardRevoked uint8 = 38
+	PublicOplogEntryCardRevoked uint8 = 39
 	// Records that a permission card used by the agent has expired
-	PublicOplogEntryCardExpired uint8 = 39
+	PublicOplogEntryCardExpired uint8 = 40
 	// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
 	// attached to the durable host call identified by its start entry's index
-	PublicOplogEntryHostStreamFrame       uint8 = 40
-	PublicOplogEntryToolAttachmentRead    uint8 = 41
-	PublicOplogEntryToolAttachmentControl uint8 = 42
+	PublicOplogEntryHostStreamFrame       uint8 = 41
+	PublicOplogEntryToolAttachmentRead    uint8 = 42
+	PublicOplogEntryToolAttachmentControl uint8 = 43
 	// Registers a durable stream before exposing its handle
-	PublicOplogEntryStreamRegistered uint8 = 43
+	PublicOplogEntryStreamRegistered uint8 = 44
 	// Records committed durable stream values or a packed-u8 batch
-	PublicOplogEntryStreamItems uint8 = 44
+	PublicOplogEntryStreamItems uint8 = 45
 	// Records the unique outcome or consumer cancellation of a durable stream
-	PublicOplogEntryStreamTerminal uint8 = 45
+	PublicOplogEntryStreamTerminal uint8 = 46
 	// Records durable Stream Session state and consumer-journal facts
-	PublicOplogEntryStreamSession uint8 = 46
+	PublicOplogEntryStreamSession uint8 = 47
 	// The successful completion of the durable host call started by the matching `start`
 	// was persisted, but its response was never delivered to the agent (the agent dropped
 	// the completion future after the `end` was recorded)
-	PublicOplogEntryCompletionDiscarded uint8 = 47
+	PublicOplogEntryCompletionDiscarded uint8 = 48
 	// The successful completion of the durable host call started by the matching `start`
 	// was delivered to the agent at this point in the recorded execution
-	PublicOplogEntryCompletionDelivered uint8 = 48
+	PublicOplogEntryCompletionDelivered uint8 = 49
 	// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
-	PublicOplogEntrySnapshotConfirmed uint8 = 49
+	PublicOplogEntrySnapshotConfirmed uint8 = 50
 	// The agent released a host resource and its span closed; the release is not a durable call
-	PublicOplogEntrySpanClosed uint8 = 50
+	PublicOplogEntrySpanClosed uint8 = 51
 )
 
 type PublicOplogEntry struct {
@@ -2429,6 +2445,12 @@ func (self PublicOplogEntry) GrowMemory() GrowMemoryParameters {
 		panic("tag mismatch")
 	}
 	return self.value.(GrowMemoryParameters)
+}
+func (self PublicOplogEntry) MemorySizeReconciled() MemorySizeReconciledParameters {
+	if self.tag != PublicOplogEntryMemorySizeReconciled {
+		panic("tag mismatch")
+	}
+	return self.value.(MemorySizeReconciledParameters)
 }
 func (self PublicOplogEntry) CreateResource() CreateResourceParameters {
 	if self.tag != PublicOplogEntryCreateResource {
@@ -2685,6 +2707,9 @@ func MakePublicOplogEntryFailedUpdate(value FailedUpdateParameters) PublicOplogE
 }
 func MakePublicOplogEntryGrowMemory(value GrowMemoryParameters) PublicOplogEntry {
 	return PublicOplogEntry{PublicOplogEntryGrowMemory, value}
+}
+func MakePublicOplogEntryMemorySizeReconciled(value MemorySizeReconciledParameters) PublicOplogEntry {
+	return PublicOplogEntry{PublicOplogEntryMemorySizeReconciled, value}
 }
 func MakePublicOplogEntryCreateResource(value CreateResourceParameters) PublicOplogEntry {
 	return PublicOplogEntry{PublicOplogEntryCreateResource, value}
@@ -4673,9 +4698,16 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).Delta)
 
+		case OplogEntryMemorySizeReconciled:
+			payload := (element).F1.MemorySizeReconciled()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(17))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).Bytes)
+
 		case OplogEntryCreateResource:
 			payload := (element).F1.CreateResource()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(17))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(18))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).Id)
@@ -4690,7 +4722,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryDropResource:
 			payload := (element).F1.DropResource()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(18))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(19))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).Id)
@@ -4705,7 +4737,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryLog:
 			payload := (element).F1.Log()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(19))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(20))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 32)) = int8(int32((payload).Level))
@@ -4740,19 +4772,19 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryRestart:
 			payload := (element).F1.Restart()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(20))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(21))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
 		case OplogEntryResumed:
 			payload := (element).F1.Resumed()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(21))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(22))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
 		case OplogEntryActivatePlugin:
 			payload := (element).F1.ActivatePlugin()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(22))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(23))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((((payload).PluginGrantId).Uuid).HighBits)
@@ -4760,7 +4792,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryDeactivatePlugin:
 			payload := (element).F1.DeactivatePlugin()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(23))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(24))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((((payload).PluginGrantId).Uuid).HighBits)
@@ -4768,7 +4800,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryRevert:
 			payload := (element).F1.Revert()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(24))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(25))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(((payload).DroppedRegion).Start)
@@ -4776,7 +4808,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCancelPendingInvocation:
 			payload := (element).F1.CancelPendingInvocation()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(25))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(26))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(((payload).InvocationId).HighBits)
@@ -4784,7 +4816,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryBeginRemoteTransaction:
 			payload := (element).F1.BeginRemoteTransaction()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(26))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(27))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			utf8159 := unsafe.Pointer(unsafe.StringData((payload).TransactionId))
@@ -4795,35 +4827,35 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryPreCommitRemoteTransaction:
 			payload := (element).F1.PreCommitRemoteTransaction()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).BeginIndex)
 
 		case OplogEntryPreRollbackRemoteTransaction:
 			payload := (element).F1.PreRollbackRemoteTransaction()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).BeginIndex)
 
 		case OplogEntryCommittedRemoteTransaction:
 			payload := (element).F1.CommittedRemoteTransaction()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).BeginIndex)
 
 		case OplogEntryRolledBackRemoteTransaction:
 			payload := (element).F1.RolledBackRemoteTransaction()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(31))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).BeginIndex)
 
 		case OplogEntrySnapshot:
 			payload := (element).F1.Snapshot()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(32))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -4901,7 +4933,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryOplogProcessorCheckpoint:
 			payload := (element).F1.OplogProcessorCheckpoint()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(33))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((((payload).PluginGrantId).Uuid).HighBits)
@@ -4935,7 +4967,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntrySetRetryPolicy:
 			payload := (element).F1.SetRetryPolicy()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(34))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			utf8170 := unsafe.Pointer(unsafe.StringData(((payload).Policy).Name))
@@ -5746,7 +5778,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryRemoveRetryPolicy:
 			payload := (element).F1.RemoveRetryPolicy()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(35))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			utf8242 := unsafe.Pointer(unsafe.StringData((payload).Name))
@@ -5756,7 +5788,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCardEventQueued:
 			payload := (element).F1.CardEventQueued()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(36))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -5779,7 +5811,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCardInstalled:
 			payload := (element).F1.CardInstalled()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(37))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -5803,7 +5835,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCardInstallFailed:
 			payload := (element).F1.CardInstallFailed()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(37))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(38))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).QueuedEventIndex)
@@ -5813,7 +5845,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCardRevoked:
 			payload := (element).F1.CardRevoked()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(38))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(39))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).QueuedEventIndex)
@@ -5823,7 +5855,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCardExpired:
 			payload := (element).F1.CardExpired()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(39))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(40))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((((payload).CardId).Uuid).HighBits)
@@ -5832,7 +5864,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryHostStreamFrame:
 			payload := (element).F1.HostStreamFrame()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(40))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(41))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).ParentStartIndex)
@@ -5863,7 +5895,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryToolAttachmentRead:
 			payload := (element).F1.ToolAttachmentRead()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(41))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(42))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -8358,7 +8390,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryToolAttachmentControl:
 			payload := (element).F1.ToolAttachmentControl()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(42))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(43))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -13259,7 +13291,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryStreamRegistered:
 			payload := (element).F1.StreamRegistered()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(43))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(44))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -13337,7 +13369,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryStreamItems:
 			payload := (element).F1.StreamItems()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(44))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(45))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -13415,7 +13447,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryStreamTerminal:
 			payload := (element).F1.StreamTerminal()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(45))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(46))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -13493,7 +13525,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryStreamSession:
 			payload := (element).F1.StreamSession()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(46))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(47))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -13571,21 +13603,21 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntryCompletionDiscarded:
 			payload := (element).F1.CompletionDiscarded()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(47))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(48))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).StartIndex)
 
 		case OplogEntryCompletionDelivered:
 			payload := (element).F1.CompletionDelivered()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(48))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(49))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).StartIndex)
 
 		case OplogEntrySnapshotConfirmed:
 			payload := (element).F1.SnapshotConfirmed()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(49))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(50))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			utf8733 := unsafe.Pointer(unsafe.StringData((payload).FilesystemSnapshot))
@@ -13595,7 +13627,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 		case OplogEntrySpanClosed:
 			payload := (element).F1.SpanClosed()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(50))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(51))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 
@@ -41635,18 +41667,22 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 				variant5533 = MakePublicOplogEntryGrowMemory(GrowMemoryParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Delta: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
 			case 17:
+
+				variant5533 = MakePublicOplogEntryMemorySizeReconciled(MemorySizeReconciledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Bytes: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
+
+			case 18:
 				value3797 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 				value3798 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4))))
 
 				variant5533 = MakePublicOplogEntryCreateResource(CreateResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Name: value3797, Owner: value3798})
 
-			case 18:
+			case 19:
 				value3799 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 				value3800 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4))))
 
 				variant5533 = MakePublicOplogEntryDropResource(DropResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Name: value3799, Owner: value3800})
 
-			case 19:
+			case 20:
 				value3801 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4))))
 				value3802 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))))
 				var option3805 witTypes.Option[LogTraceContext]
@@ -41665,15 +41701,15 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryLog(LogParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Level: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), Context: value3801, Message: value3802, TraceContext: option3805})
 
-			case 20:
+			case 21:
 
 				variant5533 = MakePublicOplogEntryRestart(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}})
 
-			case 21:
+			case 22:
 
 				variant5533 = MakePublicOplogEntryResumed(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}})
 
-			case 22:
+			case 23:
 				value3806 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 				value3807 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 				result3810 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -41687,7 +41723,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryActivatePlugin(ActivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3806, PluginVersion: value3807, Parameters: result3810}})
 
-			case 23:
+			case 24:
 				value3811 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 				value3812 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 				result3815 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -41701,36 +41737,36 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryDeactivatePlugin(DeactivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3811, PluginVersion: value3812, Parameters: result3815}})
 
-			case 24:
+			case 25:
 
 				variant5533 = MakePublicOplogEntryRevert(RevertParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, DroppedRegion: OplogRegion{Start: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), End: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}})
 
-			case 25:
+			case 26:
 
 				variant5533 = MakePublicOplogEntryCancelPendingInvocation(CancelPendingInvocationParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, InvocationId: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}})
 
-			case 26:
+			case 27:
 				value3816 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 				variant5533 = MakePublicOplogEntryBeginRemoteTransaction(BeginRemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, TransactionId: value3816})
 
-			case 27:
+			case 28:
 
 				variant5533 = MakePublicOplogEntryPreCommitRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 28:
+			case 29:
 
 				variant5533 = MakePublicOplogEntryPreRollbackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 29:
+			case 30:
 
 				variant5533 = MakePublicOplogEntryCommittedRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 30:
+			case 31:
 
 				variant5533 = MakePublicOplogEntryRolledBackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 31:
+			case 32:
 				value3817 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				value3818 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4))))
 				var option3820 witTypes.Option[string]
@@ -41759,7 +41795,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntrySnapshot(SnapshotParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Data: SnapshotData{Data: value3817, MimeType: value3818}, FilesystemSnapshot: option3820, Bootstrap: option3821})
 
-			case 32:
+			case 33:
 				value3822 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 				value3823 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 				result3826 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -41775,7 +41811,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryOplogProcessorCheckpoint(OplogProcessorCheckpointParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3822, PluginVersion: value3823, Parameters: result3826}, SourceComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4)))), TargetAgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 6*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 6*4))))}}, AgentId: value3827}, ConfirmedUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (72 + 8*4)))), SendingUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (80 + 8*4)))), LastBatchStart: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (88 + 8*4))))})
 
-			case 33:
+			case 34:
 				value3828 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				result3859 := make([]golem_api_retry.PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))); index++ {
@@ -42290,12 +42326,12 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntrySetRetryPolicy(SetRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Policy: golem_api_retry.NamedRetryPolicy{Name: value3828, Priority: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4)))), Predicate: golem_api_retry.RetryPredicate{Nodes: result3859}, Policy: golem_api_retry.RetryPolicy{Nodes: result3892}}})
 
-			case 34:
+			case 35:
 				value3893 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 				variant5533 = MakePublicOplogEntryRemoveRetryPolicy(RemoveRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Name: value3893})
 
-			case 35:
+			case 36:
 				var variant3894 QueuedCardEvent
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 				case 0:
@@ -42312,7 +42348,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryCardEventQueued(CardEventQueuedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Event: variant3894})
 
-			case 36:
+			case 37:
 				var option3895 witTypes.Option[uint64]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 				case 0:
@@ -42327,19 +42363,19 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryCardInstalled(CardInstalledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: option3895, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))})
 
-			case 37:
+			case 38:
 
 				variant5533 = MakePublicOplogEntryCardInstallFailed(CardInstallFailedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, Reason: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))))})
 
-			case 38:
+			case 39:
 
 				variant5533 = MakePublicOplogEntryCardRevoked(CardRevokedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))})
 
-			case 39:
+			case 40:
 
 				variant5533 = MakePublicOplogEntryCardExpired(CardExpiredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))})
 
-			case 40:
+			case 41:
 				result4071 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))), index*(56+22*4))
@@ -44252,7 +44288,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryHostStreamFrame(HostStreamFrameParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, ParentStartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4071, Defs: result4075, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 5*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4099, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 8*4)))}}})
 
-			case 41:
+			case 42:
 				result4275 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -46178,7 +46214,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryToolAttachmentRead(ToolAttachmentReadParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Observation: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4275, Defs: result4279, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4303, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}, Payload: option4305})
 
-			case 42:
+			case 43:
 				result4481 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -50001,7 +50037,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryToolAttachmentControl(ToolAttachmentControlParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Attachment: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4481, Defs: result4485, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4509, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}, Transition: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4685, Defs: result4689, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 12*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4713, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 15*4)))}}})
 
-			case 43:
+			case 44:
 				result4889 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -51914,7 +51950,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryStreamRegistered(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4889, Defs: result4893, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4917, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-			case 44:
+			case 45:
 				result5093 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -53827,7 +53863,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryStreamItems(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result5093, Defs: result5097, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result5121, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-			case 45:
+			case 46:
 				result5297 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -55740,7 +55776,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryStreamTerminal(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result5297, Defs: result5301, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result5325, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-			case 46:
+			case 47:
 				result5501 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -57653,20 +57689,20 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 
 				variant5533 = MakePublicOplogEntryStreamSession(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result5501, Defs: result5505, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result5529, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-			case 47:
+			case 48:
 
 				variant5533 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 48:
+			case 49:
 
 				variant5533 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-			case 49:
+			case 50:
 				value5530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 				variant5533 = MakePublicOplogEntrySnapshotConfirmed(SnapshotConfirmedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, FilesystemSnapshot: value5530})
 
-			case 50:
+			case 51:
 				var option5531 witTypes.Option[uint64]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 				case 0:
@@ -85727,18 +85763,22 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 					variant4794 = MakePublicOplogEntryGrowMemory(GrowMemoryParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Delta: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
 				case 17:
+
+					variant4794 = MakePublicOplogEntryMemorySizeReconciled(MemorySizeReconciledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Bytes: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
+
+				case 18:
 					value3058 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					value3059 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4))))
 
 					variant4794 = MakePublicOplogEntryCreateResource(CreateResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Name: value3058, Owner: value3059})
 
-				case 18:
+				case 19:
 					value3060 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					value3061 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4))))
 
 					variant4794 = MakePublicOplogEntryDropResource(DropResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Name: value3060, Owner: value3061})
 
-				case 19:
+				case 20:
 					value3062 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4))))
 					value3063 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))))
 					var option3066 witTypes.Option[LogTraceContext]
@@ -85757,15 +85797,15 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryLog(LogParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Level: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), Context: value3062, Message: value3063, TraceContext: option3066})
 
-				case 20:
+				case 21:
 
 					variant4794 = MakePublicOplogEntryRestart(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}})
 
-				case 21:
+				case 22:
 
 					variant4794 = MakePublicOplogEntryResumed(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}})
 
-				case 22:
+				case 23:
 					value3067 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 					value3068 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 					result3071 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -85779,7 +85819,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryActivatePlugin(ActivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3067, PluginVersion: value3068, Parameters: result3071}})
 
-				case 23:
+				case 24:
 					value3072 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 					value3073 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 					result3076 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -85793,36 +85833,36 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryDeactivatePlugin(DeactivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3072, PluginVersion: value3073, Parameters: result3076}})
 
-				case 24:
+				case 25:
 
 					variant4794 = MakePublicOplogEntryRevert(RevertParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, DroppedRegion: OplogRegion{Start: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), End: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}})
 
-				case 25:
+				case 26:
 
 					variant4794 = MakePublicOplogEntryCancelPendingInvocation(CancelPendingInvocationParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, InvocationId: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}})
 
-				case 26:
+				case 27:
 					value3077 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 					variant4794 = MakePublicOplogEntryBeginRemoteTransaction(BeginRemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, TransactionId: value3077})
 
-				case 27:
+				case 28:
 
 					variant4794 = MakePublicOplogEntryPreCommitRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 28:
+				case 29:
 
 					variant4794 = MakePublicOplogEntryPreRollbackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 29:
+				case 30:
 
 					variant4794 = MakePublicOplogEntryCommittedRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 30:
+				case 31:
 
 					variant4794 = MakePublicOplogEntryRolledBackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 31:
+				case 32:
 					value3078 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					value3079 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4))))
 					var option3081 witTypes.Option[string]
@@ -85851,7 +85891,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntrySnapshot(SnapshotParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Data: SnapshotData{Data: value3078, MimeType: value3079}, FilesystemSnapshot: option3081, Bootstrap: option3082})
 
-				case 32:
+				case 33:
 					value3083 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 					value3084 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 4*4))))
 					result3087 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))))
@@ -85867,7 +85907,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryOplogProcessorCheckpoint(OplogProcessorCheckpointParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 40)), PluginName: value3083, PluginVersion: value3084, Parameters: result3087}, SourceComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4)))), TargetAgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 6*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 6*4))))}}, AgentId: value3088}, ConfirmedUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (72 + 8*4)))), SendingUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (80 + 8*4)))), LastBatchStart: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (88 + 8*4))))})
 
-				case 33:
+				case 34:
 					value3089 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					result3120 := make([]golem_api_retry.PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))); index++ {
@@ -86382,12 +86422,12 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntrySetRetryPolicy(SetRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Policy: golem_api_retry.NamedRetryPolicy{Name: value3089, Priority: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 2*4)))), Predicate: golem_api_retry.RetryPredicate{Nodes: result3120}, Policy: golem_api_retry.RetryPolicy{Nodes: result3153}}})
 
-				case 34:
+				case 35:
 					value3154 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 					variant4794 = MakePublicOplogEntryRemoveRetryPolicy(RemoveRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Name: value3154})
 
-				case 35:
+				case 36:
 					var variant3155 QueuedCardEvent
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 					case 0:
@@ -86404,7 +86444,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryCardEventQueued(CardEventQueuedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Event: variant3155})
 
-				case 36:
+				case 37:
 					var option3156 witTypes.Option[uint64]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 					case 0:
@@ -86419,19 +86459,19 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryCardInstalled(CardInstalledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: option3156, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))})
 
-				case 37:
+				case 38:
 
 					variant4794 = MakePublicOplogEntryCardInstallFailed(CardInstallFailedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, Reason: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))))})
 
-				case 38:
+				case 39:
 
 					variant4794 = MakePublicOplogEntryCardRevoked(CardRevokedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))})
 
-				case 39:
+				case 40:
 
 					variant4794 = MakePublicOplogEntryCardExpired(CardExpiredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))})
 
-				case 40:
+				case 41:
 					result3332 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))), index*(56+22*4))
@@ -88344,7 +88384,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryHostStreamFrame(HostStreamFrameParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, ParentStartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3332, Defs: result3336, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 5*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3360, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 8*4)))}}})
 
-				case 41:
+				case 42:
 					result3536 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -90270,7 +90310,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryToolAttachmentRead(ToolAttachmentReadParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Observation: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3536, Defs: result3540, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3564, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}, Payload: option3566})
 
-				case 42:
+				case 43:
 					result3742 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -94093,7 +94133,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryToolAttachmentControl(ToolAttachmentControlParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Attachment: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3742, Defs: result3746, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3770, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}, Transition: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3946, Defs: result3950, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 12*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3974, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 15*4)))}}})
 
-				case 43:
+				case 44:
 					result4150 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -96006,7 +96046,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryStreamRegistered(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4150, Defs: result4154, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-				case 44:
+				case 45:
 					result4354 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -97919,7 +97959,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryStreamItems(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4354, Defs: result4358, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4382, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-				case 45:
+				case 46:
 					result4558 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -99832,7 +99872,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryStreamTerminal(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4558, Defs: result4562, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4586, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-				case 46:
+				case 47:
 					result4762 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24)))), index*(56+22*4))
@@ -101745,20 +101785,20 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 					variant4794 = MakePublicOplogEntryStreamSession(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4762, Defs: result4766, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4790, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 7*4)))}}})
 
-				case 47:
+				case 48:
 
 					variant4794 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 48:
+				case 49:
 
 					variant4794 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
-				case 49:
+				case 50:
 					value4791 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 1*4))))
 
 					variant4794 = MakePublicOplogEntrySnapshotConfirmed(SnapshotConfirmedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, FilesystemSnapshot: value4791})
 
-				case 50:
+				case 51:
 					var option4792 witTypes.Option[uint64]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 					case 0:
@@ -129839,18 +129879,22 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 					variant4794 = MakePublicOplogEntryGrowMemory(GrowMemoryParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Delta: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
 				case 17:
+
+					variant4794 = MakePublicOplogEntryMemorySizeReconciled(MemorySizeReconciledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Bytes: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
+
+				case 18:
 					value3058 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4))))
 					value3059 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4))))
 
 					variant4794 = MakePublicOplogEntryCreateResource(CreateResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), Name: value3058, Owner: value3059})
 
-				case 18:
+				case 19:
 					value3060 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4))))
 					value3061 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 3*4))))
 
 					variant4794 = MakePublicOplogEntryDropResource(DropResourceParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Id: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), Name: value3060, Owner: value3061})
 
-				case 19:
+				case 20:
 					value3062 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4))))
 					value3063 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4))))
 					var option3066 witTypes.Option[LogTraceContext]
@@ -129869,15 +129913,15 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryLog(LogParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Level: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), Context: value3062, Message: value3063, TraceContext: option3066})
 
-				case 20:
+				case 21:
 
 					variant4794 = MakePublicOplogEntryRestart(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}})
 
-				case 21:
+				case 22:
 
 					variant4794 = MakePublicOplogEntryResumed(Timestamp{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}})
 
-				case 22:
+				case 23:
 					value3067 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4))))
 					value3068 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 4*4))))
 					result3071 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))))
@@ -129891,7 +129935,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryActivatePlugin(ActivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 48)), PluginName: value3067, PluginVersion: value3068, Parameters: result3071}})
 
-				case 23:
+				case 24:
 					value3072 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4))))
 					value3073 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 4*4))))
 					result3076 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))))
@@ -129905,36 +129949,36 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryDeactivatePlugin(DeactivatePluginParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 48)), PluginName: value3072, PluginVersion: value3073, Parameters: result3076}})
 
-				case 24:
+				case 25:
 
 					variant4794 = MakePublicOplogEntryRevert(RevertParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, DroppedRegion: OplogRegion{Start: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), End: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}})
 
-				case 25:
+				case 26:
 
 					variant4794 = MakePublicOplogEntryCancelPendingInvocation(CancelPendingInvocationParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, InvocationId: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}})
 
-				case 26:
+				case 27:
 					value3077 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 
 					variant4794 = MakePublicOplogEntryBeginRemoteTransaction(BeginRemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, TransactionId: value3077})
 
-				case 27:
+				case 28:
 
 					variant4794 = MakePublicOplogEntryPreCommitRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 28:
+				case 29:
 
 					variant4794 = MakePublicOplogEntryPreRollbackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 29:
+				case 30:
 
 					variant4794 = MakePublicOplogEntryCommittedRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 30:
+				case 31:
 
 					variant4794 = MakePublicOplogEntryRolledBackRemoteTransaction(RemoteTransactionParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 31:
+				case 32:
 					value3078 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					value3079 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 3*4))))
 					var option3081 witTypes.Option[string]
@@ -129963,7 +130007,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntrySnapshot(SnapshotParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Data: SnapshotData{Data: value3078, MimeType: value3079}, FilesystemSnapshot: option3081, Bootstrap: option3082})
 
-				case 32:
+				case 33:
 					value3083 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 2*4))))
 					value3084 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 4*4))))
 					result3087 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))))
@@ -129979,7 +130023,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryOplogProcessorCheckpoint(OplogProcessorCheckpointParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Plugin: PluginInstallationDescription{EnvironmentPluginGrantId: EnvironmentPluginGrantId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, PluginPriority: *(*int32)(unsafe.Add(unsafe.Pointer(base), 48)), PluginName: value3083, PluginVersion: value3084, Parameters: result3087}, SourceComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (56 + 6*4)))), TargetAgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (64 + 6*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (72 + 6*4))))}}, AgentId: value3088}, ConfirmedUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (80 + 8*4)))), SendingUpTo: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (88 + 8*4)))), LastBatchStart: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (96 + 8*4))))})
 
-				case 33:
+				case 34:
 					value3089 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					result3120 := make([]golem_api_retry.PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))); index++ {
@@ -130494,12 +130538,12 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntrySetRetryPolicy(SetRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Policy: golem_api_retry.NamedRetryPolicy{Name: value3089, Priority: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 2*4)))), Predicate: golem_api_retry.RetryPredicate{Nodes: result3120}, Policy: golem_api_retry.RetryPolicy{Nodes: result3153}}})
 
-				case 34:
+				case 35:
 					value3154 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 
 					variant4794 = MakePublicOplogEntryRemoveRetryPolicy(RemoveRetryPolicyParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Name: value3154})
 
-				case 35:
+				case 36:
 					var variant3155 QueuedCardEvent
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))) {
 					case 0:
@@ -130516,7 +130560,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryCardEventQueued(CardEventQueuedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Event: variant3155})
 
-				case 36:
+				case 37:
 					var option3156 witTypes.Option[uint64]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))) {
 					case 0:
@@ -130531,19 +130575,19 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryCardInstalled(CardInstalledParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, QueuedEventIndex: option3156, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 64)))})
 
-				case 37:
+				case 38:
 
 					variant4794 = MakePublicOplogEntryCardInstallFailed(CardInstallFailedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))}}, Reason: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 56))))})
 
-				case 38:
+				case 39:
 
 					variant4794 = MakePublicOplogEntryCardRevoked(CardRevokedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, QueuedEventIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))})
 
-				case 39:
+				case 40:
 
 					variant4794 = MakePublicOplogEntryCardExpired(CardExpiredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, CardId: golem_core_types.CardId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 40)))}}, WalletGeneration: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 48)))})
 
-				case 40:
+				case 41:
 					result3332 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 2*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (40 + 1*4))))), index*(56+22*4))
@@ -132456,7 +132500,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryHostStreamFrame(HostStreamFrameParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, ParentStartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40)))), Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3332, Defs: result3336, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (40 + 5*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3360, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (40 + 8*4)))}}})
 
-				case 41:
+				case 42:
 					result3536 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -134382,7 +134426,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryToolAttachmentRead(ToolAttachmentReadParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Observation: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3536, Defs: result3540, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3564, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}, Payload: option3566})
 
-				case 42:
+				case 43:
 					result3742 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -138205,7 +138249,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryToolAttachmentControl(ToolAttachmentControlParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Attachment: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3742, Defs: result3746, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3770, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}, Transition: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result3946, Defs: result3950, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result3974, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 15*4)))}}})
 
-				case 43:
+				case 44:
 					result4150 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -140118,7 +140162,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryStreamRegistered(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4150, Defs: result4154, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4178, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}})
 
-				case 44:
+				case 45:
 					result4354 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -142031,7 +142075,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryStreamItems(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4354, Defs: result4358, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4382, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}})
 
-				case 45:
+				case 46:
 					result4558 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -143944,7 +143988,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryStreamTerminal(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4558, Defs: result4562, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4586, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}})
 
-				case 46:
+				case 47:
 					result4762 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32)))), index*(56+22*4))
@@ -145857,20 +145901,20 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 					variant4794 = MakePublicOplogEntryStreamSession(DurableStreamRecordParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, Record: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result4762, Defs: result4766, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 4*4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result4790, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (32 + 7*4)))}}})
 
-				case 47:
+				case 48:
 
 					variant4794 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 48:
+				case 49:
 
 					variant4794 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, StartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
-				case 49:
+				case 50:
 					value4791 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 1*4))))
 
 					variant4794 = MakePublicOplogEntrySnapshotConfirmed(SnapshotConfirmedParameters{Timestamp: wasi_clocks_0_3_0_system_clock.Instant{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, FilesystemSnapshot: value4791})
 
-				case 50:
+				case 51:
 					var option4792 witTypes.Option[uint64]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 32))) {
 					case 0:

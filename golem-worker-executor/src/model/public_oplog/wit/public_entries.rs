@@ -207,6 +207,10 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         timestamp: timestamp.into(),
         delta: delta,
     } }
+    MemorySizeReconciled { record MemorySizeReconciledParams => MemorySizeReconciledParameters {
+        timestamp: timestamp.into(),
+        bytes: bytes,
+    } }
     CreateResource { record CreateResourceParams => CreateResourceParameters {
         timestamp: timestamp.into(),
         id: id.0,

@@ -618,6 +618,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
+    memory_accounting: residency::MemoryAccounting,
     memory_limit_interrupt_queued: AtomicBool,
 
     /// Snapshot of the active component, refreshed by `create_instance`.

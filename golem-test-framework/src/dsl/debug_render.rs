@@ -316,6 +316,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", params.delta,);
         }
+        PublicOplogEntry::MemorySizeReconciled(params) => {
+            let _ = writeln!(result, "MEMORY SIZE RECONCILED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}allocated bytes:   {}", params.bytes);
+        }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

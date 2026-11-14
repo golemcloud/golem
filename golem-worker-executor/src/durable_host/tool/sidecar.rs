@@ -508,6 +508,11 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
         | Err(GuestCallSettlementError::Trap(error)) => {
+            let error = store
+                .data()
+                .durable_ctx()
+                .linear_memory_tracker()
+                .annotate_gc_heap_error(error);
             let error: anyhow::Error = error.into();
             if durability::is_entity_cancellation(&error) {
                 operation.claim_local_cancellation_interruption();

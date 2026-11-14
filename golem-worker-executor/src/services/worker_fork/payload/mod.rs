@@ -83,6 +83,7 @@ where
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }

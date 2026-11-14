@@ -60,6 +60,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     );
                     return Self::perform_start_action(store, action).await;
                 }
+                store
+                    .as_context()
+                    .data()
+                    .durable_ctx()
+                    .reconcile_memory_accounting(true)
+                    .await?;
                 let component_metadata = store.as_context().data().component_metadata().clone();
                 let agent_type_provision_config = store
                     .as_context()
@@ -524,6 +530,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Snapshot recovery at {snapshot_index} failed: {error}"
             )))
         } else {
+            let ctx = store.as_context();
+            let ctx = ctx.data().durable_ctx();
+            // A snapshot-only cursor can already be live before loading the guest state.
+            // The load suppresses growth hints, so replace that earlier accounting baseline.
+            if ctx.is_live()
+                && let Err(error) = ctx.reconcile_memory_accounting(true).await
+            {
+                return SnapshotRecoveryResult::Unavailable(error);
+            }
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
             SnapshotRecoveryResult::Success

@@ -166,6 +166,17 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.asInstanceOf[OplogEntry.GrowMemory].params.delta == BigInt(65536)
       )
     },
+    test("MemorySizeReconciled preserves an absolute byte count") {
+      val raw = wrapEntry(
+        "memory-size-reconciled",
+        js.Dynamic.literal(timestamp = ts(), bytes = js.BigInt("9007199254741009"))
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.MemorySizeReconciled]
+      assertTrue(
+        parsed.params.bytes == BigInt("9007199254741009"),
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     test("CancelPendingInvocation from dynamic") {
       val raw = wrapEntry(
         "cancel-invocation",

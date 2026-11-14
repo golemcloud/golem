@@ -1,0 +1,19 @@
+package golem-it:gc-heap;
+
+world gc-probe-imports {
+  import golem-it:gc-probe/heap;
+}
+
+package golem-it:gc-probe {
+  interface heap {
+    /// Allocates a GC array of `kib` KiB, keeps it reachable and returns the retained KiB.
+    retain: func(kib: u32) -> u32;
+    /// Drops every retained GC array.
+    release: func();
+    retained-kib: func() -> u32;
+    /// Throws `value + 1` as a wasm exception and catches it inside the GC component.
+    catch-thrown: func(value: u32) -> u32;
+    /// Throws a wasm exception that escapes the GC component.
+    throw-uncaught: func();
+  }
+}

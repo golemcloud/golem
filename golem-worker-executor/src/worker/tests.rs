@@ -22,6 +22,169 @@ use golem_common::model::{AssistedSelection, IdempotencyKey, UsableAutomaticSnap
 use golem_common::schema::SchemaValue;
 use test_r::test;
 
+fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
+    let tracker = LinearMemoryTracker::new(
+        saved,
+        saved,
+        AgentMode::Durable,
+        true,
+        Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
+            0, 200, 0, 0, 0,
+        )),
+        Arc::new(StdMutex::new(MemoryGrant::inert(saved))),
+        Instant::now(),
+    );
+    tracker.begin_instantiation(false);
+    tracker.reconcile(current, Instant::now());
+    tracker
+}
+
+#[test]
+async fn accounting_cutover_captures_growth_and_survives_publisher_cancellation() {
+    use tokio::sync::oneshot;
+
+    for saved in [40, 80] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = accounting_tracker(saved, 40);
+        let entries = Arc::new(StdMutex::new(Vec::new()));
+        let (release, gate) = oneshot::channel();
+        let baseline_entries = entries.clone();
+        let mut publication = Box::pin(accounting.reconcile(&tracker, false, move |bytes| {
+            baseline_entries.lock().unwrap().push((true, bytes));
+            gate
+        }));
+        assert_eq!(futures::poll!(&mut publication).is_pending(), saved != 40);
+        tracker.grow_and_record(20, Instant::now(), |delta| {
+            entries.lock().unwrap().push((false, delta));
+        });
+        drop(publication);
+        let tracker_clone = tracker.clone();
+        let mut retry = Box::pin(accounting.reconcile(&tracker_clone, false, |_| {
+            panic!("a second publisher must join the existing cutover")
+        }));
+        if saved != 40 {
+            assert!(futures::poll!(&mut retry).is_pending());
+            release.send(Ok(())).unwrap();
+        }
+        retry.await.unwrap();
+        tracker.switch_to_live();
+        tracker.grow_and_record(7, Instant::now(), |delta| {
+            entries.lock().unwrap().push((false, delta));
+        });
+        let entries = entries.lock().unwrap();
+        let mut persisted = saved;
+        for &(absolute, bytes) in entries.iter() {
+            if absolute {
+                persisted = bytes;
+            } else {
+                persisted += bytes;
+            }
+        }
+        assert_eq!(persisted, 67);
+        assert_eq!(tracker.current_bytes(), 67);
+        assert_eq!(
+            entries.iter().filter(|(absolute, _)| *absolute).count(),
+            usize::from(saved != 40)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|(absolute, _)| !*absolute)
+                .map(|(_, bytes)| *bytes)
+                .collect::<Vec<_>>(),
+            vec![20, 7]
+        );
+    }
+}
+
+#[test]
+async fn accounting_commit_failure_remains_a_publication_barrier() {
+    use tokio::sync::oneshot;
+
+    for dropped_receipt in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = accounting_tracker(80, 40);
+        let (sender, receipt) = oneshot::channel();
+        if dropped_receipt {
+            drop(sender);
+        } else {
+            sender
+                .send(Err(WorkerExecutorError::runtime("refused commit")))
+                .unwrap();
+        }
+        let failure = accounting
+            .reconcile(&tracker, false, |_| receipt)
+            .await
+            .unwrap_err();
+        for reset in [false, true] {
+            let repeated = accounting
+                .reconcile(&tracker, reset, |_| {
+                    panic!("a refused commit must remain authoritative")
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(failure.to_string(), repeated.to_string());
+        }
+        // A replacement Store must neither inherit the failure nor erase the old Store's receipt.
+        let replacement = accounting_tracker(80, 32);
+        accounting
+            .reconcile(&replacement, false, |bytes| {
+                assert_eq!(bytes, 32);
+                let (sender, receipt) = oneshot::channel();
+                sender.send(Ok(())).unwrap();
+                receipt
+            })
+            .await
+            .unwrap();
+        assert!(
+            accounting
+                .reconcile(&tracker, false, |_| panic!("old failure was lost"))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+async fn accounting_reset_joins_prior_commit_without_blocking_a_new_store() {
+    use tokio::sync::oneshot;
+
+    let accounting = residency::MemoryAccounting::default();
+    let tracker = accounting_tracker(80, 40);
+    let (sender, receipt) = oneshot::channel();
+    let mut first = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+    assert!(futures::poll!(&mut first).is_pending());
+    drop(first);
+    let replacement = accounting_tracker(80, 32);
+    let mut replacement_publish = Box::pin(accounting.reconcile(&replacement, false, |_| {
+        let (sender, receipt) = oneshot::channel();
+        sender.send(Ok(())).unwrap();
+        receipt
+    }));
+    assert!(matches!(
+        futures::poll!(&mut replacement_publish),
+        std::task::Poll::Ready(Ok(()))
+    ));
+    let resets = std::sync::atomic::AtomicUsize::new(0);
+    let (reset_sender, reset_receipt) = oneshot::channel();
+    tracker.grow(3, Instant::now());
+    let mut reset = Box::pin(accounting.reconcile(&tracker, true, |bytes| {
+        assert_eq!(bytes, 43);
+        resets.fetch_add(1, Ordering::SeqCst);
+        reset_receipt
+    }));
+    assert!(futures::poll!(&mut reset).is_pending());
+    assert_eq!(resets.load(Ordering::SeqCst), 0);
+    sender.send(Ok(())).unwrap();
+    assert!(futures::poll!(&mut reset).is_pending());
+    assert_eq!(resets.load(Ordering::SeqCst), 1);
+    drop(reset);
+    let mut join = Box::pin(accounting.reconcile(&tracker, false, |_| panic!("reset was lost")));
+    assert!(futures::poll!(&mut join).is_pending());
+    reset_sender.send(Ok(())).unwrap();
+    join.await.unwrap();
+}
+
 /// A terminal entry of an interrupt that an archive layer did not store fails the waiters
 /// with the cause. Only a fence is a lost shard, whose waiters are sent to the new owner.
 #[test]
@@ -920,9 +1083,35 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
     let mut store = Store::new(&engine, ());
     wasmtime::Instance::new(&mut store, &module, &[])?;
 
+    assert_eq!(instance::allocated_memory_bytes(&store), Ok(6 * 65_536));
+    Ok(())
+}
+
+#[test]
+fn allocated_memory_includes_the_gc_heap_allocated_during_instantiation() -> anyhow::Result<()> {
+    let engine = wasmtime::Engine::new(
+        &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+    )?;
+    let module = wasmtime::Module::new(
+        &engine,
+        r#"(module
+                (type $arr (array (mut i32)))
+                (global $keep (mut (ref null $arr)) (ref.null $arr))
+                (memory 1)
+                (func $init (global.set $keep (array.new_default $arr (i32.const 1024))))
+                (start $init)
+            )"#,
+    )?;
+    let mut store = Store::new(&engine, ());
+    store.set_fuel(u64::MAX)?;
+    store.set_epoch_deadline(u64::MAX);
+    wasmtime::Instance::new(&mut store, &module, &[])?;
+
+    let gc_heap = store.gc_heap_capacity() as u64;
+    assert!(gc_heap > 0, "the start function must allocate a GC heap");
     assert_eq!(
-        instance::allocated_linear_memory_bytes(&store),
-        Ok(6 * 65_536)
+        instance::allocated_memory_bytes(&store),
+        Ok(65_536 + gc_heap)
     );
     Ok(())
 }

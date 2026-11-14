@@ -80,6 +80,7 @@ message RawOplogEntry {
     RawToolAttachmentReadParameters tool_attachment_read = 67;
     RawToolAttachmentControlParameters tool_attachment_control = 68;
     RawSpanClosedParameters span_closed = 69;
+    RawMemorySizeReconciledParameters memory_size_reconciled = 70;
   }
 }
 
@@ -371,6 +372,10 @@ message RawFailedSnapshotAssistedUpdateDetails {
 
 message RawGrowMemoryParameters {
   uint64 delta = 1;
+}
+
+message RawMemorySizeReconciledParameters {
+  uint64 bytes = 1;
 }
 
 message RawResourceTypeId {

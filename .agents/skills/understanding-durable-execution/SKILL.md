@@ -460,10 +460,20 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+A live invocation still holds its allocated linear memory, GC heap capacity and filesystem stock while waiting for
 host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
-executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+executes. The memory meter measures allocated linear-memory bytes plus GC heap capacity, not the configured maximum.
 The parked guest itself burns no fuel.
+
+Primary reconstruction consumes its saved memory reservation across all linear-memory and GC heap allocations, including repeated growth during core initialization. Growth beyond the reservation needs physical admission before allocation. Live publication releases unused reservation but preserves capacity for prepared growth; a failed growth releases that excess capacity.
+
+`LinearMemoryTracker` keeps transition-owned flags, provisional allocations, pending grants and growth-refusal state in `TrackerState`. Allocation reconciliation and replay are independent facts: live publication can precede enumeration, and accounting can start during replay. Mutations lock the shared transition gate, then private state, then the retained grant. State-only readers never acquire the gate. Release private state and grant guards before enqueue/limit callbacks or owner activation; retain the gate across baseline enqueue and accounting activation. Async reservation acquisition releases synchronous guards before awaiting admission and rechecks the required bytes before installation. Cancellation drops partial grants and permits a later activation retry. Atomic allocation, quota and billing observations remain separate; the gate still synchronizes metering and identifies Worker receipts.
+
+The Wasmtime fork preserves limiter `Err` as an immediate trap. Golem returns `Ok(false)` for quota/capacity refusal of growth of a nonempty GC heap, allowing collection and retry; linear memory and the first nonempty GC allocation still return typed errors. Refusal rolls back provisional admission itself: Wasmtime calls no growth-failure callback after `Ok(false)`. The production Auto collector currently selects Copying. This policy does not classify Null collector `AllocationTooLarge` failures as GC OOM, and explicit host heap-growth errors are distinct from guest allocation failures.
+
+The per-Store tracker retains a refusal until another admission attempt, ordinary growth failure, committed growth, instantiation or invocation entry. Terminal `GcHeapOutOfMemory<()>` uses it to distinguish `ExceededMemoryLimit` from `OutOfMemory`; absent a refusal, it is `OutOfMemory`. A guest GC allocation trap exits the component event loop before root completion or settlement, preserving the reason until classification. Primary exports, tool/middleware bodies and core instantiation retain typed memory failures. Collection reclaims objects without reducing allocated capacity. Heap doubling and collector headroom can still reject an allocation whose live bytes are below the plan limit; the limit applies to capacity.
+
+At the replay tail, the tracker synchronously enqueues `MemorySizeReconciled { bytes }` if allocation differs from the saved baseline, and enables subsequent `GrowMemory` recording under the same transition lock. The lifecycle actor orders the absolute reset before later deltas, including growth during reconstruction settlement. `Worker` owns the commit receipts through `MemoryAccounting` in `worker/residency.rs`, keyed by weak references to each tracker's transition identity. Publication and snapshot resets join that tracker's previous receipt before starting another cutover. Cancellation preserves the receipt and a failed commit remains authoritative for that tracker; a replacement Store does not inherit it. Receipt ownership retains no tracker or memory grants, and the next reconciliation prunes expired identities. A fresh, already-live primary enables growth recording after its initial allocation has been persisted. Successful snapshot-only recovery and manual snapshot loading reset the baseline after the load, even when the cursor was already live. Snapshot recovery with a replay suffix waits for the normal replay-tail boundary. Both entries are replay-skippable accounting hints, not assertions that GC capacity must match on replay. Completed entity replay retains historical admission; an incomplete entity acquires its own live reservation before continuation.
 
 Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
 per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.
@@ -3408,7 +3418,11 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
-  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  instruction-trap allowlist and uncaught Wasm exceptions. Agent and tool classification share
+  `model::deterministic_guest_trap`, including GC cast failures, array bounds failures and
+  oversized allocations. Agent stack overflow keeps its separate classification; tool host-call
+  markers take precedence over the predicate. GC heap OOM remains a resource failure.
+  The tool terminal has `body_execution: Trapped` and
   `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
   and lifecycle failures retain owner recovery even when the retry decision is exhausted.
   Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors

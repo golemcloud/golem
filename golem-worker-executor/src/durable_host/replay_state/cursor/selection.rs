@@ -49,6 +49,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log {
@@ -120,6 +121,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::SuccessfulUpdate { .. }
         | OplogEntry::FailedUpdate { .. }
         | OplogEntry::GrowMemory { .. }
+        | OplogEntry::MemorySizeReconciled { .. }
         | OplogEntry::CreateResource { .. }
         | OplogEntry::DropResource { .. }
         | OplogEntry::Log { .. }

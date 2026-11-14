@@ -2650,6 +2650,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             delta: 64,
         }),
+        PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+            timestamp: timestamp(),
+            bytes: 41,
+        }),
         PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp: timestamp(),
             id: AgentResourceId(1),

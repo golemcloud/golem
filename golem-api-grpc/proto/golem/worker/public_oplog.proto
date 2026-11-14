@@ -81,6 +81,7 @@ message OplogEntry {
     ToolAttachmentReadParameters ToolAttachmentRead = 68;
     ToolAttachmentControlParameters ToolAttachmentControl = 69;
     SpanClosedParameters SpanClosed = 70;
+    MemorySizeReconciledParameters MemorySizeReconciled = 71;
   }
 }
 
@@ -659,6 +660,11 @@ message FailedSnapshotAssistedUpdateDetails {
 message GrowMemoryParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 delta = 2;
+}
+
+message MemorySizeReconciledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 bytes = 2;
 }
 
 message CreateResourceParameters {

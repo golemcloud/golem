@@ -239,6 +239,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
+            | OplogEntry::MemorySizeReconciled { .. }
             | OplogEntry::Log {
                 parent_start_index: None,
                 ..

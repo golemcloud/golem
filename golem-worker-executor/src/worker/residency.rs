@@ -14,6 +14,71 @@
 
 use crate::worker::*;
 
+type MemoryAccountingCommit = Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>;
+
+#[derive(Default)]
+pub(super) struct MemoryAccounting {
+    generations: StdMutex<Vec<MemoryAccountingGeneration>>,
+}
+
+struct MemoryAccountingGeneration {
+    // Each tracker has its own transition lock, shared by all of its clones. A weak identity
+    // keeps receipts generation-scoped without retaining a discarded Store's memory grants.
+    owner: std::sync::Weak<StdMutex<()>>,
+    commit: Arc<Mutex<Option<MemoryAccountingCommit>>>,
+}
+
+impl MemoryAccounting {
+    pub(super) async fn reconcile(
+        &self,
+        tracker: &LinearMemoryTracker,
+        reset: bool,
+        enqueue: impl FnOnce(u64) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
+        let owner = Arc::downgrade(&tracker.resource_transition());
+        let commit = {
+            let mut generations = self.generations.lock().unwrap();
+            generations.retain(|generation| generation.owner.strong_count() != 0);
+            match generations
+                .iter()
+                .find(|generation| generation.owner.ptr_eq(&owner))
+            {
+                Some(generation) => generation.commit.clone(),
+                None => {
+                    let commit = Arc::new(Mutex::new(None));
+                    generations.push(MemoryAccountingGeneration {
+                        owner,
+                        commit: commit.clone(),
+                    });
+                    commit
+                }
+            }
+        };
+        let mut commit = commit.lock().await;
+        if let Some(previous) = commit.as_ref() {
+            previous.clone().await?;
+        }
+        if let Some(receipt) = tracker.start_memory_accounting(reset, enqueue) {
+            // Install before the first await so cancellation cannot lose the commit or its error.
+            *commit = Some(
+                async move {
+                    receipt.await.map_err(|_| {
+                        WorkerExecutorError::runtime(
+                            "Memory reconciliation acknowledgement stopped",
+                        )
+                    })?
+                }
+                .boxed()
+                .shared(),
+            );
+        }
+        if let Some(commit) = commit.as_ref() {
+            commit.clone().await?;
+        }
+        Ok(())
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
     /// previously returned true.
@@ -589,6 +654,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.state_actor.grow_memory(self.clone(), growth.clone());
         }
     }
+    /// Orders the baseline before subsequent growth and joins its generation's storage barrier.
+    pub(crate) async fn reconcile_memory_accounting(
+        self: &Arc<Self>,
+        tracker: &LinearMemoryTracker,
+        reset: bool,
+    ) -> Result<(), WorkerExecutorError> {
+        self.memory_accounting
+            .reconcile(tracker, reset, |bytes| {
+                let mut growth = self.memory_growth.lock().unwrap();
+                *growth = Arc::new(PendingMemoryGrowth::default());
+                self.state_actor.reconcile_memory(self.clone(), bytes)
+            })
+            .await
+    }
+
     pub(in crate::worker) async fn persist_pending_memory_growth(
         self: &Arc<Self>,
         growth: Arc<PendingMemoryGrowth>,

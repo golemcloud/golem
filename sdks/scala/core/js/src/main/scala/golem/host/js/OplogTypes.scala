@@ -496,6 +496,12 @@ sealed trait JsGrowMemoryParameters extends js.Object {
   def delta: js.BigInt      = js.native
 }
 
+@js.native
+sealed trait JsMemorySizeReconciledParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def bytes: js.BigInt      = js.native
+}
+
 // --- CreateResourceParameters ---
 
 @js.native

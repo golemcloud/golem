@@ -288,6 +288,11 @@ object OplogApi {
     delta: BigInt
   )
 
+  final case class MemorySizeReconciledParameters(
+    timestamp: ContextApi.DateTime,
+    bytes: BigInt
+  )
+
   final case class CreateResourceParameters(
     timestamp: ContextApi.DateTime,
     resourceId: BigInt,
@@ -443,6 +448,9 @@ object OplogApi {
     final case class GrowMemory(params: GrowMemoryParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class MemorySizeReconciled(params: MemorySizeReconciledParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class CreateResource(params: CreateResourceParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -571,8 +579,10 @@ object OplogApi {
         case "pending-update"    => PendingUpdate(parsePendingUpdateParameters(v.asInstanceOf[JsPendingUpdateParameters]))
         case "successful-update" =>
           SuccessfulUpdate(parseSuccessfulUpdateParameters(v.asInstanceOf[JsSuccessfulUpdateParameters]))
-        case "failed-update"   => FailedUpdate(parseFailedUpdateParameters(v.asInstanceOf[JsFailedUpdateParameters]))
-        case "grow-memory"     => GrowMemory(parseGrowMemoryParameters(v.asInstanceOf[JsGrowMemoryParameters]))
+        case "failed-update"          => FailedUpdate(parseFailedUpdateParameters(v.asInstanceOf[JsFailedUpdateParameters]))
+        case "grow-memory"            => GrowMemory(parseGrowMemoryParameters(v.asInstanceOf[JsGrowMemoryParameters]))
+        case "memory-size-reconciled" =>
+          MemorySizeReconciled(parseMemorySizeReconciledParameters(v.asInstanceOf[JsMemorySizeReconciledParameters]))
         case "create-resource" =>
           CreateResource(parseCreateResourceParameters(v.asInstanceOf[JsCreateResourceParameters]))
         case "drop-resource"   => DropResource(parseDropResourceParameters(v.asInstanceOf[JsDropResourceParameters]))
@@ -1037,6 +1047,14 @@ object OplogApi {
     GrowMemoryParameters(
       timestamp = parseDateTime(raw.timestamp),
       delta = BigInt(raw.delta.toString)
+    )
+
+  private def parseMemorySizeReconciledParameters(
+    raw: JsMemorySizeReconciledParameters
+  ): MemorySizeReconciledParameters =
+    MemorySizeReconciledParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      bytes = BigInt(raw.bytes.toString)
     )
 
   private def parseCreateResourceParameters(raw: JsCreateResourceParameters): CreateResourceParameters =

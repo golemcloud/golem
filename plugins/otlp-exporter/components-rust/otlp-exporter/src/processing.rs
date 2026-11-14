@@ -183,6 +183,16 @@ pub(crate) fn process_entries_from(
             OplogEntry::GrowMemory(params) => {
                 handle_grow_memory(state, params, &mut metrics);
             }
+            OplogEntry::MemorySizeReconciled(params) => {
+                state.total_memory_bytes = params.bytes;
+                metrics.push(gauge_metric(
+                    "golem.memory.total_bytes",
+                    "By",
+                    "Total linear memory and GC heap size",
+                    &datetime_to_nanos(&params.timestamp).to_string(),
+                    state.total_memory_bytes,
+                ));
+            }
             OplogEntry::Start(params) => {
                 handle_start(state, params, entry_index, &mut metrics);
             }
@@ -576,7 +586,7 @@ fn handle_create(
     metrics.push(gauge_metric(
         "golem.memory.initial_bytes",
         "By",
-        "Initial linear memory size",
+        "Initial linear memory and GC heap size",
         &time_ns,
         params.initial_total_linear_memory_size,
     ));
@@ -584,7 +594,7 @@ fn handle_create(
     metrics.push(gauge_metric(
         "golem.memory.total_bytes",
         "By",
-        "Total linear memory size",
+        "Total linear memory and GC heap size",
         &time_ns,
         state.total_memory_bytes,
     ));
@@ -610,7 +620,7 @@ fn handle_grow_memory(
     metrics.push(OtlpMetric {
         name: "golem.memory.growth_bytes".to_string(),
         unit: "By".to_string(),
-        description: "Linear memory growth".to_string(),
+        description: "Linear memory and GC heap growth".to_string(),
         sum: Some(OtlpSum {
             aggregation_temporality: 1,
             is_monotonic: true,
@@ -628,7 +638,7 @@ fn handle_grow_memory(
     metrics.push(gauge_metric(
         "golem.memory.total_bytes",
         "By",
-        "Total linear memory size",
+        "Total linear memory and GC heap size",
         &time_ns,
         state.total_memory_bytes,
     ));
@@ -1292,6 +1302,81 @@ mod tests {
             original_phantom_id: None,
             instance_id: uuid(instance),
         })
+    }
+
+    #[test]
+    fn memory_reconciliation_resets_total_without_counting_growth_across_batches() {
+        use golem_rust::bindings::golem::api::oplog::MemorySizeReconciledParameters;
+
+        for reconciled_bytes in [0, 40, 180] {
+            for split in 1..=4 {
+                let mut state = state();
+                let mut entries = vec![
+                    create(10, 100),
+                    OplogEntry::GrowMemory(GrowMemoryParameters {
+                        timestamp: instant(11, 3),
+                        delta: 20,
+                    }),
+                    OplogEntry::MemorySizeReconciled(MemorySizeReconciledParameters {
+                        timestamp: instant(12, 7),
+                        bytes: reconciled_bytes,
+                    }),
+                    OplogEntry::GrowMemory(GrowMemoryParameters {
+                        timestamp: instant(13, 9),
+                        delta: 7,
+                    }),
+                ];
+                let remaining = entries.split_off(split);
+                let first = process_entries_from(&mut state, 0, entries);
+                let second = process_entries_from(&mut state, split as u64, remaining);
+                assert_eq!(state.total_memory_bytes, reconciled_bytes + 7);
+
+                let metrics: Vec<_> = first.metrics.into_iter().chain(second.metrics).collect();
+                let totals: Vec<_> = metrics
+                    .iter()
+                    .filter(|metric| metric.name == "golem.memory.total_bytes")
+                    .map(|metric| {
+                        assert!(metric.sum.is_none());
+                        let points = &metric.gauge.as_ref().unwrap().data_points;
+                        assert_eq!(points.len(), 1);
+                        (points[0].time_unix_nano.clone(), points[0].as_int.clone())
+                    })
+                    .collect();
+                assert_eq!(
+                    totals,
+                    vec![
+                        ("10000000000".to_string(), Some("100".to_string())),
+                        ("11000000003".to_string(), Some("120".to_string())),
+                        (
+                            "12000000007".to_string(),
+                            Some(reconciled_bytes.to_string())
+                        ),
+                        (
+                            "13000000009".to_string(),
+                            Some((reconciled_bytes + 7).to_string())
+                        ),
+                    ]
+                );
+                let growth: Vec<_> = metrics
+                    .iter()
+                    .filter(|metric| metric.name == "golem.memory.growth_bytes")
+                    .map(|metric| {
+                        assert!(metric.gauge.is_none());
+                        let sum = metric.sum.as_ref().unwrap();
+                        assert!(sum.is_monotonic);
+                        assert_eq!(sum.data_points.len(), 1);
+                        (
+                            sum.data_points[0].time_unix_nano.as_str(),
+                            sum.data_points[0].as_int.as_deref(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    growth,
+                    vec![("11000000003", Some("20")), ("13000000009", Some("7"))]
+                );
+            }
+        }
     }
 
     fn local_span(span_id: &str, parent: Option<&str>, inherited: bool) -> SpanData {

@@ -447,6 +447,10 @@ impl PublicOplogEntry {
                 Self::string_match("growmemory", &[], query_path, query)
                     || Self::string_match("grow-memory", &[], query_path, query)
             }
+            PublicOplogEntry::MemorySizeReconciled(_) => {
+                Self::string_match("memorysizereconciled", &[], query_path, query)
+                    || Self::string_match("memory-size-reconciled", &[], query_path, query)
+            }
             PublicOplogEntry::CreateResource(_params) => {
                 Self::string_match("createresource", &[], query_path, query)
                     || Self::string_match("create-resource", &[], query_path, query)

@@ -255,6 +255,7 @@ const KINDS = {
   Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
   Exited: ['EXITED', 'lifecycle', 1], Restart: ['RESTART', 'lifecycle', 1], Resumed: ['RESUMED', 'lifecycle', 1],
   Revert: ['REVERT', 'lifecycle', 1], GrowMemory: ['GROW MEMORY', 'lifecycle', 1],
+  MemorySizeReconciled: ['MEMORY SIZE RECONCILED', 'lifecycle', 1],
   BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region', 1], PreCommitRemoteTransaction: ['PRE COMMIT', 'region', 1],
   PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region', 1], CommittedRemoteTransaction: ['COMMITTED', 'region', 1],
   RolledBackRemoteTransaction: ['ROLLED BACK', 'region', 1],
@@ -589,6 +590,7 @@ function summary(e) {
     case 'SuccessfulUpdate': return [span('ok', 'now at revision ' + p.targetRevision), span('val', ` · ${fmtBytes(p.newComponentSize || 0)}` + (p.snapshotAssistedDetails ? ` · snapshot assisted from #${idxOf(p.snapshotAssistedDetails.snapshotIndex)}` : ''))];
     case 'FailedUpdate': return [span('err', 'update to revision ' + p.targetRevision + ' failed'), span('val', p.details ? ': ' + trunc(p.details, 150) : '')];
     case 'GrowMemory': return [span('val', '+' + fmtBytes(p.delta || 0))];
+    case 'MemorySizeReconciled': return [span('val', 'allocated ' + fmtBytes(p.bytes || 0))];
     case 'CreateResource': case 'DropResource': return [span('fn', p.name || ''), span('val', ` · id ${p.id} · owner ${p.owner || ''}`)];
     case 'Log': return [span('val', `[${p.level}] `), span(p.level === 'Stderr' ? 'err' : '', trunc(String(p.message || '').replace(/\n+$/, ''), 300)), p.context ? span('val', ' · ' + p.context) : null];
     case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];

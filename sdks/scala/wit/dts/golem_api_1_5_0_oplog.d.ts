@@ -548,6 +548,10 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     delta: bigint;
   };
+  export type MemorySizeReconciledParameters = {
+    timestamp: Datetime;
+    bytes: bigint;
+  };
   export type AgentResourceId = bigint;
   export type CreateResourceParameters = {
     timestamp: Datetime;
@@ -1174,6 +1178,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
+  {
+    tag: 'memory-size-reconciled'
+    val: MemorySizeReconciledParameters
+  } |
   /** Created a resource instance */
   {
     tag: 'create-resource'
@@ -1448,6 +1456,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
+  } |
+  {
+    tag: 'memory-size-reconciled'
+    val: MemorySizeReconciledParameters
   } |
   /** Created a resource instance */
   {

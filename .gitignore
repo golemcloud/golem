@@ -12,6 +12,9 @@ dump.rdb
 /golem_registry_service.db-*
 test-components/*.wat
 test-components/**/*.wat
+# Exception: the source of the GC and exception-handling component that the gc-heap fixture
+# composes into its Rust agent. No Golem SDK targets those proposals yet.
+!test-components/gc-heap/gc-probe/gc_probe.wat
 test-components/*.wasm
 test-components/*/**/*.wasm
 builtin-tools/*.wasm

@@ -10,7 +10,7 @@ pub(crate) struct WorkerState {
     pub(crate) terminal_error: Option<(String, u128)>,
     /// Timestamp (nanos) when the current invocation started, for duration metrics.
     pub(crate) invocation_start_ns: Option<u128>,
-    /// Running total of linear memory in bytes (initial + sum of grow deltas).
+    /// Total linear memory and GC heap bytes, reset by reconciliation and increased by growth.
     pub(crate) total_memory_bytes: u64,
     /// Running count of active resources (created - dropped).
     pub(crate) active_resources: i64,
