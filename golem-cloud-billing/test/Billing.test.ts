@@ -731,7 +731,7 @@ describe("Polar billing", () => {
     const unbilledHold =
       "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unsettledHold =
-      "Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact support at contact@golem.cloud."
+      "Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
     const unpaidHold = `Golem Cloud billing: An invoice for paid overage is not paid. Pay it in Manage billing at ${baseUrl}.`
     /** The state of `sub_1` after Polar ended it at its period end, December 4. */
     const endedAtPeriodEnd = { status: "canceled", modified_at: "2026-12-04T10:00:00Z", ended_at: "2026-12-04T10:00:00Z" }

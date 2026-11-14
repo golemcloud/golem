@@ -11,7 +11,7 @@ import {
   ORDER_PAYMENT_GRACE_MS,
   planFor,
   SETTLEMENT_MARGIN_MS,
-  SUPPORT_EMAIL,
+  CONTACT_EMAIL,
   sweeper
 } from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
@@ -155,7 +155,7 @@ describe("holdFor", () => {
     expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
   })
 
-  it("promises an invoice only for the overage of a billable subscription, and names support for the rest", () => {
+  it("promises an invoice only for the overage of a billable subscription, and names a contact for the rest", () => {
     const billingUrl = "https://billing.golem.cloud"
 
     expect(holdReasonText(["subscription", "unbilledUsage"], billingUrl)).toContain(
@@ -163,7 +163,7 @@ describe("holdFor", () => {
     )
     const unsettled = holdReasonText(["unsettledUsage"], billingUrl)
     expect(unsettled).toBe(
-      `Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact support at ${SUPPORT_EMAIL}.`
+      `Golem Cloud billing: The billing of the paid overage of the account is not final yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
     )
     expect(unsettled).not.toMatch(/invoice|period/)
   })

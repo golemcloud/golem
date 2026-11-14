@@ -297,7 +297,7 @@ shows the reason text to the person, for example in `golem-cli account delete`. 
 with `Golem Cloud billing:` and has one sentence for each reason that tells the person what to do:
 cancel the subscription and wait for the end of the period, wait for the invoice, or pay it. Only
 a billable subscription has an invoice to come, so the text of `unsettledUsage` promises none: it
-says to try again in an hour, and then to contact support at `contact@golem.cloud`. The rest of
+says to try again in an hour, and then to contact Golem Cloud at `sales@golem.cloud`. The rest of
 the paid period is not refunded.
 
 ## Billable overage
