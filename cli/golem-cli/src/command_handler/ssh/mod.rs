@@ -37,14 +37,14 @@ use self::completion::{Completions, Fetch};
 pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
     BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
-    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
-    classify_live_error, decode_live_result, decode_result, decorated, dimmed, ended, exit_code,
-    failed_agent_notice, global_args, help_text, input_mode, interrupted_message, local_command,
-    lookup_command, prompt, run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports,
-    time_limit, tools_listing,
+    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_live_error,
+    decode_live_result, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
+    global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
+    run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
+use self::live::CallKey;
 use self::look::{Loader, Palette, Readiness, shown, shown_message};
 use self::progress::Ticker;
 use crate::agent_help_hints::is_agent_help_enabled;
@@ -186,16 +186,17 @@ impl Fetch for AgentFetcher {
             return None;
         };
         let input = ExternalTypedSchemaValue::try_from(*input).ok()?;
-        let key = IdempotencyKey::fresh();
-        let tool_handler = self.ctx.tool_handler();
-        let call = tool_handler.invoke_tool_scalar(
+        let key = CallKey::fresh();
+        let call = live::run_live(
+            &self.ctx,
             &self.owner,
             &self.tool,
             command_path,
-            Some(input),
+            input,
             &key,
-            NativeToolInvocationMode::Await,
-            None,
+            false,
+            std::future::pending(),
+            std::future::pending(),
         );
         let give_up = async {
             debug!("a helper script got no answer in time");
@@ -212,7 +213,7 @@ impl Fetch for AgentFetcher {
             .block_on(within(HELPER_WAIT, call, give_up))?
             .inspect_err(|error| debug!(error = %error, "a helper script failed"))
             .ok()?;
-        let result = decode_result(response.result).ok()?;
+        let result = decode_live_result(response).ok()?;
         (result.exit_code == 0).then_some(result.stdout)
     }
 }
@@ -233,22 +234,25 @@ async fn within<T>(
     }
 }
 
-/// Asks Golem to cancel the call under `key`. True when the call was still queued and is now
-/// cancelled; Golem does not stop a call that has started.
-async fn cancel_call(
-    ctx: &Arc<Context>,
-    owner: &ToolOwner,
-    key: &IdempotencyKey,
-) -> anyhow::Result<bool> {
+/// Asks Golem to cancel the call under its accepted key. True when the call was still queued and
+/// is now cancelled; Golem does not stop a call that has started.
+async fn cancel_call(ctx: &Arc<Context>, owner: &ToolOwner, key: &CallKey) -> anyhow::Result<bool> {
     let agent = owner
         .agent_id
         .as_ref()
         .ok_or_else(|| anyhow!("the session has no agent"))?;
+    let accepted = key
+        .accepted()
+        .ok_or_else(|| anyhow!("the server had not accepted the command"))?;
     Ok(ctx
         .golem_clients()
         .await?
         .worker
-        .cancel_invocation(&agent.component_id.0, &agent.agent_id, &key.value)
+        .cancel_invocation(
+            &agent.component_id.0,
+            &agent.agent_id,
+            &accepted.to_string(),
+        )
         .await
         .map(|result| result.canceled)
         .map_service_error()?)
@@ -409,7 +413,7 @@ impl SshCommandHandler {
 
     /// `-c`: one submission. On success the process output is exactly the script's.
     async fn run_once(&self, session: &Session, script: &str) -> u8 {
-        let key = IdempotencyKey::fresh();
+        let key = CallKey::fresh();
         // One command: no earlier agent is there to compare its agent with.
         let fingerprint = LiveFingerprint::Known(None);
         match self
@@ -602,7 +606,7 @@ impl SshCommandHandler {
                 _ => {}
             }
 
-            let key = IdempotencyKey::fresh();
+            let key = CallKey::fresh();
             let ticker = show_progress.then(|| {
                 Ticker::start(
                     colorize.then_some((palette, loader)),
@@ -746,7 +750,7 @@ impl SshCommandHandler {
         &self,
         session: &Session,
         script: &str,
-        key: &IdempotencyKey,
+        key: &CallKey,
         fingerprint: LiveFingerprint,
         ticker: Option<&Ticker>,
     ) -> (Submission, Option<Uuid>) {
@@ -768,47 +772,72 @@ impl SshCommandHandler {
             }
             Err(error) => return unbuilt(error),
         };
+        let fingerprint = async {
+            match fingerprint {
+                LiveFingerprint::Known(fingerprint) => fingerprint,
+                LiveFingerprint::Unread => self.agent_state(session).await.2,
+            }
+        };
+        // Read next to the call, so the command starts at once. The result waits for this
+        // read, which gives up after `STATUS_WAIT`.
         if session.stoppable {
-            let fingerprint = async {
-                match fingerprint {
-                    LiveFingerprint::Known(fingerprint) => fingerprint,
-                    LiveFingerprint::Unread => self.agent_state(session).await.2,
-                }
-            };
-            // Read next to the call, so the command starts at once. The result waits for this
-            // read, which gives up after `STATUS_WAIT`.
-            return tokio::join!(
+            tokio::join!(
                 self.submit_live(session, command_path, input, key, ticker),
                 fingerprint
-            );
+            )
+        } else {
+            tokio::join!(
+                self.submit_unstoppable(session, command_path, input, key),
+                fingerprint
+            )
         }
-        let tool_handler = self.ctx.tool_handler();
-        let call = tool_handler.invoke_tool_scalar(
+    }
+
+    /// Runs the call through the live session without stdin, for a tool that cannot stop a
+    /// command. Ctrl+C stops waiting and cancels the call if it is still queued; the cancel
+    /// needs the accepted key, so it waits for the acceptance first.
+    async fn submit_unstoppable(
+        &self,
+        session: &Session,
+        command_path: Vec<String>,
+        input: ExternalTypedSchemaValue,
+        key: &CallKey,
+    ) -> Submission {
+        let (give_up_tx, give_up_rx) = tokio::sync::oneshot::channel::<()>();
+        let call = live::run_live(
+            &self.ctx,
             &session.owner,
             &session.tool,
             command_path,
-            Some(input),
+            input,
             key,
-            NativeToolInvocationMode::Await,
-            None,
+            false,
+            std::future::pending(),
+            async {
+                let _ = give_up_rx.await;
+            },
         );
-        let response = tokio::select! {
-            response = call => Some(response),
+        tokio::pin!(call);
+        let answer = tokio::select! {
+            answer = &mut call => Some(answer),
             _ = tokio::signal::ctrl_c() => None,
         };
-        match response {
-            Some(Ok(response)) => {
-                let submission = match decode_result(response.result) {
-                    Ok(result) => Submission::Completed(result),
-                    Err(failure) => Submission::Failed(failure),
-                };
-                (submission, response.agent_fingerprint)
+        let answer = match answer {
+            Some(answer) => answer,
+            None => {
+                tokio::select! {
+                    answer = &mut call => answer,
+                    _ = tokio::time::timeout(CANCEL_WAIT, key.wait_accepted()) => {
+                        let _ = give_up_tx.send(());
+                        let _ = call.await;
+                        return Submission::Interrupted(self.cancel(session, key).await);
+                    }
+                }
             }
-            Some(Err(error)) => (Submission::Failed(invoke_failure(error)), None),
-            None => (
-                Submission::Interrupted(self.cancel(session, key).await),
-                None,
-            ),
+        };
+        match answer {
+            Ok(result) => live_submission(decode_live_result(result), false),
+            Err(error) => Submission::Failed(classify_live_error(error)),
         }
     }
 
@@ -820,7 +849,7 @@ impl SshCommandHandler {
         session: &Session,
         command_path: Vec<String>,
         input: ExternalTypedSchemaValue,
-        key: &IdempotencyKey,
+        key: &CallKey,
         ticker: Option<&Ticker>,
     ) -> Submission {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -832,6 +861,7 @@ impl SshCommandHandler {
             command_path,
             input,
             key,
+            true,
             async {
                 let _ = stop_rx.await;
             },
@@ -853,9 +883,12 @@ impl SshCommandHandler {
                     ticker.command_stopping();
                 }
                 // The stop reaches only a call that has started. A call that still waits in the
-                // agent's queue is cancelled under its key instead; that request does nothing to
-                // a call that has started.
-                let queued = self.cancel(session, key);
+                // agent's queue is cancelled under its accepted key instead; that request does
+                // nothing to a call that has started.
+                let queued = async {
+                    key.wait_accepted().await;
+                    self.cancel(session, key).await
+                };
                 tokio::pin!(queued);
                 let mut answered = false;
                 let limit = tokio::time::sleep(CANCEL_WAIT);
@@ -899,16 +932,18 @@ impl SshCommandHandler {
         }
     }
 
-    /// The result of a call that has finished, looked up under its key. `None` when it cannot
-    /// be had in time, which leaves the lookup command to the user.
-    async fn finished_result(&self, session: &Session, key: &IdempotencyKey) -> Option<BashResult> {
+    /// The result of a call that has finished, looked up under its accepted key. `None` when it
+    /// cannot be had in time, which leaves the lookup command to the user.
+    async fn finished_result(&self, session: &Session, key: &CallKey) -> Option<BashResult> {
+        let accepted = key.accepted()?;
+        let accepted_key = IdempotencyKey::new(accepted.to_string());
         let tool_handler = self.ctx.tool_handler();
         let lookup = tool_handler.invoke_tool_scalar(
             &session.owner,
             &session.tool,
             vec![RUN.to_string()],
             None,
-            key,
+            &accepted_key,
             NativeToolInvocationMode::Lookup,
             None,
         );
@@ -938,7 +973,7 @@ impl SshCommandHandler {
 
     /// After an outcome nobody saw: when the agent has failed, that is why and there is nothing
     /// to look up; otherwise how to look the result up later.
-    async fn report_unknown(&self, session: &Session, key: &IdempotencyKey) {
+    async fn report_unknown(&self, session: &Session, key: &CallKey) {
         if self.agent_state(session).await.0 == Readiness::Failed {
             log_error(failed_agent_notice(&session.agent));
         } else {
@@ -947,7 +982,7 @@ impl SshCommandHandler {
     }
 
     /// Asks Golem to cancel the call Ctrl+C stopped waiting for, and reads the answer.
-    async fn cancel(&self, session: &Session, key: &IdempotencyKey) -> CancelOutcome {
+    async fn cancel(&self, session: &Session, key: &CallKey) -> CancelOutcome {
         let request = cancel_call(&self.ctx, &session.owner, key);
         classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
             Ok(Ok(cancelled)) => Ok(cancelled),
@@ -976,7 +1011,7 @@ impl SshCommandHandler {
         logln(format!("Continuing from {place}; the command was not run."));
     }
 
-    fn report_failure(&self, session: &Session, failure: &CallFailure, key: &IdempotencyKey) {
+    fn report_failure(&self, session: &Session, failure: &CallFailure, key: &CallKey) {
         set_log_output(Output::Stderr);
         // These messages are the tool's and the server's words: the session writes them, so
         // nothing in them may act on the terminal.
@@ -1007,11 +1042,15 @@ impl SshCommandHandler {
                     "unexpected result from `{tool}`: {}",
                     shown_message(message)
                 ));
-                logln(format!(
-                    "The directory the command ended in is unknown, so the session ends. \
-                     Idempotency key: {}",
-                    key.value
-                ));
+                logln(match key.accepted() {
+                    Some(accepted) => format!(
+                        "The directory the command ended in is unknown, so the session ends. \
+                         Invocation key: {}",
+                        accepted
+                    ),
+                    None => "The directory the command ended in is unknown, so the session ends."
+                        .to_string(),
+                });
             }
         }
     }
@@ -1019,7 +1058,7 @@ impl SshCommandHandler {
     fn report_interrupted(
         &self,
         session: &Session,
-        key: &IdempotencyKey,
+        key: &CallKey,
         outcome: &CancelOutcome,
         styled: Option<Palette>,
     ) {
@@ -1053,7 +1092,14 @@ impl SshCommandHandler {
 
     /// Tells the user how to fetch the result of a command whose outcome this session did not
     /// see, without running it again.
-    fn report_lookup(&self, session: &Session, key: &IdempotencyKey) {
+    fn report_lookup(&self, session: &Session, key: &CallKey) {
+        let Some(accepted) = key.accepted() else {
+            logln(
+                "The server did not say that it accepted the command, so its result cannot be \
+                 looked up.",
+            );
+            return;
+        };
         logln(format!(
             "To see its result later, run this from the same directory, with any other global \
              options this session used:\n  {}",
@@ -1061,7 +1107,7 @@ impl SshCommandHandler {
                 &crate::command_name(),
                 &self.global_args(),
                 &session.agent,
-                &key.value,
+                &accepted.to_string(),
                 &session.tool,
             )
         ));
@@ -1173,13 +1219,6 @@ fn live_submission(decoded: Result<BashResult, CallFailure>, stopped: bool) -> S
         Ok(result) if stopped => Submission::Stopped(result),
         Ok(result) => Submission::Completed(result),
         Err(failure) => Submission::Failed(failure),
-    }
-}
-
-fn invoke_failure(error: anyhow::Error) -> CallFailure {
-    match error_response(&error) {
-        Some((status, rendered, _)) => classify_invoke_error(Some(status), rendered),
-        None => classify_invoke_error(None, format!("{error:#}")),
     }
 }
 

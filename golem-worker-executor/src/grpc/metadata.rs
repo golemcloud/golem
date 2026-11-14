@@ -59,10 +59,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
 
-        let filter: Option<AgentFilter> = match request.filter {
-            Some(f) => Some(f.try_into().map_err(WorkerExecutorError::invalid_request)?),
-            _ => None,
-        };
+        let filter = request.filter.map(validated_filter).transpose()?;
 
         let workers = self
             .running_worker_enumeration_service()
@@ -91,10 +88,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid project id"))?;
 
-        let filter: Option<AgentFilter> = match request.filter {
-            Some(f) => Some(f.try_into().map_err(WorkerExecutorError::invalid_request)?),
-            _ => None,
-        };
+        let filter = request.filter.map(validated_filter).transpose()?;
 
         let (new_cursor, workers) = self
             .worker_enumeration_service()
@@ -288,4 +282,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             fingerprint: Some(metadata.fingerprint.0.into()),
         })
     }
+}
+
+/// prost bounds the nesting of the decoded filter, so its conversion and `validated` recurse a
+/// bounded number of times.
+fn validated_filter(
+    filter: golem::worker::AgentFilter,
+) -> Result<AgentFilter, WorkerExecutorError> {
+    AgentFilter::try_from(filter)
+        .and_then(AgentFilter::validated)
+        .map_err(WorkerExecutorError::invalid_request)
 }

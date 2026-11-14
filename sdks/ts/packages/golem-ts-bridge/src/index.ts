@@ -1453,13 +1453,29 @@ export function decodeFlags<T extends Record<string, boolean>>(
 const STREAM_SUBPROTOCOL = 'golem.agent-invocation.v1';
 const STREAM_ENDPOINT = '/v1/agents/invoke-agent-session';
 
+export type StreamOutcome =
+  | { kind: 'finished' }
+  | { kind: 'failed'; error: StreamError }
+  | { kind: 'consumer-cancelled'; details?: string | null };
+
+export type StreamError =
+  | { kind: 'failed'; value: { graph: unknown; value: PublicValue } }
+  | { kind: 'trapped' | 'interrupted' | 'resource-exhausted'; message: string }
+  | { kind: 'cancelled' | 'abandoned' };
+
 export class StreamingProtocolError extends Error {
+  /** The agent's stderr output, present when an agent failure caused the error. */
+  readonly stderr?: string;
+
   constructor(
     readonly code: string,
     message: string,
+    stderr?: string,
+    readonly outcome?: StreamOutcome,
   ) {
     super(message);
     this.name = 'StreamingProtocolError';
+    if (stderr !== undefined) this.stderr = stderr;
   }
 }
 
@@ -3027,9 +3043,11 @@ type InputState = {
   channel?: number;
   sequence: bigint;
   terminal: boolean;
-  cancelReason?: 'source-unavailable';
   wireKind: 'json' | 'u8' | 'binary';
   bufferedPull?: Promise<IteratorResult<unknown>>;
+  // Owns a byte reservation while the preceding packed range waits for ACK.
+  bufferedFailure?: PendingInput;
+  pumping?: boolean;
   naturalEnd?: boolean;
   pending?: PendingInput;
 };
@@ -3239,6 +3257,80 @@ function object(value: unknown, required: string[], optional: string[] = []): Re
   return value;
 }
 
+function streamOutcome(value: unknown): StreamOutcome {
+  const outcome = object(value, ['kind'], ['error', 'details']);
+  switch (outcome.kind) {
+    case 'finished':
+      object(outcome, ['kind']);
+      break;
+    case 'consumer-cancelled':
+      object(outcome, ['kind'], ['details']);
+      if (outcome.details != null && typeof outcome.details !== 'string')
+        throw new StreamingProtocolError('malformed-message', 'invalid cancellation details');
+      break;
+    case 'failed': {
+      object(outcome, ['kind', 'error']);
+      const error = object(outcome.error, ['kind'], ['value', 'message']);
+      switch (error.kind) {
+        case 'failed': {
+          object(error, ['kind', 'value']);
+          const typed = object(error.value, ['graph', 'value']);
+          new PublicValueValidator(schemaGraphFromWire(typed.graph), 'none').validate(typed.value);
+          break;
+        }
+        case 'trapped':
+        case 'interrupted':
+        case 'resource-exhausted':
+          object(error, ['kind', 'message']);
+          if (typeof error.message !== 'string')
+            throw new StreamingProtocolError('malformed-message', 'invalid stream error message');
+          break;
+        case 'cancelled':
+        case 'abandoned':
+          object(error, ['kind']);
+          break;
+        default:
+          throw new StreamingProtocolError('malformed-message', 'unknown stream error');
+      }
+      break;
+    }
+    default:
+      throw new StreamingProtocolError('malformed-message', 'unknown stream outcome');
+  }
+  return outcome as StreamOutcome;
+}
+
+/** Validates a v1 terminal frame without applying attachment state. */
+export function decodeStreamSessionEnd(value: unknown): {
+  version: 1;
+  type: 'stream-end';
+  channel: number;
+  direction: 'input' | 'output';
+  sequence: string;
+  outcome: StreamOutcome;
+  cursorToken?: string | null;
+} {
+  const frame = object(
+    value,
+    ['version', 'type', 'channel', 'direction', 'sequence', 'outcome'],
+    ['cursorToken'],
+  );
+  if (typeof frame.version !== 'number')
+    throw new StreamingProtocolError('malformed-message', 'invalid stream terminal version');
+  if (frame.version !== 1)
+    throw new StreamingProtocolError('unsupported-version', 'unsupported stream terminal version');
+  if (frame.type !== 'stream-end' || !['input', 'output'].includes(frame.direction))
+    throw new StreamingProtocolError(
+      'malformed-message',
+      'invalid stream terminal direction or type',
+    );
+  validateChannel(frame.channel);
+  decimal(frame.sequence, 'sequence');
+  streamOutcome(frame.outcome);
+  if (frame.cursorToken != null) validateOpaqueToken(frame.cursorToken, 'cursor token');
+  return frame as ReturnType<typeof decodeStreamSessionEnd>;
+}
+
 function decimal(value: unknown, field: string): bigint {
   if (typeof value !== 'string' || !/^(?:0|[1-9]\d*)$/u.test(value))
     throw new StreamingProtocolError(
@@ -3371,19 +3463,24 @@ class OutputStream<T> implements AgentStream<T> {
     });
   }
 
-  finish(cursor?: { token: string; sequence: bigint }, deliveredSequence?: bigint): void {
+  finish(
+    bytes: number,
+    cursor?: { token: string; sequence: bigint },
+    deliveredSequence?: bigint,
+  ): void {
     this.protocolTerminal = true;
-    if (!this.consumerDropped) this.enqueue({ done: true, cursor, deliveredSequence, bytes: 1 });
+    if (!this.consumerDropped) this.enqueue({ done: true, cursor, deliveredSequence, bytes });
   }
 
   fail(
     error: unknown,
+    bytes: number,
     cursor?: { token: string; sequence: bigint },
     deliveredSequence?: bigint,
   ): void {
     if (this.protocolTerminal) return;
     this.protocolTerminal = true;
-    if (!this.consumerDropped) this.enqueue({ error, cursor, deliveredSequence, bytes: 1 });
+    if (!this.consumerDropped) this.enqueue({ error, cursor, deliveredSequence, bytes });
   }
 
   abort(error: unknown): void {
@@ -3500,6 +3597,7 @@ class StreamingSession {
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
   private sessionToken?: string;
+  private acceptedInvocation?: { agentId: AgentId; idempotencyKey: string };
   private attemptId = crypto.randomUUID();
   private idempotencyKey = '';
   private pendingOperation = '';
@@ -3809,8 +3907,8 @@ class StreamingSession {
         await this.connect(timeoutMs);
         return;
       } catch (error) {
-        if (!(error instanceof RetryableStreamingConnectionError) || this.signal?.aborted)
-          throw error;
+        throwIfAborted(this.signal);
+        if (!(error instanceof RetryableStreamingConnectionError)) throw error;
         // An attempt cut short by the end of the window keeps the earlier cause.
         const cutShort = timeoutMs < CONNECT_ATTEMPT_TIMEOUT_MS && error.timedOut;
         this.attemptFailed(cutShort ? (this.lastFailure ?? error.failure) : error.failure);
@@ -3911,16 +4009,42 @@ class StreamingSession {
           'version',
           'type',
           'attemptId',
+          'agentId',
           'idempotencyKey',
           'mappings',
           'sessionToken',
         ]);
         if (message.attemptId !== this.attemptId)
           throw new StreamingProtocolError('protocol-error', 'unexpected attempt acceptance');
-        if (message.idempotencyKey !== this.idempotencyKey)
-          throw new StreamingProtocolError('protocol-error', 'unexpected invocation identity');
+        if (!isRecord(message.agentId))
+          throw new StreamingProtocolError('malformed-message', 'invalid accepted agent identity');
+        object(message.agentId, ['componentId', 'agentId']);
+        if (
+          typeof message.agentId.componentId !== 'string' ||
+          !HYPHENATED_UUID.test(message.agentId.componentId) ||
+          typeof message.agentId.agentId !== 'string' ||
+          message.agentId.agentId.length === 0 ||
+          typeof message.idempotencyKey !== 'string' ||
+          message.idempotencyKey.length === 0
+        )
+          throw new StreamingProtocolError(
+            'malformed-message',
+            'invalid accepted invocation identity',
+          );
+        const agentId = message.agentId as unknown as AgentId;
+        if (
+          this.acceptedInvocation &&
+          (this.acceptedInvocation.agentId.componentId !== agentId.componentId ||
+            this.acceptedInvocation.agentId.agentId !== agentId.agentId ||
+            this.acceptedInvocation.idempotencyKey !== message.idempotencyKey)
+        )
+          throw new StreamingProtocolError(
+            'protocol-error',
+            'accepted invocation identity changed',
+          );
         validateOpaqueToken(message.sessionToken, 'session token');
         this.install(message.mappings, true);
+        this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
         this.everAccepted = true;
@@ -3929,7 +4053,11 @@ class StreamingSession {
         break;
       }
       case 'invocationRejected': {
-        object(message, ['version', 'type', 'code', 'message', 'retryable'], ['attemptId']);
+        object(
+          message,
+          ['version', 'type', 'code', 'message', 'retryable'],
+          ['attemptId', 'stderr'],
+        );
         if (
           (message.attemptId !== undefined && message.attemptId !== this.attemptId) ||
           (this.everAccepted && message.attemptId === undefined)
@@ -3938,10 +4066,11 @@ class StreamingSession {
         if (
           typeof message.code !== 'string' ||
           typeof message.message !== 'string' ||
-          typeof message.retryable !== 'boolean'
+          typeof message.retryable !== 'boolean' ||
+          (message.stderr !== undefined && typeof message.stderr !== 'string')
         )
           throw new StreamingProtocolError('malformed-message', 'invalid invocation rejection');
-        const rejection = new StreamingProtocolError(message.code, message.message);
+        const rejection = new StreamingProtocolError(message.code, message.message, message.stderr);
         if (message.code === 'invalid-attachment-state') {
           if (
             this.everAccepted &&
@@ -4019,48 +4148,47 @@ class StreamingSession {
         );
         break;
       }
-      case 'outputStreamEnd': {
-        object(message, ['version', 'type', 'channel', 'outcome', 'sequence'], ['cursorToken']);
+      case 'stream-end': {
+        const terminal = decodeStreamSessionEnd(message);
+        if (terminal.direction === 'input') {
+          this.cancelChannel(terminal.channel);
+          break;
+        }
         const output = this.outputByChannel(message.channel);
         const sequence = decimal(message.sequence, 'sequence');
         const deliveredSequence = output.stream.accept(sequence, 0n);
-        if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')
-          throw new StreamingProtocolError('malformed-message', 'invalid output outcome');
+        const outcome = terminal.outcome;
         let failure: StreamingProtocolError | undefined;
-        if (message.outcome.kind === 'ok') object(message.outcome, ['kind']);
-        else if (message.outcome.kind === 'error') {
-          object(message.outcome, ['kind', 'code', 'message']);
-          if (
-            typeof message.outcome.code !== 'string' ||
-            typeof message.outcome.message !== 'string'
-          )
-            throw new StreamingProtocolError('malformed-message', 'invalid output error');
-          failure = new StreamingProtocolError(message.outcome.code, message.outcome.message);
-        } else if (message.outcome.kind === 'cancelled') {
-          object(message.outcome, ['kind', 'reason']);
-          if (typeof message.outcome.reason !== 'string')
-            throw new StreamingProtocolError('malformed-message', 'invalid cancellation reason');
-          failure = new StreamingProtocolError('cancelled', message.outcome.reason);
-        } else throw new StreamingProtocolError('malformed-message', 'invalid output outcome');
+        if (outcome.kind === 'consumer-cancelled')
+          failure = new StreamingProtocolError(
+            'consumer-cancelled',
+            outcome.details ?? 'output consumer cancelled',
+            undefined,
+            outcome,
+          );
+        else if (outcome.kind === 'failed')
+          failure = new StreamingProtocolError(
+            outcome.error.kind,
+            'message' in outcome.error
+              ? outcome.error.message
+              : `output stream ${outcome.error.kind}`,
+            undefined,
+            outcome,
+          );
         const cursor =
-          message.cursorToken !== undefined
+          message.cursorToken != null
             ? (validateOpaqueToken(message.cursorToken, 'cursor token'),
               {
                 token: message.cursorToken as string,
                 sequence,
               })
             : undefined;
-        if (failure === undefined) output.stream.finish(cursor, deliveredSequence);
-        else output.stream.fail(failure, cursor, deliveredSequence);
+        const bytes = Buffer.byteLength(text);
+        if (failure === undefined) output.stream.finish(bytes, cursor, deliveredSequence);
+        else output.stream.fail(failure, bytes, cursor, deliveredSequence);
         this.outputCancelReasons.delete(output.token);
         break;
       }
-      case 'streamCancel':
-        object(message, ['version', 'type', 'channel', 'reason']);
-        if (typeof message.reason !== 'string')
-          throw new StreamingProtocolError('malformed-message', 'invalid cancellation reason');
-        this.cancelChannel(message.channel);
-        break;
       case 'attachmentRevoked':
         object(message, ['version', 'type', 'reason']);
         if (message.reason !== 'replaced')
@@ -4072,10 +4200,11 @@ class StreamingSession {
         if (!isRecord(message.outcome) || typeof message.outcome.kind !== 'string')
           throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
         if (message.outcome.kind === 'failure') {
-          object(message.outcome, ['kind', 'code', 'message']);
+          object(message.outcome, ['kind', 'code', 'message'], ['stderr']);
           if (
             typeof message.outcome.code !== 'string' ||
-            typeof message.outcome.message !== 'string'
+            typeof message.outcome.message !== 'string' ||
+            (message.outcome.stderr !== undefined && typeof message.outcome.stderr !== 'string')
           )
             throw new StreamingProtocolError('malformed-message', 'invalid invocation failure');
           if ([...this.outputs.values()].some((output) => !output.isTerminal()))
@@ -4083,7 +4212,13 @@ class StreamingSession {
               'protocol-error',
               'invocation failure preceded output terminal',
             );
-          this.finish(new StreamingProtocolError(message.outcome.code, message.outcome.message));
+          this.finish(
+            new StreamingProtocolError(
+              message.outcome.code,
+              message.outcome.message,
+              message.outcome.stderr,
+            ),
+          );
         } else if (message.outcome.kind !== 'success')
           throw new StreamingProtocolError('malformed-message', 'invalid invocation outcome');
         else {
@@ -4314,21 +4449,20 @@ class StreamingSession {
         this.ensureOutput(mapping.token);
         const reason = this.outputCancelReasons.get(mapping.token);
         if (reason)
-          this.send({ version: 1, type: 'streamCancel', channel: mapping.channel, reason });
+          this.send({
+            version: 1,
+            type: 'stream-end',
+            direction: 'output',
+            sequence: '0',
+            channel: mapping.channel,
+            outcome: { kind: 'consumer-cancelled', details: reason },
+          });
       } else {
         const input = mapping.input as InputState;
         this.inputTokens.set(mapping.token, input);
         input.channel = mapping.channel;
         this.reconcileInput(input, mapping.highWater as bigint, mapping.terminal as boolean);
-        if (mapping.terminal) input.cancelReason = undefined;
-        else if (input.cancelReason)
-          this.send({
-            version: 1,
-            type: 'streamCancel',
-            channel: mapping.channel,
-            reason: input.cancelReason,
-          });
-        else if (input.pending) this.socket?.send(input.pending.render(mapping.channel));
+        if (input.pending) this.socket?.send(input.pending.render(mapping.channel));
         else pumps.add(input);
       }
     }
@@ -4336,60 +4470,78 @@ class StreamingSession {
   }
 
   private async pump(input: InputState): Promise<void> {
-    if (input.terminal || input.cancelReason || input.channel === undefined || input.pending)
-      return;
+    if (input.terminal || input.pumping || input.channel === undefined || input.pending) return;
+    input.pumping = true;
     try {
-      const next = input.naturalEnd
-        ? ({ done: true } as IteratorResult<unknown>)
-        : await this.pull(input);
-      const pending = next.done
-        ? this.terminalInput(input.sequence)
-        : input.wireKind === 'u8'
-          ? await this.packedU8Input(input, next.value)
-          : input.wireKind === 'binary'
-            ? this.binaryInput(input, next.value)
-            : this.jsonInput(input, next.value);
-      const channel = input.channel;
-      const message = pending.render(channel ?? 4294967295);
-      const bytes = Buffer.byteLength(message);
-      if (bytes > MAX_LOGICAL_VALUE_BYTES)
-        throw new StreamingProtocolError(
-          'resource-exhausted',
-          'input logical value limit exceeded',
-        );
-      if (this.pendingInputBytes + bytes > MAX_QUEUE_BYTES)
-        throw new StreamingProtocolError(
-          'resource-exhausted',
-          'unacknowledged input limit exceeded',
-        );
-      pending.bytes = bytes;
-      input.pending = pending;
-      this.pendingInputBytes += bytes;
-      if (channel !== undefined) this.socket?.send(pending.render(channel));
+      const next =
+        input.bufferedFailure || input.naturalEnd
+          ? ({ done: true } as IteratorResult<unknown>)
+          : await this.pull(input);
+      if (input.terminal) return;
+      const pending =
+        input.bufferedFailure ??
+        (next.done
+          ? this.terminalInput(input.sequence)
+          : input.wireKind === 'u8'
+            ? await this.packedU8Input(input, next.value)
+            : input.wireKind === 'binary'
+              ? this.binaryInput(input, next.value)
+              : this.jsonInput(input, next.value));
+      if (input.terminal) return;
+      this.retainInput(input, pending);
     } catch (error) {
+      if (input.terminal) return;
       if (error instanceof StreamingProtocolError) {
         this.fail(error);
         this.socket?.close(1002);
         return;
       }
-      input.cancelReason = 'source-unavailable';
-      if (input.channel !== undefined)
-        this.send({
-          version: 1,
-          type: 'streamCancel',
-          channel: input.channel,
-          reason: input.cancelReason,
-        });
+      const pending = this.failedInput(input.sequence, error);
+      try {
+        this.retainInput(input, pending);
+      } catch (failure) {
+        this.fail(failure);
+        this.socket?.close(1002);
+      }
+    } finally {
+      input.pumping = false;
     }
   }
 
-  private pull(input: InputState): Promise<IteratorResult<unknown>> {
+  private retainInput(input: InputState, pending: PendingInput): void {
+    if (input.bufferedFailure === pending) input.bufferedFailure = undefined;
+    else this.reserveInput(pending);
+    input.pending = pending;
+    if (input.channel !== undefined) this.socket?.send(pending.render(input.channel));
+  }
+
+  private reserveInput(pending: PendingInput): void {
+    // Reserve enough for any channel assigned on resume.
+    const bytes = Buffer.byteLength(pending.render(4294967295));
+    if (bytes > MAX_LOGICAL_VALUE_BYTES)
+      throw new StreamingProtocolError('resource-exhausted', 'input logical value limit exceeded');
+    if (this.pendingInputBytes + bytes > MAX_QUEUE_BYTES)
+      throw new StreamingProtocolError('resource-exhausted', 'unacknowledged input limit exceeded');
+    pending.bytes = bytes;
+    this.pendingInputBytes += bytes;
+  }
+
+  private async pull(input: InputState): Promise<IteratorResult<unknown>> {
     const pending = input.bufferedPull;
     if (pending) {
-      input.bufferedPull = undefined;
-      return pending;
+      const next = await pending;
+      if (input.bufferedPull === pending) input.bufferedPull = undefined;
+      return next;
     }
-    return input.source.next();
+    return this.sourceNext(input);
+  }
+
+  private async sourceNext(input: InputState): Promise<IteratorResult<unknown>> {
+    try {
+      return await input.source.next();
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private jsonInput(input: InputState, value: unknown): PendingInput {
@@ -4450,18 +4602,31 @@ class StreamingSession {
 
   private async packedU8Input(input: InputState, first: unknown): Promise<PendingInput> {
     const bytes = [this.nativeU8(input.encode(first))];
-    while (bytes.length < 1024 * 1024) {
-      const pull = input.source.next();
+    while (bytes.length < 1024 * 1024 && !input.terminal) {
+      const sequence = input.sequence + BigInt(bytes.length);
+      const pull: Promise<IteratorResult<unknown>> = this.sourceNext(input).catch((error) => {
+        if (input.terminal || input.bufferedPull !== pull) return { done: true, value: undefined };
+        input.bufferedPull = undefined;
+        try {
+          const failure = this.failedInput(sequence, error);
+          this.reserveInput(failure);
+          input.bufferedFailure = failure;
+        } catch (failure) {
+          this.fail(failure);
+          this.socket?.close(1002);
+        }
+        return { done: true, value: undefined };
+      });
+      input.bufferedPull = pull;
       const next = await Promise.race([
         pull.then((value) => ({ kind: 'value' as const, value })),
         new Promise<{ kind: 'timeout' }>((resolve) =>
           setTimeout(() => resolve({ kind: 'timeout' }), 1),
         ),
       ]);
-      if (next.kind === 'timeout') {
-        input.bufferedPull = pull;
-        break;
-      }
+      if (next.kind === 'timeout') break;
+      if (input.bufferedPull === pull) input.bufferedPull = undefined;
+      if (input.bufferedFailure) break;
       if (next.value.done) {
         input.naturalEnd = true;
         break;
@@ -4469,6 +4634,16 @@ class StreamingSession {
       bytes.push(this.nativeU8(input.encode(next.value.value)));
     }
     return this.packedU8Range(input.sequence, Buffer.from(bytes));
+  }
+
+  private failedInput(sequence: bigint, error: unknown): PendingInput {
+    return this.terminalInput(sequence, {
+      kind: 'failed',
+      error: {
+        kind: 'interrupted',
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
   }
 
   private packedU8Range(sequence: bigint, payload: Buffer): PendingInput {
@@ -4485,7 +4660,10 @@ class StreamingSession {
     };
   }
 
-  private terminalInput(sequence: bigint): PendingInput {
+  private terminalInput(
+    sequence: bigint,
+    outcome: StreamOutcome = { kind: 'finished' },
+  ): PendingInput {
     return {
       sequence,
       itemCount: 0n,
@@ -4494,9 +4672,11 @@ class StreamingSession {
       render: (channel) =>
         canonicalJson({
           version: 1,
-          type: 'inputStreamEnd',
+          type: 'stream-end',
+          direction: 'input',
           channel,
           sequence: sequence.toString(),
+          outcome,
         }),
     };
   }
@@ -4536,10 +4716,7 @@ class StreamingSession {
       throw new StreamingProtocolError('invalid-sequence', 'input high-water moved backwards');
     const pending = input.pending;
     if (!pending) {
-      if (
-        highWater !== input.sequence ||
-        (terminal !== input.terminal && !(terminal && input.cancelReason !== undefined))
-      )
+      if (highWater !== input.sequence || terminal !== input.terminal)
         throw new StreamingProtocolError(
           'invalid-sequence',
           'input high-water conflicts with local state',
@@ -4564,13 +4741,7 @@ class StreamingSession {
   private reconcileInput(input: InputState, highWater: bigint, terminal: boolean): void {
     this.validateInputReconcile(input, highWater, terminal);
     const pending = input.pending;
-    if (!pending) {
-      if (terminal && input.cancelReason) {
-        input.cancelReason = undefined;
-        input.terminal = true;
-      }
-      return;
-    }
+    if (!pending) return;
     const end = pending.sequence + pending.itemCount;
     if (pending.terminal) {
       if (highWater !== pending.sequence || !terminal) return;
@@ -4623,7 +4794,14 @@ class StreamingSession {
           this.outputCancelReasons.set(token, 'consumer-drop');
           const channel = [...this.channels].find(([, value]) => value.token === token)?.[0];
           if (channel !== undefined)
-            this.send({ version: 1, type: 'streamCancel', channel, reason: 'consumer-drop' });
+            this.send({
+              version: 1,
+              type: 'stream-end',
+              channel,
+              direction: 'output',
+              sequence: '0',
+              outcome: { kind: 'consumer-cancelled', details: 'consumer-drop' },
+            });
         },
         (cursor, deliveredSequence) => {
           const previous = (stream as any).__delivered as
@@ -4674,7 +4852,14 @@ class StreamingSession {
           this.outputCancelReasons.set(token, 'consumer-drop');
           const channel = [...this.channels].find(([, value]) => value.token === token)?.[0];
           if (channel !== undefined)
-            this.send({ version: 1, type: 'streamCancel', channel, reason: 'consumer-drop' });
+            this.send({
+              version: 1,
+              type: 'stream-end',
+              channel,
+              direction: 'output',
+              sequence: '0',
+              outcome: { kind: 'consumer-cancelled', details: 'consumer-drop' },
+            });
         },
         (cursor, deliveredSequence) => {
           const previous = (stream as any).__delivered as
@@ -4784,10 +4969,15 @@ class StreamingSession {
         'invalid-channel',
         'cancellation referenced an unknown input',
       );
-    void input.source.return?.();
-    this.clearPendingInput(input);
-    input.cancelReason = undefined;
     input.terminal = true;
+    this.clearBufferedInput(input);
+    this.clearPendingInput(input);
+    void input.source.return?.();
+  }
+  private clearBufferedInput(input: InputState): void {
+    input.bufferedPull = undefined;
+    if (input.bufferedFailure) this.pendingInputBytes -= input.bufferedFailure.bytes;
+    input.bufferedFailure = undefined;
   }
   private clearPendingInput(input: InputState): void {
     if (input.pending) this.pendingInputBytes -= input.pending.bytes;
@@ -4813,9 +5003,11 @@ class StreamingSession {
   }
   private releaseInputs(): void {
     for (const input of this.inputs.values()) {
-      if (!input.terminal) void input.source.return?.();
-      this.clearPendingInput(input);
+      const terminal = input.terminal;
       input.terminal = true;
+      this.clearBufferedInput(input);
+      this.clearPendingInput(input);
+      if (!terminal) void input.source.return?.();
     }
   }
 }

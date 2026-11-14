@@ -983,16 +983,11 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("this.resolved.scheduleCancelable("));
     assert!(source.contains("const __golemSchemaGraphs = {"));
     assert!(source.contains("graph: __golemSchemaGraphs.graph0()"));
-    assert!(!source.contains("typedSchemaValueFromJson"));
-    assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("reachable-config"));
     assert!(source.contains("18446744073709551615"));
     assert!(source.contains("requests"));
     assert!(!source.contains("\\\"id\\\":\\\"unreachable-config\\\""));
     assert!(source.contains("Invalid result value: missing result value"));
-    assert!(!source.contains("LegacySchemaValue"));
-    assert!(!source.contains("toGuestSchemaValue"));
-    assert!(!source.contains("fromGuestSchemaValue"));
     assert!(source.contains("{ tag: 'record', fields:"));
     assert!(source.contains("{ tag: 'list', elements:"));
     assert!(source.contains("{ tag: 'map', entries:"));
@@ -1180,9 +1175,6 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     );
     assert!(source.contains("throw new Error(`Invalid enum case index ${__i}`)"));
     assert!(!source.contains("{ kind:"));
-    assert!(!source.contains("LegacySchemaValue"));
-    assert!(!source.contains("toGuestSchemaValue"));
-    assert!(!source.contains("fromGuestSchemaValue"));
 }
 
 #[test]
@@ -1632,7 +1624,8 @@ const port = wss.address().port;
 let connection = 0;
 const accepted = (start, mappings = []) => ({
   version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-  idempotencyKey: start.idempotencyKey, sessionToken: 'session', mappings,
+  agentId: { componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' },
+  idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session', mappings,
 });
 const finish = (socket) => socket.send(JSON.stringify({
   version: 1, type: 'invocationFinished', outcome: { kind: 'success' },
@@ -1667,8 +1660,8 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {
       },
     }));
     socket.send(JSON.stringify({
-      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
-      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+      version: 1, type: 'stream-end', channel: 2, direction: 'output', sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'finished' },
     }));
     finish(socket);
   } else {
@@ -1971,8 +1964,6 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
     assert!(source.contains("typedInput = { graph: __golemSchemaGraphs.graph"));
-    assert!(!source.contains("typedSchemaValueFromJson"));
-    assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("base.splitToolRpcError(error, (name, payload) =>"));
     assert!(source.contains(
         "function decodeGrepError(name: string, typed: base.TypedSchemaValue): GrepError | undefined"
@@ -2009,7 +2000,6 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("export type ColorMode"));
     assert!(!source.contains("golem-ts-bridge"));
     assert!(!source.contains("kind: 'record'"));
-    assert!(!source.contains("legacy"));
     std::fs::write(
         package_dir.join(format!("{package_name}.ts")),
         format!(
@@ -2079,8 +2069,6 @@ fn guest_tool_generation_escapes_identifiers_and_emits_exact_bigints() {
     assert!(source.contains("await_: number"));
     assert!(source.contains("encodeColorMode1: ColorMode"));
     assert!(source.contains("{ tag: 'unsigned', val: 18446744073709551615n }"));
-    assert!(!source.contains("schemaGraphFromJson"));
-    assert!(!source.contains("typedSchemaValueFromJson"));
     install_and_build(&package_dir);
 }
 
@@ -2558,7 +2546,8 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {{
   const start = JSON.parse(raw);
   socket.send(JSON.stringify({{
     version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-    idempotencyKey: start.idempotencyKey, sessionToken: 'session',
+    agentId: {{ componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' }},
+    idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session',
     mappings: [{{
       channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisionalRef(start.methodParameters),
       inputHighWater: {{ sequence: '0', terminal: false }},

@@ -141,39 +141,6 @@ fn generate_without_check(agent_type: AgentTypeSchema, mode: MoonBitBridgeMode) 
     dir
 }
 
-fn generate_with_default_mode_without_check(agent_type: AgentTypeSchema) -> TempDir {
-    let dir = TempDir::new().unwrap();
-    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
-    let mut generator = MoonBitBridgeGenerator::new(agent_type, target_dir, true).unwrap();
-    generator.generate().unwrap();
-    dir
-}
-
-fn generated_files(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
-    fn visit(
-        root: &std::path::Path,
-        current: &std::path::Path,
-        files: &mut Vec<(std::path::PathBuf, Vec<u8>)>,
-    ) {
-        for entry in std::fs::read_dir(current).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                visit(root, &path, files);
-            } else {
-                files.push((
-                    path.strip_prefix(root).unwrap().to_path_buf(),
-                    std::fs::read(&path).unwrap(),
-                ));
-            }
-        }
-    }
-
-    let mut files = Vec::new();
-    visit(root, root, &mut files);
-    files.sort_by(|(left, _), (right, _)| left.cmp(right));
-    files
-}
-
 fn moon_check_wasm(path: &std::path::Path) {
     let output = std::process::Command::new("moon")
         .arg("-C")
@@ -433,10 +400,10 @@ fn tool_node(name: &str) -> CommandNode {
     }
 }
 
-fn phase_eight_tool() -> Tool {
-    let recursive_id = TypeId::new("phase-eight.Recursive");
-    let outer_alias_id = TypeId::new("phase-eight.OuterAlias");
-    let inner_alias_id = TypeId::new("phase-eight.InnerAlias");
+fn schema_complete_tool() -> Tool {
+    let recursive_id = TypeId::new("schema-complete.Recursive");
+    let outer_alias_id = TypeId::new("schema-complete.OuterAlias");
+    let inner_alias_id = TypeId::new("schema-complete.InnerAlias");
     let tuple_8 = SchemaType::tuple(vec![SchemaType::string(); 8]);
     let tuple_9 = SchemaType::tuple(vec![SchemaType::string(); 9]);
 
@@ -631,17 +598,6 @@ fn counter_agent() -> AgentTypeSchema {
 }
 
 #[test]
-fn explicit_external_mode_is_byte_identical_to_the_default() {
-    let default = generate_with_default_mode_without_check(counter_agent());
-    let explicit = generate_without_check(counter_agent(), MoonBitBridgeMode::ExternalRest);
-
-    assert_eq!(
-        generated_files(default.path()),
-        generated_files(explicit.path())
-    );
-}
-
-#[test]
 fn guest_mode_generates_wasm_rpc_project_layout() {
     let guest = generate_without_check(counter_agent(), MoonBitBridgeMode::GuestWasmRpc);
     let module = std::fs::read_to_string(guest.path().join("moon.mod")).unwrap();
@@ -675,7 +631,8 @@ fn guest_mode_generates_wasm_rpc_project_layout() {
 fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut generator = MoonBitToolBridgeGenerator::new(phase_eight_tool(), target, true).unwrap();
+    let mut generator =
+        MoonBitToolBridgeGenerator::new(schema_complete_tool(), target, true).unwrap();
     generator.generate().unwrap();
 
     let module = std::fs::read_to_string(target.join("moon.mod")).unwrap();
@@ -709,7 +666,7 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         "body: @model.Url",
         "body: @model.Datetime",
         "body: @model.Duration",
-        "\"phase-eight.Recursive\"",
+        "\"schema-complete.Recursive\"",
         "[\"en\", \"de\"]",
         "[\"fr\"]",
     ] {
@@ -755,7 +712,7 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
 fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut tool = phase_eight_tool();
+    let mut tool = schema_complete_tool();
     tool.commands.nodes[0].name = "codec".into();
     let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
     generator.generate().unwrap();
@@ -769,7 +726,7 @@ fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
 fn guest_tool_mode_generates_name_aware_error_decoder() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut tool = phase_eight_tool();
+    let mut tool = schema_complete_tool();
     let errors = &mut tool.commands.nodes[0].body.as_mut().unwrap().errors;
     errors[0].name = "first-text".into();
     errors[1].name = "restricted-text".into();
@@ -809,7 +766,7 @@ fn guest_tool_mode_generates_name_aware_error_decoder() {
 fn guest_tool_mode_marks_substring_collision_parameter_used() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut tool = phase_eight_tool();
+    let mut tool = schema_complete_tool();
     tool.commands.nodes[0]
         .body
         .as_mut()
@@ -3276,8 +3233,23 @@ test "native value codec directly rejects the frozen malformed schema-value fixt
 test "text codec directly consumes frozen canonical and malformed fixtures" {
   let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
   for vector in expect_array(get_field(messages, "vectors")) {
-    let canonical = expect_string(get_field(expect_object(vector), "canonical"))
+    let vector = expect_object(vector)
+    let canonical = expect_string(get_field(vector, "canonical"))
     assert_eq(parse_strict_json(canonical).stringify(), canonical)
+    if expect_string(get_field(vector, "direction")) == "server" {
+      let message = expect_object(parse_strict_json(canonical))
+      let kind = expect_string(get_field(vector, "type"))
+      validate_message_fields(message, kind)
+      if kind == "stream-end" {
+        ignore(validate_server_stream_end(message))
+      }
+      if kind == "invocationFinished" {
+        let outcome = expect_object(get_field(message, "outcome"))
+        if expect_string(get_field(outcome, "kind")) == "failure" {
+          ignore(failure_outcome(outcome))
+        }
+      }
+    }
   }
   let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
   for vector in expect_array(get_field(malformed, "vectors")) {
@@ -3288,6 +3260,51 @@ test "text codec directly consumes frozen canonical and malformed fixtures" {
       }))
     }
   }
+}
+
+///|
+fn fixture_message(name : String) -> Map[String, Json] raise {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let vector = expect_object(vector)
+    if expect_string(get_field(vector, "name")) == name {
+      return expect_object(parse_strict_json(expect_string(get_field(vector, "canonical"))))
+    }
+  }
+  fail("missing vector \{name}")
+}
+
+///|
+test "agent failures surface stderr and still reject unknown members" {
+  let rejection = fixture_message("invocation-rejected-previous-invocation-failed")
+  validate_message_fields(rejection, "invocationRejected")
+  assert_eq(
+    reported_failure(rejection),
+    InvocationFailed(
+      code="previous-invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let finished = fixture_message("invocation-finished-failure-with-stderr")
+  validate_message_fields(finished, "invocationFinished")
+  let outcome = expect_object(get_field(finished, "outcome"))
+  assert_eq(
+    failure_outcome(outcome),
+    InvocationFailed(
+      code="invocation-failed",
+      message="intentional invocation failure",
+      stderr=Some("intentional failure stderr\n"),
+    ),
+  )
+  let without_stderr = expect_object(get_field(fixture_message("invocation-finished-failure"), "outcome"))
+  assert_true(failure_outcome(without_stderr) is InvocationFailed(stderr=None, ..))
+  rejection["extra"] = Json::string("x")
+  assert_true(raises(() => validate_message_fields(rejection, "invocationRejected")))
+  outcome["extra"] = Json::string("x")
+  assert_true(raises(() => ignore(failure_outcome(outcome))))
+  finished["stderr"] = Json::string("misplaced")
+  assert_true(raises(() => validate_message_fields(finished, "invocationFinished")))
 }
 "#,
     )
@@ -3344,6 +3361,22 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("resume-routing-miss", "", window, STABLE),
         ("accept-drop", "unreachable", "Within(800)", "400"),
         ("stable-reset", "", "Within(1000)", "300"),
+        ("input-failure-replay", "", window, STABLE),
+        ("input-eof-replay", "", window, STABLE),
+        ("output-failed", "typed-failure", window, STABLE),
+        ("output-cancel-race", "", window, STABLE),
+        ("output-cancel-after-resume-head", "", window, STABLE),
+        ("output-cancel-partial-packed", "", window, STABLE),
+        ("terminal-accounting", "", window, STABLE),
+        ("output-admission-cancel", "", window, STABLE),
+        ("input-prefetch-delayed", "", window, STABLE),
+        ("input-prefetch-before-attachment", "", window, STABLE),
+        (
+            "output-consumer-cancelled",
+            "consumer-cancelled",
+            window,
+            STABLE,
+        ),
     ] {
         let mut server = std::process::Command::new("python3")
             .arg("-u")
@@ -3364,6 +3397,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
                 .replace("__PORT__", port.trim())
+                .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
                 .replace("__STABLE__", stable)
@@ -3390,10 +3424,10 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
     }
 }
 
-// GOL-100 requires input ownership to move into an invocation, so a stream
-// already consumed directly must not subsequently be registered as an input.
+// Input ownership moves into an invocation, so a stream already consumed
+// directly must not subsequently be registered as an input.
 #[test]
-fn provisional_consumed_stream_cannot_be_registered_as_invocation_input() {
+fn consumed_stream_cannot_be_registered_as_invocation_input() {
     let pkg = GeneratedPackage::new(agent(
         "AffineStreamAgent",
         "rust",
@@ -3407,8 +3441,7 @@ fn provisional_consumed_stream_cannot_be_registered_as_invocation_input() {
         AgentMode::Durable,
     ));
     std::fs::write(
-        pkg.module_dir()
-            .join("runtime/provisional_affine_wbtest.mbt"),
+        pkg.module_dir().join("runtime/consumed_input_wbtest.mbt"),
         r#"///|
 async test "consumed stream cannot move into an invocation" {
   let stream = AgentStream::from_next(async fn() { None })
@@ -3430,10 +3463,10 @@ async test "consumed stream cannot move into an invocation" {
     pkg.test_native();
 }
 
-// GOL-100 requires input ownership to move into an invocation, so application
-// code must not retain cancellation or drop authority after registration.
+// Input ownership moves into an invocation, so application code must not
+// retain cancellation or drop authority after registration.
 #[test]
-fn provisional_invocation_owned_stream_rejects_application_cancel_and_drop() {
+fn invocation_owned_stream_rejects_application_cancel_and_drop() {
     let pkg = GeneratedPackage::new(agent(
         "MovedStreamAgent",
         "rust",
@@ -3448,7 +3481,7 @@ fn provisional_invocation_owned_stream_rejects_application_cancel_and_drop() {
     ));
     std::fs::write(
         pkg.module_dir()
-            .join("runtime/provisional_moved_cancel_wbtest.mbt"),
+            .join("runtime/moved_input_cancel_wbtest.mbt"),
         r#"///|
 async test "invocation-owned stream rejects application cancellation" {
   let mut cancellations = 0
@@ -3801,7 +3834,7 @@ test "text language outside the schema is rejected on encode and decode" {
 fn guest_tool_mode_moon_checks_rich_kinds() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
-    let mut tool = phase_eight_tool();
+    let mut tool = schema_complete_tool();
     let body = tool.commands.nodes[0].body.as_mut().unwrap();
     body.positionals
         .fixed

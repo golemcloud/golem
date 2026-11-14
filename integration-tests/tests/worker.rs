@@ -25,14 +25,14 @@ use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
 use golem_client::model::WorkersMetadataRequest;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, AgentMode,
 };
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator,
+    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, IdempotencyScope,
+    InvocationRequestKey, PromiseId, ScanCursor, StringFilterComparator,
 };
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue};
@@ -416,7 +416,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let workers_count = 150;
     let mut agent_ids = HashSet::new();
-    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for i in 0..workers_count {
         let aid = agent_id!("Repository", format!("gw{i}"));
@@ -596,6 +596,32 @@ async fn invalid_worker_enumeration_requests_return_http_400(
     Ok(())
 }
 
+/// Lists every agent of the component that matches the filter, following the cursors.
+async fn list_all_agents(
+    user: &impl TestDsl,
+    component_id: &ComponentId,
+    filter: &AgentFilter,
+    count: u64,
+) -> anyhow::Result<Vec<AgentId>> {
+    let mut cursor = ScanCursor::default();
+    let mut listed = Vec::new();
+    loop {
+        let (next_cursor, values) = user
+            .get_workers_metadata(component_id, Some(filter.clone()), cursor, count, true)
+            .await?;
+        assert!(
+            values.len() as u64 <= count,
+            "a page has {} agents, more than its count of {count}",
+            values.len()
+        );
+        listed.extend(values.into_iter().map(|metadata| metadata.agent_id));
+        match next_cursor {
+            Some(next_cursor) => cursor = next_cursor,
+            None => return Ok(listed),
+        }
+    }
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
@@ -621,8 +647,25 @@ async fn get_running_workers(
     let response = Arc::new(Mutex::new("running".to_string()));
     let response_clone = response.clone();
 
+    // Ephemeral agents stay running while their request to `/hang` waits for the release.
+    let hang_requests = Arc::new(AtomicU64::new(0));
+    let hang_requests_clone = hang_requests.clone();
+    let (release_hang, hang_released) = tokio::sync::watch::channel(false);
+
     let http_server = tokio::spawn(async move {
-        let route = Router::new().route(
+        let route = Router::new()
+            .route(
+                "/hang",
+                get(move || {
+                    let mut hang_released = hang_released.clone();
+                    hang_requests_clone.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        let _ = hang_released.wait_for(|released| *released).await;
+                        "released"
+                    }
+                }),
+            )
+            .route(
             "/poll",
             get(move |query: Query<HashMap<String, String>>| {
                 async move {
@@ -652,7 +695,7 @@ async fn get_running_workers(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let workers_count = 15;
-    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
+    let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentKey)> = Vec::new();
 
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
@@ -693,6 +736,42 @@ async fn get_running_workers(
         }
 
         sleep(Duration::from_secs(1)).await;
+    }
+
+    let ephemeral_count = 3;
+    let hang_url = format!("http://localhost:{host_http_port}/hang");
+    let mut ephemeral_ids = HashSet::new();
+    for _ in 0..ephemeral_count {
+        let name = agent_id!("EphemeralHttpClient4");
+        let key = IdempotencyKey::fresh();
+        let owner_key = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(*user.account_id())),
+            Some(&key),
+        )
+        .owner_key("get_for_quota_wait");
+        let physical = name
+            .with_ephemeral_invocation_phantom(&owner_key)
+            .map_err(|e| anyhow!(e))?;
+        ephemeral_ids
+            .insert(AgentId::from_agent_id(component.id, &physical).map_err(|e| anyhow!(e))?);
+        user.invoke_agent_with_key(
+            &component,
+            &name,
+            &key,
+            "get_for_quota_wait",
+            data_value!(hang_url.clone()),
+        )
+        .await?;
+    }
+    let start = tokio::time::Instant::now();
+    while hang_requests.load(Ordering::SeqCst) < ephemeral_count {
+        if start.elapsed() > polling_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for the ephemeral agents' requests. Only {}/{ephemeral_count} arrived",
+                hang_requests.load(Ordering::SeqCst)
+            ));
+        }
+        sleep(Duration::from_millis(100)).await;
     }
 
     // Testing looking for a single worker - with retry for eventual consistency
@@ -777,49 +856,61 @@ async fn get_running_workers(
         start.elapsed()
     );
 
-    // Testing looking for running workers - with retry for eventual consistency
+    // A `status == Running` filter without a cursor first asks the executors for their running
+    // agents. A count of 100 fits every match, so that answer is the whole listing. A count of 2
+    // does not, so the listing pages through the full enumeration. Both must list the same
+    // agents, with the same default of durable agents only when the filter names no mode.
     info!("Phase 3: Looking for running workers");
-    let start = tokio::time::Instant::now();
-    loop {
-        let mut cursor = ScanCursor::default();
-        let mut enum_results = Vec::new();
-        loop {
-            let (next_cursor, values) = user
-                .get_workers_metadata(
-                    &component.id,
-                    Some(AgentFilter::new_status(
-                        FilterComparator::Equal,
-                        AgentStatus::Running,
-                    )),
-                    cursor,
-                    workers_count,
-                    true,
-                )
-                .await?;
-            enum_results.extend(values);
-            if let Some(next_cursor) = next_cursor {
-                cursor = next_cursor;
-            } else {
-                break;
+    let running = || AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    let mode = |mode| AgentFilter::new_mode(FilterComparator::Equal, mode);
+    let all_ids: HashSet<AgentId> = agent_ids.union(&ephemeral_ids).cloned().collect();
+    let cases = [
+        ("no mode", running(), &agent_ids),
+        (
+            "durable",
+            running().and(mode(AgentMode::Durable)),
+            &agent_ids,
+        ),
+        (
+            "ephemeral",
+            running().and(mode(AgentMode::Ephemeral)),
+            &ephemeral_ids,
+        ),
+        (
+            "both modes",
+            running().and(mode(AgentMode::Durable).or(mode(AgentMode::Ephemeral))),
+            &all_ids,
+        ),
+    ];
+    for (label, filter, expected) in cases {
+        for count in [100, 2] {
+            let start = tokio::time::Instant::now();
+            loop {
+                let listed = list_all_agents(&user, &component.id, &filter, count).await?;
+                let listed_set: HashSet<AgentId> = listed.iter().cloned().collect();
+                assert_eq!(
+                    listed.len(),
+                    listed_set.len(),
+                    "{label}, count {count}: an agent is listed twice"
+                );
+                if &listed_set == expected {
+                    break;
+                }
+                if start.elapsed() > enum_deadline {
+                    return Err(anyhow!(
+                        "{label}, count {count}: missing {:?}, unexpected {:?}",
+                        expected.difference(&listed_set).collect::<Vec<_>>(),
+                        listed_set.difference(expected).collect::<Vec<_>>()
+                    ));
+                }
+                sleep(Duration::from_millis(200)).await;
             }
         }
-        if !enum_results.is_empty() && enum_results.len() <= workers_count as usize {
-            break;
-        }
-        if start.elapsed() > enum_deadline {
-            return Err(anyhow!(
-                "Timed out waiting for at least one running worker. Got {} running workers",
-                enum_results.len()
-            ));
-        }
-        sleep(Duration::from_millis(200)).await;
     }
-    info!(
-        "Phase 3 complete: found running workers in {:?}",
-        start.elapsed()
-    );
+    info!("Phase 3 complete: listed the running workers through both paths");
 
     info!("Phase 4: Sending stop signal to workers");
+    release_hang.send(true)?;
     *response.lock().unwrap() = "stop".to_string();
 
     // Wait for all workers to become Idle in parallel with a generous timeout
@@ -1256,6 +1347,113 @@ async fn stale_scheduled_invocation_dropped_after_worker_recreation(
         "Stale scheduled invocation was unexpectedly delivered to the recreated worker"
     );
 
+    Ok(())
+}
+
+/// A schedule on an agent owned by another executor is committed in the target's own oplog
+/// before the scheduling call returns, and runs once at its deadline.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn cross_executor_schedule_commits_in_the_target_oplog(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let routing_table = deps.shard_manager().get_routing_table().await?;
+    let (client_parsed, server_name) = (0..10_000)
+        .find_map(|index| {
+            let client = agent_id!("ScheduledInvocationClient", format!("cross-client-{index}"));
+            let server_name = format!("cross-server-{index}");
+            let server = agent_id!("ScheduledInvocationServer", server_name.clone());
+            let client_pod =
+                routing_table.lookup(&AgentId::from_agent_id(component.id, &client).ok()?)?;
+            let server_pod =
+                routing_table.lookup(&AgentId::from_agent_id(component.id, &server).ok()?)?;
+            (client_pod != server_pod).then_some((client, server_name))
+        })
+        .ok_or_else(|| anyhow!("no client and server agent IDs on different executors"))?;
+    let server_parsed = agent_id!("ScheduledInvocationServer", server_name.clone());
+    let server = user
+        .start_agent(&component.id, server_parsed.clone())
+        .await?;
+    user.start_agent(&component.id, client_parsed.clone())
+        .await?;
+
+    let due = chrono::Utc::now() + chrono::Duration::seconds(5);
+    user.invoke_and_await_agent(
+        &component,
+        &client_parsed,
+        "schedule_at",
+        data_value!(
+            server_name.clone(),
+            due.timestamp() as u64,
+            due.timestamp_subsec_nanos()
+        ),
+    )
+    .await?;
+    let scheduled_key = |oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(pending) if pending.not_before.is_some() => {
+                match &pending.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method) => {
+                        Some(method.invocation_id)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    };
+    let key = scheduled_key(&user.get_oplog(&server, OplogIndex::INITIAL).await?)
+        .ok_or_else(|| anyhow!("the schedule must be committed in the target oplog"))?;
+    assert!(
+        chrono::Utc::now() < due,
+        "the commit must be observed before the deadline"
+    );
+
+    let counter = || async {
+        user.invoke_and_await_agent(
+            &component,
+            &server_parsed,
+            "get_global_value",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()
+    };
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while counter().await? < 17 {
+            sleep(Duration::from_millis(200)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("the scheduled invocation never ran"))??;
+    sleep(Duration::from_secs(2)).await;
+    assert_eq!(counter().await?, 17);
+    let starts = user
+        .get_oplog(&server, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                    invocation: PublicAgentInvocation::AgentMethodInvocation(method),
+                    ..
+                }) if method.invocation_id == key)
+        })
+        .count();
+    assert_eq!(starts, 1);
     Ok(())
 }
 

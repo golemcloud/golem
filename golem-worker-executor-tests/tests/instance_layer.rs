@@ -20,12 +20,11 @@
 //! exercised through a public tool call without also testing the routing adapter above them.
 
 use crate::Tracing;
-use crate::execution_observations::WorkerObservations;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -60,7 +59,7 @@ use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess,
     ToolName, ToolProvisionConfig, ToolSource,
 };
-use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, InvocationId, OwnedAgentId};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::{SchemaGraph, SecretValuePayload};
@@ -83,7 +82,7 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use golem_worker_executor::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use golem_worker_executor::workerctx::{
@@ -288,6 +287,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
     // scopes test namespace selection only; genuine reconstruction is covered separately.
     let wallet_cards = active.primary().get_wallet_cards().await?;
+    let mut live_initializer_calls = Vec::new();
     let mut live_decisions = Vec::new();
     for historical in [false, true] {
         let parent_start = active.execution().oplog().current_oplog_index().await;
@@ -323,13 +323,19 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
-            // The body reads its wallet once. Each of its two scope derivations records its
+            // Instantiating the entity Store runs the core initializer, whose calls come first.
+            // The body then reads its wallet once. Each of its two scope derivations records its
             // authorization decision and then checks the liveness of every wallet parent, and
-            // the refused wallet derivation records its decision. The decisions are copied from
-            // the live body, which decided on the same wallet cards.
-            record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
+            // the refused wallet derivation records its decision. The initializer calls and the
+            // decisions are copied from the live body, which decided on the same wallet cards.
+            let mut ordinal = 0u64;
+            for call in &live_initializer_calls {
+                record_entity_call(&active, parent_start.next(), ordinal, call).await?;
+                ordinal += 1;
+            }
+            record_entity_self_wallet(&active, parent_start.next(), ordinal, &wallet_cards).await?;
+            ordinal += 1;
             let mut decisions = live_decisions.iter();
-            let mut ordinal = 1u64;
             for _ in 0..2 {
                 let decision = decisions.next().expect("a live scope-derivation decision");
                 record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
@@ -459,15 +465,22 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .await?;
         } else {
             finish_entity_boundary(&active, parent_start.next()).await?;
-            live_decisions = recorded_entity_calls(
-                &active,
-                parent_start.next(),
-                &[
-                    HostFunctionName::GolemPermissionsDeriveScopeDecision,
-                    HostFunctionName::GolemPermissionsDeriveFromWalletDecision,
-                ],
-            )
-            .await;
+            let live_calls = recorded_entity_calls(&active, parent_start.next()).await;
+            live_initializer_calls = live_calls
+                .iter()
+                .take_while(|call| call.0 != HostFunctionName::GolemPermissionsSelfWallet)
+                .cloned()
+                .collect();
+            live_decisions = live_calls
+                .into_iter()
+                .filter(|call| {
+                    matches!(
+                        call.0,
+                        HostFunctionName::GolemPermissionsDeriveScopeDecision
+                            | HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+                    )
+                })
+                .collect();
         }
         drop(parent);
     }
@@ -484,12 +497,10 @@ type RecordedEntityCall = (
     Option<String>,
 );
 
-/// The completed calls of `functions` that the entity body started at `entity_start` recorded,
-/// in oplog order.
+/// The completed calls that the entity body started at `entity_start` recorded, in oplog order.
 async fn recorded_entity_calls(
     active: &ActiveAgent<TestWorkerCtx>,
     entity_start: OplogIndex,
-    functions: &[HostFunctionName],
 ) -> Vec<RecordedEntityCall> {
     let oplog = active.execution().oplog();
     let tip = oplog.current_oplog_index().await;
@@ -507,7 +518,7 @@ async fn recorded_entity_calls(
                 request,
                 denial,
                 ..
-            } if *parent == entity_start && functions.contains(function_name) => {
+            } if *parent == entity_start => {
                 let response =
                     entries
                         .range(index.next()..)
@@ -684,7 +695,7 @@ async fn cross_store_wallet_change(
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
                 agent_id: worker_id.clone(),
-                invocation_key: IdempotencyKey::fresh(),
+                invocation_key: InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
         )
@@ -1164,15 +1175,12 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
 async fn initialize_entity(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
-    let init_key = IdempotencyKey::fresh();
-    store
-        .data_mut()
-        .set_current_idempotency_key(init_key.clone())
-        .await;
+    let init_key = InvocationId(uuid::Uuid::new_v4());
+    store.data_mut().set_current_idempotency_key(init_key).await;
     store
         .data_mut()
         .set_current_invocation_context(InvocationContextStack::fresh())
@@ -1184,8 +1192,7 @@ async fn initialize_entity(
         principal,
     };
     let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
-    let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1203,15 +1210,15 @@ async fn initialize_entity(
 async fn invoke_sleep_p3(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     seconds: u64,
 ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
     let metadata = store.data().component_metadata().metadata.clone();
-    let method_key = IdempotencyKey::fresh();
+    let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1222,8 +1229,7 @@ async fn invoke_sleep_p3(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    let result =
-        invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1235,17 +1241,17 @@ async fn invoke_sleep_p3(
 async fn invoke_entity_method(
     instance: &Instance,
     store: &mut Store<TestWorkerCtx>,
-    parsed_agent_id: &ParsedAgentId,
+    parsed_agent_id: &ParsedAgentKey,
     principal: Principal,
     method_name: &str,
     input: golem_common::schema::SchemaValue,
 ) -> Result<AgentInvocationResult, golem_service_base::error::worker_executor::WorkerExecutorError>
 {
     let metadata = store.data().component_metadata().metadata.clone();
-    let method_key = IdempotencyKey::fresh();
+    let method_key = InvocationId(uuid::Uuid::new_v4());
     store
         .data_mut()
-        .set_current_idempotency_key(method_key.clone())
+        .set_current_idempotency_key(method_key)
         .await;
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
@@ -1256,8 +1262,7 @@ async fn invoke_entity_method(
         scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None).await?
-    {
+    match invoke_observed_and_traced(lowered, store, instance, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
@@ -1557,7 +1562,7 @@ async fn stage_entity_boundary(
                 HostRequest::EntityInvocation(HostRequestEntityInvocation {
                     metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
                     input: empty,
-                    stream_session_idempotency_key: scope.stream_session_idempotency_key().clone(),
+                    stream_session_idempotency_key: *scope.stream_session_idempotency_key(),
                 }),
             ))),
             durable_function_type: DurableFunctionType::WriteLocal,
@@ -1572,6 +1577,7 @@ async fn stage_entity_boundary(
 async fn record_entity_self_wallet(
     active: &ActiveAgent<TestWorkerCtx>,
     entity_start_index: OplogIndex,
+    ordinal: u64,
     cards: &[StoredCard],
 ) -> Result<(), WorkerExecutorError> {
     let oplog = active.execution().oplog();
@@ -1580,7 +1586,7 @@ async fn record_entity_self_wallet(
             timestamp: golem_common::model::Timestamp::now_utc(),
             parent_start_index: Some(entity_start_index),
             function_name: HostFunctionName::GolemPermissionsSelfWallet,
-            invocation_id: Some(DurableInvocationId::new(entity_start_index, 0)),
+            invocation_id: Some(DurableInvocationId::new(entity_start_index, ordinal)),
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
@@ -1724,9 +1730,9 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(1)),
         false,
-        IdempotencyKey::new("instance-layer-live-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(2)),
     )
     .unwrap()
 }
@@ -1752,9 +1758,9 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
-        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(3)),
         false,
-        IdempotencyKey::new("instance-layer-replay-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(4)),
     )
     .unwrap()
 }
@@ -2370,9 +2376,9 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         activation.clone(),
         principal.clone(),
         InvocationExecutionMode::ReplayingIncomplete,
-        IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(5)),
         false,
-        IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(6)),
     )
     .unwrap();
     let replay_parent_id = parent_id.clone();
@@ -2639,9 +2645,9 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             activation,
             principal,
             InvocationExecutionMode::ReplayingIncomplete,
-            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal".to_string()),
+            InvocationId(uuid::Uuid::from_u128(7)),
             false,
-            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal-streams".to_string()),
+            InvocationId(uuid::Uuid::from_u128(8)),
         )
         .unwrap(),
         owner_metadata,
@@ -2924,9 +2930,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("owner-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(9)),
         false,
-        IdempotencyKey::new("owner-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(10)),
     )
     .unwrap();
 
@@ -3020,9 +3026,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("second-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(11)),
         false,
-        IdempotencyKey::new("second-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(12)),
     )
     .unwrap();
     let expected_error = second_hosted
@@ -3061,9 +3067,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(13)),
         false,
-        IdempotencyKey::new("cancelled-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(14)),
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -3145,9 +3151,9 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        InvocationId(uuid::Uuid::from_u128(15)),
         false,
-        IdempotencyKey::new("panicking-entity-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(16)),
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();
@@ -3654,13 +3660,11 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     let principal = Principal::Agent(AgentPrincipal {
         agent_id: owner_id.agent_id.clone(),
     });
+    // No guest call makes these staged scopes, so the owner cannot reconstruct them. Owner
+    // restart and interrupt of nested entity bodies are covered with real guest tool calls by
+    // `owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission`.
     let lane = active_agent.execution().lane();
-    let root_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
+    let root_start = active_agent.execution().oplog().current_oplog_index().await;
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
     let middleware_start = root_start.next();
@@ -3672,22 +3676,16 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         middleware_activation,
         principal.clone(),
     );
+    stage_entity_boundary(&active_agent, &middleware_scope).await?;
     let middleware_invocation = middleware_scope.invocation_id().clone();
-    let nested_start = middleware_start.next();
-    let nested_scope = invocation_scope(
-        &owner_id,
-        &tool_entity,
-        nested_start,
-        middleware_start,
-        tool_activation.clone(),
-        principal,
-    );
     let expected_middleware_scope = middleware_scope.clone();
-    let expected_nested_scope = nested_scope.clone();
     let nested_parent = OwnerInvocationId::Entity(middleware_invocation.clone());
     let nested_parent_for_body = nested_parent.clone();
     let nested_active_agent = active_agent.clone();
     let nested_owner_metadata = owner_metadata.clone();
+    let nested_owner_id = owner_id.clone();
+    let nested_tool_entity = tool_entity.clone();
+    let nested_tool_activation = tool_activation.clone();
     let (nested_started, nested_started_rx) = tokio::sync::oneshot::channel();
     let (release_nested, release_nested_rx) = tokio::sync::oneshot::channel();
     let middleware = active_agent.start_entity_invocation(
@@ -3701,6 +3699,24 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
                     store.data().entity_invocation_scope(),
                     Some(&expected_middleware_scope)
                 );
+                // The middleware Store records the calls of its core initializer before its body
+                // runs, so the nested Start follows them.
+                let nested_start = nested_active_agent
+                    .execution()
+                    .oplog()
+                    .current_oplog_index()
+                    .await
+                    .next();
+                let nested_scope = invocation_scope(
+                    &nested_owner_id,
+                    &nested_tool_entity,
+                    nested_start,
+                    middleware_start,
+                    nested_tool_activation,
+                    principal,
+                );
+                stage_entity_boundary(&nested_active_agent, &nested_scope).await?;
+                let expected_nested_scope = nested_scope.clone();
                 let nested = nested_active_agent.start_entity_invocation(
                     nested_parent_for_body.clone(),
                     nested_scope,
@@ -3714,7 +3730,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
                                 .expect("nested scope must be installed");
                             assert_eq!(installed, &expected_nested_scope);
                             assert_eq!(installed.parent_start_index(), middleware_start);
-                            let _ = nested_started.send(());
+                            let _ = nested_started.send(nested_start);
                             let _ = release_nested_rx.await;
                             Ok(())
                         })
@@ -3727,7 +3743,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         std::future::ready,
     )?;
 
-    tokio::time::timeout(std::time::Duration::from_secs(10), nested_started_rx)
+    let nested_start = tokio::time::timeout(std::time::Duration::from_secs(10), nested_started_rx)
         .await
         .expect("nested tool invocation must start")?;
     let metadata = active_agent.entity_metadata();
@@ -3756,72 +3772,25 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     );
     assert_eq!(active_agent.entity_metadata().slots.len(), 2);
 
-    let restart = tokio::spawn({
-        let worker = active_agent.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
+    release_nested
+        .send(())
+        .expect("nested tool must wait for its release");
+    middleware.await_result(&root_id).await?;
+    drop(root);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while active_agent.entity_metadata().accepting_entities {
+        while active_agent
+            .entity_metadata()
+            .slots
+            .iter()
+            .any(|slot| !slot.invocations.is_empty())
+        {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("owner restart did not fence the nested execution unit");
-    restart.await??;
-    active_agent
-        .primary()
-        .join_accepted_stops_for_test()
-        .await?;
-    assert!(
-        release_nested.send(()).is_err(),
-        "nested tool was still waiting after joined owner restart drain"
-    );
-    assert!(
-        active_agent
-            .entity_metadata()
-            .slots
-            .iter()
-            .all(|slot| slot.invocations.is_empty()),
-        "owner restart did not retire every nested entity body"
-    );
-    assert!(
-        middleware.await_result(&root_id).await.is_err(),
-        "nested middleware execution survived its owner generation"
-    );
-    drop(root);
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
-    assert!(
-        active_agent
-            .entity_metadata()
-            .slots
-            .iter()
-            .all(|slot| slot.invocations.is_empty()),
-        "completed Stores leave only vacant in-memory slots, never durable child status"
-    );
-    assert!(
-        active_agent.entity_metadata().accepting_entities,
-        "a new primary generation must reopen entity admission after an in-place restart"
-    );
-    executor
-        .interrupt_with_optional_recovery(&worker_id, false)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
-    assert!(
-        active_agent.entity_metadata().accepting_entities,
-        "a resumed primary generation must reopen entity admission after a terminal interrupt"
-    );
+    .expect("completed Stores leave only vacant in-memory slots, never durable child status");
 
-    let delete_parent_start = nested_start.next();
+    let delete_parent_start = active_agent.execution().oplog().current_oplog_index().await;
     let delete_parent = OwnerInvocationId::Agent(delete_parent_start);
     let delete_parent_permit = lane.enter_primary(delete_parent_start)?.acquire().await?;
     let delete_start = delete_parent_start.next();
@@ -3835,6 +3804,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
             agent_id: owner_id.agent_id.clone(),
         }),
     );
+    stage_entity_boundary(&active_agent, &delete_scope).await?;
     let (delete_body_started, delete_body_started_rx) = tokio::sync::oneshot::channel();
     let deleting = active_agent.start_entity_invocation(
         delete_parent,
@@ -4903,9 +4873,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             agent_id: owner_id.agent_id.clone(),
         }),
         InvocationExecutionMode::ReplayingIncomplete,
-        IdempotencyKey::new("instance-layer-secret-reveal-repair".to_string()),
+        InvocationId(uuid::Uuid::from_u128(17)),
         false,
-        IdempotencyKey::new("instance-layer-secret-reveal-repair-streams".to_string()),
+        InvocationId(uuid::Uuid::from_u128(18)),
     )
     .unwrap();
     let replay_parent_id = parent_id.clone();

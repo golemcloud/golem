@@ -312,7 +312,9 @@ export const __seedAgentsForComponent = (
 // Promise rendezvous
 // ---------------------------------------------------------------------------
 
-export type PromiseId = { agentId: AgentId; oplogIdx: OplogIndex }
+export type PromiseId = { agentId: AgentId; fingerprint: Uuid; oplogIdx: OplogIndex }
+
+const _selfFingerprint: Uuid = { highBits: 0x0123456789abcdefn, lowBits: 0xfedcba9876543210n }
 
 interface PendingPromise {
   payload?: Uint8Array
@@ -320,7 +322,8 @@ interface PendingPromise {
 }
 
 const _promises = new Map<string, PendingPromise>()
-const promiseKey = (id: PromiseId): string => `${agentIdKey(id.agentId)}::${id.oplogIdx.toString()}`
+const promiseKey = (id: PromiseId): string =>
+  `${agentIdKey(id.agentId)}::${uuidToString(id.fingerprint)}::${id.oplogIdx.toString()}`
 let _promiseGetError: unknown | undefined
 
 export const __setPromiseGetError = (error: unknown | undefined): void => {
@@ -330,6 +333,7 @@ export const __setPromiseGetError = (error: unknown | undefined): void => {
 export const createPromise = (): PromiseId => {
   const id: PromiseId = {
     agentId: _selfMetadata.agentId,
+    fingerprint: _selfFingerprint,
     oplogIdx: nextPromiseIndex(),
   }
   _promises.set(promiseKey(id), { subscribers: [] })

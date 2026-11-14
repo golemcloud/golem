@@ -22,7 +22,7 @@ use golem_common::model::oplog::{
     PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
+use golem_common::model::{AgentId, AgentInvocationPayload, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
@@ -36,6 +36,7 @@ struct InMemoryOplog {
     entries: std::sync::Mutex<Vec<OplogEntry>>,
     /// Every index served by `read_exact`, in order.
     reads: std::sync::Mutex<Vec<OplogIndex>>,
+    fail_next_read_at: std::sync::Mutex<Option<OplogIndex>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
     tasks: crate::worker::tasks::WorkerTasks,
 }
@@ -45,6 +46,7 @@ impl InMemoryOplog {
         Self {
             entries: std::sync::Mutex::new(Vec::new()),
             reads: std::sync::Mutex::new(Vec::new()),
+            fail_next_read_at: std::sync::Mutex::new(None),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
             tasks: Default::default(),
         }
@@ -156,6 +158,18 @@ impl Oplog for InMemoryOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let mut failure = self.fail_next_read_at.lock().unwrap();
+        if *failure == Some(oplog_index) {
+            *failure = None;
+            return Err(UnreadableOplog::new(
+                &test_agent_id().agent_id,
+                crate::services::oplog::OplogReadError::source_failure(
+                    crate::services::oplog::OplogReadSource::Other("test"),
+                    "registration lookahead failed",
+                ),
+            ));
+        }
+        drop(failure);
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -239,10 +253,21 @@ fn stored_test_card(card_id: CardId) -> StoredCard {
     })
 }
 
+fn replayed_invocation_id() -> golem_common::model::InvocationId {
+    uuid::Uuid::from_u128(1).into()
+}
+
 fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
+    invocation_started_for(replayed_invocation_id(), wallet_pin)
+}
+
+fn invocation_started_for(
+    invocation_id: golem_common::model::InvocationId,
+    wallet_pin: InvocationWalletPin,
+) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
-        idempotency_key: IdempotencyKey::new("wallet-pin-replay".to_string()),
+        invocation_id,
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
@@ -483,7 +508,7 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
         }
         other => panic!("expected completed custom subtree, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -613,7 +638,7 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(8)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -646,7 +671,7 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(7)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -674,7 +699,7 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Incomplete
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -705,7 +730,7 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Incomplete
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -772,7 +797,7 @@ async fn custom_replay_skips_observational_cancellation() {
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
             if end_idx == OplogIndex::from_u64(5)
     ));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -995,6 +1020,7 @@ fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry
     OplogEntry::error(
         Some(OplogIndex::from_u64(entity_parent_start_index)),
         OplogErrorKind::Invocation,
+        Some(replayed_invocation_id()),
         AgentError::TransientError("retry".to_string()),
         OplogIndex::from_u64(retry_from),
         None,
@@ -1164,7 +1190,11 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
         );
         assert!(state.entity_route_members.is_empty());
         assert_eq!(
-            state.retained_entity_counts.get(&OplogIndex::from_u64(2)),
+            state
+                .starts
+                .retained_summary()
+                .entities
+                .get(&OplogIndex::from_u64(2)),
             Some(&2)
         );
     }
@@ -1182,7 +1212,9 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
             .state
             .lock()
             .await
-            .retained_entity_counts
+            .starts
+            .retained_summary()
+            .entities
             .get(&OplogIndex::from_u64(2)),
         Some(&1)
     );
@@ -1209,7 +1241,9 @@ async fn disposal_refusal_uses_folded_boundary_without_oplog_reads() {
             .state
             .lock()
             .await
-            .retained_entity_counts
+            .starts
+            .retained_summary()
+            .entities
             .is_empty()
     );
     let reads = oplog.reads.lock().unwrap().clone();
@@ -1288,11 +1322,11 @@ async fn disposal_refusal_retained_membership_ignores_observational_owner() {
     {
         let state = rs.cursor.state.lock().await;
         assert!(state.entity_start_routes.is_empty());
-        assert!(state.retained_entity_counts.is_empty());
+        assert!(state.starts.retained_summary().entities.is_empty());
         assert!(
             state
-                .retained_starts
-                .values()
+                .starts
+                .retained_values()
                 .all(|retained| retained.enclosing_entities.is_empty())
         );
     }
@@ -1484,7 +1518,7 @@ async fn held_completed_reconstruction() -> (
 #[test]
 async fn primary_publication_requires_completed_reconstruction_validation() {
     let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
-    let target = replay.switch_cursor_to_live().await.unwrap();
+    let target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     let memory = replay_linear_memory();
 
     let publication = replay
@@ -1508,7 +1542,7 @@ async fn primary_publication_requires_completed_reconstruction_validation() {
     drop(reconstruction);
     assert!(matches!(
         replay
-            .finish_settling_to_live(&memory, ReplayToLiveRole::PrimaryAgent, target)
+            .finish_settling_to_live(&memory, target)
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -1547,7 +1581,7 @@ async fn growing_replay_target_revokes_published_live_state() {
         .await
         .expect("failed to grow replay target");
 
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(
         !replay.is_live_published(),
         "resuming replay must revoke owner live publication"
@@ -1561,16 +1595,10 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1593,7 +1621,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
         transition.await.unwrap().unwrap(),
         ReplayToLiveOutcome::ReplayResumed
     );
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(!replay.is_live_published());
     assert_eq!(
         linear_memory.reconciliation_grant_bytes(1),
@@ -1605,10 +1633,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     assert_eq!(index, new_target);
     assert!(matches!(entry, OplogEntry::RecoverySucceeded { .. }));
     assert!(matches!(
-        replay
-            .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-            .await
-            .unwrap(),
+        replay.publish_primary_live(&linear_memory).await.unwrap(),
         ReplayToLiveOutcome::Live { .. }
     ));
     assert_eq!(
@@ -1639,16 +1664,10 @@ async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1684,16 +1703,10 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1723,7 +1736,7 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
 #[test]
 async fn historical_revision_updates_remain_for_root_after_entity_drain() {
     let replay = replay_state_over(vec![remove_retry_policy(), remove_retry_policy()]).await;
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
     assert!(!replay.is_live_published());
     let update = ReplayEvent::UpdateReplayed {
         new_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
@@ -1742,7 +1755,7 @@ async fn historical_revision_updates_remain_for_root_after_entity_drain() {
     assert!(replay.take_new_replay_events_for(false).is_empty());
     assert_eq!(replay.take_new_replay_events_for(true), vec![update]);
     assert!(replay.take_new_replay_events_for(true).is_empty());
-    assert!(replay.is_replay());
+    assert!(replay.has_replay_remaining());
 }
 
 #[test]
@@ -1765,7 +1778,7 @@ async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(1),
-        replay.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent),
+        replay.publish_primary_live(&replay_linear_memory()),
     )
     .await
     .expect("incomplete reconstruction deadlocked the primary transition")
@@ -1822,16 +1835,10 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
 
     let transition = tokio::spawn({
         let replay = replay.clone();
-        async move {
-            replay
-                .switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&replay_linear_memory()).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1874,16 +1881,10 @@ async fn concurrent_same_target_transitions_are_idempotent() {
     let first = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = first_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     tokio::time::timeout(Duration::from_secs(1), async {
-        while replay.cursor.transition_phase.load(Ordering::Acquire)
-            != ReplayTransitionPhase::Settling as u8
-        {
+        while replay.cursor.transition_phase.load() != ReplayTransitionPhase::Settling {
             tokio::task::yield_now().await;
         }
     })
@@ -1892,11 +1893,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
     let second = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = second_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
 
     drop(reconstruction);
@@ -1917,7 +1914,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
 #[test]
 async fn old_settler_cannot_publish_a_grown_target() {
     let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
-    let old_target = replay.switch_cursor_to_live().await.unwrap();
+    let old_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     let new_target = oplog
         .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -1928,7 +1925,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .set_replay_target(new_target)
         .await
         .expect("failed to grow replay target while settling");
-    let second_target = replay.switch_cursor_to_live().await.unwrap();
+    let second_target = replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(second_target, new_target);
     drop(reconstruction);
 
@@ -2202,7 +2199,7 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
                 WorkerExecutorError::Interrupted { kind }
             );
             assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(4));
-            assert!(!replay.is_live());
+            assert!(!replay.at_replay_tail());
             drop(gate);
         }
     }
@@ -2248,7 +2245,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
     )
     .await;
     let state = replay.cursor.state.lock().await;
-    assert!(state.concurrent_resolver.is_awaited(start_index));
+    assert!(state.starts.is_awaited(start_index));
     owner
         .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
         .await;
@@ -2266,7 +2263,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
             .state
             .lock()
             .await
-            .concurrent_resolver
+            .starts
             .is_pending(start_index)
     );
     assert_eq!(replay.last_replayed_index(), start_index);
@@ -2284,11 +2281,7 @@ async fn owner_failure_during_final_classification_prevents_live_publication() {
     let transition = tokio::spawn({
         let replay = replay.clone();
         let linear_memory = linear_memory.clone();
-        async move {
-            replay
-                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                .await
-        }
+        async move { replay.publish_primary_live(&linear_memory).await }
     });
     drop(reconstruction);
     entered.wait().await;
@@ -2401,6 +2394,7 @@ async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
             active_cards: Vec::new(),
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         invocation_started(pin.clone()),
         start_now(),
@@ -2486,9 +2480,9 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         other => panic!("expected the recorded successful result, got {other:?}"),
     }
 
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -2985,9 +2979,7 @@ async fn typed_claim_mismatch_does_not_leak_pending() {
     );
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2)),
         "failed typed claim must not leave a pending awaiter"
     );
 }
@@ -3029,13 +3021,11 @@ async fn predicate_probe_retains_unclaimed_start_and_drains_awaited_terminals() 
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal.concurrent_resolver.is_pending(start_idx),
+            !internal.starts.is_pending(start_idx),
             "End(A) drained by the probe must resolve A's awaiter"
         );
         assert!(
-            !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(3)),
+            !internal.starts.is_pending(OplogIndex::from_u64(3)),
             "the probe must not claim Start(B) on behalf of its owner"
         );
     }
@@ -3105,6 +3095,7 @@ async fn error_hint_between_start_and_end_resolves() {
         OplogEntry::error(
             None,
             OplogErrorKind::Invocation,
+            Some(replayed_invocation_id()),
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             None,
@@ -3210,7 +3201,7 @@ async fn lone_start_reports_incomplete_outcome_and_unregisters() {
     }
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal.concurrent_resolver.is_pending(start_idx),
+        !internal.starts.is_pending(start_idx),
         "incomplete outcome must unregister the awaiter"
     );
 }
@@ -3255,13 +3246,13 @@ async fn dropped_awaiter_terminal_drains_without_residue() {
 
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal.concurrent_resolver.is_pending(start_idx),
+        !internal.starts.is_pending(start_idx),
         "draining the terminal of a dropped awaiter must drop its registration"
     );
 }
 
 /// A scan-ahead (identity-keyed) claim whose awaiter was dropped without awaiting must leave
-/// no `claimed_starts` residue once the cursor passes the claimed `Start`, and no resolver
+/// no claimed-ahead residue once the cursor passes the claimed `Start`, and no resolver
 /// residue once it passes the terminal — dead registrations from cancelled accessor futures
 /// must not accumulate or steal entries from later positional readers.
 #[test]
@@ -3326,19 +3317,15 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
 
     let internal = rs.cursor.state.lock().await;
     assert!(
-        internal.claimed_starts.is_empty(),
-        "passing the claimed Start must remove it from claimed_starts"
+        !internal.starts.has_claimed_ahead(),
+        "passing the claimed Start must remove its claimed-ahead obligation"
     );
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(3)),
+        !internal.starts.is_pending(OplogIndex::from_u64(3)),
         "draining the terminal of the dropped scan-ahead claim must drop its registration"
     );
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2)),
         "the resolved call must not stay registered"
     );
 }
@@ -3493,8 +3480,13 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
 }
 
 fn invocation_finished() -> OplogEntry {
+    invocation_finished_for(replayed_invocation_id())
+}
+
+fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationFinished {
         timestamp: Timestamp::now_utc(),
+        invocation_id,
         result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
         method_name: None,
         consumed_fuel: 0,
@@ -3516,6 +3508,7 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(replayed_invocation_id()),
             error.clone(),
             anchor,
             None,
@@ -3549,10 +3542,11 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         rs.last_replayed_index() < terminal,
         "the host call must not consume the local terminal as a hint"
     );
-    assert!(
-        rs.get_oplog_entry_agent_method_failure(anchor, &error, None)
+    assert_eq!(
+        rs.get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
             .await
-            .unwrap()
+            .unwrap(),
+        Some(terminal)
     );
     assert_eq!(rs.last_replayed_index(), terminal);
     assert!(
@@ -3565,15 +3559,16 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
 }
 
 #[test]
-async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_parent_or_retry_state()
+async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_payload_parent_or_retry_state()
  {
     let anchor = OplogIndex::from_u64(2);
     let error = AgentError::InternalError("method gave up".into());
     for entry in [
         invocation_finished(),
         OplogEntry::error(
-            Some(OplogIndex::INITIAL),
+            None,
             OplogErrorKind::InvocationLocal,
+            None,
             error.clone(),
             anchor,
             None,
@@ -3581,6 +3576,23 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
         OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(golem_common::model::InvocationId(uuid::Uuid::from_u128(99))),
+            error.clone(),
+            anchor,
+            None,
+        ),
+        OplogEntry::error(
+            Some(OplogIndex::INITIAL),
+            OplogErrorKind::InvocationLocal,
+            Some(replayed_invocation_id()),
+            error.clone(),
+            anchor,
+            None,
+        ),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::InvocationLocal,
+            Some(replayed_invocation_id()),
             error.clone(),
             anchor.next(),
             None,
@@ -3588,6 +3600,7 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
         OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(replayed_invocation_id()),
             AgentError::InternalError("other".into()),
             anchor,
             None,
@@ -3595,6 +3608,7 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
         OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(replayed_invocation_id()),
             error.clone(),
             anchor,
             Some(golem_common::model::RetryPolicyState::Counter(1)),
@@ -3611,8 +3625,13 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
             .unwrap()
             .unwrap();
         assert!(matches!(
-            rs.get_oplog_entry_agent_method_failure(anchor, &error, None)
-                .await,
+            rs.get_oplog_entry_agent_method_failure(
+                &replayed_invocation_id(),
+                anchor,
+                &error,
+                None
+            )
+            .await,
             Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
         ));
     }
@@ -3623,6 +3642,7 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
             OplogEntry::error(
                 None,
                 OplogErrorKind::InvocationLocal,
+                Some(replayed_invocation_id()),
                 error.clone(),
                 anchor,
                 None,
@@ -3634,7 +3654,7 @@ async fn invocation_local_terminal_rejects_a_different_outcome_anchor_payload_pa
             .unwrap()
             .unwrap();
         let result = if success {
-            rs.get_oplog_entry_agent_invocation_finished()
+            rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
                 .await
                 .map(|_| ())
         } else {
@@ -3667,7 +3687,7 @@ async fn invocation_local_terminal_is_optional_only_at_the_natural_tail() {
             .unwrap()
             .unwrap();
         let result = rs
-            .get_oplog_entry_agent_method_failure(anchor, &error, None)
+            .get_oplog_entry_agent_method_failure(&replayed_invocation_id(), anchor, &error, None)
             .await;
         if later_history {
             assert!(matches!(
@@ -3675,7 +3695,7 @@ async fn invocation_local_terminal_is_optional_only_at_the_natural_tail() {
                 Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
             ));
         } else {
-            assert!(!result.unwrap());
+            assert!(result.unwrap().is_none());
         }
     }
 }
@@ -3683,7 +3703,119 @@ async fn invocation_local_terminal_is_optional_only_at_the_natural_tail() {
 async fn read_invocation_finished(
     rs: &ReplayState,
 ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
-    rs.get_oplog_entry_agent_invocation_finished().await
+    rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+        .await
+        .map(|finished| finished.map(|(_, result)| result))
+}
+
+fn test_invocation_wallet_pin() -> InvocationWalletPin {
+    InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [5; 32],
+            generation: 1,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    }
+}
+
+fn invocation_error_for(
+    invocation_id: golem_common::model::InvocationId,
+    retry_from: u64,
+) -> OplogEntry {
+    OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        Some(invocation_id),
+        AgentError::TransientError("boom".to_string()),
+        OplogIndex::from_u64(retry_from),
+        None,
+    )
+}
+
+#[test]
+async fn replayed_finished_naming_another_invocation_is_rejected() {
+    // [RecoverySucceeded, AgentInvocationFinished(other)] — the recorded terminal is in the
+    // position of the replayed invocation's terminal, but it names another invocation.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        invocation_finished_for(uuid::Uuid::from_u128(2).into()),
+    ])
+    .await;
+
+    let result = read_invocation_finished(&rs).await;
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected an unexpected-oplog-entry error, got {result:?}"
+    );
+}
+
+#[test]
+async fn replayed_finished_naming_the_replayed_invocation_is_accepted() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        invocation_finished(),
+    ])
+    .await;
+
+    let (finished_index, result) = rs
+        .get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
+        .await
+        .unwrap()
+        .expect("expected the matching invocation terminal");
+    assert_eq!(finished_index, OplogIndex::from_u64(2));
+    assert!(matches!(result, AgentInvocationResult::AgentInitialization));
+}
+
+async fn replay_invocation_with_error(
+    error_invocation_id: golem_common::model::InvocationId,
+) -> Result<(), WorkerExecutorError> {
+    // [RemoveRetryPolicy, AgentInvocationStarted, Start, Error(retry_from: Start), End,
+    //  AgentInvocationFinished]
+    let rs = replay_state_over(vec![
+        remove_retry_policy(),
+        invocation_started(test_invocation_wallet_pin()),
+        start_now(),
+        invocation_error_for(error_invocation_id, 3),
+        end_for(3, 42),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await?
+        .expect("expected invocation start");
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await?;
+    rs.await_resolution(handle).await?;
+    read_invocation_finished(&rs).await?;
+    Ok(())
+}
+
+#[test]
+async fn replayed_invocation_error_naming_a_finished_invocation_is_accepted() {
+    // A background task that outlives its invocation records retry errors that name the earlier,
+    // already finished invocation. An `Error` is a hint, so it never makes replay diverge.
+    replay_invocation_with_error(uuid::Uuid::from_u128(3).into())
+        .await
+        .expect("an error naming a finished invocation must replay");
+}
+
+#[test]
+async fn replayed_invocation_error_naming_the_replayed_invocation_is_accepted() {
+    replay_invocation_with_error(replayed_invocation_id())
+        .await
+        .expect("an error of the replayed invocation must replay");
 }
 
 #[test]
@@ -4270,6 +4402,277 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
 
 #[test]
 #[test_r::timeout("10s")]
+async fn unregister_after_scan_ahead_prefetch_keeps_exact_terminal_drainage() {
+    // B's terminal is ready while both its Start and A's intervening operation remain unread.
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        start_with_parent(2),
+        remove_retry_policy(),
+        end_for(3, 73),
+        delivered_for(3),
+        end_for(2, 41),
+    ])
+    .await;
+    let b = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let (start, mut receiver, reconstruction) = b.into_parts();
+    assert_eq!(start, OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, delivery_marker, .. })
+            if end_idx == OplogIndex::from_u64(5)
+                && delivery_marker == Some(OplogIndex::from_u64(6))
+    ));
+    rs.cursor.state.lock().await.starts.unregister(start);
+    drop(reconstruction);
+    {
+        let state = rs.cursor.state.lock().await;
+        assert!(state.starts.is_claimed_ahead(&start));
+        assert!(state.starts.owns_terminal(start, OplogIndex::from_u64(5)));
+        assert!(!state.starts.owns_terminal(start, OplogIndex::from_u64(7)));
+    }
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.start_idx(), OplogIndex::from_u64(2));
+    let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    let barrier = rs
+        .await_completion_delivery(start, OplogIndex::from_u64(6), None)
+        .await
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    barrier.acknowledge();
+    assert!(matches!(
+        rs.await_resolution_outcome(a).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+    assert!(!rs.has_unclaimed_retained_starts());
+    let state = rs.cursor.state.lock().await;
+    assert!(!state.starts.has_claimed_ahead());
+    assert!(!state.starts.has_claim(start));
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn unregister_waiting_scan_ahead_claim_drains_start_but_not_terminal() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 73),
+        end_for(2, 41),
+    ])
+    .await;
+    let b = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let (start, mut receiver, reconstruction) = b.into_parts();
+    assert_eq!(start, OplogIndex::from_u64(3));
+    rs.cursor.state.lock().await.starts.unregister(start);
+    drop(reconstruction);
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+    ));
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.start_idx(), OplogIndex::from_u64(2));
+    let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::End { start_index, .. } if start_index == start));
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert!(matches!(
+        rs.await_resolution_outcome(a).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert!(!rs.cursor.state.lock().await.starts.has_claimed_ahead());
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn registration_lookahead_failure_preserves_committed_claim_effects() {
+    for path in ["head", "ahead", "retained"] {
+        let retained = path == "retained";
+        let start_index = OplogIndex::from_u64(if path == "head" { 2 } else { 3 });
+        let card = stored_test_card(CardId::new());
+        let mut entries = vec![OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        }];
+        if path != "head" {
+            entries.push(start_now());
+            entries.push(start_with_parent(2));
+        } else {
+            entries.push(start_now());
+        }
+        if retained {
+            entries.push(OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                card: Box::new(card.clone()),
+                wallet_generation: 0,
+                transfer_id: None,
+            });
+        }
+        let positional_index = OplogIndex::from_u64(entries.len() as u64 + 1);
+        entries.push(remove_retry_policy());
+        entries.push(end_for(start_index.into(), 73));
+        entries.push(delivered_for(start_index.into()));
+        if path != "head" {
+            entries.push(end_for(2, 41));
+        }
+        let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+        let mut owner = if retained {
+            let owner = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(owner.start_idx(), OplogIndex::from_u64(2));
+            rs.drain_awaited_terminals().await.unwrap();
+            assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+            assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+            assert!(rs.has_unclaimed_retained_starts());
+            assert_eq!(rs.pending_card_derivation(card.card_id()).await, None);
+            assert!(rs.take_new_replay_events().is_empty());
+            Some(owner)
+        } else {
+            None
+        };
+
+        // Identity scanning starts at 2. Registration alone scans from this Start's successor,
+        // so the injected read failure cannot be mistaken for a failed identity lookup.
+        *oplog.fail_next_read_at.lock().unwrap() = Some(start_index.next());
+        let result = if path == "head" {
+            rs.claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+        } else {
+            rs.claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            )
+            .await
+        };
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("registration lookahead failed"),
+            "{path}: {error}"
+        );
+        assert!(oplog.fail_next_read_at.lock().unwrap().is_none(), "{path}");
+        {
+            let state = rs.cursor.state.lock().await;
+            assert!(!state.starts.is_pending(start_index), "{path}");
+            assert!(!state.starts.has_claim(start_index), "{path}");
+            assert_eq!(
+                state.starts.is_claimed_ahead(&start_index),
+                path == "ahead",
+                "{path}"
+            );
+        }
+        assert!(!rs.has_unclaimed_retained_starts(), "{path}");
+        assert_eq!(
+            rs.last_replayed_index(),
+            OplogIndex::from_u64(match path {
+                "head" => 2,
+                "ahead" => 1,
+                "retained" => 4,
+                _ => unreachable!(),
+            }),
+            "{path}"
+        );
+        assert_eq!(
+            rs.last_replayed_non_hint_index(),
+            if path == "ahead" {
+                OplogIndex::NONE
+            } else {
+                start_index
+            },
+            "{path}"
+        );
+        if retained {
+            assert_eq!(
+                rs.pending_card_derivation(card.card_id()).await,
+                Some((card.clone(), 0)),
+            );
+            assert_eq!(
+                rs.take_new_replay_events(),
+                vec![ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation: 0
+                }],
+            );
+        }
+        if path == "ahead" {
+            let claimed = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(claimed.start_idx(), OplogIndex::from_u64(2));
+            owner = Some(claimed);
+        }
+        // Head and retained Starts were already consumed. The failed ahead claim must still
+        // drain its Start rather than retaining it for a second caller.
+        let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert_eq!(index, positional_index, "{path}");
+        assert!(
+            matches!(entry, OplogEntry::RemoveRetryPolicy { .. }),
+            "{path}"
+        );
+        assert!(!rs.has_unclaimed_retained_starts(), "{path}");
+        assert!(
+            !rs.cursor.state.lock().await.starts.has_claimed_ahead(),
+            "{path}"
+        );
+        drop(owner);
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn host_internal_end_does_not_wait_for_accessor_continuation() {
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -4423,16 +4826,15 @@ fn consumer_observation_with_parent(
 ) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
-        StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-        StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
+        StreamConsumerObservation, StreamConsumerTerminalRecord, StreamOffset,
+        StreamRegistrationInvocation, StreamSessionRecord, StreamTerminal,
     };
     let observation = if guest {
         StreamConsumerObservation::Guest { parent_start_index }
     } else {
         StreamConsumerObservation::Host
     };
-    let session_key =
-        StreamRegistrationInvocation::Local(IdempotencyKey::new("observations".to_string()));
+    let session_key = StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(501).into());
     let reader_id = LocalStreamReaderId {
         introducing_oplog_index: OplogIndex::from_u64(1),
         binding_slot: reader_slot,
@@ -4447,7 +4849,8 @@ fn consumer_observation_with_parent(
             reader_id,
             source_offset,
             consumer_read_ordinal: 1,
-            terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+            authored_by: golem_common::base_model::durable_stream::StreamTerminalAuthor::Guest,
+            terminal: StreamTerminal::Finished,
         })
     } else {
         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
@@ -4481,7 +4884,7 @@ fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> O
                 creation_start: OplogIndex::INITIAL,
                 slot: ToolAttachmentSlot::Stdout,
             },
-            logical_invocation: IdempotencyKey::new("attachment-observation".into()),
+            logical_invocation: uuid::Uuid::from_u128(4).into(),
             observation: if guest {
                 StreamConsumerObservation::Guest {
                     parent_start_index: parent,
@@ -5336,7 +5739,7 @@ async fn invocation_boundary_after_guest_observation_preserves_finished_or_incom
             .unwrap();
         barrier.acknowledge();
         assert_eq!(
-            rs.get_oplog_entry_agent_invocation_finished()
+            rs.get_oplog_entry_agent_invocation_finished(&replayed_invocation_id())
                 .await
                 .unwrap()
                 .is_some(),
@@ -5924,7 +6327,7 @@ async fn await_natural_tail_end_returns_once_tail_drains() {
     rs.await_resolution(handle).await.unwrap();
 
     rs.await_natural_tail_end(None).await.unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -5965,7 +6368,7 @@ async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     waiter.await.unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 #[test]
@@ -7228,15 +7631,14 @@ async fn drain_retains_unclaimed_start_for_its_owner() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2)),
+            !internal.starts.is_pending(OplogIndex::from_u64(2)),
             "drain must resolve A across the unclaimed Start(B)"
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(3)),
+                .starts
+                .get_retained(&OplogIndex::from_u64(3))
+                .is_some(),
             "Start(B) must be retained for its owner"
         );
     }
@@ -7249,6 +7651,10 @@ async fn drain_retains_unclaimed_start_for_its_owner() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
+
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert!(rs.has_unclaimed_retained_starts());
 
     // B's owner arrives later (guest re-execution reaches its call): the claim adopts the
     // retained Start instead of erroring or claiming something else, and resolves with the End
@@ -7308,8 +7714,8 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
     {
         let internal = rs.cursor.state.lock().await;
         let retained_b = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(4))
+            .starts
+            .get_retained(&OplogIndex::from_u64(4))
             .expect("Start(B) must be retained for its owner");
         assert_eq!(
             retained_b
@@ -7329,8 +7735,9 @@ async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() 
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(7)),
+                .starts
+                .get_retained(&OplogIndex::from_u64(7))
+                .is_some(),
             "the drain retains Start(C) after skipping the hint"
         );
     }
@@ -7415,11 +7822,11 @@ async fn hints_behind_a_released_retained_start_are_published_at_live_invocation
         rs.pending_card_derivation(derived_card.card_id()).await,
         None
     );
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(
         rs.pending_card_derivation(derived_card.card_id()).await,
         None,
-        "switch_to_live keeps retained Starts and their deferred hints"
+        "exhaust_replay_prefix keeps retained Starts and their deferred hints"
     );
 
     rs.release_retained_starts_at_live_invocation_end()
@@ -7717,7 +8124,7 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
                 .await
                 .unwrap();
             rs.await_resolution(first).await.unwrap();
-            assert_eq!(rs.is_live(), exhausted);
+            assert_eq!(rs.at_replay_tail(), exhausted);
             let position = rs.last_replayed_index();
 
             for wrong in [
@@ -7789,11 +8196,12 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
 #[test]
 async fn retained_start_counts_are_published_per_quota_class() {
     // [RecoverySucceeded, Start(A=2 now), Start(B=3 p3 http send), Start(C=4 rpc invoke),
-    //  Start(D=5 resolution), End(A=2→6), End(B=3→7), End(C=4→8), End(D=5→9)] — resolving A
-    // commits past B, C and D, retaining all three. Only a call charged to the same quota as a
+    //  Start(B2=5 p3 http send), Start(D=6 resolution), End(A=2→7), End(B=3→8),
+    //  End(C=4→9), End(B2=5→10), End(D=6→11)] — resolving A
+    // commits past B, C, B2 and D, retaining all four. Only a call charged to the same quota as a
     // retained Start may still be its late owner: B keeps HTTP-charged calls unfresh, C keeps
-    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting a
-    // retained Start clears its class again while the others stay published.
+    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting the
+    // last retained Start in a class clears that class while the others stay published.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -7801,11 +8209,13 @@ async fn retained_start_counts_are_published_per_quota_class() {
         start_now(),
         start_named(HostFunctionName::P3HttpClientSend),
         start_named(HostFunctionName::GolemRpcWasmRpcInvoke),
+        start_named(HostFunctionName::P3HttpClientSend),
         start_resolution(),
         end_for(2, 42),
         end_for(3, 43),
         end_for(4, 44),
         end_for(5, 45),
+        end_for(6, 46),
     ])
     .await;
     assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
@@ -7819,7 +8229,7 @@ async fn retained_start_counts_are_published_per_quota_class() {
         .await
         .unwrap();
     match rs.await_resolution(handle_a).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
@@ -7835,14 +8245,25 @@ async fn retained_start_counts_are_published_per_quota_class() {
         .unwrap();
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
     assert!(
-        !rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
-        "adopting the only HTTP-charged retained Start makes HTTP calls fresh again"
+        rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
+        "adopting one HTTP-charged Start must not clear the other HTTP Start's charge"
     );
     assert!(
         rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc),
         "a retained RPC-charged Start is unaffected by an HTTP adoption"
     );
     assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b2 = rs
+        .claim_concurrent_start(
+            &HostFunctionName::P3HttpClientSend,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b2.start_idx(), OplogIndex::from_u64(5));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
 
     let handle_c = rs
         .claim_concurrent_start(
@@ -7865,9 +8286,14 @@ async fn retained_start_counts_are_published_per_quota_class() {
         )
         .await
         .unwrap();
-    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(5));
+    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(6));
     assert!(!rs.has_unclaimed_retained_starts());
-    for (handle, end) in [(handle_b, 7), (handle_c, 8), (handle_d, 9)] {
+    for (handle, end) in [
+        (handle_b, 8),
+        (handle_b2, 10),
+        (handle_c, 9),
+        (handle_d, 11),
+    ] {
         match rs.await_resolution(handle).await.unwrap() {
             Resolution::Completed { end_idx, .. } => {
                 assert_eq!(end_idx, OplogIndex::from_u64(end))
@@ -8131,7 +8557,7 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(rs.has_unclaimed_retained_starts());
 
     match rs
@@ -8352,7 +8778,7 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
             timestamp: Timestamp::now_utc(),
         },
         start_now(),
-        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
         end_for(3, 43),
         end_for(2, 42),
     ])
@@ -8369,17 +8795,20 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(
         rs.has_unclaimed_retained_starts(),
-        "switch_to_live keeps retained Starts"
+        "exhaust_replay_prefix keeps retained Starts"
     );
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.release_retained_starts_at_live_invocation_end()
         .await
         .unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
     let err = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -8420,7 +8849,7 @@ async fn unclosed_retained_starts_are_rejected_at_live_invocation_end() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(rs.has_unclaimed_retained_starts());
 
     let err = rs
@@ -8468,7 +8897,7 @@ async fn retained_terminals_the_cursor_clamped_past_are_found_at_live_invocation
         other => panic!("expected Completed, got {other:?}"),
     }
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
     assert!(rs.has_unclaimed_retained_starts());
 
@@ -8488,7 +8917,7 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
             timestamp: Timestamp::now_utc(),
         },
         start_now(),
-        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
         end_for(2, 42),
         end_for(3, 43),
     ])
@@ -8508,28 +8937,31 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) retained");
         assert_eq!(
             retained.terminal.as_ref().map(|(idx, _)| *idx),
             Some(OplogIndex::from_u64(5))
         );
     }
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) still visible");
         assert!(retained.terminal.is_none(), "hidden End must be detached");
     }
     assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 
     rs.set_replay_target(OplogIndex::from_u64(2)).await.unwrap();
     assert!(!rs.has_unclaimed_retained_starts());
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
 }
 
 #[test]
@@ -8562,8 +8994,8 @@ async fn retained_start_publishes_the_non_hint_position_only_when_claimed() {
     {
         let internal = rs.cursor.state.lock().await;
         let retained = internal
-            .retained_starts
-            .get(&OplogIndex::from_u64(3))
+            .starts
+            .get_retained(&OplogIndex::from_u64(3))
             .expect("Start(B) retained");
         assert_eq!(
             retained.terminal.as_ref().map(|(idx, _)| *idx),
@@ -8663,11 +9095,7 @@ async fn drain_parks_on_positional_marker() {
     rs.drain_awaited_terminals().await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
-        assert!(
-            internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2))
-        );
+        assert!(internal.starts.is_pending(OplogIndex::from_u64(2)));
     }
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
 
@@ -8708,9 +9136,7 @@ async fn drain_parks_on_unawaited_end() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(2)),
+            internal.starts.is_pending(OplogIndex::from_u64(2)),
             "drain must not resolve A across an unawaited End"
         );
     }
@@ -8829,7 +9255,7 @@ async fn await_resolves_across_unclaimed_sibling_start() {
 async fn speculative_read_does_not_publish_live_cursor() {
     // [RecoverySucceeded, RemoveRetryPolicy(2)] — replay_target = 2. A speculative read of the last entry must
     // NOT make the cursor observably reach the replay target while the read is still
-    // rollbackable: the predicate (run after the read) must still see `is_live() == false`. This
+    // rollbackable: the predicate (run after the read) must still see `at_replay_tail() == false`. This
     // is the regression guard for "publish only committed cursor state" — a transient live cursor
     // would let a concurrent awaiter falsely conclude end-of-replay.
     let rs = replay_state_over(vec![
@@ -8839,12 +9265,12 @@ async fn speculative_read_does_not_publish_live_cursor() {
         remove_retry_policy(),
     ])
     .await;
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 
     let observed_live = std::cell::Cell::new(None);
     let probe = rs
         .try_get_oplog_entry(|_entry| {
-            observed_live.set(Some(rs.is_live()));
+            observed_live.set(Some(rs.at_replay_tail()));
             false
         })
         .await
@@ -8861,7 +9287,7 @@ async fn speculative_read_does_not_publish_live_cursor() {
         OplogIndex::from_u64(1),
         "a rolled-back probe must leave the committed cursor unchanged"
     );
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 }
 
 #[test]
@@ -8882,7 +9308,7 @@ async fn probe_past_lone_unclaimed_start_retains_it_and_reaches_the_tail() {
     let observed_live = std::cell::Cell::new(None);
     let probe = rs
         .try_get_oplog_entry(|_entry| {
-            observed_live.set(Some(rs.is_live()));
+            observed_live.set(Some(rs.at_replay_tail()));
             false
         })
         .await
@@ -8891,7 +9317,7 @@ async fn probe_past_lone_unclaimed_start_retains_it_and_reaches_the_tail() {
     assert!(probe.is_none());
     assert_eq!(observed_live.get(), Some(false));
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(rs.has_unclaimed_retained_starts());
 
     let handle = rs
@@ -8995,8 +9421,8 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
         let internal = rs.cursor.state.lock().await;
         for idx in [3, 4] {
             let retained = internal
-                .retained_starts
-                .get(&OplogIndex::from_u64(idx))
+                .starts
+                .get_retained(&OplogIndex::from_u64(idx))
                 .unwrap_or_else(|| panic!("Start at {idx} must be retained"));
             assert!(
                 retained.terminal.is_some(),
@@ -9040,7 +9466,7 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
 async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
     // [RecoverySucceeded, Start(A=2), Start(B=3)] — A is claimed and awaited but B is never claimed. The
     // awaiter retains B and reaches the replay tail without A's End: it resolves Incomplete
-    // (rather than sleeping on the unclaimed Start(B) until switch_to_live) and drops its
+    // (rather than sleeping on the unclaimed Start(B) until exhaust_replay_prefix) and drops its
     // registration; B stays retained for a late owner.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -9066,20 +9492,21 @@ async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            !internal.concurrent_resolver.is_pending(start_idx),
+            !internal.starts.is_pending(start_idx),
             "an Incomplete resolution must unregister the awaiter"
         );
         assert!(
             internal
-                .retained_starts
-                .contains_key(&OplogIndex::from_u64(3))
+                .starts
+                .get_retained(&OplogIndex::from_u64(3))
+                .is_some()
         );
     }
     assert!(rs.has_unclaimed_retained_starts());
 
-    // switch_to_live keeps the retained Start: the late owner still adopts it and, lacking a
+    // exhaust_replay_prefix keeps the retained Start: the late owner still adopts it and, lacking a
     // terminal, is Incomplete as well.
-    rs.switch_cursor_to_live().await.unwrap();
+    rs.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(rs.has_unclaimed_retained_starts());
     let handle_b = rs
         .claim_concurrent_start(
@@ -9145,7 +9572,7 @@ async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
         .expect("reconstruction guard");
     let claim_state = replay.cursor.reconstruction_claims.clone();
 
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(claim_state.active_fences().is_empty());
     assert_eq!(claim_state.active_bodies(), HashSet::from([start_index]));
     assert!(matches!(
@@ -9181,7 +9608,7 @@ async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
         replay.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
     ));
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     reconstruction.body_settled();
     assert_eq!(claim_state.active_fences(), HashSet::from([start_index]));
     assert!(claim_state.active_bodies().is_empty());
@@ -9236,7 +9663,7 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
     let mut reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
-    replay.switch_cursor_to_live().await.unwrap();
+    replay.exhaust_cursor_replay_prefix().await.unwrap();
     assert!(
         replay.ensure_reconstruction_claims_empty().is_err(),
         "an incomplete claim's active body must still reject generation replacement"
@@ -9287,10 +9714,10 @@ async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup(
     assert_eq!(replay.last_replayed_index(), start_index);
     {
         let state = replay.cursor.state.lock().await;
-        assert!(!state.concurrent_resolver.is_awaited(start_index));
+        assert!(!state.starts.is_awaited(start_index));
         assert!(
             state
-                .concurrent_resolver
+                .starts
                 .owns_terminal(start_index, OplogIndex::from_u64(4))
         );
     }
@@ -9513,9 +9940,7 @@ async fn deferred_root_error_ignores_live_retry_from_descendant() {
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal
-                .concurrent_resolver
-                .is_awaited(OplogIndex::from_u64(3)),
+            internal.starts.is_awaited(OplogIndex::from_u64(3)),
             "the retry_from descendant must still have a live awaiter"
         );
     }
@@ -9757,7 +10182,7 @@ async fn sequential_replay_reads_each_oplog_entry_once() {
     oplog.reads.lock().unwrap().clear();
 
     let mut read_indices = Vec::new();
-    while rs.is_replay() {
+    while rs.has_replay_remaining() {
         let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
         assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
         read_indices.push(idx);
@@ -9798,7 +10223,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         .await
         .expect("failed to build replay state");
 
-    assert!(!rs.is_live(), "Start at 2 is not yet consumed");
+    assert!(!rs.at_replay_tail(), "Start at 2 is not yet consumed");
     let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
         .claim_start_or_replay_end(StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
@@ -9812,11 +10237,11 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
     assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
 
     assert!(
-        rs.is_live(),
+        rs.at_replay_tail(),
         "consuming the Start must jump over the deleted tail to the target"
     );
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -9857,9 +10282,9 @@ async fn replay_finished_emitted_when_target_entry_consumed() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -10393,15 +10818,13 @@ async fn concurrent_replay_call_permutation_fuzz() {
         }
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after all calls resolved"
         );
         let internal = rs.cursor.state.lock().await;
         for (i, &si) in start_idx.iter().enumerate() {
             assert!(
-                !internal
-                    .concurrent_resolver
-                    .is_pending(OplogIndex::from_u64(si)),
+                !internal.starts.is_pending(OplogIndex::from_u64(si)),
                 "seed {seed}: call {i} left a registered awaiter"
             );
         }
@@ -10651,7 +11074,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
         }
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after the full walk"
         );
         assert!(
@@ -10661,9 +11084,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
         let internal = rs.cursor.state.lock().await;
         for (i, &si) in start_idx.iter().enumerate() {
             assert!(
-                !internal
-                    .concurrent_resolver
-                    .is_pending(OplogIndex::from_u64(si)),
+                !internal.starts.is_pending(OplogIndex::from_u64(si)),
                 "seed {seed}: item {i} left a registered awaiter"
             );
         }
@@ -10714,7 +11135,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         }
         other => panic!("expected Completed, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// A `Cancelled` orphan (its `Start` deleted) is consumed transparently by a positional drain,
@@ -10744,7 +11165,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
     let result = rs.try_get_oplog_entry(|_| false).await.unwrap();
     assert!(result.is_none());
     assert!(
-        rs.is_live(),
+        rs.at_replay_tail(),
         "the orphan Cancelled must be drained, reaching live"
     );
 }
@@ -10778,7 +11199,7 @@ async fn positional_reader_skips_orphan_terminal() {
     let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// The inverse partial deletion — the `Start` kept, its terminal inside a deleted region —
@@ -10817,7 +11238,7 @@ async fn deleted_terminal_reports_incomplete() {
         ResolutionOutcome::Incomplete => {}
         other => panic!("expected Incomplete, got {other:?}"),
     }
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
 }
 
 /// How a generated call pair interacts with the deleted regions in
@@ -11015,7 +11436,7 @@ async fn replay_skips_deleted_regions_fuzz() {
         );
 
         assert!(
-            rs.is_live(),
+            rs.at_replay_tail(),
             "seed {seed}: replay did not reach live after skipping deleted regions"
         );
     }
@@ -11234,24 +11655,14 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     }
 
     // The whole sequential oplog is consumed: replay is over and nothing is left pending.
-    assert!(rs.is_live(), "replay must reach live at the end");
+    assert!(rs.at_replay_tail(), "replay must reach live at the end");
     let internal = rs.cursor.state.lock().await;
     assert!(
-        !internal
-            .concurrent_resolver
-            .is_pending(OplogIndex::from_u64(2))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(5))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(8))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(11))
-            && !internal
-                .concurrent_resolver
-                .is_pending(OplogIndex::from_u64(12)),
+        !internal.starts.is_pending(OplogIndex::from_u64(2))
+            && !internal.starts.is_pending(OplogIndex::from_u64(5))
+            && !internal.starts.is_pending(OplogIndex::from_u64(8))
+            && !internal.starts.is_pending(OplogIndex::from_u64(11))
+            && !internal.starts.is_pending(OplogIndex::from_u64(12)),
         "no resolver awaiter may remain pending after a full replay"
     );
 }
@@ -11367,7 +11778,13 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
             // Observe the actual pending/deferred batch without releasing its receipts. All
             // projection tasks may finish while a Store has yet to receive any of these events.
             let events = if delayed_entity {
-                rs.cursor.state.lock().await.retained_starts[&start]
+                rs.cursor
+                    .state
+                    .lock()
+                    .await
+                    .starts
+                    .get_retained(&start)
+                    .unwrap()
                     .deferred_events
                     .iter()
                     .map(|(_, event)| event.clone())
@@ -11612,7 +12029,7 @@ async fn benign_card_suffix_reconstructs_before_wallet_boundary() {
     rs.get_oplog_entry(None).await.unwrap();
     assert!(!rs.is_live_published());
     assert!(matches!(
-        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+        rs.publish_primary_live(&replay_linear_memory())
             .await
             .unwrap(),
         ReplayToLiveOutcome::Live { .. }
@@ -11651,7 +12068,7 @@ async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_com
     tokio::pin!(acquisition);
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
-    assert!(rs.is_live());
+    assert!(rs.at_replay_tail());
     assert!(futures::poll!(acquisition.as_mut()).is_pending());
     rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
     drop(contention);
@@ -11792,7 +12209,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
     };
 
     assert!(format!("{error}").contains("no matching Start"));
-    assert!(!rs.is_live());
+    assert!(!rs.at_replay_tail());
 }
 
 #[test]
@@ -13308,7 +13725,7 @@ async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
 #[test_r::timeout("30s")]
 async fn disposal_refusal_without_collection_preserves_recorded_calls() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamCancelRole,
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamEndpointSide,
         StreamRecordReference, StreamRegistrationInvocation,
     };
     use golem_common::model::oplog::attachment::{
@@ -13360,15 +13777,14 @@ async fn disposal_refusal_without_collection_preserves_recorded_calls() {
         let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
         let refusal = if input {
             SerializableToolAdmissionRefusal::BeforeDurableInputDisposal {
-                session: StreamRegistrationInvocation::Local(IdempotencyKey::new(
-                    "refused-input".into(),
-                )),
+                session: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(502).into()),
                 binding: Box::new(StreamBindingRecord {
                     transport_stream_id: 1,
                     source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                     role: SessionStreamRole::Input,
                 }),
-                role: StreamCancelRole::InputConsumer,
+                direction: SessionStreamRole::Input,
+                side: StreamEndpointSide::Consumer,
             }
         } else {
             SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
@@ -13720,7 +14136,7 @@ async fn admission_refusal_retires_only_terminal_less_claims() {
             .state
             .lock()
             .await
-            .concurrent_resolver
+            .starts
             .has_claim(unfinished.start_idx())
     );
     assert!(
@@ -14316,12 +14732,14 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
             None,
             Default::default(),
             None,
+            None,
         ),
         OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             1,
             None,
             Default::default(),
+            None,
             None,
         ),
         start_now(),
@@ -14461,6 +14879,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
             active_cards: vec![selected.clone()],
             wallet_generation: 7,
             filesystem_snapshot: None,
+            bootstrap: None,
         },
         start_now(),
         OplogEntry::CardDerived {
@@ -14648,8 +15067,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
         .unwrap();
         let mut consumption_error = None;
         let mut reconstruction = parent.map(|parent| {
-            ConcurrentReplayResolver::default()
-                .register_reconstruction(parent, Some(Arc::downgrade(&wallet)))
+            ReplayStarts::default().register_reconstruction(parent, Some(Arc::downgrade(&wallet)))
         });
         let reconstruction_hold = reconstruction.clone();
         while replay.last_replayed_index() < OplogIndex::from_u64(22) {
@@ -14853,7 +15271,7 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
         )
         .await
         .unwrap();
-        assert!(replay.is_live());
+        assert!(replay.at_replay_tail());
         drop(replacement.lock_boundary().await.unwrap());
         replacement.validate_current().unwrap();
         assert_eq!(
@@ -14941,4 +15359,186 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
         drain.await;
         drop(contention);
     }
+}
+
+async fn bootstrap_cursor_over(
+    oplog: &Arc<InMemoryOplog>,
+    skip_through: u64,
+    target: u64,
+    tail: BootstrapTail,
+) -> ReplayState {
+    ReplayState::new_for_bootstrap(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(skip_through),
+        OplogIndex::from_u64(target),
+        tail,
+    )
+    .await
+    .expect("failed to build bootstrap cursor")
+}
+
+async fn oplog_of(entries: Vec<OplogEntry>) -> Arc<InMemoryOplog> {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    oplog
+}
+
+/// The history `[RecoverySucceeded, resolution 2..=3, now 4..=5, resolution 6..=7]`, whose
+/// bootstrap block is the `now` call at `4..=5`.
+fn history_with_bootstrap_block() -> Vec<OplogEntry> {
+    vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_resolution(),
+        end_for(2, 5),
+        start_now(),
+        end_for(4, 42),
+        start_resolution(),
+        end_for(6, 7),
+    ]
+}
+
+async fn claim_and_resolve(rs: &ReplayState, name: HostFunctionName) -> (u64, u64) {
+    let handle = rs
+        .claim_concurrent_start(&name, &DurableFunctionType::ReadLocal)
+        .await
+        .unwrap();
+    let start = u64::from(handle.start_idx());
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => (start, u64::from(end_idx)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn strict_bootstrap_cursor_replays_its_block_after_history_that_the_main_cursor_replays_later()
+ {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    bootstrap.ensure_bootstrap_consumed().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(bootstrap.at_replay_tail());
+    assert!(!bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty(),
+        "a bootstrap cursor records no replay events, not even ReplayFinished"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(main.has_replay_remaining());
+    assert_eq!(
+        claim_and_resolve(&main, HostFunctionName::MonotonicClockResolution).await,
+        (2, 3)
+    );
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_a_durable_call_after_its_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let memory = replay_linear_memory();
+    claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await;
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert!(matches!(
+        switched,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(!bootstrap.is_live_published());
+    assert_eq!(memory.reconciliation_grant_bytes(1), 2);
+}
+
+#[test]
+async fn strict_bootstrap_cursor_diverges_on_an_unconsumed_block() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let unconsumed = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+    let empty = bootstrap_cursor_over(&oplog, 1, 1, BootstrapTail::Strict).await;
+
+    assert!(matches!(
+        unconsumed.ensure_bootstrap_consumed().await,
+        Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+    ));
+    assert!(empty.at_replay_tail());
+    assert!(
+        !empty.is_live_published(),
+        "an exhausted bootstrap cursor does not publish live at construction"
+    );
+    empty.ensure_bootstrap_consumed().await.unwrap();
+}
+
+#[test]
+async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let main_position = main.last_replayed_index();
+    let bootstrap = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Live).await;
+    let memory = replay_linear_memory();
+
+    let claimed = claim_and_resolve(&bootstrap, HostFunctionName::MonotonicClockNow).await;
+    let outcome = bootstrap
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    let switched = bootstrap.finish_bootstrap_replay().await.unwrap();
+
+    assert_eq!(claimed, (4, 5));
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+    assert_eq!(switched, Some(OplogIndex::from_u64(5)));
+    assert!(bootstrap.is_live_published());
+    assert!(
+        bootstrap
+            .cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        memory.reconciliation_grant_bytes(1),
+        2,
+        "the live switch of a bootstrap cursor leaves the linear memory in replay"
+    );
+    assert_eq!(main.last_replayed_index(), main_position);
+    assert!(!main.is_live_published());
 }

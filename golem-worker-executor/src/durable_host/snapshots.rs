@@ -66,6 +66,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .data()
                     .agent_type_provision_config()
                     .cloned();
+                let bootstrap = store.as_context().data().durable_ctx().bootstrap_range();
 
                 store
                     .as_context_mut()
@@ -80,6 +81,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .map(|installation| installation.environment_plugin_grant_id),
                         ),
                         start_outcome::success_details_of(&reference),
+                        bootstrap,
                     )
                     .await?;
                 Ok(None)
@@ -122,12 +124,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId::from(Uuid::new_v4());
         store
             .as_context_mut()
             .data_mut()
             .durable_ctx_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
 
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
@@ -166,9 +168,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result =
-            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None)
-                .await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
         store.as_context_mut().data().set_suspended();
 
         store
@@ -404,12 +404,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = golem_common::model::InvocationId::from(Uuid::new_v4());
         store
             .as_context_mut()
             .data_mut()
             .durable_ctx_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
 
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
@@ -456,9 +456,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result =
-            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay, None)
-                .await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
         store.as_context_mut().data().set_suspended();
 
         store
@@ -679,6 +677,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
         >,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
@@ -689,6 +688,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 new_component_size,
                 new_active_plugins,
                 snapshot_assisted_details,
+                bootstrap,
             )
             .await?;
         Ok(())

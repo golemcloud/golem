@@ -4098,6 +4098,7 @@ dependencies = [
  "pretty_assertions",
  "prometheus",
  "proptest",
+ "prost",
  "prost-types",
  "quote",
  "rand 0.9.5",
@@ -4108,6 +4109,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "shadow-rs",
  "similar",
  "sqlx",
@@ -4115,6 +4117,7 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "syn 2.0.119",
+ "tempfile",
  "test-r",
  "thiserror 2.0.20",
  "tokio",
@@ -12978,7 +12981,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d3b26c17256b958ef02094ef2a2e90f9fcec46e2#d3b26c17256b958ef02094ef2a2e90f9fcec46e2"
 dependencies = [
  "bitflags 2.13.1",
  "futures",
@@ -12999,7 +13002,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d3b26c17256b958ef02094ef2a2e90f9fcec46e2#d3b26c17256b958ef02094ef2a2e90f9fcec46e2"
 dependencies = [
  "anyhow",
  "heck",
@@ -13009,7 +13012,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d3b26c17256b958ef02094ef2a2e90f9fcec46e2#d3b26c17256b958ef02094ef2a2e90f9fcec46e2"
 dependencies = [
  "anyhow",
  "heck",
@@ -13024,7 +13027,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.63.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=6f161c1bce440d7b0506950ee38338ce36742957#6f161c1bce440d7b0506950ee38338ce36742957"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d3b26c17256b958ef02094ef2a2e90f9fcec46e2#d3b26c17256b958ef02094ef2a2e90f9fcec46e2"
 dependencies = [
  "anyhow",
  "macro-string",

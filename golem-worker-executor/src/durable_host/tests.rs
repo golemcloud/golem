@@ -55,6 +55,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     };
@@ -178,6 +179,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         },
     )));
@@ -531,7 +533,7 @@ fn ephemeral_restart_decisions_are_terminal() {
 fn ephemeral_replay_is_only_for_typed_owner_initialization() {
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 
-    let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+    let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentKey::new(
         AgentTypeName("counter".to_string()),
         TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::string()),
@@ -600,23 +602,27 @@ fn component_file_node_reports_the_write_permission_of_a_file() {
 
 #[test]
 fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
-    assert!(!store_is_live(None, false, false));
-    assert!(store_is_live(None, false, true));
+    let primary = StoreReplayState::new(None);
+    assert!(!primary.is_live(false));
+    assert!(primary.is_live(true));
 
-    let completed = Some(InvocationExecutionMode::ReplayingCompleted);
-    assert!(!store_is_live(completed, false, false));
-    assert!(!store_is_live(completed, false, true));
-    assert!(!store_is_live(completed, true, true));
+    let completed = StoreReplayState::new(Some(InvocationExecutionMode::ReplayingCompleted));
+    assert!(!completed.is_live(false));
+    assert!(!completed.is_live(true));
 
-    let incomplete = Some(InvocationExecutionMode::ReplayingIncomplete);
-    assert!(!store_is_live(incomplete, false, false));
-    assert!(!store_is_live(incomplete, false, true));
-    assert!(store_is_live(incomplete, true, true));
-    assert!(store_is_live(
-        Some(InvocationExecutionMode::Live),
-        true,
-        false
-    ));
+    let gate = Arc::new(AtomicBool::new(false));
+    let incomplete = StoreReplayState::incomplete_entity_for_test(gate.clone());
+    let captured = incomplete.clone();
+    assert!(!incomplete.is_live(false));
+    assert!(!incomplete.is_live(true));
+    gate.store(true, Ordering::Release);
+    assert!(incomplete.is_live(true));
+    assert!(captured.is_live(false));
+    assert_eq!(
+        captured.initial_entity_mode(),
+        Some(InvocationExecutionMode::ReplayingIncomplete)
+    );
+    assert!(StoreReplayState::new(Some(InvocationExecutionMode::Live)).is_live(false));
 }
 
 #[test]
@@ -624,13 +630,14 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
     let memory = replay_usage_tracker();
     let _body = memory.begin_guest_body();
     let local_live_tail = Arc::new(AtomicBool::new(false));
+    let StoreReplayState::IncompleteEntityReplay(continuation) =
+        StoreReplayState::incomplete_entity_for_test(local_live_tail.clone())
+    else {
+        unreachable!()
+    };
     let pending = PendingReplayToLive {
         replay_target: OplogIndex::from_u64(42),
-        role: ReplayToLiveRole::NonPrimary,
-        replaying_incomplete_entity: false,
-        tool_entity: false,
-        tool_operation: None,
-        local_live_tail: local_live_tail.clone(),
+        finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: memory.clone(),
     };
 
@@ -647,17 +654,44 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
     let dropped_tail = Arc::new(AtomicBool::new(false));
     let dropped_memory = replay_usage_tracker();
     let _dropped_body = dropped_memory.begin_guest_body();
+    let StoreReplayState::IncompleteEntityReplay(continuation) =
+        StoreReplayState::incomplete_entity_for_test(dropped_tail.clone())
+    else {
+        unreachable!()
+    };
     drop(PendingReplayToLive {
         replay_target: OplogIndex::from_u64(43),
-        role: ReplayToLiveRole::NonPrimary,
-        replaying_incomplete_entity: false,
-        tool_entity: false,
-        tool_operation: None,
-        local_live_tail: dropped_tail.clone(),
+        finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: dropped_memory.clone(),
     });
     assert!(!dropped_tail.load(Ordering::Acquire));
     assert!(!dropped_memory.usage_is_live());
+}
+
+#[test]
+async fn completed_entity_settlement_keeps_the_store_non_live() {
+    let completed = StoreReplayState::new(Some(InvocationExecutionMode::ReplayingCompleted));
+    let memory = replay_usage_tracker();
+    let _body = memory.begin_guest_body();
+    let pending = PendingReplayToLive {
+        replay_target: OplogIndex::from_u64(42),
+        finalization: LiveFinalization::CompletedEntityReplay,
+        linear_memory: memory.clone(),
+    };
+
+    assert_eq!(pending.role(), ReplayToLiveRole::NonPrimary);
+    assert!(!memory.usage_is_live());
+    assert_eq!(
+        pending.finish_at(None).await.unwrap(),
+        FinishReplayToLive::Live
+    );
+    assert!(memory.usage_is_live());
+    assert!(!completed.is_live(false));
+    assert!(!completed.is_live(true));
+    assert_eq!(
+        completed.initial_entity_mode(),
+        Some(InvocationExecutionMode::ReplayingCompleted)
+    );
 }
 
 pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
@@ -1103,7 +1137,7 @@ fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
     }
 }
 
-fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
+fn permission_id_test_inputs() -> (OwnedAgentId, golem_common::model::InvocationId) {
     (
         OwnedAgentId {
             environment_id: EnvironmentId(
@@ -1116,7 +1150,7 @@ fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
                 agent_id: "cart/primary".to_string(),
             },
         },
-        IdempotencyKey::new("checkout-invocation".to_string()),
+        Uuid::from_u128(801).into(),
     )
 }
 
@@ -1292,19 +1326,19 @@ fn permission_id_derivation_has_golden_vectors() {
 
     assert_eq!(
         card_id,
-        Uuid::parse_str("00000000-002a-7cdd-b83d-c9e9f32d880c").unwrap()
+        Uuid::parse_str("00000000-002a-7517-811a-f8ff9897ce5b").unwrap()
     );
     assert_eq!(
         transfer_id,
-        Uuid::parse_str("00000000-002a-7646-b8aa-b84e348196f6").unwrap()
+        Uuid::parse_str("00000000-002a-7125-abba-aa83c50adf19").unwrap()
     );
     assert_eq!(
         installed_child_id,
-        Uuid::parse_str("00000000-002a-7607-aaa4-0b04c840169d").unwrap()
+        Uuid::parse_str("00000000-002a-70fd-8321-769fffab2675").unwrap()
     );
     assert_eq!(
         scope_card_id,
-        Uuid::parse_str("00000000-002a-7680-bbdb-7f78bd28fc43").unwrap()
+        Uuid::parse_str("00000000-002a-769f-bab5-c87f60c1800a").unwrap()
     );
     assert_eq!(card_id.as_bytes()[6] >> 4, 7);
     assert_eq!(card_id.as_bytes()[8] >> 6, 2);
@@ -2218,6 +2252,7 @@ fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
     };
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
@@ -2257,15 +2292,16 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(IdempotencyKey::fresh()),
+        current_idempotency_key: Some(Uuid::new_v4().into()),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
 
     status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
+        not_before: None,
         oplog_index: OplogIndex::INITIAL,
-        idempotency_key: Some(IdempotencyKey::fresh()),
+        idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {

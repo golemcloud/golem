@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 use test_r::{test, timeout};
 
 #[test]
@@ -53,9 +54,9 @@ async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits
             agent_id: owner.agent_id.clone(),
         }),
         InvocationExecutionMode::Live,
-        IdempotencyKey::fresh(),
+        InvocationId(Uuid::new_v4()),
         false,
-        IdempotencyKey::fresh(),
+        InvocationId(Uuid::new_v4()),
     )
     .unwrap();
     let slot = Arc::new(entity_slot::EntitySlot::new(entity.clone()));
@@ -133,7 +134,7 @@ pub(super) fn running_lifecycle(
     owner_generation_started: bool,
 ) -> WorkerInstance {
     WorkerInstance::Running(RunningWorker {
-        handle: None,
+        handle: tokio::spawn(async {}),
         sender: tokio::sync::mpsc::unbounded_channel().0,
         queue: Default::default(),
         waiting_for_command: Default::default(),

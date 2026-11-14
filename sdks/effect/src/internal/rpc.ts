@@ -1,17 +1,27 @@
 import { Effect, Exit } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import type { RemoteCallError } from "../Client.js"
+import { uuidToString } from "golem:core/types@2.0.0"
+import type { InvocationMetadata, RemoteCallError } from "../Client.js"
 import type { RpcCancellationToken, RpcConnection } from "../host/RpcClient.js"
+import type { Uuid } from "../Ids.js"
+import { makeInvocationId } from "./invocationId.js"
 import { type GuestScopeCard, isScopeCard, peekScopeCard } from "./scopeCard.js"
 import { restoreEncodedCapabilities } from "./schema-model/wit.js"
 
-const snapshotInvocationMetadata = (
+/**
+ * Convert host invocation metadata to the SDK form. The invocation ID combines the agent ID text
+ * with the UUID of the invocation; the owner case of the host ID is not used.
+ */
+export const invocationMetadataFromHost = (
   metadata: AgentHost.InvocationMetadata,
-): AgentHost.InvocationMetadata =>
+): InvocationMetadata =>
   Object.freeze({
     agentId: metadata.agentId,
-    idempotencyKey: metadata.idempotencyKey,
+    invocationId: makeInvocationId(
+      metadata.agentId,
+      uuidToString(metadata.invocationId.id) as Uuid,
+    ),
   })
 
 const RPC_TAGS = new Set<AgentHost.RpcError["tag"]>([
@@ -75,7 +85,8 @@ const borrowScopeCard = (
  * it then stays as the caller supplied it.
  *
  * Once `asyncInvokeAndAwait` is called, nothing is restored, even when it throws: the host may
- * already own the input.
+ * already own the input. A handle without metadata is a rejected call: its future fails with the
+ * rejection error.
  */
 export const awaitInvocation = <R>(
   rpc: RpcConnection,
@@ -110,15 +121,22 @@ export const awaitInvocation = <R>(
             ),
             Effect.map((invocation) => ({
               invocation,
-              metadata: snapshotInvocationMetadata(invocation.metadata),
+              metadata: invocation.metadata && invocationMetadataFromHost(invocation.metadata),
             })),
           ),
           ({ invocation, metadata }) =>
             Effect.tryPromise({ try: () => invocation.get(), catch: wrapHostThrow }).pipe(
-              Effect.map((result) => ({
-                metadata,
-                result,
-              })),
+              Effect.flatMap((result) =>
+                metadata === undefined
+                  ? Effect.fail<RemoteCallError>({
+                      _tag: "RpcCallError",
+                      cause: {
+                        tag: "protocol-error",
+                        val: `${method}: host completed a rejected invocation`,
+                      },
+                    })
+                  : Effect.succeed({ metadata, result }),
+              ),
             ),
           ({ invocation }) =>
             Effect.sync(() => {
@@ -158,7 +176,7 @@ export const scheduleCancelableInvocation = (
     ({ token }) => Effect.sync(() => bestEffort(() => token.drop())),
   ).pipe(
     Effect.map(({ metadata, token }) => ({
-      metadata: snapshotInvocationMetadata(metadata),
+      metadata: invocationMetadataFromHost(metadata),
       cancel: cancelOnce(token),
     })),
   )

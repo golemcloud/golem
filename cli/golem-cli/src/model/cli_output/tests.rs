@@ -13,6 +13,7 @@ use quote::ToTokens;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use syn::{Expr, ImplItem, Item, ItemImpl, Lit, Type};
 use test_r::test;
 use uuid::uuid;
@@ -523,7 +524,7 @@ struct SourceSummary {
 
 #[test]
 fn cli_output_schema_source_kinds_are_consistent() {
-    let summary = collect_source_summary();
+    let summary = &*SOURCE_SUMMARY;
     let mut errors = Vec::new();
 
     if let Ok(path) = std::env::var("GOLEM_CLI_OUTPUT_SUMMARY_MD") {
@@ -623,9 +624,7 @@ fn cli_output_schema_matches_source_registry() {
         "oneOf refs must match output types"
     );
 
-    jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    LazyLock::force(&COMMAND_OUTPUT_SCHEMA_VALIDATOR);
 }
 
 #[test]
@@ -909,9 +908,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
     assert!(!text.contains("middleware-env-secret"));
     assert!(!text.contains("middleware-plugin-secret"));
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .unwrap();
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     for show_secrets in [false, true] {
         let get = to_structured_output_value_masked(
             ComponentGetView(component.clone()),
@@ -1371,6 +1368,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1387,6 +1385,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
                 HashOf::form_value(sample_diff_provision_config(
@@ -1431,10 +1430,7 @@ fn fixed_hash(input: &str) -> golem_common::model::diff::Hash {
 
 #[test]
 fn cli_output_schema_validates_schema_native_secret_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let secret = golem_client::model::AgentSecretDto {
         id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
@@ -1568,9 +1564,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
     })
     .expect("agent.oplog should serialize");
 
-    let validator = jsonschema::options()
-        .build(&load_command_output_schema())
-        .expect("command output schema must be valid");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&output),
         "schema rejected agent.oplog secret metadata: {:?}",
@@ -1596,10 +1590,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
 
 #[test]
 fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut runner = proptest::test_runner::TestRunner::deterministic();
 
     let component = arb_component_view()
@@ -1647,11 +1638,31 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_accepts_every_sample_oplog_entry() {
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
+    for entry in sample_public_oplog_entries() {
+        let entry_type =
+            serde_json::to_value(&entry).expect("oplog entry should serialize")["type"].clone();
+        let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+            index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+            entry: entry.into(),
+        })
+        .expect("agent.oplog should serialize");
+        assert!(
+            validator.is_valid(&output),
+            "schema should accept the {entry_type} oplog entry: {:?}",
+            validator
+                .iter_errors(&output)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1675,10 +1686,7 @@ fn cli_output_schema_rejects_invalid_tool_definition() {
 // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn cli_output_schema_rejects_out_of_range_tool_command_index() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = to_structured_output_value(crate::model::component::ComponentGetView(
         sample_component_view(),
     ))
@@ -1703,10 +1711,7 @@ fn cli_output_schema_rejects_out_of_range_tool_command_index() {
 
 #[test]
 fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let mut output = (arb_component_manifest_trace_result())
         .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
         .expect("component.manifest-trace strategy should produce a value")
@@ -1735,9 +1740,7 @@ fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
 #[test]
 fn cli_output_schema_validates_discriminated_documents() {
     let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     let definitions = schema_definitions(&schema);
     for output_type in schema_output_entries(&schema).keys() {
@@ -1777,9 +1780,7 @@ fn cli_output_schema_validates_discriminated_documents() {
 fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
     let schema = load_command_output_schema();
     let definitions = schema_definitions(&schema);
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY.iter().filter(|entry| {
         !definition_allows_additional_properties(
@@ -1805,10 +1806,7 @@ fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
 
 #[test]
 fn cli_output_schema_validates_registered_examples() {
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
     for entry in STRUCTURED_OUTPUT_TEST_REGISTRY {
         for example in (entry.examples)() {
@@ -1837,10 +1835,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
         json!(0.5)
     );
 
-    let schema = load_command_output_schema();
-    let validator = jsonschema::options()
-        .build(&schema)
-        .expect("command output schema must be a valid JSON schema");
+    let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     assert!(
         validator.is_valid(&example),
         "account limits schema should accept fractional memory billable excess: {:?}",
@@ -1854,10 +1849,7 @@ fn cli_output_schema_accepts_fractional_memory_billable_excess() {
 proptest! {
     #[test]
     fn cli_output_schema_accepts_registered_generated_examples(value in arb_registered_output_document()) {
-        let schema = load_command_output_schema();
-        let validator = jsonschema::options()
-            .build(&schema)
-            .expect("command output schema must be a valid JSON schema");
+        let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
 
         prop_assert!(
             validator.is_valid(&value),
@@ -1869,6 +1861,12 @@ proptest! {
         );
     }
 }
+
+static COMMAND_OUTPUT_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    jsonschema::options()
+        .build(&load_command_output_schema())
+        .expect("command output schema must be a valid JSON schema")
+});
 
 fn load_command_output_schema() -> Value {
     serde_json::from_str(crate::model::cli_output::COMMAND_OUTPUT_SCHEMA_JSON)
@@ -1932,12 +1930,14 @@ fn registry_output_entries() -> BTreeMap<String, String> {
 }
 
 fn source_output_entries() -> BTreeMap<String, String> {
-    collect_source_summary()
+    SOURCE_SUMMARY
         .outputs
-        .into_iter()
-        .map(|output| (output.type_name(), output.rust_type))
+        .iter()
+        .map(|output| (output.type_name(), output.rust_type.clone()))
         .collect()
 }
+
+static SOURCE_SUMMARY: LazyLock<SourceSummary> = LazyLock::new(collect_source_summary);
 
 fn collect_source_summary() -> SourceSummary {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -2263,7 +2263,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::model::oplog::public_oplog_entry::*;
     use golem_common::model::oplog::*;
     use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
+    use golem_common::model::{AgentId, Empty, InvocationId, Timestamp};
     use golem_common::schema::{
         IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
@@ -2346,7 +2346,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
 
     fn method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: InvocationId(Uuid::from_u128(2)),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -2411,7 +2411,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             creation_start: OplogIndex::from_u64(1),
             slot: ToolAttachmentSlot::Stdout,
         },
-        logical_invocation: IdempotencyKey::new("attachment-read-key".to_string()),
+        logical_invocation: InvocationId(Uuid::from_u128(4)),
         observation: StreamConsumerObservation::Guest {
             parent_start_index: Some(OplogIndex::from_u64(4)),
         },
@@ -2539,6 +2539,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
                 output: typed_string_value("output"),
             }),
@@ -2552,6 +2553,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Error(ErrorParams {
             timestamp: timestamp(),
             kind: OplogErrorKind::Invocation,
+            invocation_id: Some(InvocationId(Uuid::from_u128(6))),
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state: Some(retry_policy_state),
@@ -2559,6 +2561,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Error(ErrorParams {
             timestamp: timestamp(),
             kind: OplogErrorKind::InvocationLocal,
+            invocation_id: Some(InvocationId(Uuid::from_u128(7))),
             error: "method error".to_string(),
             retry_from: OplogIndex::from_u64(2),
             retry_policy_state: None,
@@ -2581,8 +2584,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: Some(timestamp()),
             invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-                idempotency_key: IdempotencyKey::new("init-key".to_string()),
+                invocation_id: InvocationId(Uuid::from_u128(1)),
                 constructor_parameters: typed_string_value("constructor"),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -2623,6 +2627,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 source_component_revision: ComponentRevision::new(1).unwrap(),
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(2),
+            }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
             }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
@@ -2695,7 +2703,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: timestamp(),
-            idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+            invocation_id: InvocationId(Uuid::from_u128(7)),
         }),
         PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
             timestamp: timestamp(),
@@ -2721,16 +2729,22 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             data: raw_snapshot(),
             filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }),
         PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
             timestamp: timestamp(),
@@ -2748,6 +2762,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
             plugin: plugin(4),
+            source_component_revision: ComponentRevision::INITIAL,
             target_agent_id: agent_id("target-agent"),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),
@@ -2763,6 +2778,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
                 snapshot: json_snapshot(),
             }),
@@ -2772,28 +2788,33 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
                 snapshot: multipart_snapshot(),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-                idempotency_key: IdempotencyKey::new("process-key".to_string()),
+                invocation_id: InvocationId(Uuid::from_u128(3)),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
+            not_before: None,
             invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
                 target_revision: ComponentRevision::new(5).unwrap(),
             }),
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters {
                 error: Some("load failed".to_string()),
             }),
@@ -2803,6 +2824,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::ProcessOplogEntries(
                 ProcessOplogEntriesResultParameters { error: None },
             ),
@@ -2812,6 +2834,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),
+            invocation_id: InvocationId(Uuid::from_u128(5)),
             result: PublicAgentInvocationResult::ManualUpdate(Empty {}),
             method_name: Some("generated-method".to_string()),
             consumed_fuel: 104,
@@ -3312,6 +3335,8 @@ fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> 
 }
 
 fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails> {
+    use golem_schema::http::HttpRouteMode;
+
     (
         arb_http_method(),
         proptest::collection::vec(arb_path_segment(), 0..2),
@@ -3343,9 +3368,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
             (
                 arb_small_string(),
                 arb_small_string(),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
-                proptest::option::of(any::<bool>()),
                 proptest::option::of(1u32..=16),
                 proptest::option::of(1u32..=1000),
             )
@@ -3353,9 +3375,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     |(
                         input_slot,
                         output_slot,
-                        allow_external_writes,
-                        allow_stream_delete,
-                        allow_invocation_delete,
                         max_concurrent_readers_per_stream,
                         max_append_requests_per_second_per_stream,
                     )| Some(
@@ -3380,9 +3399,6 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                                 content_type: Some("application/octet-stream".to_string()),
                             },
                         ],
-                            allow_external_writes,
-                            allow_stream_delete,
-                            allow_invocation_delete,
                             load: Some(golem_common::model::agent::DurableStreamRouteLoadOptions {
                                 max_concurrent_readers_per_stream,
                                 max_append_requests_per_second_per_stream,
@@ -3391,6 +3407,12 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     ),
                 ),
         ],
+        proptest::option::of(proptest::sample::select(vec![
+            HttpRouteMode::DurableStreams,
+            HttpRouteMode::Plain,
+            HttpRouteMode::Sse,
+            HttpRouteMode::WebSocket,
+        ])),
     )
         .prop_map(
             |(
@@ -3401,6 +3423,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 auth_details,
                 allowed_patterns,
                 durable_streams,
+                mode,
             )| {
                 golem_common::model::agent::HttpEndpointDetails {
                     http_method,
@@ -3410,6 +3433,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     auth_details,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     durable_streams,
+                    mode,
                 }
             },
         )
@@ -3547,7 +3571,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
 
-    arb_small_string()
+    any::<u128>()
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
@@ -3555,7 +3579,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
                         component_id: ComponentId(uuid::Uuid::nil()),
                         agent_id: "agent".into(),
                     },
-                    idempotency_key: key,
+                    idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,
                     status: None,
                     component_revision: None,
@@ -3569,13 +3593,13 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
 }
 
 fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::InvocationId;
     use golem_common::model::invocation_session_public::{
         PublicInvocationResult, PublicNativeToolTarget, PublicTypedValue,
     };
     use golem_common::schema::{SchemaGraph, SchemaType};
 
-    (arb_small_string(), any::<bool>())
+    (any::<u128>(), any::<bool>())
         .prop_map(|(key, success)| {
             let typed = PublicTypedValue {
                 graph: SchemaGraph::anonymous(if success {
@@ -3593,7 +3617,7 @@ fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
-                idempotency_key: IdempotencyKey::new(key),
+                idempotency_key: InvocationId(uuid::Uuid::from_u128(key)),
                 result: if success {
                     PublicInvocationResult::ToolSuccess {
                         result: Some(typed),
@@ -3788,7 +3812,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 )| crate::model::agent::stream::AgentStreamEvent {
@@ -3798,7 +3822,7 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                     context,
                     message,
                     function_name,
-                    idempotency_key,
+                    invocation_id,
                     number_of_missed_messages,
                     error,
                 },
@@ -3825,6 +3849,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                 proptest::option::of(arb_small_u64()),
                 proptest::option::of(arb_json_value(1)),
             ),
+            proptest::option::of(arb_small_string()),
         )
             .prop_map(
                 |(
@@ -3834,6 +3859,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                     component_revision,
                     (outcome, reason, error, stream_id),
                     (parent_stream_id, path, offset, value),
+                    stderr,
                 )| {
                     crate::model::agent::invocation_session::AgentInvocationSessionEvent {
                         kind,
@@ -3843,6 +3869,7 @@ fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
                         outcome,
                         reason,
                         error,
+                        stderr,
                         stream_id,
                         parent_stream_id,
                         path,
@@ -5962,6 +5989,12 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    agent_types: BTreeMap::from_iter([(
+                        "agent".to_string(),
+                        golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                            golem_common::model::agent::AgentTypeName("agent".to_string()),
+                        )),
+                    )]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -6001,6 +6034,25 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    agent_types: BTreeMap::from_iter([
+                        (
+                            "agent".to_string(),
+                            golem_common::model::diff::HashOf::form_value(
+                                golem_common::schema::agent::AgentTypeSchema {
+                                    description: "changed".to_string(),
+                                    ..sample_agent_type_schema(
+                                        golem_common::model::agent::AgentTypeName("agent".to_string()),
+                                    )
+                                },
+                            ),
+                        ),
+                        (
+                            "added".to_string(),
+                            golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
+                                golem_common::model::agent::AgentTypeName("added".to_string()),
+                            )),
+                        ),
+                    ]),
                     agent_type_provision_configs: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(
@@ -6848,20 +6900,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_hash(),
         arb_small_u64(),
         proptest::collection::vec(
-            (
-                proptest::option::of(any::<u32>()),
-                proptest::option::of(arb_small_string()),
-                arb_small_string(),
-            )
-                .prop_map(|(import_index, upstream_tool_name, reason)| {
-                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
-                        golem_common::model::deployment::McpImportDiscovery {
-                            import_index,
-                            upstream_tool_name,
-                            reason,
-                        },
-                    )
-                }),
+            prop_oneof![
+                (
+                    proptest::option::of(any::<u32>()),
+                    proptest::option::of(arb_small_string()),
+                    arb_small_string(),
+                )
+                    .prop_map(|(import_index, upstream_tool_name, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                            golem_common::model::deployment::McpImportDiscovery {
+                                import_index,
+                                upstream_tool_name,
+                                reason,
+                            },
+                        )
+                    }),
+                (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+                    |(agent_type, path, reason)| {
+                        golem_common::model::deployment::DeployValidationWarning::IncompatibleConstructorChange(
+                            golem_common::model::deployment::IncompatibleConstructorChange {
+                                agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                                path,
+                                reason,
+                            },
+                        )
+                    }
+                ),
+            ],
             0..4,
         ),
     )
@@ -7023,7 +7088,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
         proptest::option::of(arb_url_string()),
         any::<bool>(),
         proptest::option::of(any::<bool>()),
-        arb_format_string(),
+        arb_format(),
     )
         .prop_map(
             |(is_active, name, url, worker_url, allow_insecure, authenticated, default_format)| {
@@ -7035,11 +7100,7 @@ fn arb_profile_view() -> BoxedStrategy<crate::model::config::ProfileView> {
                         .map(|url| url.parse().expect("generated URL should parse")),
                     allow_insecure,
                     authenticated,
-                    config: crate::config::ProfileConfig {
-                        default_format: default_format
-                            .parse()
-                            .expect("generated format should parse"),
-                    },
+                    config: crate::config::ProfileConfig { default_format },
                 }
             },
         )

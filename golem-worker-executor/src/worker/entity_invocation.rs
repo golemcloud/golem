@@ -1248,11 +1248,13 @@ where
 mod tests {
     use super::*;
     use golem_common::model::AgentId;
+    use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use std::sync::Mutex;
     use test_r::test;
+    use uuid::Uuid;
 
     fn cleanup_operation() -> (
         Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
@@ -1401,7 +1403,10 @@ mod tests {
 
         let (owner, operation) = cleanup_operation();
         assert!(operation.begin_cancel());
-        operation.resolve_cancel(true).await;
+        operation
+            .resolve_cancel(crate::durable_host::tool::operation::TerminalResolution::Committed)
+            .await
+            .unwrap();
         retained_cleanup_failure::<crate::workerctx::default::Context>(
             Some(operation.clone()),
             anyhow::anyhow!("cleanup after cancellation"),
@@ -1815,9 +1820,9 @@ mod tests {
                 },
             ),
             InvocationExecutionMode::Live,
-            golem_common::model::IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
             false,
-            golem_common::model::IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
         )
         .unwrap();
         let registration = slot.register(&scope, Default::default()).unwrap();

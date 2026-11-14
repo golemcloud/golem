@@ -70,12 +70,15 @@ import zio.blocks.schema.Schema
 
 case class WorkResult(value: String) derives Schema
 case class PromiseRef(componentHigh: String, componentLow: String,
-                      agent: String, oplogIndex: String) derives Schema {
+                      agent: String, fingerprintHigh: String, fingerprintLow: String,
+                      oplogIndex: String) derives Schema {
   def toHost: PromiseId = HostApi.PromiseIdLiteral(
     HostApi.AgentIdLiteral(
       HostApi.ComponentIdLiteral(HostApi.UuidLiteral(
         scala.scalajs.js.BigInt(componentHigh), scala.scalajs.js.BigInt(componentLow))),
       agent),
+    HostApi.UuidLiteral(
+      scala.scalajs.js.BigInt(fingerprintHigh), scala.scalajs.js.BigInt(fingerprintLow)),
     scala.scalajs.js.BigInt(oplogIndex))
 }
 
@@ -84,6 +87,8 @@ object PromiseRef {
     pid.agentId.componentId.uuid.highBits.toString,
     pid.agentId.componentId.uuid.lowBits.toString,
     pid.agentId.agentId,
+    pid.fingerprint.highBits.toString,
+    pid.fingerprint.lowBits.toString,
     pid.oplogIdx.toString)
 }
 

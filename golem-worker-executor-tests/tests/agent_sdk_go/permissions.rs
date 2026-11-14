@@ -391,6 +391,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
+        principal: Principal,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -398,6 +399,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
+                principal,
                 auth_ctx,
             )
             .await
@@ -429,7 +431,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
@@ -437,10 +439,23 @@ impl WorkerProxy for LocalCardDeliveryProxy {
             .await
     }
 
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &golem_common::model::OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: golem_common::model::agent::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+    }
+
     async fn lookup_invocation_status(
         &self,
         agent_id: &AgentId,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         environment_id: Option<EnvironmentId>,
         auth_ctx: &AuthCtx,
     ) -> Result<InvocationStatus, WorkerProxyError> {
@@ -454,7 +469,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
         component_revision: ComponentRevision,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: golem_common::model::InvocationId,
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,

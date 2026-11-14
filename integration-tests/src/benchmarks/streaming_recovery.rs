@@ -22,7 +22,7 @@ use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
@@ -32,7 +32,7 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, IdempotencyKey, PromiseId};
+use golem_common::model::{AgentId, InvocationId, PromiseId};
 use golem_common::schema::FromSchema;
 #[cfg(test)]
 use golem_common::schema::{SchemaGraph, SchemaType};
@@ -80,7 +80,7 @@ pub struct RecoveryIteration {
     environment: String,
     deadline: tokio::time::Instant,
     warm_agent: Option<AgentId>,
-    agents: Vec<ParsedAgentId>,
+    agents: Vec<ParsedAgentKey>,
     gates: Vec<PromiseId>,
     expected: Vec<Vec<(u32, u32)>>,
     streams: Vec<Vec<StreamId>>,
@@ -103,10 +103,9 @@ async fn phase<T>(
         .map_err(|e| error(name, format!("{e:#}")))
 }
 
-fn session_key(report: &SessionCheckpoint) -> anyhow::Result<IdempotencyKey> {
+fn session_key(report: &SessionCheckpoint) -> anyhow::Result<InvocationId> {
     report
         .idempotency_key
-        .clone()
         .context("missing accepted invocation key")
 }
 
@@ -115,7 +114,7 @@ fn worker(iteration: &RecoveryIteration, index: usize) -> anyhow::Result<AgentId
         .map_err(anyhow::Error::msg)
 }
 
-fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<IdempotencyKey>> {
+fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<InvocationId>> {
     let mut keys = Vec::new();
     for entry in history {
         if let PublicOplogEntry::StreamSession(session) = &entry.entry
@@ -124,7 +123,7 @@ fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<Id
                     .map_err(anyhow::Error::msg)?
         {
             ensure!(finished.result.is_ok(), "producer session failed");
-            keys.push(finished.session_key.idempotency_key().clone());
+            keys.push(*finished.session_key.idempotency_key());
         }
     }
     Ok(keys)
@@ -133,7 +132,7 @@ fn finished_keys(history: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Vec<Id
 async fn wait_finished(
     iteration: &RecoveryIteration,
     index: usize,
-    expected: &[IdempotencyKey],
+    expected: &[InvocationId],
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
     let id = worker(iteration, index)?;
     loop {
@@ -269,7 +268,7 @@ fn validate_report(
 
 fn validate_execution(
     history: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &InvocationId,
 ) -> anyhow::Result<()> {
     let starts = history
         .iter()
@@ -277,7 +276,7 @@ fn validate_execution(
             matches!(&entry.entry,
         PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
-                if &invocation.idempotency_key == key))
+                if &invocation.invocation_id == key))
         })
         .count();
     ensure!(
@@ -289,7 +288,7 @@ fn validate_execution(
     for entry in history {
         match &entry.entry {
             PublicOplogEntry::AgentInvocationStarted(start) => {
-                current_is_target = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation) if &invocation.idempotency_key == key);
+                current_is_target = matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation) if &invocation.invocation_id == key);
             }
             PublicOplogEntry::AgentInvocationFinished(_) if current_is_target => {
                 finishes += 1;

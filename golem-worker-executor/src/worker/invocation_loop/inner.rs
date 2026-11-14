@@ -1,12 +1,18 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl SelectedWork {
     pub(super) fn next(
         queue: &mut VecDeque<QueuedWorkerInvocation>,
         status: Arc<AgentStatusRecord>,
-        constructor_key: Option<&IdempotencyKey>,
+        constructor_key: Option<&InvocationId>,
         filesystem_turn_used: &mut bool,
+        now: Timestamp,
     ) -> Self {
+        let next_pending = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.is_due(now));
         let filesystem_request = matches!(
             queue.front(),
             Some(
@@ -18,13 +24,9 @@ impl SelectedWork {
         // constructor completes during replay instead of remaining in the pending queue.
         let needs_initialization = filesystem_request
             && constructor_key.is_some_and(|key| {
-                status
-                    .pending_invocations
-                    .first()
-                    .is_some_and(|pending| pending.has_idempotency_key(key))
+                next_pending.is_some_and(|pending| pending.has_idempotency_key(key))
             });
-        let pending_work =
-            !status.pending_updates.is_empty() || !status.pending_invocations.is_empty();
+        let pending_work = status.has_pending_work(now);
         let yield_filesystem_turn = filesystem_request && *filesystem_turn_used && pending_work;
         if !needs_initialization
             && !yield_filesystem_turn
@@ -39,7 +41,7 @@ impl SelectedWork {
         if !status.pending_updates.is_empty() {
             return Self::ApplyPendingUpdate;
         }
-        if let Some(pending) = status.pending_invocations.first() {
+        if let Some(pending) = next_pending {
             return Self::Durable(pending.clone());
         }
         Self::Idle(status)
@@ -264,8 +266,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
 
         let status = self.parent.get_last_known_status().await;
-        !status.pending_updates.is_empty()
-            || !status.pending_invocations.is_empty()
+        status.has_pending_work(Timestamp::now_utc())
             || !matches!(
                 self.periodic_snapshot_action(&status),
                 PeriodicSnapshotAction::NotNeeded
@@ -312,6 +313,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             status,
             constructor_key.as_ref(),
             &mut self.filesystem_turn_used,
+            Timestamp::now_utc(),
         ))
     }
 
@@ -494,7 +496,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 // and re-acquire its permit through the FIFO queue if
                 // more durable work remains.
                 let status = self.parent.get_last_known_status().await;
-                if !status.pending_invocations.is_empty() {
+                let now = Timestamp::now_utc();
+                if status
+                    .pending_invocations
+                    .iter()
+                    .any(|pending| pending.is_due(now))
+                {
                     // More durable work remains — self-wake so we return
                     // to the outer loop, release the permit (entering
                     // idle), and re-enter through the scheduler queue.

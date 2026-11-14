@@ -69,7 +69,7 @@ func params(vals ...types.SchemaValueNode) types.SchemaValueTree {
 func initAgent(t *testing.T) {
 	t.Helper()
 	active = nil // fresh instance per test
-	res := guestExports.Initialize("TestCounter", params(types.MakeSchemaValueNodeStringValue("x")), common.MakePrincipalAnonymous())
+	res := guestExports.Initialize("TestCounter", params(types.MakeSchemaValueNodeStringValue("x")))
 	if res.IsErr() {
 		t.Fatalf("initialize failed: %v", res.Err())
 	}
@@ -77,7 +77,7 @@ func initAgent(t *testing.T) {
 
 func invokeInt(t *testing.T, method string, in types.SchemaValueTree) int64 {
 	t.Helper()
-	res := guestExports.Invoke(method, in, common.MakePrincipalAnonymous())
+	res := guestExports.Invoke(method, in)
 	if res.IsErr() {
 		t.Fatalf("%s errored: %v", method, res.Err())
 	}
@@ -101,7 +101,7 @@ func TestCounterRoundTrip(t *testing.T) {
 		t.Fatalf("value = %d, want 6", got)
 	}
 	// reset returns unit => ok(none); bound via a method expression
-	res := guestExports.Invoke("reset", params(), common.MakePrincipalAnonymous())
+	res := guestExports.Invoke("reset", params())
 	if res.IsErr() || !res.Ok().IsNone() {
 		t.Fatal("reset should succeed and return none (unit output)")
 	}
@@ -176,7 +176,7 @@ func TestDiscoverAgentTypes(t *testing.T) {
 
 func TestHandlerPanicReturnsAnAttributedMethodError(t *testing.T) {
 	initAgent(t)
-	res := guestExports.Invoke("boom", params(), common.MakePrincipalAnonymous())
+	res := guestExports.Invoke("boom", params())
 	if !res.IsErr() || res.Err().Tag() != common.AgentErrorCustomError {
 		t.Fatalf("handler panic must return a custom error, got %v", res)
 	}
@@ -191,12 +191,12 @@ func TestHandlerPanicReturnsAnAttributedMethodError(t *testing.T) {
 
 func TestUnknownMethodAndBadInputAreDistinguished(t *testing.T) {
 	initAgent(t)
-	res := guestExports.Invoke("nope", params(), common.MakePrincipalAnonymous())
+	res := guestExports.Invoke("nope", params())
 	if !res.IsErr() || res.Err().Tag() != common.AgentErrorInvalidMethod {
 		t.Fatal("unknown method should map to invalid-method")
 	}
 	// add expects an s64; hand it a string instead
-	bad := guestExports.Invoke("add", params(types.MakeSchemaValueNodeStringValue("nope")), common.MakePrincipalAnonymous())
+	bad := guestExports.Invoke("add", params(types.MakeSchemaValueNodeStringValue("nope")))
 	if !bad.IsErr() || bad.Err().Tag() != common.AgentErrorInvalidInput {
 		t.Fatalf("malformed input should map to invalid-input, got tag %d", bad.Err().Tag())
 	}
@@ -254,13 +254,12 @@ func init() {
 
 func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 	active = nil
-	res := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("> ")),
-		common.MakePrincipalAnonymous())
+	res := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("> ")))
 	if res.IsErr() {
 		t.Fatalf("initialize failed: %v", res.Err())
 	}
 	// constructor params reached the state
-	out := guestExports.Invoke("say", params(types.MakeSchemaValueNodeStringValue("hi")), common.MakePrincipalAnonymous())
+	out := guestExports.Invoke("say", params(types.MakeSchemaValueNodeStringValue("hi")))
 	if out.IsErr() {
 		t.Fatalf("say errored: %v", out.Err())
 	}
@@ -269,7 +268,7 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 		t.Fatalf("say = %q, want %q", got, "> hi")
 	}
 	// the other agent's methods are not reachable from this worker
-	if r := guestExports.Invoke("increment", params(), common.MakePrincipalAnonymous()); !r.IsErr() {
+	if r := guestExports.Invoke("increment", params()); !r.IsErr() {
 		t.Fatal("TestCounter's method must not be invocable on a TestEcho worker")
 	}
 	// get-definition reports the agent this worker was initialized as
@@ -277,13 +276,12 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 		t.Fatalf("definition = %q mode %d, want TestEcho/ephemeral", def.TypeName, def.Mode)
 	}
 	// initializing twice is refused
-	if again := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("x")),
-		common.MakePrincipalAnonymous()); !again.IsErr() {
+	if again := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("x"))); !again.IsErr() {
 		t.Fatal("re-initializing an already-initialized worker must fail")
 	}
 	// unknown agent type
 	active = nil
-	if bad := guestExports.Initialize("NoSuchAgent", params(), common.MakePrincipalAnonymous()); !bad.IsErr() ||
+	if bad := guestExports.Initialize("NoSuchAgent", params()); !bad.IsErr() ||
 		bad.Err().Tag() != common.AgentErrorInvalidType {
 		t.Fatal("unknown agent type should map to invalid-type")
 	}
@@ -297,12 +295,11 @@ var tPay = tEcho.Method[Unit, PaymentMethod]("pay")
 
 func TestVariantTypedMethodOutputRoundTripsThroughTheExports(t *testing.T) {
 	active = nil
-	if res := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("> ")),
-		common.MakePrincipalAnonymous()); res.IsErr() {
+	if res := guestExports.Initialize("TestEcho", params(types.MakeSchemaValueNodeStringValue("> "))); res.IsErr() {
 		t.Fatalf("initialize failed: %v", res.Err())
 	}
 
-	out := guestExports.Invoke("pay", params(), common.MakePrincipalAnonymous())
+	out := guestExports.Invoke("pay", params())
 	if out.IsErr() {
 		t.Fatalf("pay errored: %v", out.Err())
 	}

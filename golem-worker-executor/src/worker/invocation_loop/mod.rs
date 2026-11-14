@@ -40,7 +40,7 @@ use crate::worker::filesystem_snapshots::{
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, LoweredInvocation, invocation_uses_streams,
+    InvokeResult, LoweredInvocation, invocation_uses_streams, invoke_live_observed_and_traced,
     invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::monthly_limits::ExecutionWindow;
@@ -49,14 +49,15 @@ use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
     PendingLiveInvocationDisposition, PendingWorkerInterrupt, PreparedAgent,
     QueuedWorkerInvocation, RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker,
-    UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook, WorkerTrace,
+    StartupFailure, UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook,
+    WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
 use futures::FutureExt;
 use futures::channel::oneshot::{self, Sender};
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentKey};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::filesystem::{FileByteSelection, FileReadError};
 use golem_common::model::oplog::{
@@ -65,7 +66,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId,
+    OwnedAgentId,
 };
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
@@ -75,6 +76,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
+use uuid::Uuid;
 
 use golem_common::model::agent::structural_format::format_structural_typed;
 use golem_common::related_span;
@@ -90,7 +92,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
-use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -119,6 +120,7 @@ mod invocation;
 mod permits;
 mod snapshots;
 mod startup;
+pub use startup::{EphemeralStart, ephemeral_inspection_may_start, ephemeral_start_decision};
 mod unload;
 
 use commands::apply_delayed_retry_commands_after_unload;
@@ -215,6 +217,9 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
+    /// An ephemeral agent that never started has no due work; it stays unloaded with its
+    /// pending entries.
+    NotRunnable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -516,7 +521,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         None,
                         self.oom_retry_count,
                         pending_startup_attempt,
@@ -596,6 +601,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.release_concurrent_agent_permit();
                     break;
                 }
+                CreateInstanceResult::NotRunnable => {
+                    self.release_concurrent_agent_permit();
+                    self.parent.complete_startup(self.start_attempt, Ok(()));
+                    // Queued inspection requests would otherwise wait for a start that comes at the
+                    // deadline at the earliest, and never once the scheduled work was withdrawn.
+                    self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                        .await;
+                    self.parent
+                        .restart_if_ephemeral_start_became_runnable()
+                        .await;
+                    break;
+                }
             };
             self.permit_state.install_window(window);
             if let PreparedAgent::Resident(agent) = &prepared {
@@ -644,6 +661,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     if !self.active.read().await.is_empty() {
                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
                     }
+                    let last_state_change = match self.parent.snapshot_policy() {
+                        SnapshotPolicy::Periodic { .. } => agent
+                            .runtime
+                            .store
+                            .lock()
+                            .await
+                            .data()
+                            .durable_ctx()
+                            .last_state_change(),
+                        SnapshotPolicy::EveryNInvocation { .. } | SnapshotPolicy::Disabled => None,
+                    };
                     let mut inner_loop = InnerInvocationLoop {
                         start_attempt: self.start_attempt,
                         receiver: &mut self.receiver,
@@ -657,6 +685,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         filesystem: &agent.filesystem,
                         filesystem_snapshot_slot: &self.filesystem_snapshot_slot,
                         last_periodic_attempt: &mut self.last_periodic_attempt,
+                        last_state_change,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
                         filesystem_turn_used: false,
@@ -1090,8 +1119,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_last_known_status()
                                             .await
-                                            .current_idempotency_key
-                                            .clone();
+                                            .current_idempotency_key;
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {
@@ -1180,7 +1208,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
                     if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
-                        true,
+                        crate::worker::StopOrigin::InvocationLoop,
                         delay,
                         self.oom_retry_count + 1,
                         pending_startup_attempt,
@@ -1228,6 +1256,12 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// policy reads it: the next periodic snapshot waits a period from it, whether the last one
     /// wrote a record or not, and however long it took.
     last_periodic_attempt: &'a mut Option<Timestamp>,
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of the Store that
+    /// can change the state of the agent, replayed or live, as
+    /// `DurableWorkerCtx::last_state_change` gives it. Only the `Periodic` policy sets and reads
+    /// it: a periodic snapshot is needed only when it is after the automatic snapshot record that a
+    /// start would select.
+    last_state_change: Option<OplogIndex>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     filesystem_turn_used: bool,

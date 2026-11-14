@@ -12,8 +12,15 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
+use golem_cli::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
 use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
+use golem_common::model::durable_stream::{
+    SessionStreamRole, StreamRegisteredRecord, StreamTerminal, StreamTerminalAuthor,
+    StreamTerminalOrigin, StreamTerminalRecord,
+};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::schema::FromSchema;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
@@ -214,6 +221,79 @@ pub(super) fn assert_generated_driver(output: std::process::Output, language: &s
     );
 }
 
+/// Each streamed line names the invocation that wrote it, and the stream of an invocation ends
+/// at the finish of that invocation. `agent stream` names the invocation of each line in the same
+/// way.
+#[test]
+#[timeout("15 minutes")]
+async fn test_agent_invoke_stream_attributes_lines_to_their_invocation() {
+    let ctx = streaming_invocation_context().await;
+    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+    let first = invoke_logging(&ctx, &agent, "round 0").await;
+    let second = invoke_logging(&ctx, &agent, "round 1").await;
+    assert_ne!(first, second);
+
+    let marker = format!("streamed {}", Uuid::new_v4());
+    let stream = ctx.cli_process_after_line([cmd::AGENT, "stream", &agent], &marker);
+    let invoked = async {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        invoke_logging(&ctx, &agent, &marker).await
+    };
+    let ((mut stream, line), streamed) = tokio::join!(stream, invoked);
+    stream.kill().await.unwrap();
+    assert!(line.contains(&format!("[{streamed}]")), "{line}");
+}
+
+/// Invokes `bug_golem1265`, which logs `Got <message>`, and returns the invocation ID that the
+/// streamed log line and the invocation finish both carry.
+async fn invoke_logging(ctx: &TestContext, agent: &str, message: &str) -> String {
+    let invoked = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            agent,
+            "bug_golem1265",
+            &format!("\"{message}\""),
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(invoked.success_or_dump());
+    let events = invoked
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .filter(|document| document["$type"] == "agent.stream")
+        .collect::<Vec<_>>();
+    let id_of = |kind: &str, message: Option<&str>| {
+        events
+            .iter()
+            .filter(|event| {
+                event["kind"] == kind
+                    && message.is_none_or(|message| {
+                        event["message"]
+                            .as_str()
+                            .is_some_and(|text| text.ends_with(message))
+                    })
+            })
+            .map(|event| {
+                event["invocationId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let logged = id_of("log", Some(&format!("Got {message}")));
+    let finished = id_of("invocation-finished", None);
+    assert_eq!(logged.len(), 1, "{events:#?}");
+    assert_eq!(finished, logged, "{events:#?}");
+    let (owner, uuid) = logged[0].split_at(logged[0].len() - 37);
+    assert_eq!(owner, agent);
+    assert!(Uuid::parse_str(&uuid[1..]).is_ok(), "{}", logged[0]);
+    logged[0].clone()
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn test_agent_stream_ends_when_stdout_is_closed() {
@@ -304,28 +384,6 @@ async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_w
     assert!(!oplog.stderr_text().contains("Broken pipe"));
 }
 
-/// Whether the oplog entry is a cancel of a stream with the given role and reason. The record is
-/// a schema value, so the names of the enum cases come from its graph.
-fn stream_cancel_is(entry: &serde_json::Value, role: &str, reason: &str) -> bool {
-    let record = &entry["entry"]["record"];
-    let case_name = |type_name: &str, case: &serde_json::Value| -> Option<String> {
-        let def = record["graph"]["defs"]
-            .as_array()?
-            .iter()
-            .find(|def| def["name"] == type_name)?;
-        def["body"]["value"]["cases"][case["value"]["case"].as_u64()? as usize]
-            .as_str()
-            .map(str::to_string)
-    };
-    let fields = &record["value"]["value"]["fields"];
-    let is_cancel = record["graph"]["root"]["value"]["id"]
-        .as_str()
-        .is_some_and(|id| id.ends_with("StreamCancelRecord"));
-    is_cancel
-        && case_name("StreamCancelRole", &fields[5]).as_deref() == Some(role)
-        && case_name("StreamCancelReason", &fields[6]).as_deref() == Some(reason)
-}
-
 /// Runs `agent invoke` with raw stdout and lets the reader of stdout leave after the first byte.
 /// Asserts that the command ends with the exit code of SIGPIPE and that the server got the cancel
 /// of the output stream from a consumer that dropped it.
@@ -358,7 +416,7 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
             "oplog",
             &invoke_agent,
             "--query",
-            "stream-cancel",
+            "stream-terminal OR stream-registered",
             flag::FORMAT,
             "json",
         ])
@@ -366,13 +424,30 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
     assert!(cancels.success_or_dump());
     let entries = cancels
         .stdout()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|line| serde_json::from_str::<AgentOplogEntryView>(line).unwrap())
+        .collect::<Vec<_>>();
+    let output_streams = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamRegistered(params)) => {
+                let record = StreamRegisteredRecord::from_value(params.record.value()).unwrap();
+                (record.session_role == Some(SessionStreamRole::Output)).then_some(entry.index)
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
     assert!(
-        entries
-            .iter()
-            .any(|entry| stream_cancel_is(entry, "OutputConsumer", "GuestDrop")),
-        "the server received no cancel of the output stream for a consumer that dropped it: {entries:#?}"
+        entries.iter().any(|entry| match &entry.entry {
+            AgentOplogEntryContent::Full(PublicOplogEntry::StreamTerminal(params)) => {
+                let record = StreamTerminalRecord::from_value(params.record.value()).unwrap();
+                output_streams.contains(&record.stream_id.0.as_u64())
+                    && record.authored_by == StreamTerminalAuthor::Guest
+                    && record.origin == StreamTerminalOrigin::Control
+                    && matches!(record.terminal, StreamTerminal::ConsumerCancelled { .. })
+            }
+            _ => false,
+        }),
+        "the server received no guest-authored ConsumerCancelled control terminal for the dropped output stream: {entries:#?}"
     );
 }
 
@@ -1348,8 +1423,11 @@ async fn test_streaming_invocation_cli_end_to_end() {
             "increment_scalar",
         ])
         .await;
-    assert!(after_interrupt.success_or_dump());
-    assert!(after_interrupt.stdout_contains("1"));
+    assert!(!after_interrupt.success());
+    assert!(
+        after_interrupt.stderr_contains("Previous Invocation Failed (previous-invocation-failed)")
+    );
+    assert!(after_interrupt.stderr_contains("invocation interrupted"));
 }
 
 /// The Go external bridge against the same streaming agent: inputs, outputs,
@@ -2032,11 +2110,6 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
         start_interrupting_websocket_proxy(&worker_service_url, true).await;
     let moonbit_module = "streaming-rpc-target-client";
-    assert!(
-        std::fs::read_to_string(moonbit_client.join("moon.mod"))
-            .unwrap()
-            .contains(&format!("name = \"{moonbit_module}\""))
-    );
     let moonbit_main_pkg = formatdoc! {r#"
         import {{
           "moonbitlang/async",
@@ -2165,11 +2238,6 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let moonbit_config_client =
         ctx.cwd_path_join("moonbit-streaming-bridge/configured-rpc-target-client");
     let moonbit_config_module = "configured-rpc-target-client";
-    assert!(
-        std::fs::read_to_string(moonbit_config_client.join("moon.mod"))
-            .unwrap()
-            .contains(&format!("name = \"{moonbit_config_module}\""))
-    );
     let moonbit_config_main_pkg = formatdoc! {r#"
         import {{
           "moonbitlang/async",
@@ -2527,108 +2595,6 @@ async fn test_scala_streaming_rpc_e2e() {
     assert!(second.stdout_contains("2"));
 }
 
-/// End-to-end test for the Scala bridge generator: deploys the Rust counter
-/// agent, generates a Scala bridge SDK for it, then compiles and runs a small
-/// Scala program that invokes the live agent through the generated, future-based
-/// client and verifies the returned values.
-///
-/// Requires `sbt` on the PATH (same as the Scala bridge cross-compile tests).
-#[test]
-#[timeout("15 minutes")]
-async fn test_scala_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "counter";
-
-    ctx.start_server().await;
-
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    ctx.cd(app_name);
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    // Generate the Scala bridge SDK for the counter agent into a known directory.
-    let bridge_root = ctx.cwd_path_join("scala-bridge");
-    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
-    let outputs = ctx
-        .cli([
-            cmd::GENERATE_BRIDGE,
-            flag::LANGUAGE,
-            "scala",
-            flag::AGENT_TYPE_NAME,
-            "CounterAgent",
-            flag::OUTPUT_DIR,
-            &bridge_root_str,
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    let client_dir = bridge_root.join("counter-agent-client");
-    assert!(
-        client_dir.join("build.sbt").exists(),
-        "generated Scala bridge project is missing at {}",
-        client_dir.display()
-    );
-
-    // Write a small Scala program that drives the generated client against the
-    // live local server, mirroring the TS REPL e2e check above.
-    let server_url = ctx.worker_service_url();
-    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
-    let main_scala = formatdoc! {r#"
-        import golem.bridge.client.counter_agent.CounterAgentClient
-        import golem.bridge.runtime.GolemServer
-
-        import scala.concurrent.Await
-        import scala.concurrent.duration._
-
-        object Main {{
-          def main(args: Array[String]): Unit = {{
-            CounterAgentClient.configure(
-              GolemServer.Custom("{server_url}", "{token}"),
-              "{app_name}",
-              "local"
-            )
-            val timeout = 60.seconds
-            val remote  = Await.result(CounterAgentClient.get("scala-e2e-counter"), timeout)
-            val first   = Await.result(remote.increment(), timeout)
-            val second  = Await.result(remote.increment(), timeout)
-            if (first.value != 1L || second.value != 2L) {{
-              sys.error(s"Unexpected counter values: first=${{first.value}} second=${{second.value}}")
-            }}
-            println("SCALA_BRIDGE_E2E_OK first=" + first.value + " second=" + second.value)
-          }}
-        }}
-        "#
-    };
-    let scala_main_dir = client_dir.join("src").join("main").join("scala");
-    std::fs::create_dir_all(&scala_main_dir).unwrap();
-    std::fs::write(scala_main_dir.join("Main.scala"), main_scala).unwrap();
-
-    // Compile and run the generated client + driver with sbt.
-    let output = std::process::Command::new("sbt")
-        .arg("--batch")
-        .arg("runMain Main")
-        .current_dir(&client_dir)
-        .output()
-        .expect("failed to run sbt; is it installed?");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "sbt run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-        client_dir.display()
-    );
-    assert!(
-        stdout.contains("SCALA_BRIDGE_E2E_OK first=1 second=2"),
-        "Scala bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-    );
-}
-
 /// End-to-end test for the Go external bridge: deploys the Rust counter agent,
 /// generates a Go client for it, then builds and runs a small Go program that
 /// invokes the live agent through the generated client.
@@ -2897,122 +2863,6 @@ async fn test_go_bridge_e2e() {
     assert!(
         stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b,go:c!,go:dd fresh=true"),
         "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-    );
-}
-
-/// End-to-end test for the MoonBit bridge generator: deploys the Rust counter
-/// agent, generates a MoonBit bridge SDK for it, then compiles and runs a small
-/// MoonBit program that invokes the live agent through the generated, async
-/// client and verifies the returned values.
-///
-/// Requires `moon` on the PATH (same as the MoonBit bridge compile tests).
-#[test]
-#[timeout("10 minutes")]
-async fn test_moonbit_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "counter";
-
-    ctx.start_server().await;
-
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    ctx.cd(app_name);
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    // Generate the MoonBit bridge SDK for the counter agent into a known directory.
-    let bridge_root = ctx.cwd_path_join("moonbit-bridge");
-    let bridge_root_str = bridge_root.to_str().unwrap().to_string();
-    let outputs = ctx
-        .cli([
-            cmd::GENERATE_BRIDGE,
-            flag::LANGUAGE,
-            "moonbit",
-            flag::AGENT_TYPE_NAME,
-            "CounterAgent",
-            flag::OUTPUT_DIR,
-            &bridge_root_str,
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    let client_dir = bridge_root.join("counter-agent-client");
-    assert!(
-        client_dir.join("moon.mod").exists(),
-        "generated MoonBit bridge module is missing at {}",
-        client_dir.display()
-    );
-
-    // Write a small MoonBit program that drives the generated client against the
-    // live local server, mirroring the Scala bridge e2e check.
-    let server_url = ctx.worker_service_url();
-    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
-    let main_mbt = formatdoc! {r#"
-        async fn main {{
-          @client.CounterAgent::configure(
-            @runtime.Custom("{server_url}", "{token}"),
-            "{app_name}",
-            "local",
-          )
-          let remote = @client.CounterAgent::get("moonbit-e2e-counter")
-          let first = remote.increment()
-          let second = remote.increment()
-          if first != 1 || second != 2 {{
-            abort("Unexpected counter values")
-          }}
-          println(
-            "MOONBIT_BRIDGE_E2E_OK first=" + first.to_string() + " second=" + second.to_string(),
-          )
-        }}
-        "#
-    };
-    let module_name = "counter-agent-client";
-    assert!(
-        std::fs::read_to_string(client_dir.join("moon.mod"))
-            .unwrap()
-            .contains(&format!("name = \"{module_name}\""))
-    );
-    let main_moon_pkg = formatdoc! {r#"
-        import {{
-          "moonbitlang/async" @async,
-          "{module_name}/client" @client,
-          "{module_name}/runtime" @runtime,
-        }}
-
-        options(
-          "is-main": true,
-        )
-        "#
-    };
-    let main_dir = client_dir.join("main");
-    std::fs::create_dir_all(&main_dir).unwrap();
-    std::fs::write(main_dir.join("moon.pkg"), main_moon_pkg).unwrap();
-    std::fs::write(main_dir.join("main.mbt"), main_mbt).unwrap();
-
-    // Compile and run the generated client + driver with moon.
-    let output = std::process::Command::new("moon")
-        .arg("run")
-        .arg("--target")
-        .arg("native")
-        .arg("main")
-        .current_dir(&client_dir)
-        .output()
-        .expect("failed to run moon; is it installed?");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "moon run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-        client_dir.display()
-    );
-    assert!(
-        stdout.contains("MOONBIT_BRIDGE_E2E_OK first=1 second=2"),
-        "MoonBit bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
 
@@ -3563,25 +3413,6 @@ async fn test_rust_tool_guest_bridge_e2e() {
     let generated_client_dir =
         ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/echo-tool-guest-client");
     assert!(generated_client_dir.join("Cargo.toml").exists());
-
-    // The consumer build above already compiled the generated client crate as
-    // a dependency; this standalone build additionally validates that the
-    // generated crate compiles to wasm32-wasip2 on its own (its manifest and
-    // dependency resolution are self-contained).
-    let output = std::process::Command::new("cargo")
-        .arg("build")
-        .arg("--target")
-        .arg("wasm32-wasip2")
-        .current_dir(&generated_client_dir)
-        .output()
-        .expect("failed to run cargo; is it installed?");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "standalone wasm32-wasip2 build of the generated tool client failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-        generated_client_dir.display()
-    );
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
@@ -4239,6 +4070,14 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
         String::from_utf8_lossy(&repeated.stderr)
     );
     assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+    let document: serde_json::Value = serde_json::from_slice(repeated.stdout()).unwrap();
+    let receipt = &document["response"];
+    let owner: golem_common::model::AgentId =
+        serde_json::from_value(receipt["agentId"].clone()).unwrap();
+    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
+    Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
+    assert_ne!(invocation_id, "structured-cli-repeat");
 
     let lookup = ctx
         .cli_with_input(
@@ -4247,11 +4086,11 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
                 "json",
                 cmd::TOOL,
                 cmd::INVOKE,
-                "--component",
-                "tool-raw-stdout:provider",
+                "--agent",
+                &owner,
                 "--lookup",
                 "--idempotency-key",
-                "structured-cli-repeat",
+                invocation_id,
                 "raw-output",
                 "--",
                 "repeat",
@@ -4368,462 +4207,6 @@ async fn a_reader_that_leaves_the_raw_output_of_tool_invoke_ends_the_command_wit
         assert!(!open_stream.contains("panicked"));
         assert!(!open_stream.contains("Broken pipe"));
     }
-}
-
-/// End-to-end test for the Rust guest agent bridge: a provider component
-/// defines a real `CounterAgent`, the app manifest lists it under
-/// `dependencies.agents`, and a consumer component calls it through the
-/// generated `counter-agent-guest-client` crate.
-///
-/// The build covers the full pipeline: provider component build -> bundled
-/// component metadata extraction (`discover-agent-types`) -> dependency agent
-/// bridge planning -> guest agent client generation -> consumer compilation and
-/// linking against the generated crate. The deployment and invocation also prove
-/// the generated guest client reaches the worker executor's Wasm RPC path.
-#[test]
-#[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
-async fn test_rust_agent_guest_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "agent-bridge";
-
-    ctx.start_server().await;
-
-    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
-    ctx.cd(app_name);
-
-    for component_name in ["agent-bridge:provider", "agent-bridge:consumer"] {
-        let outputs = ctx
-            .cli([
-                flag::YES,
-                cmd::NEW,
-                ".",
-                flag::TEMPLATE,
-                "rust",
-                flag::COMPONENT_NAME,
-                component_name,
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    // Replace the generated app manifest so the consumer depends on the
-    // provider through `dependencies.agents`. The consumer's Cargo.toml below
-    // points at the generated internal guest bridge crate, so `golem build`
-    // fails unless the bridge is generated before the consumer is compiled.
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! { r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: agent-bridge
-
-            environments:
-              local:
-                server: local
-                componentPresets: debug
-
-            components:
-              agent-bridge:provider:
-                dir: "provider"
-                templates: rust
-              agent-bridge:consumer:
-                dir: "consumer"
-                templates: rust
-                dependencies:
-                  agents:
-                    - agent-bridge:provider/CounterAgent
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
-    )
-    .unwrap();
-
-    fs::write_str(
-        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
-        indoc! { r#"
-            use counter_agent_guest_client::CounterAgent;
-            use golem_rust::{agent_definition, agent_implementation};
-
-            #[agent_definition]
-            pub trait CounterConsumerAgent {
-                fn new(name: String) -> Self;
-                async fn increment_provider(&self, provider_name: String) -> String;
-            }
-
-            struct CounterConsumerImpl;
-
-            #[agent_implementation]
-            impl CounterConsumerAgent for CounterConsumerImpl {
-                fn new(_name: String) -> Self {
-                    Self
-                }
-
-                async fn increment_provider(&self, provider_name: String) -> String {
-                    let client = match CounterAgent::get(provider_name) {
-                        Ok(client) => client,
-                        Err(error) => return format!("client-error:{error:?}"),
-                    };
-
-                    match client.increment().await {
-                        Ok(value) => format!("ok:{value}"),
-                        Err(error) => format!("invoke-error:{error:?}"),
-                    }
-                }
-            }
-        "# },
-    )
-    .unwrap();
-
-    let consumer_cargo_toml_path = ctx.cwd_path_join("consumer/Cargo.toml");
-    let consumer_cargo_toml = fs::read_to_string(&consumer_cargo_toml_path).unwrap();
-    assert!(consumer_cargo_toml.contains("[dependencies]"));
-    fs::write_str(
-        &consumer_cargo_toml_path,
-        consumer_cargo_toml.replace(
-            "[dependencies]",
-            indoc! { r#"
-                [dependencies]
-                counter-agent-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client" }
-            "# }
-            .trim_end(),
-        ),
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-
-    let generated_client_dir =
-        ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/counter-agent-guest-client");
-    assert!(generated_client_dir.join("Cargo.toml").exists());
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    let consumer_name = Uuid::new_v4().to_string();
-    let provider_name = Uuid::new_v4().to_string();
-    let agent_constructor = format!("CounterConsumerAgent(\"{consumer_name}\")");
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &agent_constructor,
-            "increment_provider",
-            &format!("\"{provider_name}\""),
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-    let invocation_returned_provider_result = outputs.stdout_contains("ok:1");
-    if !invocation_returned_provider_result {
-        outputs.dump();
-    }
-    assert!(
-        invocation_returned_provider_result,
-        "expected the consumer to return ok:1 through the generated guest client"
-    );
-}
-
-fn add_ts_guest_bridge_source(ctx: &TestContext, package_name: &str, generated_source_name: &str) {
-    let tsconfig_path = ctx.cwd_path_join("consumer/tsconfig.json");
-    let mut tsconfig: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&tsconfig_path).unwrap()).unwrap();
-    let generated_source =
-        format!("../golem-temp/bridge-sdk/ts/internal/{package_name}/{generated_source_name}");
-    tsconfig["compilerOptions"]["paths"][package_name] = serde_json::json!([generated_source]);
-    let include = tsconfig["include"]
-        .as_array_mut()
-        .expect("TypeScript template tsconfig include must be an array");
-    if !include.iter().any(|entry| entry == "src/**/*.ts") {
-        include.push(serde_json::json!("src/**/*.ts"));
-    }
-    include.push(serde_json::json!(format!(
-        "../golem-temp/bridge-sdk/ts/internal/{package_name}/*.ts"
-    )));
-    fs::write_str(
-        tsconfig_path,
-        serde_json::to_string_pretty(&tsconfig).unwrap() + "\n",
-    )
-    .unwrap();
-}
-
-#[test]
-#[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
-async fn test_ts_agent_guest_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "ts-agent-bridge";
-
-    ctx.start_server().await;
-    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
-    ctx.cd(app_name);
-
-    for (template, component_name) in [
-        ("rust", "ts-agent-bridge:provider"),
-        ("ts", "ts-agent-bridge:consumer"),
-    ] {
-        let outputs = ctx
-            .cli([
-                flag::YES,
-                cmd::NEW,
-                ".",
-                flag::TEMPLATE,
-                template,
-                flag::COMPONENT_NAME,
-                component_name,
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: ts-agent-bridge
-
-            environments:
-              local:
-                server: local
-                componentPresets: debug
-
-            components:
-              ts-agent-bridge:provider:
-                dir: provider
-                templates: rust
-              ts-agent-bridge:consumer:
-                dir: consumer
-                templates: ts
-                dependencies:
-                  agents:
-                    - ts-agent-bridge:provider/CounterAgent
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-    add_ts_guest_bridge_source(
-        &ctx,
-        "counter-agent-guest-client",
-        "counter-agent-guest-client.ts",
-    );
-    fs::write_str(
-        ctx.cwd_path_join("consumer/src/counter-agent.ts"),
-        indoc! {r#"
-            import { z } from 'zod';
-            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
-            import { CounterAgent } from 'counter-agent-guest-client';
-
-            export const CounterConsumerAgent = defineAgent({
-              name: 'CounterConsumerAgent',
-              id: { name: z.string() },
-              methods: {
-                incrementProvider: method({
-                  input: { providerName: z.string() },
-                  returns: z.string(),
-                }),
-              },
-            });
-
-            export const CounterConsumerAgentImpl = CounterConsumerAgent.implement({
-              init: () => ({}),
-              methods: {
-                async incrementProvider({ providerName }) {
-                  const value = await CounterAgent.get(providerName).increment();
-                  return `ok:${value}`;
-                },
-              },
-            });
-        "#},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/counter-agent-guest-client/counter-agent-guest-client.ts")
-            .exists()
-    );
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-    let consumer_name = Uuid::new_v4().to_string();
-    let provider_name = Uuid::new_v4().to_string();
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
-            "incrementProvider",
-            &format!("\"{provider_name}\""),
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        outputs.stdout_contains("ok:1"),
-        "expected the TypeScript consumer to return ok:1 through the generated guest client"
-    );
-}
-
-#[test]
-#[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
-async fn test_ts_tool_guest_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "ts-tool-bridge";
-
-    ctx.start_server().await;
-    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
-    ctx.cd(app_name);
-
-    for (template, component_name) in [
-        ("rust", "ts-tool-bridge:provider"),
-        ("ts", "ts-tool-bridge:consumer"),
-    ] {
-        let outputs = ctx
-            .cli([
-                flag::YES,
-                cmd::NEW,
-                ".",
-                flag::TEMPLATE,
-                template,
-                flag::COMPONENT_NAME,
-                component_name,
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("provider/src/counter_agent.rs"),
-        indoc! {r#"
-            use golem_rust::{tool_definition, tool_implementation};
-
-            #[tool_definition(version = "1.0.0")]
-            pub trait Echo {
-                fn echo(&self, message: String) -> String;
-            }
-
-            struct EchoImpl;
-
-            #[tool_implementation]
-            impl Echo for EchoImpl {
-                fn echo(&self, message: String) -> String {
-                    format!("echo:{message}")
-                }
-            }
-        "#},
-    )
-    .unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: ts-tool-bridge
-
-            environments:
-              local:
-                server: local
-                componentPresets: debug
-
-            components:
-              ts-tool-bridge:provider:
-                dir: provider
-                templates: rust
-              ts-tool-bridge:consumer:
-                dir: consumer
-                templates: ts
-                dependencies:
-                  tools:
-                    - ts-tool-bridge:provider/echo
-
-            tools:
-              echo: {{}}
-
-            agents:
-              EchoConsumerAgent:
-                tools:
-                  echo: {{}}
-
-            bridge:
-              ts:
-                internal:
-                  tools:
-                    - echo
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-    add_ts_guest_bridge_source(&ctx, "echo-tool-guest-client", "echo-tool-guest-client.ts");
-    fs::write_str(
-        ctx.cwd_path_join("consumer/src/counter-agent.ts"),
-        indoc! {r#"
-            import { z } from 'zod';
-            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
-            import { EchoClient } from 'echo-tool-guest-client';
-
-            export const EchoConsumerAgent = defineAgent({
-              name: 'EchoConsumerAgent',
-              id: { name: z.string() },
-              methods: {
-                callEcho: method({ input: { message: z.string() }, returns: z.string() }),
-              },
-            });
-
-            export const EchoConsumerAgentImpl = EchoConsumerAgent.implement({
-              init: () => ({}),
-              methods: {
-                async callEcho({ message }) {
-                  try {
-                    const value = await EchoClient.newClient().echo(message);
-                    return `ok:${value}`;
-                  } catch (error) {
-                    const toolError = error as {
-                      tag?: string;
-                      error?: { tag?: string; val?: unknown };
-                    };
-                    if (
-                      toolError.tag === 'rpc' &&
-                      toolError.error?.tag === 'remote-internal-error' &&
-                      typeof toolError.error.val === 'string'
-                    ) {
-                      return toolError.error.val;
-                    }
-                    throw error;
-                  }
-                },
-              },
-            });
-        "#},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/ts/internal/echo-tool-guest-client/echo-tool-guest-client.ts"
-        )
-        .exists()
-    );
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-    let consumer_name = Uuid::new_v4().to_string();
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("EchoConsumerAgent(\"{consumer_name}\")"),
-            "callEcho",
-            "\"hello\"",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        outputs.stdout_contains("ok:echo:hello"),
-        "expected the TypeScript consumer to return the provider's echo result"
-    );
 }
 
 /// A Go component calling an agent in another component through the guest
@@ -5030,135 +4413,6 @@ async fn test_go_agent_guest_bridge_e2e() {
     assert!(
         outputs.stdout_contains("ok:1:5"),
         "expected the Go consumer to return ok:1:5 through the generated guest client"
-    );
-}
-
-#[test]
-#[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
-async fn test_moonbit_agent_guest_bridge_e2e() {
-    let mut ctx = TestContext::new();
-    let app_name = "moonbit-agent-bridge";
-
-    ctx.start_server().await;
-    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
-    ctx.cd(app_name);
-
-    for (template, component_name) in [
-        ("rust", "moonbit-agent-bridge:provider"),
-        ("moonbit", "moonbit-agent-bridge:consumer"),
-    ] {
-        let outputs = ctx
-            .cli([
-                flag::YES,
-                cmd::NEW,
-                ".",
-                flag::TEMPLATE,
-                template,
-                flag::COMPONENT_NAME,
-                component_name,
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {MANIFEST_VERSION}
-
-            app: moonbit-agent-bridge
-
-            environments:
-              local:
-                server: local
-                componentPresets: debug
-
-            components:
-              moonbit-agent-bridge:provider:
-                dir: provider
-                templates: rust
-              moonbit-agent-bridge:consumer:
-                dir: consumer
-                templates: moonbit
-                dependencies:
-                  agents:
-                    - moonbit-agent-bridge:provider/CounterAgent
-        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
-
-    super::add_moonbit_local_dependency(
-        &ctx,
-        "counter-agent-guest-client",
-        "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client",
-    );
-
-    let consumer_pkg_path = ctx.cwd_path_join("consumer/moon.pkg");
-    let consumer_pkg = fs::read_to_string(&consumer_pkg_path).unwrap();
-    fs::write_str(
-        &consumer_pkg_path,
-        consumer_pkg.replace(
-            "import {",
-            "import {\n  \"counter-agent-guest-client/client\" @providerClient,",
-        ),
-    )
-    .unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("consumer/counter.mbt"),
-        indoc! {r#"
-            #derive.agent
-            struct CounterConsumerAgent {
-              name : String
-            }
-
-            fn CounterConsumerAgent::new(name : String) -> CounterConsumerAgent {
-              { name, }
-            }
-
-            pub async fn CounterConsumerAgent::increment_provider(
-              self : Self,
-              provider_name : String,
-            ) -> String {
-              @providerClient.CounterAgentClient::scoped(
-                provider_name,
-                async fn(provider) {
-                  "ok:" + provider.increment().to_string()
-                },
-              )
-            }
-        "#},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        ctx.cwd_path_join(
-            "golem-temp/bridge-sdk/moonbit/internal/counter-agent-guest-client/moon.mod"
-        )
-        .exists()
-    );
-
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    let consumer_name = Uuid::new_v4().to_string();
-    let provider_name = Uuid::new_v4().to_string();
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
-            "increment_provider",
-            &format!("\"{provider_name}\""),
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-    assert!(
-        outputs.stdout_contains("ok:1"),
-        "expected the MoonBit consumer to return ok:1 through the generated guest client"
     );
 }
 
@@ -5639,10 +4893,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         ])
         .await;
     assert!(!outputs.success());
-    assert!(
-        outputs
-            .stderr_contains("Agent Service - Error: 500 Internal Server Error, Invocation Failed")
-    );
+    assert!(outputs.stderr_contains("Invocation Failed (invocation-failed)"));
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.

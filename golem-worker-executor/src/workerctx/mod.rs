@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -57,8 +57,9 @@ use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -324,7 +325,7 @@ pub trait WorkerCtx:
     fn owned_agent_id(&self) -> &OwnedAgentId;
 
     /// Get the agent-id resolved from the worker name
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+    fn parsed_agent_id(&self) -> Option<ParsedAgentKey>;
 
     /// Authoritative persisted execution-owner identity. Authorization and component-scoped
     /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
@@ -449,10 +450,10 @@ pub trait CallCountManagement {
 #[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey);
+    async fn set_current_idempotency_key(&mut self, key: InvocationId);
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey>;
+    async fn get_current_idempotency_key(&self) -> Option<InvocationId>;
 
     /// Sets (overwrites) the current invocation context stack
     async fn set_current_invocation_context(
@@ -492,11 +493,12 @@ pub trait StatusManagement {
 /// successful or failed) of invocations.
 #[async_trait]
 pub trait InvocationHooks {
-    /// Called when a worker is about to be invoked
+    /// Called when a worker is about to be invoked. Returns false if the pending invocation
+    /// was removed before it could start; the caller must skip execution and result persistence.
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> Result<bool, WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
     async fn on_agent_invocation_finished(&mut self);
@@ -571,14 +573,17 @@ pub trait UpdateManagement {
         failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
-    /// update: the agent has been given up, and the update must not be reported as applied.
+    /// Called when an update attempt succeeded. `bootstrap` is the bootstrap range of the target
+    /// revision's core initializer that the update recorded. Fails when the oplog refused to
+    /// record the update: the agent has been given up, and the update must not be reported as
+    /// applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        bootstrap: Option<OplogRegion>,
     ) -> Result<(), WorkerExecutorError>;
 }
 

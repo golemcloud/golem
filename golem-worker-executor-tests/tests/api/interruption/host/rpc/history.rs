@@ -15,7 +15,7 @@ pub(super) struct Call {
 
 pub(super) fn invocation(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     method: &str,
     finished: usize,
 ) -> anyhow::Result<OplogIndex> {
@@ -27,14 +27,14 @@ pub(super) fn invocation(
         match &entry.entry {
             PublicOplogEntry::PendingAgentInvocation(pending) => {
                 if let PublicAgentInvocation::AgentMethodInvocation(call) = &pending.invocation
-                    && &call.idempotency_key == key
+                    && &call.invocation_id == key
                 {
                     ensure!(call.method_name == method);
                     accepted.push(entry.oplog_index);
                 }
             }
             PublicOplogEntry::AgentInvocationStarted(started) => {
-                current = matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(call) if &call.idempotency_key == key && call.method_name == method);
+                current = matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(call) if &call.invocation_id == key && call.method_name == method);
                 if current {
                     starts.push(entry.oplog_index);
                 }
@@ -53,7 +53,7 @@ pub(super) fn invocation(
 
 pub(super) fn caller(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     target: &AgentId,
     asynchronous: bool,
     completed: bool,
@@ -93,10 +93,15 @@ pub(super) fn caller(
             "async RPC Start must carry its span"
         );
     }
+    let golem_common::model::InvocationRequestKey::Internal(target_key) = &request.request_key
+    else {
+        bail!("RPC must carry an internal request key: {request:?}");
+    };
     ensure!(
-        request.idempotency_key == IdempotencyKey::derived(key, start),
+        *target_key == IdempotencyKey::derived(&IdempotencyKey::new(key.to_string()), start),
         "unexpected derived key: {request:?}, {start}"
     );
+    let target_key = target_key.clone();
     let invocation = invocation(entries, key, METHOD, finished)?;
     ensure!(invocation < start);
     terminal(
@@ -109,10 +114,7 @@ pub(super) fn caller(
         entry.entry,
         PublicOplogEntry::Jump(_) | PublicOplogEntry::Revert(_)
     )));
-    Ok(Some(Call {
-        start,
-        target_key: request.idempotency_key,
-    }))
+    Ok(Some(Call { start, target_key }))
 }
 
 pub(super) fn terminal(
@@ -151,7 +153,7 @@ pub(super) fn terminal(
 
 pub(super) fn target(
     entries: &[PublicOplogEntryWithIndex],
-    key: &IdempotencyKey,
+    key: &golem_common::model::InvocationId,
     completed: bool,
 ) -> anyhow::Result<Option<OplogIndex>> {
     let waits: Vec<_> = entries

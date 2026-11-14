@@ -279,6 +279,7 @@ interface oplog {
 
     record agent-invocation-finished-parameters {
         timestamp: datetime,
+        invocation-id: uuid,
         %result: agent-invocation-result,
         method-name: option<string>,
         consumed-fuel: s64,
@@ -294,6 +295,8 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<uuid>,
         error: string,
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
@@ -425,7 +428,7 @@ interface oplog {
     }
 
     record agent-initialization-parameters {
-        idempotency-key: string,
+        invocation-id: uuid,
         constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
@@ -433,7 +436,7 @@ interface oplog {
     }
 
     record agent-method-invocation-parameters {
-        idempotency-key: string,
+        invocation-id: uuid,
         method-name: string,
         function-input: typed-schema-value,
         trace-id: string,
@@ -446,7 +449,7 @@ interface oplog {
     }
 
     record process-oplog-entries-parameters {
-        idempotency-key: string,
+        invocation-id: uuid,
     }
 
     record manual-update-parameters {
@@ -454,7 +457,7 @@ interface oplog {
     }
 
     record external-tool-invocation-parameters {
-        idempotency-key: string,
+        invocation-id: uuid,
         tool-name: string,
         command-path: list<string>,
         input: typed-schema-value,
@@ -505,7 +508,8 @@ interface oplog {
 
     record pending-agent-invocation-parameters {
         timestamp: datetime,
-        invocation: agent-invocation
+        invocation: agent-invocation,
+        not-before: option<datetime>,
     }
 
     variant update-description {
@@ -536,7 +540,9 @@ interface oplog {
         target-revision: component-revision,
         new-component-size: u64,
         new-active-plugins: list<plugin-installation-description>,
-        snapshot-assisted-details: option<snapshot-assisted-update-details>
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record snapshot-assisted-update-details {
@@ -623,7 +629,7 @@ interface oplog {
 
     record cancel-pending-invocation-parameters {
         timestamp: datetime,
-        idempotency-key: string
+        invocation-id: uuid
     }
 
     record begin-remote-transaction-parameters {
@@ -646,6 +652,8 @@ interface oplog {
         data: snapshot-data,
         /// The filesystem snapshot taken with the application snapshot, if any
         filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     /// The store holds the named filesystem snapshot from this point
@@ -665,6 +673,7 @@ interface oplog {
     record oplog-processor-checkpoint-parameters {
         timestamp: datetime,
         plugin: plugin-installation-description,
+        source-component-revision: component-revision,
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
@@ -831,11 +840,26 @@ interface oplog {
         error,
     }
 
+    enum durable-stream-terminal-outcome {
+        finished,
+        failed,
+        consumer-cancelled,
+    }
+
+    enum stream-terminal-origin {
+        source,
+        control,
+    }
+
+    record durable-stream-terminal-summary {
+        outcome: durable-stream-terminal-outcome,
+        origin: stream-terminal-origin,
+    }
+
     variant durable-stream-event-summary {
         registered,
         items(u64),
-        end(durable-stream-outcome),
-        cancelled,
+        terminal(durable-stream-terminal-summary),
         session-result,
         session-finished(durable-stream-outcome),
         session-cancellation,
@@ -844,7 +868,7 @@ interface oplog {
 
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
-        idempotency-key: string,
+        invocation-id: uuid,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -854,6 +878,7 @@ interface oplog {
 
     record raw-agent-invocation-finished-parameters {
         timestamp: datetime,
+        invocation-id: uuid,
         %result: oplog-payload,
         method-name: option<string>,
         consumed-fuel: s64,
@@ -863,6 +888,8 @@ interface oplog {
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
+        /// The invocation whose work failed; absent for a `recovery` error, and for an `invocation` error recorded while no invocation runs.
+        invocation-id: option<uuid>,
         error: worker-error,
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
@@ -871,7 +898,8 @@ interface oplog {
 
     record raw-pending-agent-invocation-parameters {
         timestamp: datetime,
-        idempotency-key: string,
+        not-before: option<datetime>,
+        invocation-id: uuid,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -896,6 +924,8 @@ interface oplog {
         snapshot-revision: component-revision,
         /// The filesystem snapshot of the selected record, if it has one
         filesystem-snapshot: option<string>,
+        /// The bootstrap range of the selected record, if it has one
+        snapshot-bootstrap: option<oplog-region>,
     }
 
     record raw-snapshot-based-update {
@@ -916,7 +946,9 @@ interface oplog {
         target-revision: component-revision,
         new-component-size: u64,
         new-active-plugins: list<environment-plugin-grant-id>,
-        snapshot-assisted-details: option<snapshot-assisted-update-details>
+        snapshot-assisted-details: option<snapshot-assisted-update-details>,
+        /// The entries of the durable calls that the target revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record resource-type-id {
@@ -959,15 +991,19 @@ interface oplog {
         active-cards: list<list<u8>>,
         wallet-generation: u64,
         filesystem-snapshot: option<string>,
+        /// The entries of the durable calls that the running revision's initializer made, if any
+        bootstrap: option<oplog-region>,
     }
 
     record raw-oplog-processor-checkpoint-parameters {
         timestamp: datetime,
         plugin-grant-id: environment-plugin-grant-id,
+        source-component-revision: component-revision,
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
         last-batch-start: oplog-index,
+        delivery: option<list<u8>>,
     }
 
     variant oplog-entry {
@@ -1065,10 +1101,8 @@ interface oplog {
         stream-registered(raw-durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
         stream-items(raw-durable-stream-record-parameters),
-        /// Records a durable stream end terminal
-        stream-end(raw-durable-stream-record-parameters),
-        /// Records a durable stream cancellation terminal
-        stream-cancel(raw-durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(raw-durable-stream-record-parameters),
         /// Records durable Stream Session state and consumer-journal facts
         stream-session(raw-durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`
@@ -1179,10 +1213,8 @@ interface oplog {
         stream-registered(durable-stream-record-parameters),
         /// Records committed durable stream values or a packed-u8 batch
         stream-items(durable-stream-record-parameters),
-        /// Records a durable stream end terminal
-        stream-end(durable-stream-record-parameters),
-        /// Records a durable stream cancellation terminal
-        stream-cancel(durable-stream-record-parameters),
+        /// Records the unique outcome or consumer cancellation of a durable stream
+        stream-terminal(durable-stream-record-parameters),
         /// Records durable Stream Session state and consumer-journal facts
         stream-session(durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`

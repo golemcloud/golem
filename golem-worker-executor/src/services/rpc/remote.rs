@@ -26,6 +26,141 @@ impl RemoteInvocationRpc {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: golem_common::model::ScheduleId,
+        owner: &AgentId,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.worker_proxy
+            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        request_key: InvocationRequestKey,
+        invocation: AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        let AgentInvocation::AgentMethod {
+            idempotency_key,
+            method_name,
+            input,
+            invocation_context,
+            principal,
+            scope_card,
+        } = invocation
+        else {
+            return Err(RpcError::ProtocolError {
+                details: "guest scheduling requires an agent method invocation".to_string(),
+            });
+        };
+        let parent = match &principal {
+            Principal::Agent(agent) => Some(agent.agent_id.clone().into()),
+            _ => None,
+        };
+        let start = InvocationStart {
+            agent_id: Some(owned_agent_id.agent_id().into()),
+            method_name: Some(method_name),
+            input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
+                details: format!(
+                    "scheduled input cannot cross the remote worker boundary: {error}"
+                ),
+            })?),
+            idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
+            request_key: Some(request_key.into()),
+            context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                parent,
+                env: HashMap::new(),
+                tracing: Some(invocation_context.into()),
+            }),
+            auth_ctx: Some(auth_ctx.clone().into()),
+            principal: Some(principal.into()),
+            environment_id: Some(owned_agent_id.environment_id.into()),
+            config: Vec::new(),
+            component_owner_account_id: None,
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: Some(prost_types::Timestamp {
+                seconds: scheduled_at.timestamp(),
+                nanos: scheduled_at.timestamp_subsec_nanos() as i32,
+            }),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: None,
+            expected_callee_fingerprint: Some(expected_fingerprint.0.into()),
+            durable_input_mappings: Vec::new(),
+            origin_invocation: None,
+            scope_card: scope_card
+                .as_ref()
+                .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
+                .transpose()
+                .map_err(|details| RpcError::ProtocolError { details })?,
+            external_tool: None,
+        };
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(start.clone())),
+        };
+        let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
+        state
+            .lock()
+            .await
+            .validate_trusted_request(&request)
+            .map_err(|details| RpcError::ProtocolError { details })?;
+        let mut inbound = self
+            .worker_proxy
+            .invoke_agent_session(Box::pin(tokio_stream::iter([request])))
+            .await?;
+        if let Some(response) = inbound.next().await {
+            let response = response?;
+            state
+                .lock()
+                .await
+                .validate_response(&response)
+                .map_err(|details| RpcError::ProtocolError { details })?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(accepted)) => {
+                    if accepted.agent_id != start.agent_id
+                        || accepted.idempotency_key != Some(idempotency_key.into())
+                        || accepted.method_name != start.method_name
+                        || accepted.component_revision.is_none()
+                    {
+                        return Err(RpcError::ProtocolError {
+                            details: "scheduled invocation acceptance does not match the target invocation".to_string(),
+                        });
+                    }
+                    return Ok(golem_common::model::ScheduleId::for_invocation(
+                        expected_fingerprint,
+                        &idempotency_key,
+                    ));
+                }
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    confirm_terminal_response_is_last(&mut inbound, &state).await?;
+                    return Err(rpc_error_from_rejection(rejected));
+                }
+                Some(invocation_response::Response::Finished(finished)) => {
+                    return Err(rpc_error_from_invocation_finished(finished));
+                }
+                _ => {
+                    return Err(RpcError::ProtocolError {
+                        details: "unexpected response before scheduled invocation acceptance"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Err(RpcError::RemoteInternalError {
+            details: "scheduled invocation response ended before committed acceptance".to_string(),
+        })
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,
@@ -57,7 +192,10 @@ impl Rpc for RemoteInvocationRpc {
                 config,
                 principal,
                 auth_ctx,
-                idempotency_key,
+                // The receiving executor checks a fresh ephemeral phantom against the same owner
+                // key the caller derived it from.
+                idempotency_key
+                    .map(|key| InvocationRequestKey::Internal(key).owner_key(method_name)),
                 freshness_disposition,
             )
             .await?;
@@ -146,6 +284,7 @@ impl Rpc for RemoteInvocationRpc {
                 agent_id: Some(owned_agent_id.agent_id().into()),
                 method_name: Some(method_name),
                 input: Some(method_parameters),
+                request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
                 idempotency_key: Some(idempotency_key.into()),
                 context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: Some(self_agent_id.clone().into()),
@@ -235,7 +374,7 @@ impl Rpc for RemoteInvocationRpc {
                             request = InvocationRequest {
                                 request: Some(invocation_request::Request::ResumeAttach(
                                     ResumeAttach {
-                                        idempotency_key: accepted.idempotency_key.clone(),
+                                        idempotency_key: accepted.idempotency_key,
                                         agent_id: accepted.agent_id.clone(),
                                         environment_id: accepted.environment_id,
                                         attachment_id: accepted.attachment_id,
@@ -342,10 +481,8 @@ impl Rpc for RemoteInvocationRpc {
                         break;
                     }
                     Some(invocation_response::Response::OutputItem(_))
-                    | Some(invocation_response::Response::OutputEnd(_))
-                    | Some(invocation_response::Response::OutputError(_))
-                    | Some(invocation_response::Response::InputAck(_))
-                    | Some(invocation_response::Response::StreamCancel(_)) => {}
+                    | Some(invocation_response::Response::StreamEnd(_))
+                    | Some(invocation_response::Response::InputAck(_)) => {}
                     None => unreachable!("response state validation rejects empty frames"),
                 }
             }

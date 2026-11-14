@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::OwnedInvocationId;
 use crate::base_model::agent::Principal;
 use crate::model::card::{ScopeCard, StoredCard};
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -22,7 +23,7 @@ use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
 };
-use crate::model::{IdempotencyKey, OwnedAgentId};
+use crate::model::{InvocationId, OwnedAgentId};
 use crate::schema::TypedSchemaValue;
 use crate::schema::tool::Tool;
 use crate::schema::tool::compatibility::CompiledToolCompatibility;
@@ -882,9 +883,9 @@ pub struct EntityInvocationScope {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
-    idempotency_key: IdempotencyKey,
+    idempotency_key: InvocationId,
     logical_key_positions: bool,
-    stream_session_idempotency_key: IdempotencyKey,
+    stream_session_idempotency_key: InvocationId,
     /// Wallet snapshot pinned in the immutable entity invocation `Start`.
     #[serde(skip)]
     authority_wallet: Vec<StoredCard>,
@@ -893,6 +894,9 @@ pub struct EntityInvocationScope {
     /// so the scope is resident state and is not part of the entity invocation `Start`.
     #[serde(skip)]
     invocation_scope_card: Option<ScopeCard>,
+    /// The agent invocation that encloses this invocation, as the calling Store reports it.
+    #[serde(skip)]
+    enclosing_invocation_id: Option<OwnedInvocationId>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -905,9 +909,9 @@ impl EntityInvocationScope {
         activation: Arc<EntityActivation>,
         calling_principal: CallingAgentPrincipal,
         mode: InvocationExecutionMode,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         logical_key_positions: bool,
-        stream_session_idempotency_key: IdempotencyKey,
+        stream_session_idempotency_key: InvocationId,
     ) -> Result<Self, String> {
         if parent_start_index == OplogIndex::NONE {
             return Err("Entity invocation parent Start index cannot be zero".to_string());
@@ -950,6 +954,7 @@ impl EntityInvocationScope {
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
             invocation_scope_card: None,
+            enclosing_invocation_id: None,
             span_started: None,
         })
     }
@@ -970,6 +975,18 @@ impl EntityInvocationScope {
 
     pub fn invocation_scope_card(&self) -> Option<&ScopeCard> {
         self.invocation_scope_card.as_ref()
+    }
+
+    pub fn with_enclosing_invocation_id(
+        mut self,
+        enclosing_invocation_id: Option<OwnedInvocationId>,
+    ) -> Self {
+        self.enclosing_invocation_id = enclosing_invocation_id;
+        self
+    }
+
+    pub fn enclosing_invocation_id(&self) -> Option<&OwnedInvocationId> {
+        self.enclosing_invocation_id.as_ref()
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {
@@ -996,7 +1013,7 @@ impl EntityInvocationScope {
         self.mode
     }
 
-    pub fn idempotency_key(&self) -> &IdempotencyKey {
+    pub fn idempotency_key(&self) -> &InvocationId {
         &self.idempotency_key
     }
 
@@ -1004,7 +1021,7 @@ impl EntityInvocationScope {
         self.logical_key_positions
     }
 
-    pub fn stream_session_idempotency_key(&self) -> &IdempotencyKey {
+    pub fn stream_session_idempotency_key(&self) -> &InvocationId {
         &self.stream_session_idempotency_key
     }
 
@@ -1026,9 +1043,9 @@ struct EntityInvocationScopeWire {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
-    idempotency_key: IdempotencyKey,
+    idempotency_key: InvocationId,
     logical_key_positions: bool,
-    stream_session_idempotency_key: IdempotencyKey,
+    stream_session_idempotency_key: InvocationId,
 }
 
 impl<'de> Deserialize<'de> for EntityInvocationScope {

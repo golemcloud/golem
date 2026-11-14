@@ -41,6 +41,17 @@ final class BridgeUnreachableException(
       lastCause
     )
 
+/**
+ * The server rejected a streaming call with a public error `code`.
+ * `stderr` is what the agent wrote to stderr when a failure of the agent
+ * caused the rejection (`invocation-failed` or `previous-invocation-failed`).
+ */
+final class BridgeInvocationRejectedException(
+  val code: String,
+  val serverMessage: String,
+  val stderr: Option[String]
+) extends BridgeException(s"$code: $serverMessage", null)
+
 /** A streaming call its [[CancellationToken]] cancelled. */
 final class BridgeCancelledException extends BridgeException("the invocation was cancelled", null)
 

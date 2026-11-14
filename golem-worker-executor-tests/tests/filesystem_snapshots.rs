@@ -20,7 +20,7 @@ use crate::durability::assert_snapshot_recovery_loaded;
 use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
@@ -212,7 +212,7 @@ impl Operation {
 /// The agent under test, with its component.
 struct Agent {
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     worker_id: AgentId,
 }
 
@@ -935,6 +935,69 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
 
 #[test]
 #[timeout("4m")]
+async fn a_periodic_snapshot_whose_upload_failed_is_taken_again_while_the_agent_is_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const PERIOD: Duration = Duration::from_millis(500);
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let mut overrides = snapshotting(&store, Duration::from_secs(30), None);
+        let configure = overrides.configure.take();
+        overrides.configure = Some(Arc::new(move |config| {
+            if let Some(configure) = &configure {
+                configure(config);
+            }
+            config.oplog.default_snapshotting = SnapshotPolicy::Periodic { period: PERIOD };
+        }));
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "retry", &[]).await?;
+        // The record after the constructor holds only initial files: it has no name and saves
+        // nothing, so the injected failure meets the save of the write.
+        eventually(Duration::from_secs(30), || async {
+            Ok((!agent.records(&executor).await?.snapshots.is_empty()).then_some(()))
+        })
+        .await?;
+        store.fail_next_saves(1);
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "data.txt",
+                    content: "kept",
+                }],
+            )
+            .await?;
+
+        let confirmed = agent.confirmed(&executor).await?;
+        tokio::time::sleep(PERIOD * 6).await;
+        let records = agent.records(&executor).await?;
+
+        // The agent stays idle after the write. The record whose upload failed holds no state, so
+        // the next period takes the snapshot again, and the confirmed record ends the snapshots.
+        assert_eq!(store.save_count(), 2, "{records:?}");
+        assert_eq!(records.snapshots.len(), 3, "{records:?}");
+        assert_eq!(records.snapshots[0], None);
+        assert!(
+            records.snapshots[1]
+                .as_deref()
+                .is_some_and(|failed| failed != confirmed),
+            "{records:?}"
+        );
+        assert_eq!(records.snapshots[2].as_deref(), Some(confirmed.as_str()));
+        assert_eq!(
+            records.confirmations.as_ref(),
+            [confirmed.into_boxed_str()].as_slice()
+        );
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
 async fn invocations_during_an_upload_keep_their_results_after_a_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1229,7 +1292,8 @@ pub(crate) fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
         (std::collections::BTreeMap::<String, usize>::new(), None),
         |(mut finished, current), entry| match entry {
             OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } => {
                 let key = idempotency_key.to_string();
                 finished.entry(key.clone()).or_insert(0);
@@ -3406,7 +3470,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
 /// snapshot record with a name, and a confirmation of that name. The caller calls it after an
 /// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
 /// and no snapshot record is waiting for its upload when the wait ends.
-async fn newest_snapshot_confirmed(
+pub(crate) async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
@@ -3441,7 +3505,7 @@ async fn newest_snapshot_confirmed(
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentId,
+    agent: &ParsedAgentKey,
 ) -> anyhow::Result<serde_json::Value> {
     let state = executor
         .invoke_and_await_agent(component, agent, "getState", data_value!())
@@ -6029,6 +6093,9 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 store.fail_next_restores(1);
                 agent.stop(executor, context).await?;
                 let key = golem_common::model::IdempotencyKey::fresh();
+                let invocation_id = executor
+                    .external_invocation_key(&agent.worker_id, &key, "apply")
+                    .await?;
                 let rename = || executor.invoke_and_await_agent_with_key(
                     &agent.component, &agent.agent, &key, "apply",
                     data_value!("rename".to_string(), "before.txt".to_string(), "after.txt".to_string()),
@@ -6052,7 +6119,7 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                 let oplog = executor.get_oplog(&agent.worker_id, OplogIndex::INITIAL).await?;
                 assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry,
                     PublicOplogEntry::AgentInvocationStarted(start) if matches!(&start.invocation,
-                        PublicAgentInvocation::AgentMethodInvocation(invoked) if invoked.idempotency_key == key)
+                        PublicAgentInvocation::AgentMethodInvocation(invoked) if invoked.invocation_id == invocation_id)
                 )).count(), 1);
                 agent.apply_all(executor, &[Operation::Rename { from: "after.txt", to: "continued.txt" }]).await?;
                 let tree = agent.describe(executor).await?;

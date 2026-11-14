@@ -370,6 +370,13 @@ impl ComponentRevisionRecord {
 
         Ok(diff::Component {
             wasm_hash: self.binary_hash.into(),
+            agent_types: self
+                .metadata
+                .value()
+                .agent_types()
+                .iter()
+                .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
+                .collect(),
             component_config,
             agent_type_provision_configs,
             tool_deployment_configs,

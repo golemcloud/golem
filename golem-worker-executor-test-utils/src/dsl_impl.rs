@@ -40,7 +40,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
@@ -54,7 +54,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
-use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
+use golem_common::model::{AgentFilter, IdempotencyKey, InvocationRequestKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::validation::validate_value;
@@ -76,7 +76,7 @@ use uuid::Uuid;
 
 fn invocation_agent_id(
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &ParsedAgentKey,
     idempotency_key: &IdempotencyKey,
 ) -> anyhow::Result<AgentId> {
     let is_ephemeral = component
@@ -227,10 +227,8 @@ impl TestWorkerExecutor {
                 }
                 Some(
                     invocation_response::Response::OutputItem(_)
-                    | invocation_response::Response::OutputEnd(_)
-                    | invocation_response::Response::OutputError(_)
-                    | invocation_response::Response::InputAck(_)
-                    | invocation_response::Response::StreamCancel(_),
+                    | invocation_response::Response::StreamEnd(_)
+                    | invocation_response::Response::InputAck(_),
                 ) => {
                     return Err(anyhow!(
                         "non-streaming test invocation received a stream frame"
@@ -567,7 +565,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
@@ -611,12 +609,17 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<()> {
-        let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
+        let request_key = InvocationRequestKey::external(
+            self.auth_ctx().idempotency_scope(),
+            Some(idempotency_key),
+        );
+        let agent_id =
+            invocation_agent_id(component, agent_id, &request_key.owner_key(method_name))?;
 
         let (_graph, value) = params.into_parts();
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
@@ -644,6 +647,7 @@ impl TestDsl for TestWorkerExecutor {
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: Some(request_key.into()),
         })
         .await?;
         Ok(())
@@ -653,17 +657,17 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        let key = idempotency_key
-            .cloned()
-            .unwrap_or_else(IdempotencyKey::fresh);
-        let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
+        let request_key =
+            InvocationRequestKey::external(self.auth_ctx().idempotency_scope(), idempotency_key);
+        let worker_agent_id =
+            invocation_agent_id(component, agent_id, &request_key.owner_key(method_name))?;
 
         let (_graph, value) = params.into_parts();
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
@@ -676,7 +680,7 @@ impl TestDsl for TestWorkerExecutor {
                 input: Some(proto_method_parameters),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
-                idempotency_key: Some(key.into()),
+                idempotency_key: idempotency_key.cloned().map(Into::into),
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
@@ -692,6 +696,7 @@ impl TestDsl for TestWorkerExecutor {
                 scope_card: None,
                 origin_invocation: None,
                 external_tool: None,
+                request_key: Some(request_key.into()),
             })
             .await?;
 
@@ -1240,7 +1245,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -1251,10 +1256,11 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .cancel_invocation(CancelInvocationRequest {
                 agent_id: Some(agent_id.clone().into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
+                idempotency_key: Some((*idempotency_key).into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                scheduled: None,
             })
             .await?
             .into_inner();

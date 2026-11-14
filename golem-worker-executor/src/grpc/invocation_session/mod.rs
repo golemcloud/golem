@@ -21,9 +21,9 @@ use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     encode_recursive_stream_value_with_schema,
 };
-use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
+use crate::grpc::invocation::from_proto_invocation_context;
 use crate::services::oplog::OplogError;
-use crate::services::{HasAll, HasComponentService, HasSchedulerService, UsesAllDeps};
+use crate::services::{HasAll, HasComponentService, UsesAllDeps};
 use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
@@ -41,12 +41,13 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
-    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamRegistrationInvocation,
-    StreamResumeCursor, StreamResumeOperation,
+    StreamCancellationRequest, StreamEndpointSide, StreamItemsPayload,
+    StreamRegistrationInvocation, StreamResumeCursor, StreamResumeOperation, StreamTerminal,
+    StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
@@ -59,8 +60,7 @@ use golem_common::model::durable_stream::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus, ScheduledAction,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, InvocationStatus,
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
@@ -142,6 +142,7 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    idempotency_key: golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,

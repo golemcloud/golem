@@ -133,6 +133,7 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },
+                mode: Some(golem_schema::http::HttpRouteMode::Sse),
                 durable_streams: Some(DurableStreamRouteOptions {
                     slots: vec![
                         DurableStreamSlotOptions {
@@ -152,9 +153,6 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                             content_type: Some("application/vnd.golem.events".to_string()),
                         },
                     ],
-                    allow_external_writes: Some(false),
-                    allow_stream_delete: None,
-                    allow_invocation_delete: Some(false),
                     load: Some(DurableStreamRouteLoadOptions {
                         max_concurrent_readers_per_stream: Some(8),
                         max_append_requests_per_second_per_stream: None,
@@ -195,10 +193,20 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
 
 #[test]
 fn agent_type_schema_proto_round_trip() {
-    let schema = sample_agent_type_schema();
-    let proto: golem_api_grpc::proto::golem::schema::AgentTypeSchema = schema.clone().into();
-    let back: AgentTypeSchema = proto.try_into().expect("decode");
-    assert_eq!(schema, back);
+    use golem_schema::http::HttpRouteMode;
+    for mode in [
+        None,
+        Some(HttpRouteMode::DurableStreams),
+        Some(HttpRouteMode::Plain),
+        Some(HttpRouteMode::Sse),
+        Some(HttpRouteMode::WebSocket),
+    ] {
+        let mut schema = sample_agent_type_schema();
+        schema.methods[0].http_endpoint[0].mode = mode;
+        let proto: golem_api_grpc::proto::golem::schema::AgentTypeSchema = schema.clone().into();
+        let back: AgentTypeSchema = proto.try_into().expect("decode");
+        assert_eq!(schema, back);
+    }
 }
 
 fn sample_registered_agent_type_schema() -> RegisteredAgentTypeSchema {

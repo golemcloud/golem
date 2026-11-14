@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
@@ -67,6 +68,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         CommandOutcome::WaitForWakeup
     }
 
+    /// Counts a completed external invocation and gives whether a snapshot is the next action.
     pub(super) async fn on_external_invocation_completed(&mut self) -> bool {
         self.invocations_since_snapshot += 1;
         match self.parent.snapshot_policy() {
@@ -80,6 +82,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
             SnapshotPolicy::Periodic { .. } => {
+                self.last_state_change = self
+                    .store
+                    .lock()
+                    .await
+                    .data()
+                    .durable_ctx()
+                    .last_state_change();
                 let status = self.parent.get_last_known_status().await;
                 if matches!(
                     self.periodic_snapshot_action(&status),
@@ -102,6 +111,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         let SnapshotPolicy::Periodic { period } = self.parent.snapshot_policy() else {
             return PeriodicSnapshotAction::NotNeeded;
         };
+        let enabled = self.parent.filesystem_snapshots_enabled();
+        let holding_state = self.parent.read_exclusions(|exclusions| {
+            crate::worker::snapshot_selection::periodic_snapshot_holding_state(
+                status, exclusions, enabled,
+            )
+        });
+        if !state_changed_since_snapshot(self.last_state_change, holding_state) {
+            return PeriodicSnapshotAction::NotNeeded;
+        }
 
         let created_at = self.parent.get_initial_worker_metadata().created_at;
         let last_snapshot_timestamp = snapshot_baseline_timestamp(
@@ -271,9 +289,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
         let idempotency_key = {
             let ctx = self.store.data_mut();
-            let idempotency_key = IdempotencyKey::fresh();
-            ctx.set_current_idempotency_key(idempotency_key.clone())
-                .await;
+            let idempotency_key = InvocationId(Uuid::new_v4());
+            ctx.set_current_idempotency_key(idempotency_key).await;
             idempotency_key
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
@@ -446,14 +463,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            InvocationMode::Replay,
-            None,
-        )
-        .await;
+        let result = invoke_observed_and_traced(lowered, self.store, self.instance, None).await;
         self.store.data().set_suspended();
         self.store
             .data_mut()
@@ -473,10 +483,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn snapshot_guest_for_periodic(
         &mut self,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = InvocationId(Uuid::new_v4());
         self.store
             .data_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
@@ -586,6 +596,18 @@ pub(super) fn snapshot_baseline_timestamp(
         .chain(last_attempt)
         .max()
         .unwrap_or(created_at)
+}
+
+/// Whether the state changed at `last_state_change` after `last_snapshot`, the automatic snapshot
+/// record that holds the state, which a start would select. An agent whose state did not change
+/// since that record needs no periodic snapshot, so an idle agent writes none. A snapshot that
+/// wrote no record, such as a skipped one, or a record that no start can use, such as one whose
+/// upload failed, leaves the change in place, and the next period tries again.
+pub(super) fn state_changed_since_snapshot(
+    last_state_change: Option<OplogIndex>,
+    last_snapshot: Option<OplogIndex>,
+) -> bool {
+    last_state_change.is_some_and(|change| last_snapshot.is_none_or(|snapshot| change > snapshot))
 }
 
 pub(super) fn snapshot_action_at(
@@ -746,6 +768,7 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
                 .agent_wallet_cards_snapshot(),
             self.0.store.data().durable_ctx().wallet_generation(),
             name,
+            self.0.store.data().durable_ctx().bootstrap_range(),
         ))
     }
 

@@ -55,6 +55,61 @@ impl ReplayState {
         last_oplog_index: OplogIndex,
         wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     ) -> Result<Self, WorkerExecutorError> {
+        Self::build(
+            owned_agent_id,
+            oplog,
+            skipped_regions,
+            initial_snapshot_skip_end,
+            owner_tool_operations,
+            last_oplog_index,
+            wallet,
+            None,
+        )
+        .await
+    }
+
+    /// A cursor over the bootstrap block of a core initializer: it skips the history
+    /// `INITIAL.next()..=skip_through` and the operator-reverted `deleted_regions`, and replays up
+    /// to `target`. It has no wallet, records no replay events, and does not publish live when it
+    /// starts exhausted; `tail` decides what a durable call after the block does.
+    pub(crate) async fn new_for_bootstrap(
+        owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        deleted_regions: &DeletedRegions,
+        skip_through: OplogIndex,
+        target: OplogIndex,
+        tail: BootstrapTail,
+    ) -> Result<Self, WorkerExecutorError> {
+        let mut skipped_regions = DeletedRegions::from_regions(deleted_regions.regions().cloned());
+        if skip_through > OplogIndex::INITIAL {
+            skipped_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=skip_through,
+            ));
+        }
+        Self::build(
+            owned_agent_id,
+            oplog,
+            skipped_regions,
+            Some(skip_through),
+            owner_tool_operations,
+            target,
+            None,
+            Some(tail),
+        )
+        .await
+    }
+
+    async fn build(
+        owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        skipped_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+        owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        last_oplog_index: OplogIndex,
+        wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
+        bootstrap: Option<BootstrapTail>,
+    ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
@@ -80,12 +135,13 @@ impl ReplayState {
             },
             (last_oplog_index.as_u64() + 1).saturating_sub(metadata_floor.as_u64()),
         );
-        let concurrent_resolver = ConcurrentReplayResolver::default();
-        let reconstruction_claims = concurrent_resolver.reconstruction_claims();
+        let starts = ReplayStarts::default();
+        let reconstruction_claims = starts.reconstruction_claims();
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
             wallet,
+            bootstrap,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_in_progress: AtomicBool::new(false),
@@ -99,7 +155,7 @@ impl ReplayState {
                 has_seen_logs: AtomicBool::new(false),
             },
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
-            transition_phase: AtomicU8::new(ReplayTransitionPhase::Replaying as u8),
+            transition_phase: AtomicReplayTransitionPhase::replaying(),
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
@@ -108,14 +164,11 @@ impl ReplayState {
                 entity_replay_horizon: OplogIndex::NONE,
                 entity_start_routes: HashMap::new(),
                 entity_route_members: HashMap::new(),
-                retained_entity_counts: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
-                concurrent_resolver,
-                claimed_starts: HashSet::new(),
+                starts,
                 custom_subtrees: HashMap::new(),
-                retained_starts: std::collections::BTreeMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -140,7 +193,7 @@ impl ReplayState {
             tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
-        if cursor.is_live() {
+        if cursor.bootstrap.is_none() && cursor.at_replay_tail() {
             cursor.publish_live();
         }
         Ok(Self {
@@ -712,9 +765,7 @@ impl ReplayState {
                 }
             }
             if new_target > cursor.last_replayed_index() {
-                cursor
-                    .transition_phase
-                    .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
+                cursor.transition_phase.resume_replay();
                 cursor
                     .pending_replay_events
                     .lock()
@@ -722,7 +773,7 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
-            if cursor.is_live()
+            if cursor.at_replay_tail()
                 && let Some(wallet) = &cursor.wallet
             {
                 wallet.finish_replay_prefix();

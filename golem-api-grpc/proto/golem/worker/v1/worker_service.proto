@@ -29,6 +29,7 @@ import "golem/worker/worker_id.proto";
 import "golem/worker/raw_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/worker_metadata.proto";
+import "golem/worker/scheduled_invocation_cancellation.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerService {
@@ -62,7 +63,8 @@ message LaunchNewWorkerRequest {
   optional golem.worker.InvocationContext context = 7;
   optional golem.component.Principal principal = 8;
   optional string method_name = 9;
-  // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target.
+  // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target: the
+  // owner key of the demanding invocation, which a KnownFresh phantom is checked against.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
 }
@@ -98,6 +100,8 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  // The principal of the fork target's create request. Absent means the account of auth_ctx.
+  optional golem.component.Principal principal = 5;
 }
 
 message ForkWorkerResponse {
@@ -167,6 +171,7 @@ message InvokeAgentRequest {
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;
   optional golem.worker.EncodedScopeCard scope_card = 13;
+  golem.worker.InvocationRequestKey request_key = 14;
 }
 
 enum InvocationFreshnessDisposition {
@@ -196,13 +201,14 @@ message InvokeAgentSuccess {
   optional golem.worker.AgentId agent_id = 7;
   // Final invocation key. Together with agent_id this identifies the logical
   // invocation across retries and asynchronous result lookup.
-  optional golem.worker.IdempotencyKey idempotency_key = 8;
+  optional golem.common.UUID idempotency_key = 8;
 }
 
 message CancelInvocationRequest {
   golem.worker.AgentId agent_id = 1;
-  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.common.UUID idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
 }
 
 message CancelInvocationResponse {
@@ -250,7 +256,7 @@ message ProcessOplogEntriesRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 component_revision = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.UUID idempotency_key = 4;
   golem.common.AccountId account_id = 5;
   map<string, string> config = 6;
   golem.worker.AgentMetadata metadata = 7;

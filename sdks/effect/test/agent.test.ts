@@ -17,6 +17,7 @@ import {
   __resetGetConfigValueImpl as __resetGetConfigValueForTest,
   __setGetConfigValueImpl as __setGetConfigValueForTest,
 } from "./mocks/golem-agent-host.js"
+import { __setCaller, withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const secretHost = vi.hoisted(() => ({
   reveal: (_handle: unknown, _expected: unknown): unknown => {
@@ -283,7 +284,9 @@ describe("agent-guest exports", () => {
 
   it.effect("initialize + invoke + getDefinition round-trip a greet call", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() => guest.initialize("Greeter", wire(), anonymousPrincipal))
+      yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.initialize("Greeter", wire())),
+      )
 
       const def = yield* Effect.sync(() => guest.getDefinition())
       expect(def.typeName).toBe("Greeter")
@@ -294,7 +297,7 @@ describe("agent-guest exports", () => {
       const greetingWv = yield* Schema.encodeEffect(stringCodec.codec)("Hello")
 
       const out = yield* Effect.promise(() =>
-        guest.invoke("greet", wire(personWv, greetingWv), anonymousPrincipal),
+        withCaller(anonymousPrincipal, () => guest.invoke("greet", wire(personWv, greetingWv))),
       )
       const decoded = read<string>(out!)
       expect(decoded).toBe("Hello, Ada (36)!")
@@ -303,8 +306,12 @@ describe("agent-guest exports", () => {
 
   it.effect("invoke returns an empty tuple for unit-returning methods", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() => guest.initialize("Greeter", wire(), anonymousPrincipal))
-      const out = yield* Effect.promise(() => guest.invoke("ping", wire(), anonymousPrincipal))
+      yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.initialize("Greeter", wire())),
+      )
+      const out = yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.invoke("ping", wire())),
+      )
       expect(out).toBeUndefined()
     }),
   )
@@ -315,15 +322,21 @@ describe("agent-guest exports", () => {
 
       // initialize Counter with initial = 10
       const initialWv = yield* Schema.encodeEffect(numberCodec.codec)(10)
-      yield* Effect.promise(() => guest.initialize("Counter", wire(initialWv), anonymousPrincipal))
+      yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.initialize("Counter", wire(initialWv))),
+      )
 
       // add 5 twice
       const fiveWv = yield* Schema.encodeEffect(numberCodec.codec)(5)
       for (let i = 0; i < 2; i++) {
-        yield* Effect.promise(() => guest.invoke("add", wire(fiveWv), anonymousPrincipal))
+        yield* Effect.promise(() =>
+          withCaller(anonymousPrincipal, () => guest.invoke("add", wire(fiveWv))),
+        )
       }
 
-      const out = yield* Effect.promise(() => guest.invoke("getValue", wire(), anonymousPrincipal))
+      const out = yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.invoke("getValue", wire())),
+      )
       const value = read<number>(out!)
       expect(value).toBe(20)
     }),
@@ -369,16 +382,16 @@ describe("agent-guest exports", () => {
   )
 
   it("invoke fails before initialize", async () => {
-    await expect(guest.invoke("greet", wire(), anonymousPrincipal)).rejects.toThrow(
-      /not initialized/,
-    )
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.invoke("greet", wire())),
+    ).rejects.toThrow(/not initialized/)
   })
 
   it("initialize twice fails", async () => {
-    await guest.initialize("Greeter", wire(), anonymousPrincipal)
-    await expect(guest.initialize("Greeter", wire(), anonymousPrincipal)).rejects.toThrow(
-      /already initialized/,
-    )
+    await withCaller(anonymousPrincipal, () => guest.initialize("Greeter", wire()))
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.initialize("Greeter", wire())),
+    ).rejects.toThrow(/already initialized/)
   })
 
   it("normalizes escaped method failures without changing declared errors or interruption", async () => {
@@ -402,12 +415,14 @@ describe("agent-guest exports", () => {
         interrupted: () => Effect.interrupt,
       }),
     })
-    await guest.initialize("MethodFailures", wire(), anonymousPrincipal)
+    await withCaller(anonymousPrincipal, () => guest.initialize("MethodFailures", wire()))
     for (const [methodName, message] of [
       ["thrown", "synchronous method error"],
       ["defect", "method defect"],
     ]) {
-      const error = await guest.invoke(methodName!, wire(), anonymousPrincipal).then(
+      const error = await withCaller(anonymousPrincipal, () =>
+        guest.invoke(methodName!, wire()),
+      ).then(
         () => {
           throw new Error("method must fail")
         },
@@ -420,16 +435,16 @@ describe("agent-guest exports", () => {
         value: expect.stringContaining(message!),
       })
     }
-    const result = await guest.invoke("declared", wire(), anonymousPrincipal)
+    const result = await withCaller(anonymousPrincipal, () => guest.invoke("declared", wire()))
     expect(schemaValueFromWit(result!)).toEqual({
       tag: "result",
       result: { tag: "err", value: { tag: "string", value: "declared error" } },
     })
-    await expect(guest.invoke("interrupted", wire(), anonymousPrincipal)).rejects.not.toMatchObject(
-      {
-        tag: "custom-error",
-      },
-    )
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.invoke("interrupted", wire())),
+    ).rejects.not.toMatchObject({
+      tag: "custom-error",
+    })
   })
 
   it("keeps input and output codec failures outside the method error channel", async () => {
@@ -451,9 +466,11 @@ describe("agent-guest exports", () => {
         encode: () => Effect.succeed("invalid"),
       }),
     })
-    await guest.initialize("CodecFailures", wire(), anonymousPrincipal)
+    await withCaller(anonymousPrincipal, () => guest.initialize("CodecFailures", wire()))
     for (const methodName of ["decode", "encode"]) {
-      await expect(guest.invoke(methodName, wire(), anonymousPrincipal)).rejects.not.toMatchObject({
+      await expect(
+        withCaller(anonymousPrincipal, () => guest.invoke(methodName, wire())),
+      ).rejects.not.toMatchObject({
         tag: "custom-error",
       })
     }
@@ -465,9 +482,9 @@ describe("agent-guest exports", () => {
       init: () => Effect.die("constructor defect"),
       methods: () => ({}),
     })
-    await expect(guest.initialize("ConstructorDefect", wire(), anonymousPrincipal)).rejects.toThrow(
-      "constructor defect",
-    )
+    await expect(
+      withCaller(anonymousPrincipal, () => guest.initialize("ConstructorDefect", wire())),
+    ).rejects.toThrow("constructor defect")
   })
 
   it("defining two agents with the same name surfaces from discoverAgentTypes", async () => {
@@ -499,16 +516,12 @@ describe("agent-guest exports", () => {
   it.effect("Principal service resolves to the initialize-time principal in impl", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
+        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
       )
       const out = yield* Effect.promise(() =>
-        guest.invoke(
-          "owner",
-          wire(),
-          // The 'caller' principal here is irrelevant for `owner`, which
-          // captured the initialize-time principal in its closure.
-          anonymousPrincipal,
-        ),
+        // The 'caller' principal here is irrelevant for `owner`, which
+        // captured the initialize-time principal in its closure.
+        withCaller(anonymousPrincipal, () => guest.invoke("owner", wire())),
       )
       const decoded = read<string>(out!)
       expect(decoded).toBe("oidc:alice")
@@ -518,31 +531,45 @@ describe("agent-guest exports", () => {
   it.effect("Principal service resolves to the per-call principal in method handlers", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
+        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
       )
 
       // First call as Bob: should see Bob, not Alice.
-      const out1 = yield* Effect.promise(() => guest.invoke("caller", wire(), oidcPrincipal("bob")))
+      const out1 = yield* Effect.promise(() =>
+        withCaller(oidcPrincipal("bob"), () => guest.invoke("caller", wire())),
+      )
       const decoded1 = read<string>(out1!)
       expect(decoded1).toBe("oidc:bob")
 
       // Second call as anonymous, on the SAME initialized agent: per-call
       // principal must update, owner closure must not.
-      const out2 = yield* Effect.promise(() => guest.invoke("caller", wire(), anonymousPrincipal))
+      const out2 = yield* Effect.promise(() =>
+        withCaller(anonymousPrincipal, () => guest.invoke("caller", wire())),
+      )
       const decoded2 = read<string>(out2!)
       expect(decoded2).toBe("anonymous")
 
       const ownerOut = yield* Effect.promise(() =>
-        guest.invoke("owner", wire(), anonymousPrincipal),
+        withCaller(anonymousPrincipal, () => guest.invoke("owner", wire())),
       )
       const ownerDecoded = read<string>(ownerOut!)
       expect(ownerDecoded).toBe("oidc:alice")
     }),
   )
 
+  it("Principal service resolves to the immediate caller, not the original caller", async () => {
+    __setCaller(oidcPrincipal("alice"), oidcPrincipal("root"))
+    await guest.initialize("PrincipalAgent", wire())
+    __setCaller(oidcPrincipal("bob"), oidcPrincipal("root"))
+    expect(read<string>((await guest.invoke("caller", wire()))!)).toBe("oidc:bob")
+    expect(read<string>((await guest.invoke("owner", wire()))!)).toBe("oidc:alice")
+  })
+
   it("does not provide Principal to read-only handlers without PrincipalSchema input", async () => {
-    await guest.initialize("ReadOnlyPrincipalAgent", wire(), anonymousPrincipal)
-    await expect(guest.invoke("bypass", wire(), oidcPrincipal("bypassed"))).rejects.toMatchObject({
+    await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyPrincipalAgent", wire()))
+    await expect(
+      withCaller(oidcPrincipal("bypassed"), () => guest.invoke("bypass", wire())),
+    ).rejects.toMatchObject({
       tag: "custom-error",
       val: {
         value: {
@@ -555,16 +582,18 @@ describe("agent-guest exports", () => {
   })
 
   it("provides Principal to read-only handlers with explicit PrincipalSchema input", async () => {
-    await guest.initialize("ReadOnlyPrincipalAgent", wire(), anonymousPrincipal)
+    await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyPrincipalAgent", wire()))
     const principal = oidcPrincipal("allowed")
-    const out = await guest.invoke("explicit", wire(), principal)
+    const out = await withCaller(principal, () => guest.invoke("explicit", wire()))
     expect(read<string>(out!)).toBe("oidc:allowed")
-    const anonymous = await guest.invoke("explicit", wire(), anonymousPrincipal)
+    const anonymous = await withCaller(anonymousPrincipal, () => guest.invoke("explicit", wire()))
     expect(read<string>(anonymous!)).toBe("anonymous")
   })
 
   it("injects the current principal between caller-supplied method fields", async () => {
-    await guest.initialize("ReadOnlyPrincipalAgent", wire(), oidcPrincipal("owner"))
+    await withCaller(oidcPrincipal("owner"), () =>
+      guest.initialize("ReadOnlyPrincipalAgent", wire()),
+    )
     const before = await Effect.runPromise(toWitCodec(Schema.String))
     const after = await Effect.runPromise(toWitCodec(Schema.Number))
     const first = await Effect.runPromise(
@@ -573,17 +602,19 @@ describe("agent-guest exports", () => {
     const last = await Effect.runPromise(
       Schema.encodeEffect(after.codec)(7) as Effect.Effect<SchemaValue>,
     )
-    const out = await guest.invoke("mixed", wire(first, last), oidcPrincipal("caller"))
+    const out = await withCaller(oidcPrincipal("caller"), () =>
+      guest.invoke("mixed", wire(first, last)),
+    )
     expect(read<string>(out!)).toBe("first:oidc:caller:7")
   })
 
   it.effect("Principal service propagates to child fibers forked inside a handler", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
+        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
       )
       const out = yield* Effect.promise(() =>
-        guest.invoke("callerForked", wire(), oidcPrincipal("carol")),
+        withCaller(oidcPrincipal("carol"), () => guest.invoke("callerForked", wire())),
       )
       const decoded = read<string>(out!)
       expect(decoded).toBe("oidc:carol")
@@ -621,7 +652,9 @@ describe("agent-guest exports", () => {
           return schemaValueToWit(wv(apiKey) as SchemaValue)
         }
 
-        yield* Effect.promise(() => guest.initialize("ConfigAgent", wire(), anonymousPrincipal))
+        yield* Effect.promise(() =>
+          withCaller(anonymousPrincipal, () => guest.initialize("ConfigAgent", wire())),
+        )
 
         // initialize ran impl which captured greeting at init-time = "hello".
         // The mock was queried once for "greeting".
@@ -630,7 +663,7 @@ describe("agent-guest exports", () => {
         // First invoke: greeting still "hello", read twice → 1 host call.
         callLog.length = 0
         const out1 = yield* Effect.promise(() =>
-          guest.invoke("currentGreeting", wire(), anonymousPrincipal),
+          withCaller(anonymousPrincipal, () => guest.invoke("currentGreeting", wire())),
         )
         const decoded1 = read<string>(out1!)
         expect(decoded1).toBe("hello/hello")
@@ -641,14 +674,14 @@ describe("agent-guest exports", () => {
         callLog.length = 0
         greeting = "hola"
         const out2 = yield* Effect.promise(() =>
-          guest.invoke("currentGreeting", wire(), anonymousPrincipal),
+          withCaller(anonymousPrincipal, () => guest.invoke("currentGreeting", wire())),
         )
         const decoded2 = read<string>(out2!)
         expect(decoded2).toBe("hola/hola")
 
         // initialGreeting captured at init time: still "hello", not "hola".
         const out3 = yield* Effect.promise(() =>
-          guest.invoke("initialGreeting", wire(), anonymousPrincipal),
+          withCaller(anonymousPrincipal, () => guest.invoke("initialGreeting", wire())),
         )
         const decoded3 = read<string>(out3!)
         expect(decoded3).toBe("hello")
@@ -656,7 +689,7 @@ describe("agent-guest exports", () => {
         // Secret reads resolve the current capability value and are never cached.
         apiKey = "sk-newer-key-xyz789"
         const out4 = yield* Effect.promise(() =>
-          guest.invoke("keyTail", wire(), anonymousPrincipal),
+          withCaller(anonymousPrincipal, () => guest.invoke("keyTail", wire())),
         )
         expect(read<string>(out4!)).toBe("z789")
         expect(callLog.filter((p) => p === "apiKey")).toHaveLength(1)
@@ -702,9 +735,9 @@ describe("agent-guest exports", () => {
             Effect.sync(() => JSON.parse(new TextDecoder().decode(bytes)) as { saved: string }),
         },
       })
-      await guest.initialize("FreshSelfIdentity", wire(), anonymousPrincipal)
+      await withCaller(anonymousPrincipal, () => guest.initialize("FreshSelfIdentity", wire()))
       host.mockReturnValueOnce(parent).mockReturnValue(child)
-      const result = await guest.invoke("read", wire(), anonymousPrincipal)
+      const result = await withCaller(anonymousPrincipal, () => guest.invoke("read", wire()))
       expect(JSON.parse(read<string>(result!))).toEqual({
         saved: "Identity(parent)",
         before: "Identity(parent)",

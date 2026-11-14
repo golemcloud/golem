@@ -9,14 +9,14 @@ use crate::otlp_json::{
 };
 use crate::state::{PendingSpan, PendingSpanLink, WorkerState};
 use golem_rust::bindings::golem::api::oplog::{
-    AgentMode, DurableStreamEventSummary, DurableStreamOutcome, FailedUpdateParameters,
-    GrowMemoryParameters, LogLevel, LogParameters, OplogEntry, OwnerKind,
+    AgentMode, DurableStreamEventSummary, DurableStreamOutcome, DurableStreamTerminalOutcome,
+    FailedUpdateParameters, GrowMemoryParameters, LogLevel, LogParameters, OplogEntry, OwnerKind,
     RawAgentInvocationFinishedParameters, RawAgentInvocationStartedParameters,
     RawCancelledParameters, RawCreateParameters, RawCreateResourceParameters,
     RawDropResourceParameters, RawEndParameters, RawOplogProcessorCheckpointParameters,
     RawSnapshotParameters, RawStartParameters, RawSuccessfulUpdateParameters,
     RemoteTransactionParameters, SpanAttributes, SpanData, SpanFinished, SpanKind, SpanOutcome,
-    SpanStarted,
+    SpanStarted, StreamTerminalOrigin,
 };
 use std::collections::HashMap;
 
@@ -258,8 +258,7 @@ pub(crate) fn process_entries_from(
             }
             OplogEntry::StreamRegistered(params)
             | OplogEntry::StreamItems(params)
-            | OplogEntry::StreamEnd(params)
-            | OplogEntry::StreamCancel(params)
+            | OplogEntry::StreamTerminal(params)
             | OplogEntry::StreamSession(params) => {
                 if let Some(summary) = params.summary {
                     handle_stream_summary(&params.timestamp, summary, &mut metrics);
@@ -288,15 +287,34 @@ fn handle_stream_summary(
     metrics: &mut Vec<OtlpMetric>,
 ) {
     let time = datetime_to_nanos(timestamp).to_string();
-    let (event, count, outcome) = match summary {
-        DurableStreamEventSummary::Registered => ("registered", 1, None),
-        DurableStreamEventSummary::Items(count) => ("items", count, None),
-        DurableStreamEventSummary::End(value) => ("end", 1, Some(value)),
-        DurableStreamEventSummary::Cancelled => ("cancelled", 1, None),
-        DurableStreamEventSummary::SessionResult => ("session-result", 1, None),
-        DurableStreamEventSummary::SessionFinished(value) => ("session-finished", 1, Some(value)),
-        DurableStreamEventSummary::SessionCancellation => ("session-cancellation", 1, None),
-        DurableStreamEventSummary::SessionExpired => ("session-expired", 1, None),
+    let (event, count, outcome, origin) = match summary {
+        DurableStreamEventSummary::Registered => ("registered", 1, None, None),
+        DurableStreamEventSummary::Items(count) => ("items", count, None, None),
+        DurableStreamEventSummary::Terminal(value) => (
+            "terminal",
+            1,
+            Some(match value.outcome {
+                DurableStreamTerminalOutcome::Finished => "finished",
+                DurableStreamTerminalOutcome::Failed => "failed",
+                DurableStreamTerminalOutcome::ConsumerCancelled => "consumer-cancelled",
+            }),
+            Some(match value.origin {
+                StreamTerminalOrigin::Source => "source",
+                StreamTerminalOrigin::Control => "control",
+            }),
+        ),
+        DurableStreamEventSummary::SessionResult => ("session-result", 1, None, None),
+        DurableStreamEventSummary::SessionFinished(value) => (
+            "session-finished",
+            1,
+            Some(match value {
+                DurableStreamOutcome::Success => "success",
+                DurableStreamOutcome::Error => "error",
+            }),
+            None,
+        ),
+        DurableStreamEventSummary::SessionCancellation => ("session-cancellation", 1, None, None),
+        DurableStreamEventSummary::SessionExpired => ("session-expired", 1, None, None),
     };
     let mut attributes = vec![KeyValue {
         key: "event".to_string(),
@@ -308,11 +326,15 @@ fn handle_stream_summary(
         attributes.push(KeyValue {
             key: "outcome".to_string(),
             value: OtlpValue {
-                string_value: match outcome {
-                    DurableStreamOutcome::Success => "success",
-                    DurableStreamOutcome::Error => "error",
-                }
-                .to_string(),
+                string_value: outcome.to_string(),
+            },
+        });
+    }
+    if let Some(origin) = origin {
+        attributes.push(KeyValue {
+            key: "origin".to_string(),
+            value: OtlpValue {
+                string_value: origin.to_string(),
             },
         });
     }
@@ -1189,6 +1211,53 @@ mod tests {
         assert!(attributes.iter().any(|attribute| {
             attribute.key == "outcome" && attribute.value.string_value == "error"
         }));
+
+        for (outcome, expected_outcome) in [
+            (DurableStreamTerminalOutcome::Finished, "finished"),
+            (DurableStreamTerminalOutcome::Failed, "failed"),
+            (
+                DurableStreamTerminalOutcome::ConsumerCancelled,
+                "consumer-cancelled",
+            ),
+        ] {
+            for (origin, expected_origin) in [
+                (StreamTerminalOrigin::Source, "source"),
+                (StreamTerminalOrigin::Control, "control"),
+            ] {
+                let output = process_entries(
+                    &mut state,
+                    vec![OplogEntry::StreamTerminal(
+                        golem_rust::bindings::golem::api::oplog::RawDurableStreamRecordParameters {
+                            timestamp: instant(12, 0),
+                            record: OplogPayload::Inline(Vec::new()),
+                            summary: Some(DurableStreamEventSummary::Terminal(
+                                golem_rust::bindings::golem::api::oplog::DurableStreamTerminalSummary {
+                                    outcome,
+                                    origin,
+                                },
+                            )),
+                        },
+                    )],
+                );
+                let metric = output
+                    .metrics
+                    .iter()
+                    .find(|metric| metric.name == "golem.durable_stream.event_count")
+                    .unwrap();
+                let point = &metric.sum.as_ref().unwrap().data_points[0];
+                assert_eq!(point.as_int.as_deref(), Some("1"));
+                assert_eq!(point.attributes.len(), 3);
+                for (key, expected) in [
+                    ("event", "terminal"),
+                    ("outcome", expected_outcome),
+                    ("origin", expected_origin),
+                ] {
+                    assert!(point.attributes.iter().any(|attribute| {
+                        attribute.key == key && attribute.value.string_value == expected
+                    }));
+                }
+            }
+        }
     }
 
     fn close(span_id: &str, outcome: SpanOutcome) -> SpanFinished {
@@ -1252,17 +1321,20 @@ mod tests {
     }
 
     fn invocation_started(trace_id: &str, context: Vec<SpanData>) -> OplogEntry {
-        invocation_started_with_key("invocation", trace_id, context)
+        invocation_started_with_id(1, trace_id, context)
     }
 
-    fn invocation_started_with_key(
-        idempotency_key: &str,
+    fn invocation_started_with_id(
+        invocation_id: u64,
         trace_id: &str,
         context: Vec<SpanData>,
     ) -> OplogEntry {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
-            idempotency_key: idempotency_key.to_string(),
+            invocation_id: Uuid {
+                high_bits: 0,
+                low_bits: invocation_id,
+            },
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -1281,6 +1353,10 @@ mod tests {
     fn invocation_finished() -> OplogEntry {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
+            invocation_id: Uuid {
+                high_bits: 0,
+                low_bits: 1,
+            },
             result: OplogPayload::Inline(Vec::new()),
             method_name: None,
             consumed_fuel: 0,
@@ -1792,6 +1868,10 @@ mod tests {
                 OplogEntry::Error(RawErrorParameters {
                     timestamp: instant(18, 0),
                     kind: OplogErrorKind::InvocationLocal,
+                    invocation_id: Some(Uuid {
+                        high_bits: 0,
+                        low_bits: 1,
+                    }),
                     error: WorkerError::Unknown("boom".to_string()),
                     retry_from: 0,
                     retry_policy_state: None,
@@ -1845,23 +1925,27 @@ mod tests {
 
     #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
-        for (next_key, kind, expected_kind) in [
-            ("failed-key", OplogErrorKind::Invocation, "invocation"),
-            ("next-key", OplogErrorKind::Invocation, "invocation"),
+        for (next_id, kind, expected_kind) in [
+            (1, OplogErrorKind::Invocation, "invocation"),
+            (2, OplogErrorKind::Invocation, "invocation"),
         ] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);
             let failed = process_entries(
                 &mut state,
                 vec![
-                    invocation_started_with_key(
-                        "failed-key",
+                    invocation_started_with_id(
+                        1,
                         "trace-failed",
                         vec![local_span("failed-invocation", None, false)],
                     ),
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
                         kind,
+                        invocation_id: Some(Uuid {
+                            high_bits: 0,
+                            low_bits: 1,
+                        }),
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
@@ -1880,8 +1964,8 @@ mod tests {
                 &mut state,
                 vec![
                     revert_original_start(),
-                    invocation_started_with_key(
-                        next_key,
+                    invocation_started_with_id(
+                        next_id,
                         "trace-retry",
                         vec![local_span("retry-invocation", None, false)],
                     ),

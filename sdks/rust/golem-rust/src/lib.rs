@@ -141,6 +141,7 @@ mod raw_bindings {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -205,6 +206,7 @@ pub mod load_snapshot {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -253,6 +255,7 @@ pub mod save_snapshot {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -302,6 +305,7 @@ pub mod golem_agentic {
         pub_export_macro: true,
 
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -368,6 +372,7 @@ pub mod oplog_processor {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
+            "golem:core/http@2.0.0": golem_schema::http::wit::wire,
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
@@ -484,6 +489,7 @@ fn wire_agent_id_to_schema(value: schema::wit::wire::AgentId) -> AgentId {
 fn schema_promise_id_to_wire(value: &PromiseId) -> schema::wit::wire::PromiseId {
     schema::wit::wire::PromiseId {
         agent_id: schema_agent_id_to_wire(value.agent_id.clone()),
+        fingerprint: schema_uuid_to_wire(value.fingerprint),
         oplog_idx: value.oplog_idx,
     }
 }
@@ -491,6 +497,7 @@ fn schema_promise_id_to_wire(value: &PromiseId) -> schema::wit::wire::PromiseId 
 fn wire_promise_id_to_schema(value: schema::wit::wire::PromiseId) -> PromiseId {
     PromiseId {
         agent_id: wire_agent_id_to_schema(value.agent_id),
+        fingerprint: wire_uuid_to_schema(value.fingerprint),
         oplog_idx: value.oplog_idx,
     }
 }

@@ -134,15 +134,14 @@ use crate::durable_host::entity::{
     encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
-use crate::durable_host::stream_transport::{
-    LiveStreamEndpoint, accounted_byte_output_stream_pair,
-};
+use crate::durable_host::stream_transport::LiveStreamEndpoint;
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
 };
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
+    StoreReplayState,
 };
 use crate::native_tool::{NativeToolInvocation, NativeToolKey, NativeToolOutput, NativeToolStdin};
 use crate::preview2::golem::tool::host::{
@@ -184,9 +183,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
-use golem_common::model::durable_stream::{
-    DurableStreamHandle, SessionStreamRole, StreamCancelReason,
-};
+use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole, StreamError};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
     InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
@@ -343,8 +340,8 @@ struct UnderlyingToolStdinStreamConsumer {
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
-    /// The reason of a cancel by the producer of a client's stdin, set before the source ends.
-    source_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
+    /// The failure of a client's stdin, set before the source ends.
+    source_cancel: Option<Arc<OnceLock<StreamError>>>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -447,8 +444,7 @@ struct ToolCaller<Ctx: WorkerCtx> {
     publication_failure: durability::PublicationFailureContext<Ctx>,
     tracker: crate::durable_host::tail_work::TailWorkTracker,
     counter: Arc<std::sync::atomic::AtomicUsize>,
-    mode: Option<InvocationExecutionMode>,
-    local_live: Arc<AtomicBool>,
+    store_replay_state: StoreReplayState,
     suppressed: bool,
 }
 
@@ -468,19 +464,15 @@ impl<Ctx: WorkerCtx> ToolCaller<Ctx> {
                 publication_failure: durability::PublicationFailureContext::new(ctx),
                 tracker: ctx.tail_work_tracker(),
                 counter: ctx.state.live_host_call_counter(),
-                mode: ctx.entity_invocation_scope().map(|scope| scope.mode()),
-                local_live: ctx.state.local_live_tail(),
+                store_replay_state: ctx.state.store_replay_state.clone(),
                 suppressed: ctx.state.durability_is_suppressed(),
             }
         }))
     }
 
     fn is_live(&self) -> bool {
-        crate::durable_host::store_is_live(
-            self.mode,
-            self.local_live.load(Ordering::Acquire),
-            self.settlement.replay.is_live_published(),
-        )
+        self.store_replay_state
+            .is_live(self.settlement.replay.is_live_published())
     }
 }
 

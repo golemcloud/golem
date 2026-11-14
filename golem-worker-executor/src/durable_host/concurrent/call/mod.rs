@@ -23,7 +23,7 @@ use crate::workerctx::ReplayAdmissionStage;
 use futures::future::BoxFuture;
 use golem_common::SafeDisplay;
 use golem_common::model::card::PermissionTarget;
-use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
+use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::DurableInvocationId;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
 use golem_service_base::model::auth::AuthCtx;
@@ -35,6 +35,7 @@ mod claims;
 mod completion_replay;
 mod execution;
 mod start;
+mod state;
 mod terminal;
 pub(crate) use access_start::access_invocation_id;
 pub(in crate::durable_host::concurrent) use access_start::guest_import_invocation_id;
@@ -51,6 +52,7 @@ pub(crate) use claims::reproduce_incomplete_start_refusal;
 pub(in crate::durable_host::concurrent) use completion_replay::classify_replay_resolution;
 use completion_replay::expect_cancelled_resolution;
 pub(in crate::durable_host::concurrent) use execution::ambient_trap_context;
+pub use state::{CallRecording, ResolvingReplay, SessionState};
 #[cfg(test)]
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
@@ -103,27 +105,10 @@ pub(crate) trait CallSpanObserver: std::fmt::Debug + Send + Sync {
 /// finished twice; an unfinished drop runs the `P` drop policy.
 pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     pub(super) start_idx: OplogIndex,
-    pub(super) is_live: bool,
-    /// `true` when a `Start` entry was actually appended. It is `false` during unpersisted
-    /// execution and for replay handles.
-    pub(super) persisted: bool,
-    /// Tracks the (possibly deferred) blob upload of this call's request payload, started when the
-    /// `Start` was reserved. Awaited before the matching `End` / `Cancelled` is appended so an
-    /// upload failure surfaces at the call site rather than only at the leaf oplog's commit barrier.
-    /// `PendingUpload::already_durable()` (a no-op) for replay handles, unpersisted execution, and
-    /// inline requests.
-    pub(super) request_upload: PendingUpload,
-    /// Replay-side resolver receiver; `Some` only for replay handles.
-    pub(super) replay: Option<ReplayCallHandle>,
-    pub(super) finished: bool,
+    state: SessionState<P>,
     /// Span closed by a guest cancellation of this call, including a dropped host future.
     pub(super) cancellation_span_id: Option<SpanId>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// `true` when this replay handle parked on a recorded terminal that was never delivered to
-    /// the guest — a `Cancelled { partial: None }` or an `End` marked `CompletionDiscarded` —
-    /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
-    /// drop an expected state (debug-logged) rather than an anomaly.
-    pub(super) parked_undelivered_replay: bool,
     /// Whether the call was started with [`AccessClaimOptions::host_internal_calls`], which
     /// [`Self::invoke_host_internal_access`] requires of the owner of a host-internal call.
     pub(super) host_internal_calls: bool,
@@ -157,8 +142,6 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// in-flight permit to the next drain even for policies whose `production_drop_sink` is `None`
     /// (e.g. `NotCancellable`).
     pub(super) cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// Counts this handle as an in-flight live host call while present.
-    pub(super) live_call_permit: Option<LiveCallPermit>,
     pub(super) _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -202,6 +185,9 @@ pub(super) struct BegunCallExecutionScope {
     /// when it begins, in guest call order, so live execution and replay agree on it. `None`
     /// outside an entity Store with logical key positions, and for accessor calls.
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// The agent invocation that runs when the call begins. The call's retry errors name it, also
+    /// when the call outlives it.
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -216,6 +202,7 @@ impl BegunCallExecutionScope {
             observational_owner: self.observational_owner,
             invocation_id: self.invocation_id,
             logical_key_position: self.logical_key_position,
+            agent_invocation: self.agent_invocation,
         }
     }
 }
@@ -235,6 +222,8 @@ pub(super) struct CallExecutionScope {
     pub(super) invocation_id: Option<DurableInvocationId>,
     /// See [`BegunCallExecutionScope::logical_key_position`].
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// See [`BegunCallExecutionScope::agent_invocation`].
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl CallExecutionScope {
@@ -328,12 +317,10 @@ pub(crate) struct BegunCall<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx
     requires_agent_authority: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
-    primary_runtime: bool,
-    replaying_incomplete_entity: bool,
+    store_replay_state: StoreReplayState,
     tool_entity: bool,
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     admission_boundary: Option<SerializableToolAdmissionRefusal>,
-    local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
@@ -487,24 +474,18 @@ pub(crate) enum ScopeReplayRecovery {
 }
 
 #[cfg(test)]
-mod scope_replay_recovery_tests;
+pub use tests::{live_unfinished_handle, live_unfinished_handle_with_counter};
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
     start_idx: OplogIndex,
-    persisted: bool,
+    state: SessionState<P>,
     requires_agent_authority: bool,
     agent_auth_ctx: Option<AuthCtx>,
-    request_upload: PendingUpload,
-    replay: Option<ReplayCallHandle>,
     execution_scope: CallExecutionScope,
     retry: InFunctionRetryController,
     scope_replay_recovery: ScopeReplayRecovery,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// The in-flight permit taken at prepare time (or when a replayed scope switched to live),
-    /// handed on to the [`DurableCallSession`] so the call stays counted continuously from before its
-    /// first oplog append until its terminal is recorded.
-    live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
 
@@ -586,7 +567,7 @@ pub(super) struct ScopedRetryHost<'a, H> {
 
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     pub fn is_live(&self) -> bool {
-        self.is_live
+        self.state.is_executing()
     }
 
     /// The invocation id recorded in the `Start`s of this call.
@@ -595,13 +576,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     pub(crate) fn is_persisted(&self) -> bool {
-        self.persisted || !self.is_live
+        self.state.has_recorded_start()
     }
 
     pub(crate) fn take_historical_reconstruction(&mut self) -> Option<HistoricalReconstruction> {
-        self.replay
-            .as_mut()
-            .and_then(ReplayCallHandle::take_historical_reconstruction)
+        self.state.take_historical_reconstruction()
     }
 
     pub async fn recorded_request<Ctx: WorkerCtx>(

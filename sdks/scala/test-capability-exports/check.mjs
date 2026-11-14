@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { register } from "node:module";
 import { pathToFileURL } from "node:url";
 
-// These fixtures do not use streams or ambient host APIs. Resolve the static
-// imports, but fail if a fixture unexpectedly calls one.
+// Guest dispatch reads the invocation caller. Other streams and ambient host
+// APIs must still fail if a fixture unexpectedly calls one.
 const hostModules = [
   "golem:core/types@2.0.0",
   "golem:agent/host@2.0.0",
@@ -16,6 +16,16 @@ const hostModules = [
         export const SchemaValueStream = { wrap: unavailable, unwrap: unavailable };
         export const parseAgentId = unavailable;
         export const getSelfMetadata = unavailable;
+      `,
+]);
+hostModules.push([
+  "golem:agent/invocation-context@2.0.0",
+  `
+        const anonymous = { tag: "anonymous" };
+        export const caller = () => ({ original: anonymous, immediate: anonymous });
+        export const invocationId = () => {
+          throw new Error("Unexpected host call: golem:agent/invocation-context@2.0.0");
+        };
       `,
 ]);
 register("./host-module-hooks.mjs", import.meta.url, {
@@ -60,7 +70,6 @@ export const toolInput = (value) => ({
   },
   value: record("string-value", value),
 });
-const anonymous = { tag: "anonymous" };
 const errorTag = (tag) => (error) => error?.tag === tag;
 
 export async function checkFixture(path, capabilities) {
@@ -116,11 +125,11 @@ export async function checkFixture(path, capabilities) {
     assert(!source.includes('from "golem:agent/host@'));
     assert(!source.includes('from "golem:api/host@'));
     await assert.rejects(
-      agent.initialize("counter", record("string-value", "three"), anonymous),
+      agent.initialize("counter", record("string-value", "three")),
       errorTag("invalid-type"),
     );
     await assert.rejects(
-      agent.invoke("add", record("s32-value", 7), anonymous),
+      agent.invoke("add", record("s32-value", 7)),
       errorTag("invalid-agent-id"),
     );
     assert.throws(() => agent.getDefinition(), errorTag("invalid-agent-id"));
@@ -132,19 +141,17 @@ export async function checkFixture(path, capabilities) {
     await agent.initialize(
       "counter",
       record("string-value", "three"),
-      anonymous,
     );
     assert.equal(agent.getDefinition().typeName, "counter");
-    const first = await agent.invoke("add", record("s32-value", 7), anonymous);
+    const first = await agent.invoke("add", record("s32-value", 7));
     assert.equal(first.valueNodes[first.root].val, 12);
     const second = await agent.invoke(
       "add",
       record("s32-value", -2),
-      anonymous,
     );
     assert.equal(second.valueNodes[second.root].val, 10);
     await assert.rejects(
-      agent.initialize("counter", record("string-value", "again"), anonymous),
+      agent.initialize("counter", record("string-value", "again")),
       errorTag("custom-error"),
     );
     await assert.rejects(
@@ -161,7 +168,6 @@ export async function checkFixture(path, capabilities) {
       undefined,
       undefined,
       undefined,
-      anonymous,
     );
     assert.equal(
       result.result.value.valueNodes[result.result.value.root].val,
@@ -175,13 +181,12 @@ export async function checkFixture(path, capabilities) {
         undefined,
         undefined,
         undefined,
-        anonymous,
       ),
       errorTag("invalid-command-path"),
     );
   } else {
     await assert.rejects(
-      tool.invoke("echo", [], toolInput("x"), undefined, undefined, undefined, anonymous),
+      tool.invoke("echo", [], toolInput("x"), undefined, undefined, undefined),
       errorTag("invalid-tool-name"),
     );
   }
@@ -230,7 +235,6 @@ export async function checkFixture(path, capabilities) {
       undefined,
       undefined,
       undefined,
-      anonymous,
       underlying,
     );
     assert.equal(invoked, 1);

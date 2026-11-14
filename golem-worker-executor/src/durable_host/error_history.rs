@@ -238,10 +238,11 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     collected_count += 1;
                 }
                 Some(OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 }) => match &first_seen_invocation {
                     None => {
-                        first_seen_invocation = Some(idempotency_key.clone());
+                        first_seen_invocation = Some(*idempotency_key);
                         stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                         if stderr_entries.len() >= max_count {
                             break 'scan;

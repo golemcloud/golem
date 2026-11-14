@@ -227,6 +227,22 @@ impl AuthCtx {
         AuthCtx::System
     }
 
+    /// The authenticated caller namespace for external invocation idempotency.
+    /// System requests have no caller scope and must not gain internal trust here.
+    pub fn idempotency_scope(&self) -> Option<golem_common::model::IdempotencyScope> {
+        use golem_common::model::IdempotencyScope;
+
+        match self {
+            Self::System => None,
+            Self::User(ctx) => Some(IdempotencyScope::User(ctx.account_id)),
+            Self::Agent(ctx) => Some(IdempotencyScope::Agent(ctx.account_id)),
+            Self::AdminImpersonation(ctx) => Some(IdempotencyScope::AdminImpersonation {
+                admin: ctx.admin_account_id,
+                target: ctx.target_account_id,
+            }),
+        }
+    }
+
     pub fn agent_with_effective_surface(
         account_id: AccountId,
         account_email: AccountEmail,
@@ -387,6 +403,59 @@ fn authorize_effective_surface_permission(
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
             target.clone(),
         )))
+    }
+}
+
+#[cfg(test)]
+mod invocation_scope_tests {
+    use super::*;
+    use golem_common::model::IdempotencyScope;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn invocation_id_auth_scope_mapping() {
+        let account = AccountId(Uuid::from_u128(10));
+        let target = AccountId(Uuid::from_u128(11));
+        let surface = EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        };
+        let email = AccountEmail::new("caller@example.com".to_string());
+        let user = AuthCtx::User(UserAuthCtx {
+            account_id: account,
+            account_email: email.clone(),
+            account_plan_id: PlanId(Uuid::nil()),
+            account_roles: BTreeSet::new(),
+            effective_surface: surface.clone(),
+            delegation_surface: None,
+        });
+        let agent = AuthCtx::agent_with_effective_surface(account, email.clone(), surface.clone());
+        let admin = AuthCtx::admin_impersonation(
+            account,
+            target,
+            email,
+            BTreeSet::new(),
+            PlanId(Uuid::nil()),
+            surface,
+        );
+        assert_eq!(AuthCtx::system().idempotency_scope(), None);
+        assert_eq!(
+            user.idempotency_scope(),
+            Some(IdempotencyScope::User(account))
+        );
+        assert_eq!(
+            agent.idempotency_scope(),
+            Some(IdempotencyScope::Agent(account))
+        );
+        assert_eq!(
+            admin.idempotency_scope(),
+            Some(IdempotencyScope::AdminImpersonation {
+                admin: account,
+                target
+            })
+        );
     }
 }
 

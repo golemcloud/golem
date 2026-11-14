@@ -14,10 +14,10 @@
 
 use super::{
     AgentEvent, AgentStatus, BroadcastStreamRecvError, ConnectWorkerRequest, Context, HasAll,
-    InternalWorkerEvent, InterruptKind, InvocationContextStack, Pin, Poll, Response, Status,
-    Stream, Timestamp, UsesAllDeps, Worker, WorkerCtx, WorkerEventReceiver, WorkerExecutor,
-    WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, extract_principal, golem,
-    info, record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
+    InternalWorkerEvent, InterruptKind, Pin, Poll, Response, Status, Stream, Timestamp,
+    UsesAllDeps, Worker, WorkerCtx, WorkerEventReceiver, WorkerExecutor, WorkerExecutorError,
+    WorkerExecutorImpl, extract_owned_agent_id, extract_principal, golem, info,
+    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -35,6 +35,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
+        self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
@@ -49,18 +50,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
-            let event_service = Worker::get_or_create_suspended(
-                self,
-                &owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?
-            .event_service();
+            let worker = self
+                .get_existing_for_management(&owned_agent_id, principal, "connect")
+                .await?;
+            let event_service = worker.event_service();
 
             let receiver = event_service.receiver();
 

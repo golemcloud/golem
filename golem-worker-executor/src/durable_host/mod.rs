@@ -60,7 +60,9 @@ use recovery::{
     prepare_failure, recovered_restart, recovered_status, should_replay_invocation,
     should_restart_after_shard_assignment_change,
 };
-use replay_to_live::{begin_local_live_continuation, begin_replay_to_live, store_is_live};
+use replay_to_live::{
+    LiveFinalization, StoreReplayState, begin_local_live_continuation, begin_replay_to_live,
+};
 pub(crate) use replay_to_live::{
     is_tool_attachment_live_admission_rejection, tool_attachment_live_admission_cancelled_error,
     tool_attachment_live_admission_rejected_error,
@@ -219,8 +221,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
@@ -243,7 +245,7 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
 };
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
@@ -268,6 +270,7 @@ use golem_common::model::oplog::{
     EphemeralCannotSuspendError, LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData,
     SnapshotAssistedUpdateDetails, UpdateDescription,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
@@ -353,13 +356,16 @@ pub(crate) struct LiveAuthorizationPermit {
 /// before the `Start` is appended, because the request is built without access to the context.
 #[derive(Debug, Clone)]
 pub(crate) struct IdempotencyKeyPosition {
-    parent: IdempotencyKey,
+    parent: golem_common::model::InvocationId,
     logical: Option<OplogIndex>,
 }
 
 impl IdempotencyKeyPosition {
     pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
-        IdempotencyKey::derived(&self.parent, self.index(start_index))
+        IdempotencyKey::derived(
+            &IdempotencyKey::from_uuid(self.parent.0),
+            self.index(start_index),
+        )
     }
 
     /// The oplog index the key derives from: the logical position, or else the `Start` index.
@@ -388,6 +394,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
+    invocation_id: Option<golem_common::model::OwnedInvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
@@ -692,7 +699,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             parent: self
                 .state
                 .get_current_idempotency_key()
-                .unwrap_or(IdempotencyKey::fresh()),
+                .unwrap_or_else(|| Uuid::new_v4().into()),
             logical,
         }
     }
@@ -804,7 +811,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by_email
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentKey> {
         self.state.owner_context.agent().cloned()
     }
 
@@ -942,6 +949,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed, replayed or live, and can change the state of the agent.
+    pub(crate) fn last_state_change(&self) -> Option<OplogIndex> {
+        self.state.last_state_change
+    }
+
     pub(crate) fn live_stream_event_capacity(&self) -> usize {
         self.state
             .config
@@ -1036,11 +1049,7 @@ pub(crate) enum FinishReplayToLive {
 pub(crate) struct PendingReplayToLive {
     #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     replay_target: OplogIndex,
-    role: ReplayToLiveRole,
-    replaying_incomplete_entity: bool,
-    tool_entity: bool,
-    tool_operation: Option<tool::operation::OwnerToolOperation>,
-    local_live_tail: Arc<AtomicBool>,
+    finalization: LiveFinalization,
     linear_memory: LinearMemoryTracker,
 }
 
@@ -1132,7 +1141,7 @@ struct PrivateDurableWorkerState {
     created_by: AccountId,
     owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
-    current_idempotency_key: Option<IdempotencyKey>,
+    current_idempotency_key: Option<golem_common::model::InvocationId>,
     /// Store-local child positions under an entity seed.
     entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
@@ -1140,12 +1149,7 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
-    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
-    /// published replay state instead.
-    entity_execution_mode: Option<InvocationExecutionMode>,
-    /// Per-Store live continuation after this entity's matching historical call was removed by a
-    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
-    local_live_tail: Arc<AtomicBool>,
+    store_replay_state: StoreReplayState,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
@@ -1216,6 +1220,12 @@ struct PrivateDurableWorkerState {
     /// Name of the agent method currently being invoked under read-only strictness. Captured at
     /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
     read_only_method_name: Option<String>,
+
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed and can change the state of the agent, replayed or live. A `read_only` agent
+    /// method cannot. Replay sets it from the history after the baseline of the start, so after a
+    /// restart it still points at a change that no later automatic snapshot record holds.
+    last_state_change: Option<OplogIndex>,
 
     /// Oplog-processor plugin calls are admitted by the operator when the plugin is installed,
     /// outside the per-agent permission-card model. This is set only while dispatching the
@@ -1343,6 +1353,12 @@ struct PrivateDurableWorkerState {
     /// A protocol refusal ended replay without granting live authority.
     authoritative_replay_failure: Arc<AtomicBool>,
 
+    /// The bootstrap phase of the primary Store while its core initializer runs.
+    bootstrap: Option<BootstrapPhase>,
+    /// The bootstrap range of this generation: the first `Start` to the last entry of the
+    /// durable calls that the core initializer appended or claimed. `None` when it made none.
+    bootstrap_range: Option<OplogRegion>,
+
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     http_call_count: u64,
@@ -1363,6 +1379,18 @@ struct PrivateDurableWorkerState {
     resource_limit_entry: Arc<AtomicResourceEntry>,
 }
 
+/// The observation of the durable calls that a core initializer makes inside `instantiate`.
+struct BootstrapPhase {
+    /// The main cursor, while a bootstrap cursor stands in its place in `replay_state`.
+    main: Option<ReplayState>,
+    /// The lowest `Start` index that the initializer appended or claimed.
+    first_start: Option<OplogIndex>,
+    /// The last replayed non-hint index of the active cursor when the phase began.
+    replayed_before: OplogIndex,
+    /// The last appended non-hint index of the oplog when the phase began.
+    appended_before: Option<OplogIndex>,
+}
+
 #[derive(Clone)]
 pub(crate) struct WakeupScheduler {
     promise_service: Arc<dyn PromiseService>,
@@ -1379,6 +1407,7 @@ impl WakeupScheduler {
             .promise_service
             .create(
                 &self.owned_agent_id.agent_id,
+                self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
             .await?;
@@ -1557,15 +1586,8 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        store_is_live(
-            self.entity_execution_mode,
-            self.local_live_tail.load(Ordering::Acquire),
-            self.replay_state.is_live_published(),
-        )
-    }
-
-    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
-        self.local_live_tail.clone()
+        self.store_replay_state
+            .is_live(self.replay_state.is_live_published())
     }
 
     /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
@@ -1584,7 +1606,8 @@ impl PrivateDurableWorkerState {
     /// call's own quota class.
     pub fn durable_call_is_live(&self) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.has_unclaimed_retained_starts())
     }
 
@@ -1599,16 +1622,87 @@ impl PrivateDurableWorkerState {
     /// bounded by the recorded prefix of one recovered invocation.
     pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
         self.is_live()
-            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+            && (self.store_replay_state.initial_entity_mode()
+                == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.retains_unclaimed_start_charged_to(quota))
+    }
+
+    /// Records that the core initializer appended or claimed the `Start` at `start_index`, while
+    /// a bootstrap phase observes it.
+    fn observe_bootstrap_start(&mut self, start_index: OplogIndex) {
+        if let Some(phase) = &mut self.bootstrap {
+            phase.first_start = Some(
+                phase
+                    .first_start
+                    .map_or(start_index, |first| first.min(start_index)),
+            );
+        }
+    }
+
+    /// Refuses `call` with a divergence while the core initializer runs on a bootstrap cursor,
+    /// which replays its bootstrap block or records the block of an update target. Every later
+    /// start from the restore point that names the block replays it on a strict cursor, which
+    /// holds no invocation and no owner wallet and can only return recorded results.
+    fn refuse_on_bootstrap_cursor(
+        &self,
+        call: impl std::fmt::Display,
+    ) -> Result<(), WorkerExecutorError> {
+        if self
+            .bootstrap
+            .as_ref()
+            .is_some_and(|phase| phase.main.is_some())
+        {
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "a direct read call of the core initializer",
+                format!(
+                    "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
+                ),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Admits a direct durable call of the core initializer while a bootstrap cursor replays its
+    /// bootstrap block: only a read outside the permission-card and fork families, whose replay
+    /// depends on nothing but the block.
+    fn check_bootstrap_admission(
+        &self,
+        function_type: &DurableFunctionType,
+        host_function: &HostFunctionName,
+    ) -> Result<(), WorkerExecutorError> {
+        let read = matches!(
+            function_type,
+            DurableFunctionType::ReadLocal | DurableFunctionType::ReadRemote
+        );
+        let excluded_family = matches!(
+            host_function,
+            HostFunctionName::GolemApiDeriveCard
+                | HostFunctionName::GolemApiInstallCard
+                | HostFunctionName::GolemPermissionsDerivePersist
+                | HostFunctionName::GolemPermissionsRevokePersist
+                | HostFunctionName::GolemPermissionsInstallChildPersist
+                | HostFunctionName::GolemPermissionsInstallTransfer
+                | HostFunctionName::GolemPermissionsInspectDecision
+                | HostFunctionName::GolemPermissionsDeriveDecision
+                | HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+                | HostFunctionName::GolemPermissionsDeriveScopeDecision
+                | HostFunctionName::GolemPermissionsInstallDecision
+                | HostFunctionName::GolemApiFork
+                | HostFunctionName::GolemApiForkWorker
+        );
+        if read && !excluded_family {
+            Ok(())
+        } else {
+            self.refuse_on_bootstrap_cursor(format_args!("{host_function} as {function_type:?}"))
+        }
     }
 
     /// Whether this Store is an incomplete entity that already continued live locally while the
     /// shared cursor may still replay other owners' records. See
     /// [`ReplayState::claim_start_for_store`].
     pub(crate) fn store_continued_live(&self) -> bool {
-        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
-            && self.is_live()
+        self.store_replay_state.continued_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -1620,11 +1714,14 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
-    pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.current_idempotency_key.clone()
+    pub fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
+        self.current_idempotency_key
     }
 
-    pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
+    pub fn set_current_idempotency_key(
+        &mut self,
+        invocation_key: golem_common::model::InvocationId,
+    ) {
         self.current_idempotency_key = Some(invocation_key);
     }
 

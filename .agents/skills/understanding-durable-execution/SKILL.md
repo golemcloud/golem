@@ -113,7 +113,7 @@ the member, and the next scan requests the delete again. A delete request that a
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
 
-Scheduled `Invoke`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
+Scheduled `WakeInvocation`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
 use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
 again on the returned worker, covering cached and shared acquisition. Missing or mismatched
 incarnations are logged and acknowledged without creation; acquisition, delivery and startup
@@ -121,10 +121,63 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index. Deferred
-`InvokeEphemeral` retains its separate creation path.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
+
+Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
+returning acceptance, without starting its guest. Local and remote guest calls use the same target
+admission contract, pinned to the activated incarnation. Same-key repair preserves the original
+payload and deadline and repairs the deterministic wake. Completed caller replay does no target
+lookup. Future entries neither block ready work nor require residency or RunningWorkers membership.
+The scheduler stores only a `WakeInvocation` address, fingerprint and key, not another payload.
+Delivery requires the scheduled entry still to exist and be due, then starts an unloaded worker or
+notifies its resident loop. It never appends another invocation. The recovery index follows status
+changes, and the entry was future at the last one, so delivery adds a durable target to
+`RunningWorkers` before the start: the wake is acknowledged once the start begins, and a crash
+before `AgentInvocationStarted` must still be recovered. Token cancellation validates the
+incarnation-bound receipt and recorded scheduling owner, commits pending removal before removing
+the wake, and shares the instance mutex with the committed pending-to-started transition. If
+cancellation wins, selected-but-not-started work is skipped without executing. The
+`CancelPendingInvocation` entry retains the key in invocation-result membership, so a same-key
+schedule retry cannot restore the pending entry, even after restart or recent-index eviction.
+Result lookup reports cancellation rather than a successful execution. Cancelling an invocation
+that is no longer pending does not replace its completed result. If start wins, token cancellation
+returns false. A delayed wake cannot recreate cancelled work.
+An ephemeral target is created at schedule time (`create_demand`, then `schedule_invocation`), so
+its pending entry is committed like a durable target's. Its first start waits for the due wake; an
+ephemeral wake that finds the agent inactive is acknowledged. Ephemeral targets are not in
+`RunningWorkers` and the wake is acknowledged once the start begins, so an executor lost before the
+start commits `Restart` loses the scheduled invocation, as fail-stop allows. Cancelling a scheduled
+invocation on a never-started ephemeral target, through either its token or the public cancellation
+endpoint, also withdraws its constructor reservation under the instance mutex. A later resume or
+reconstruction runs neither the constructor nor the cancelled method. Token cancellation returns
+false once execution has begun; ordinary public cancellation keeps its existing pending-work rules.
+When an owner finishes construction, it registers the wake of every folded future entry
+again. Scheduler storage keeps an existing entry for the same schedule id, so this only restores a
+wake lost between the pending commit and the wake insert. A cancellation that commits during
+construction can leave a registered wake behind; its delivery finds no pending entry and is
+acknowledged without effect. A lost wake is not recovered while the target stays unloaded or stays
+resident without another construction.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
@@ -223,6 +276,10 @@ replay tolerance.
 
 ## Worker lifecycle and reconstruction
 
+`WorkerLifecycle` (`worker/lifecycle/state.rs`) owns the private `WorkerInstance` phase under the existing lifecycle mutex. Callers inspect `state()` and use named transitions for initialization, permit admission, Store attempts, stop and deletion; they cannot replace the phase directly. `transition()` lends a phase-specific handle that borrows the lifecycle exclusively. Initialization and permit-admission transitions consume these handles, so callers cannot use a transition from the wrong phase or reuse a completed handle. After releasing and reacquiring the lock, asynchronous permit callbacks still check their attempt identity. Initialization publishes `resolved` only after installing the unloaded outcome and clearing creation provenance. The cell is the lock-free completion boundary; `initialization_request` remains available across construction failures. `Running` owns an invocation loop, not a particular Store: one loop can make several Store attempts. Waiting and running phases each own a required task handle. A failed start leaves a durable agent `Unloaded` with its `startup_failure`: admission returns that error until the next start runs the agent again. An ephemeral agent goes to the separate `Inactive` phase instead (`StartupFailure::new` chooses by agent mode). A reconstructed observation-only agent and every failed ephemeral start enter it; every start and admission returns its error, and only deletion or a cleanup failure replaces it. `EphemeralInvocationState` stays separate: it records which invocation was accepted, so a same-key retry or a result lookup is not permission to execute again.
+
+Stopping retains the existing lock/effect split. `begin_stop` returns an active `StopPhase` containing a consuming phase-specific capability that owns its extracted payload and exclusively borrows its runtime slot. Running and stopping capabilities distinguish invocation-loop and external origins; their methods expose only the corresponding completion or external-stop operation. The private `StopTransition` is not available to callers. Waiting and loop-running completion return `StopCompletion`, which retains task resources through resident waiter resolution. The fallback is installed before awaited effects; cancellation or unwind leaves cleanup failure retained when known, and an `Inactive` agent stays inactive. Phases without a runtime are left unchanged. An invocation-loop stop completes without joining itself. An external stop consumes the running handle, installs `Stopping` and returns `StopResult`; its caller releases the lifecycle lock before joining. Overlapping stops merge cleanup failure before deletion before inactivity before unload, and failing pending live invocations wins over preserving them. Finalization reacquires the lock, resolves resident waiters and then notifies stop waiters. `Deleting` retains its runtime phase and deletion progress. `UnloadCleanup` stays separate because a bounded unload result does not prove final physical cleanup.
+
 `OwnerExecution` installs the replay cursor and live wallet together in `OwnerReplayGeneration`.
 Startup seals old append tasks, takes the card boundary, commits the horizon and selects the wallet
 baseline before `install_replay_generation_locked` joins prior owner cleanup and begins the new
@@ -239,7 +296,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one instance attempt)                   │
 │  monthly admission ──▶ create Store + instance ──▶ prepare_instance │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ replay       │
-│    ephemeral:      constructor-only replay, append Restart          │
+│    ephemeral:      Restart gate, then constructor-only replay       │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -258,10 +315,13 @@ The original retry decision, later interrupt arbitration, ephemeral fail-stop co
 cleanup-failure handling remain in the common tail.
 
 `DurableWorkerCtx::replay` (`durable_host/recovery.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
-each recorded invocation in `InvocationMode::Replay`, and when there is no further
+each recorded invocation through `invoke_observed_and_traced` without pending admission, and when there is no further
 `AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Live queued invocations use `invoke_live_observed_and_traced`: it commits the pending-to-started
+transition before materializing inputs and returns `None` if admission declines to start. Replay
+and snapshot execution return `InvokeResult` directly, which has no not-started variant.
 Constructor-only replay covers restarts before the accepted invocation ran. An ephemeral agent
 never reconstructs in process once its Store has run: `on_invocation_failure` turns traps that
 would restart it into terminal failures and notifies the caller. Any other `Immediate`, `Delayed`,
@@ -273,7 +333,8 @@ replay. Monthly capacity exhaustion retains its specific monthly error, and a mo
 keeps its `Monthly enforcement unavailable` reason. Idle and pre-method suspension remain safe:
 ordinary ephemeral agents keep their outer-loop `TryStop` unchanged;
 ephemeral external-tool owners also treat it as terminal. Startup retries before a Store exists
-remain unchanged. A started method never runs again live.
+remain unchanged, except that a begun ephemeral agent interrupted by `Restart` or `Jump` before its
+Store exists terminates. A started method never runs again live.
 Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
 scans the replayed range for recovery metadata (delivery markers, guest stream observations and
@@ -288,12 +349,27 @@ revoked/reassigned shard, or an oplog write refused on the shard epoch), and ins
 reconstructing, that generation is retired — stopped without writing its status, dropped from
 this executor and never restarted — and the executor that now holds the shard reconstructs it.
 
-Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
-worker that is executing or holds non-durable in-memory work. A `WarmRunnable` eviction starts the
-worker again in a spawned task (`stop_if_evictable_with_outcome`): the callers of its pending
-invocations already started it and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
+Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a worker that is executing or
+holds non-durable in-memory work. A `WarmRunnable` eviction starts the worker again in a spawned
+task (`stop_if_evictable_with_outcome`): the callers of its pending invocations already started it
+and only wait, and the start waits for memory admission. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
-never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
+never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`). "Started" is durable:
+`Worker::begin_ephemeral_execution` commits a `Restart` entry under the instance mutex before any
+guest code runs, and the status fold keeps `ephemeral_execution_begun` set. A restart or jump of a
+begun ephemeral agent is terminal. An agent that never began and still holds its constructor
+reservation may accept one method if it has none yet (a schedule repair after the target was
+created) and may run one accepted scheduled method cold (`never_started_ephemeral_admission`).
+Before its scheduled deadline the start decision is `NotDue`, and after cancellation withdrew all
+its work it is `Withdrawn`; both fail queued inspection requests instead of keeping them for a later
+start. An inspection (filesystem or wallet) never starts an unloaded ephemeral agent that has not
+begun and has no due method (`ephemeral_inspection_may_start`): it is refused, because starting it
+would run the constructor before a schedule whose commit the caller is still repairing. This is not
+a fence: an outside caller that knows the target's ID can still start it in that window (create
+with wait, resume, update), and the scheduling caller then traps on the inactive target. A start
+requested while a `NotRunnable` start is stopping joins that attempt, so the stop checks the
+decision again and starts the worker if its work became due
+(`restart_if_ephemeral_start_became_runnable`).
 
 ### Monthly admission, interruption, and recovery
 
@@ -1253,8 +1329,29 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
+The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
+and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
+(`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
+principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+(`CreateIntent::Create`) records its key. An invocation that creates its target
+(`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
+the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
+no key. The recorded `wasm-rpc` activation call sends the key derived from its own `Start`, so a
+repaired activation sends the same key. Later re-activations send no key and check the recorded
+fingerprint. A fork target records `Fork`, no key and the forker's principal. A self fork also
+records the forking agent's current invocation context; a fork through the worker service records a
+fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
+`AgentInitialization` with the recorded principal and context, not with the loading request's. The
+resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
+not published yet; it carries no principal or context. Tests:
+`restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
+`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`durable_rpc_activation_repeats_its_key_after_restart` in
+`tests/rpc/held_response_restart.rs`.
+
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
-interrupt, delete, resume, update, revert, and plugin changes never create an absent agent.
+interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
+reads, cancel and connect never create an absent agent.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
@@ -1573,7 +1670,7 @@ execution so HTTP, RPC, and guest span parents resolve to the same ids as in the
 ## Durable host call lifecycle
 
 Two-step callers use `DurableCallSession::begin` (returning `BegunCall`) → `BegunCall::resolve` →
-`ResolvedCall::{Live, Replay}` (`concurrent/call.rs`). Only the `Live` branch performs
+`ResolvedCall::{Live, Replay}` (`concurrent/call/`). Only the `Live` branch performs
 live-only authorization and request preparation before `start_live`; `BegunCall::is_live`
 is private so callers cannot choose a branch before resolution. `Replay` consumes the recorded
 result or repairs an admitted incomplete call without re-authorizing. Resolution may finish a
@@ -1581,7 +1678,7 @@ guarded replay-tail transition and refresh authority capture. Snapshot calls rem
 resolving one as `Live` does not publish Store liveness or lift snapshot restrictions.
 
 Accessor and direct (Store-holding) calls build the same `BegunCall` (`DurableCallSession::new_begun`)
-and resolve it through the one `BegunCall::resolve_against_history` (`concurrent/call/claims.rs`).
+and resolve it through the one `BegunCall::resolve_against_history` (`concurrent/call/claims/mod.rs`).
 It claims the recorded `Start`, or continues live at the replay tail. When the replay target grew
 while the transition was settling (`BeginReplayToLive::ReplayResumed`), it claims again, so the
 call replays the `Start` the grown target covers instead of failing. Both paths append the live
@@ -1591,8 +1688,12 @@ call replays the `Start` the grown target covers instead of failing. Both paths 
 
 Every nondeterministic host function goes through `begin_durable_function` /
 `end_durable_function` (`durability.rs`). Concurrent (p3 accessor) calls and direct
-(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call.rs`) with the same
+(Store-holding) calls run inside a `DurableCallSession` (`concurrent/call/`) with the same
 `Start`/`End` shape.
+
+`concurrent/call/state.rs` owns the session lifecycle through consuming handles. The session's dynamic boundary extracts an `ExecutingCall` or `ReplayCall`, returning an error on the wrong phase. `ReplayCall::begin_resolution` consumes the claim and returns its receiver plus a `ResolvingReplay` that owns cleanup across the await. Only that handle can accept a terminal, park for guest drop, or enter `RepairPendingCall`. Pending repair owns a permit before awaiting protocol readiness, so that wait blocks snapshot admission. Successful readiness returns an `ExecutingCall`; this is session-local execution, not permission to perform external effects before Store liveness is published.
+
+Each handle owns a `CallGuard` with its cleanup obligation and permit. Extracting a handle leaves the session released; the extracted guard now handles cancellation. Resident sessions supply fresh drop metadata at destruction; extracted handles capture it at extraction. An `ExecutingCall` owns recorded request-upload tracking or unrecorded snapshot execution. Its consuming terminal methods release unfinished-call cleanup before fallible persistence, while retaining the resources in `ReleasedCall`. Released means cleanup was released, not that an `End` exists. Active recorded Drop transfers its permit to the deferred drop event. Readiness failure releases the preparation permit immediately. Keep the terminal guard and completion-delivery state machines separate.
 
 Live (guest-facing accessor path): append `Start` eagerly → run the live action → append `End` (or
 `Cancelled`) → hand the result to the guest → append `CompletionDelivered` (or
@@ -1640,7 +1741,7 @@ while replay returns `STARTED` and enters that Store-holding call before it can 
 The direct call would wait behind a guest boundary that its own Store ownership prevents.
 
 Replay: claim the matching `Start` (`StartClaim`: invocation id, function name and kind),
-resolve its terminal through `ConcurrentReplayResolver`, then classify with
+resolve its terminal through `ReplayStarts` under the cursor lock, then classify with
 `classify_replay_resolution` (`concurrent/call.rs`), which is total and shared by guest-delivery paths:
 
 | Recorded | `ReplayedResolution` | Guest handoff |
@@ -1908,11 +2009,13 @@ entitled to nothing it did not record. Kind and owner are validated before consu
 - A durable-call `Start` nobody has claimed is never handed to a positional reader and is never
   parked on either: its owner may be a concurrent host task that needs the very Store the parked
   reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
-  direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
+  direct call). The cursor commits past it and **retains** it (`ReplayStart::Retained` in `CursorState::starts`,
   in oplog order, together with its terminal once reached). The owner's later identity claim
   checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching`); a
   `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- `ReplayStarts` (`replay_state/starts.rs`) owns each active Start's state under the cursor lock. A `Claimed` entry separates `AheadOfCursor`/`Consumed` position from `Waiting`/`Prefetched` terminal ownership. A prefetched result can reach the host before the cursor consumes either the Start or its exact terminal; it does not authorize guest delivery. `UnregisteredAhead` preserves the Start-consumption obligation before successful registration, after registration failure, or after explicit unregistration. Dropping a receiver retains its terminal sender; explicit unregistration removes a waiting sender but keeps an ahead Start, and leaves prefetched-terminal drainage intact. The derived retained-key index visits retained entries only, not every active claim. Subtree ancestry, fork effects, guest-delivery tokens and reconstruction guards remain separate owners.
+- Registration performs fallible terminal lookahead before creating its sender. Failure leaves an ahead Start owed, a head Start consumed, and an adopted retained Start removed with its position/events already published. Do not rewind these effects or treat caller cancellation as registration failure: accepted `run_owned_cursor_op` work survives cancellation. Bulk incomplete resolution belongs to explicit prefix finalization (`CursorTx::switch_to_live`), which retains unclaimed Starts. Merely observing the replay target does not clear claims; the final-terminal path rechecks its receiver under the cursor lock before declaring it incomplete. Registry membership alone cannot replace the distinct claimed-ahead, terminal-ownership, active-awaiter and reconstruction predicates.
 - A delivery barrier blocks physical advancement, not adoption of already-retained history.
   `with_claim_tx_admission` first polls one gate waiter, then uses the restricted `RetainedClaims`
   capability under the state mutex while that gate is unavailable. Using retained history means
@@ -2058,21 +2161,27 @@ is still a mismatch. Transaction-protocol reads remain strict.
 
 Three different facts are involved, each with its own owner:
 
-1. **Cursor exhaustion** — the recorded history has been consumed. An observation only.
+1. **Cursor exhaustion** — `ReplayState::at_replay_tail()` observes that the recorded history
+   has been consumed; `has_replay_remaining()` observes the opposite. Neither grants live authority.
 2. **Shared primary publication** — `transition_phase` moves Replaying → Settling → Live
-   (`replay_state/cursor.rs`). `ReplayState::switch_to_live` with `ReplayToLiveRole::PrimaryAgent`
+   (`replay_state/cursor/settling.rs`). `ReplayState::publish_primary_live(linear_memory)`
    runs `begin_primary_settling`, then `finish_settling_to_live` loops until every
    `HistoricalReconstruction` fence has validated and `CursorTx::finish_primary_settling`
    publishes Live (or reports `ReplayResumed` when new history appeared).
-3. **Entity-local liveness** — `store_is_live(mode, local_live_tail, shared_live_published)`
-   (`durable_host/mod.rs`): the primary Store is live iff (2) has published; a
-   `ReplayingCompleted` entity Store is never live; a `ReplayingIncomplete`/`Live` entity Store is
-   live iff its own `local_live_tail` is set by `PendingReplayToLive::finish_at` (`#[must_use]`).
-   For `ReplayToLiveRole::NonPrimary`, `switch_to_live` skips (2): the entity Store goes live for
-   its own invocation scope (after attachment admission) without waiting for the primary.
+3. **Store liveness** — `StoreReplayState::is_live(primary_live_published)`
+   (`durable_host/replay_to_live.rs`): `Primary` reads (2); `CompletedEntityReplay` is always
+   false; `IncompleteEntityReplay` reads its shared `EntityContinuation` gate; `LiveEntity`
+   is always true. Clones share the incomplete entity's gate. The non-primary path calls
+   `exhaust_replay_prefix`, not primary publication, and switches its own linear memory to live.
+   An incomplete entity can continue its own invocation scope without waiting for the primary.
+
+`PendingReplayToLive` holds a flat `LiveFinalization` payload: `Primary`, `CompletedEntityReplay`, `IncompleteBody`, `IncompleteTool`, or `AlreadyLiveEntity`. `finish_at` consumes the pending value. It publishes an incomplete body's continuation gate directly; for an incomplete tool it publishes only after attachment memory admission returns `Admitted`. Refusal, cancellation and fencing leave that gate closed. Primary, completed-replay and already-live entity finalization need no local gate publication. Successful finalization activates live usage only inside a guest body.
+
+Completed entity replay can settle an incomplete child through the non-primary path without making the parent Store live. The parent's guest still cannot continue with unrecorded calls.
 
 Tests: `entity_store_liveness_is_scoped_to_its_invocation_mode`,
 `pending_replay_to_live_is_fail_closed_until_finished`,
+`completed_entity_settlement_keeps_the_store_non_live`,
 `replay_state/tests.rs::switch_to_live_wakes_parked_awaiter_as_incomplete`,
 `replay_state/tests.rs::primary_publication_requires_completed_reconstruction_validation`,
 `tests/tool_streaming/mod.rs::incomplete_custom_durability_waits_for_completed_reconstruction`.
@@ -2082,6 +2191,63 @@ it must observe `is_live` from the durable context. A markerless `End` is delive
 cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 (`CompletionDelivery::prepare_delivery`), which makes "crash after End, before delivery" safe
 without re-executing.
+
+## Invocation identity
+
+An invocation's owner-qualified identity is `OwnedInvocationId`: the owner agent and an
+`InvocationId`, the UUID-backed unique part. The server prints the owner-qualified identity as
+`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only `InvocationId`, in
+the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
+`AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
+dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
+input to the ID; the raw key is not stored.
+
+A request carries an `InvocationRequestKey`, and admission finalizes it with
+`finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
+(`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
+`durable_host/rpc/schedule.rs`):
+
+| Variant | Source | Unique part |
+|---|---|---|
+| `External { scope, key }` | an authenticated caller's key; `IdempotencyScope` is `user:`, `agent:` or `admin:…:as:` (`AuthCtx::idempotency_scope`) | UUIDv5 of (fingerprint, scope, operation, key) |
+| `Internal(key)` | a key Golem derived, such as `derive_idempotency_key` of the parent ID and the call's `Start` index | the same, with the fixed scope `internal` |
+| `RouteSession { scope, key }` | a Durable Streams session, scoped to the route for every caller | the same, with `route:<scope>` |
+| `Unkeyed(uuid)` | no key, or a caller without a scope: `AuthCtx::System`, and the HTTP route (`custom_api`) and MCP paths, which pass no scope | the retained random UUID |
+
+`InvocationRequestKey::external` turns a key from a caller without a scope into `Unkeyed`: such a
+key is ignored, never rejected or deduped. The operation is the method name, or
+`tool:<tool-name>/<command path>` for an agent-hosted tool. Every field is length-prefixed. The
+fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral or phantom owner
+has no fingerprint before it exists, so its owner ID comes from `owner_key(operation)`; the CLI
+derives the same owner to subscribe to its events. Keep the prepared request key, not the final ID,
+when a request is retried or forwarded: every retry finalizes it again against the same target.
+
+A key that is already accepted with a different request is an `IdempotencyConflict` (REST 422):
+`worker/ingress.rs::ensure_matching_invocation_payload` compares the stored request with
+`AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
+sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
+is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+or the request position kept with every result (`InvocationResultPosition::request`, in the
+in-memory membership and in the persisted result index). The status fold sets it to the
+`AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
+one cancelled or denied before it started (`fields.rs::InvocationRequests`). A duplicate check
+therefore reads the same number of entries however long the invocation ran.
+
+Terminals name their invocation. Replay rejects an `AgentInvocationFinished` whose ID differs from
+the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
+An invocation `Error` is a hint: a background retry task can outlive its invocation, so an `Error`
+naming a finished invocation is legal. The status fold attributes it only while that invocation
+runs, or for the agent's `PermissionDenied` rejection of a cancelled pending invocation
+(`worker/status/fields.rs`). A `Recovery` error never names an invocation (`check_well_formed`).
+
+Guests read their identity and caller through `golem:agent/invocation-context`
+(`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
+invocation start recorded, so they are not durable calls. An entity Store answers for its
+enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
+(initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
+`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation queue and results
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
@@ -2192,8 +2358,8 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Streaming RPC consumes this hint during target preparation, before it builds stream mappings
    with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
-   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
-   never random.
+   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
+   `owner_key(operation)` — deterministic, never random.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
@@ -2232,7 +2398,7 @@ supported"); an entity body's synchronous call into its owner must pass
 ## Snapshots and updates
 
 Snapshot save/load runs guest code in a third mode: it neither appends nor consumes durable-call
-oplog entries (`DurableCallSession` created with `persisted: false`; `durability_is_suppressed`
+oplog entries (`DurableCallSession` executes with `CallRecording::Unrecorded`; `durability_is_suppressed`
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
@@ -2297,6 +2463,85 @@ record. A record with a name on an executor without filesystem snapshots gives `
   replays the remaining old history against the new component; success is recorded during that
   replay.
 - No pending update — `try_load_snapshot` loads the selected periodic record.
+
+### Bootstrap blocks
+
+The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
+any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
+that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the
+instantiation; the *bootstrap range* is the region from the first to the last entry the
+initializer claimed or appended (hints inside it belong to the main history). Durability is never
+suppressed for `instantiate`.
+
+Every restore point names its range, and the status records carry it: `Snapshot.bootstrap` (the
+range of the generation that wrote the periodic record), `SuccessfulUpdate.bootstrap` (the
+target's own block for a snapshot-based update, the selected record's range for a
+snapshot-assisted one), and
+`SnapshotAssistedAutomatic.snapshot_bootstrap` in the strategy entry. On these entries `None` means
+the initializer made no durable call; the `SuccessfulUpdate` of a plain automatic update always
+names `None`.
+
+`ReplayBaseline.bootstrap` (`BootstrapSource`, filled by `plan_start`) decides where the
+initializer runs; `ReplayBaseline::initializer_replay` and `attempt_region` turn it into the
+cursor choice (`worker/filesystem_snapshots/mod.rs`):
+
+| Source | Baselines | Initializer runs on | Main cursor also skips |
+|---|---|---|---|
+| `Recorded(range)` | `Periodic`, `AssistedPending` (the selected record's range), `ManualPromoted`, `AssistedPromoted` (also under a plain `Automatic` head) | A `BootstrapTail::Strict` bootstrap cursor over the range; `None` is an empty strict cursor | — (the range lies in the skipped prefix of a periodic record, or in the regions a successful update committed) |
+| `Attempt { anchor }` | `ManualPending` (anchor `P`) | A `BootstrapTail::Live` cursor after the anchor: it replays what an interrupted earlier attempt recorded, then appends live | The attempt region `anchor+1..=horizon` |
+| `Positional` | `InitialFiles` | The main cursor, in its position | — |
+
+The bootstrap cursor (`ReplayState::new_for_bootstrap`) skips `1..=skip_through` and the deleted
+regions; a `Live` cursor also skips what the status skips after its anchor
+(`bootstrap_skipped_regions`), so it never replays the block of an earlier update in the queue. It
+has no owner wallet, records no replay events (so its `ReplayFinished` never reaches
+`replay_application::reserve`), and switches to live locally without publishing the
+generation's liveness or touching linear-memory reconciliation. `runtime.rs` installs it with
+`enter_bootstrap_phase` around `instantiate` and restores the main cursor with
+`finish_bootstrap_phase`, which checks that every recorded call of the block was claimed
+(`ensure_bootstrap_consumed`) and records the observed range on `DurableWorkerCtx`. While a
+bootstrap cursor is installed, only direct `ReadLocal`/`ReadRemote` calls outside the
+permission-card and fork families are admitted, and accessor calls are refused. The rule holds on
+the live cursor of a pending manual update too: every later start from the update replays the
+block on a strict cursor, which holds no invocation and no owner wallet, so it can return a
+recorded result but cannot repair a write or rebuild its pending state. A language runtime's
+initializer (Go's, Rust's) reads the environment, the arguments, clocks and random values, and
+those calls pass; a core initializer that makes a durable write fails a manual update and makes
+periodic records unusable, so its agent recovers by full replay. A refusal or a
+divergence is `RawStartError::Replay { diverged: true }`: a periodic record is rejected, a pending
+update fails (`UPDATE_REPLAY_FAILED` for a plain automatic one, `UPDATE_SNAPSHOT_INCOMPATIBLE` for
+a snapshot-assisted one, a failed update without a code for a manual one), and any other start ends
+with the error. No invocation is current during the phase.
+
+A pending snapshot-assisted update replays the source tail after its selected record on the
+target. That tail was recorded with the inputs of the record's bootstrap block, so the target's
+initializer replays that block strictly and records none of its own; its calls replay recorded
+results and run no live authorization. A target whose initializer makes other durable calls fails
+with `UPDATE_SNAPSHOT_INCOMPATIBLE`, as a plain automatic update fails when its initializer
+diverges from the original revision's block.
+
+The writers: `invocation_loop/snapshots.rs` writes the generation's range into every periodic
+`Snapshot`; `finalize_pending_snapshot_update` writes it into the snapshot-based
+`SuccessfulUpdate`, and `reserve` the replayed range into the snapshot-assisted one. `reserve` never takes a
+`SnapshotBased` update, so no `ReplayFinished` of the main cursor takes a manual update; only
+`finalize_pending_snapshot_update` finalizes it.
+`status/regions.rs` commits a successful snapshot-based update's `2..=P` with its bootstrap range,
+and a successful snapshot-assisted update's `2..=S`, which holds its range, as skipped; a failed
+snapshot-based update commits its attempt region `max(P, last_outcome)+1..=F-1`, where
+`last_outcome` is the latest outcome that ended a queue element, so the source revision never
+replays the target's calls. A snapshot-assisted attempt appends no target entry.
+`cut_point::validate_restore_point_ranges` refuses a revert or fork cut that retains a restore
+point but not its whole range.
+
+Tests: `tests/durability.rs::automatic_snapshot_every_2nd_invocation` (the initializer seed hash
+survives periodic recovery), and in `tests/hot_update.rs` the
+`a_snapshot_based_update_*`, `a_snapshot_assisted_update_*` (among them
+`a_snapshot_assisted_update_replays_a_source_tail_that_depends_on_the_initializer_seed`),
+`a_restart_right_after_a_snapshot_based_update_recovers_the_target_initializer_state`, `a_failed_snapshot_*_update_keeps_the_source_and_its_initializer_state`,
+`an_interrupted_snapshot_based_update_attempt_replays_its_initializer_calls_on_the_next_attempt`,
+`a_manual_update_whose_target_initializer_makes_a_write_fails_and_keeps_the_source` and
+`a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot` tests, and
+`tests/durability.rs::a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected`.
 
 Every start failure goes through `worker/start_outcome.rs::decide(role, head, RawStartError,
 lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `ManualPromoted`,
@@ -2770,7 +3015,15 @@ update then fails as a failed update, and the agent stays on its revision: chang
 `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
 agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
 the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+(`invocation_loop/snapshots.rs::snapshot_baseline_timestamp`). A periodic snapshot is needed only
+when an invocation that can change the state, not a `read_only` method, finished after the
+automatic record that a start would select (`invocation_loop/snapshots.rs::state_changed_since_snapshot`,
+`snapshot_selection::periodic_snapshot_holding_state`), so an idle agent writes no record. A record
+whose upload failed or that a start rejected does not count, so the next period takes the snapshot
+again. The
+Store records the index of that `AgentInvocationFinished` entry for replayed and live invocations
+alike (`DurableWorkerCtx::last_state_change`), so a change replayed after a restart still takes its
+pending snapshot. A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
@@ -3051,7 +3304,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two owner-relative journals are authoritative, nothing else.** A producer records
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` in its own oplog. Its persisted
+  `StreamRegistered`/`StreamItems`/`StreamTerminal` in its own oplog. Its persisted
   `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every
   cross-record source is explicit `StreamRecordReference::{Local, Foreign}`; a received handle
   remains `Foreign` even when it happens to name the receiving oplog's owner. Consumer records
@@ -3070,14 +3323,16 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
-  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; the first selected
+  terminal fences competing terminals. Completed replay still validates the recorded terminal.
+  Terminal outputs reconstruct from committed records without reattachment.
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
 Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
 resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
-mappings. Entity-invocation requests do not record the internal calling principal: live execution
+mappings. The target's `Create` entry records the fork request, not the source's create
+request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
 The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
@@ -3266,7 +3521,9 @@ Four exactly-once contracts coexist and must not be conflated: RPC exactly-once 
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
 exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
-stream, protocol terminal fencing guest terminals). A change that
+stream, the first terminal fencing competing terminals). Terminal origin is independent of
+author and outcome: reconstruction validates the recorded prefix, then reproduces a `Source`
+terminal exactly or stops at a `Control` terminal without waiting for the source. A change that
 satisfies one does not imply the others.
 
 Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
@@ -3283,8 +3540,16 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
-range and key across retries, independently of a rebuilt per-executor processor cache.
+otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
+installed plugin and source metadata, including the guest-visible status, revision, environment
+and configuration. Its status contains only the guest-visible status, revision and latest retry
+state. Historical host indexes and processor checkpoints are excluded so snapshot size does not
+grow with source history. Reconstruction reuses this snapshot rather than current source metadata, even
+when the plugin is no longer attached. Both local and remote ambiguous failures retain the recorded
+target: a missing response does not prove that admission failed. Confirmation clears the snapshot
+but retains `source_component_revision`; public rendering resolves the installation at that revision,
+even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
 
 ## Permission-card handles
 
@@ -3362,7 +3627,7 @@ incomplete decision decides at its own `Start`. Tests:
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
 | "HashMap iteration / poll order makes the guest nondeterministic, so replay must tolerate different calls." | Guest inputs are recorded; same inputs ⇒ same calls. Different calls = executor bug. | `no matching Start` / `unexpected_oplog_entry` errors in replay tests |
-| "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
+| "Cursor reached the end, so I can do the live effect now." | `StoreReplayState` separates authority from cursor position: `Primary` reads shared publication after `publish_primary_live`; `CompletedEntityReplay` stays false; `IncompleteEntityReplay` needs its continuation gate; `LiveEntity` is always true. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
@@ -3371,6 +3636,7 @@ incomplete decision decides at its own `Start`. Tests:
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
 | "A snapshot load is just a fast-forwarded replay, so its host calls are recorded/consumed like any other." | Snapshotting mode (`durability_is_suppressed`) neither appends nor consumes; the loaded state replaces skipped history from a revision-scoped baseline. | `tests/hot_update.rs::{auto_update_invalidates_snapshot_from_previous_revision, automatic_snapshot_invalid_entry_fallback_recreates_replay_context}` |
+| "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; a snapshot-based update target records and replays its own block, and a snapshot-assisted one replays the selected record's block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target}` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
@@ -3442,7 +3708,7 @@ table and tests: `reference/retries.md`.
      differed (missing recording, wrong request-identity match, delivery at wrong boundary).
    - Hang in replay → an awaiter waiting for a terminal that is not in history or a delivery
      gate never released; check `ReplayDeliveryBarrier` and `switch_to_live_wakes_parked_awaiter`.
-   - Live effect during replay → liveness read from the wrong place; check `store_is_live`.
+   - Live effect during replay → liveness read from the wrong place; check `StoreReplayState::is_live`.
    - Duplicate side effect → key derivation or acceptance ordering; compare keys across attempts.
 3. Reproduce with a real reconstruction (`simulated_crash`, or executor drop + restart via
    `start_with_overrides`), injecting the failure at the exact window with

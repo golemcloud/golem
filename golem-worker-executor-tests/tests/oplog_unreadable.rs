@@ -21,7 +21,7 @@ use crate::Tracing;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
@@ -644,7 +644,7 @@ struct ArchiveFaultAgent {
     fault: Arc<ArchiveFault>,
     executor: TestWorkerExecutor,
     component: ComponentDto,
-    agent: ParsedAgentId,
+    agent: ParsedAgentKey,
     agent_id: AgentId,
 }
 
@@ -1005,7 +1005,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id => Some((idempotency_key.clone(), result.is_ok())),
+            } if agent_id == &agent.agent_id => Some((*idempotency_key, result.is_ok())),
             _ => None,
         })
         .await?;
@@ -1090,6 +1090,10 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         .expect("the agent is loaded after its first invocation");
     let mut events = worker.events().subscribe();
     let queued = IdempotencyKey::fresh();
+    let stored_queued = agent
+        .executor
+        .external_invocation_key(&agent.agent_id, &queued, "get_self_metadata_result")
+        .await?;
 
     // The enqueue folds every entry before it, so the status of the first invocation does not
     // need the history.
@@ -1116,7 +1120,9 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id && idempotency_key == &queued => Some(result.clone()),
+            } if agent_id == &agent.agent_id && idempotency_key == &stored_queued => {
+                Some(result.clone())
+            }
             _ => None,
         }),
     )

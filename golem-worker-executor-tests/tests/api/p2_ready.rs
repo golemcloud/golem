@@ -53,7 +53,13 @@ async fn silent_tcp_ready(
         name.clone()
     } else {
         name.clone()
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(
+                &golem_common::model::InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&key),
+                )
+                .owner_key("tcp_input_ready_p2"),
+            )
             .map_err(|error| anyhow!(error))?
     };
     let id = AgentId::from_agent_id(component.id, &physical).map_err(|error| anyhow!(error))?;

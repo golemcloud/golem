@@ -187,6 +187,9 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
     let name = agent_id!("Counter", "monthly-stale-target");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "increment")
+        .await?;
     assert_eq!(
         executor
             .invoke_and_await_agent_with_key(&component, &name, &key, "increment", data_value!())
@@ -210,7 +213,7 @@ async fn same_cached_worker_reconstructs_and_enforces_current_quota(
         .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
         .await?;
     let original_raw = executor.stored_oplog(&id).await;
-    let (_, _, payload) = completed_invocation_payload(&original, &key)?;
+    let (_, _, payload) = completed_invocation_payload(&original, &stored_key)?;
     let (old_replay, release_old_replay) =
         executor.gate_next_oplog_payload_read(&id, payload.clone());
     worker.set_interrupting(InterruptKind::Restart).await?;
@@ -470,13 +473,22 @@ mod activation {
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let key = IdempotencyKey::fresh();
-        let mut outcome = executor.gate_next_invocation_started(&owned).await?;
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "increment")
+            .await?;
+        let lane = worker.owner_execution().lane();
+        let prebody = lane.acquire_exclusive().await;
         // Finish scheduling before suspending so an outstanding caller or retry
         // cannot issue a startup request during teardown.
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
-        outcome.entered().await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while lane.metadata().active_invocation_count == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
         assert!(matches!(
             &*worker
                 .owner_runtime_resources()
@@ -495,7 +507,7 @@ mod activation {
             worker.selected_owner_failure_for_test().await,
             Some(ToolOwnerFailureMetadata::Lifecycle)
         );
-        outcome.release();
+        drop(prebody);
         assert_eq!(
             worker.selected_owner_failure_for_test().await,
             Some(ToolOwnerFailureMetadata::Lifecycle)
@@ -523,7 +535,7 @@ mod activation {
             .count();
         assert_eq!(suspends_before, 1);
         assert!(matches!(
-            worker.lookup_invocation_result(&key).await,
+            worker.lookup_invocation_result(&stored_key).await,
             golem_worker_executor::model::LookupResult::Pending
         ));
         executor.resume(&id, false).await?;
@@ -557,7 +569,7 @@ mod activation {
             "one accepted stop must produce only one Suspend across reconstruction"
         );
         assert_eq!(result??.into_typed::<u32>()?, 2);
-        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
         assert_eq!(
             entries
                 .values()
@@ -642,8 +654,9 @@ mod activation {
             .values()
             .find_map(|entry| match entry {
                 OplogEntry::PendingAgentInvocation {
-                    idempotency_key, ..
-                } => Some(idempotency_key.clone()),
+                    invocation_id: idempotency_key,
+                    ..
+                } => Some(*idempotency_key),
                 _ => None,
             })
             .context("reserved constructor invocation")?;
@@ -670,6 +683,9 @@ mod activation {
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let (selected, release_selected) = executor.gate_next_invocation_outcome_append(&id).await;
         let completed_key = IdempotencyKey::fresh();
+        let stored_completed_key = executor
+            .external_invocation_key(&id, &completed_key, "increment")
+            .await?;
         let first = tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -690,6 +706,9 @@ mod activation {
         selected.await?;
         // The selected result's terminal append keeps later work queued.
         let key = IdempotencyKey::fresh();
+        let stored_key = executor
+            .external_invocation_key(&id, &key, "increment")
+            .await?;
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
@@ -736,7 +755,7 @@ mod activation {
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await?;
-        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &completed_key)).count(), 1);
+        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_completed_key)).count(), 1);
         assert_eq!(
             blocked
                 .values()
@@ -745,8 +764,8 @@ mod activation {
             1,
             "only the constructor has finished before the selected writer append"
         );
-        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
-        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 0);
+        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
+        assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 0);
         assert!(!blocked.values().any(|e| matches!(
             e,
             OplogEntry::Interrupted { .. } | OplogEntry::Suspend { .. } | OplogEntry::Error { .. }
@@ -805,8 +824,8 @@ mod activation {
             (1, 0),
             "the explicit Interrupt owns the invocation terminal"
         );
-        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 0);
-        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 0);
+        assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
         assert_eq!(
             entries
                 .values()
@@ -842,9 +861,9 @@ mod activation {
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await?;
-        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
-        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
-        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &completed_key)).count(), 1);
+        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
+        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
+        assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_completed_key)).count(), 1);
         assert_eq!(
             recovered
                 .values()

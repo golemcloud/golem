@@ -48,6 +48,7 @@ pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod instance_layer;
+pub mod invocation_context;
 mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -72,6 +73,8 @@ pub mod revert;
 pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
+pub mod scheduled_durable;
+pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
@@ -113,6 +116,8 @@ pub fn raw_params(
 }
 
 tag_suite!(api, group1);
+tag_suite!(scheduled_durable, group1);
+tag_suite!(scheduled_ephemeral, group1);
 tag_suite!(retry_lifecycle, group1);
 tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
@@ -146,6 +151,7 @@ tag_suite!(effect_permissions, group4);
 tag_suite!(permission_cards_scala, group4);
 tag_suite!(scalability, group4);
 tag_suite!(readonly, group4);
+tag_suite!(invocation_context, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);

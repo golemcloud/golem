@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
@@ -19,19 +21,20 @@ use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
-use crate::worker::status::{RegionFold, fold_regions_from};
 use crate::worker::status::{
-    StatusOplogReader, calculate_last_known_status,
+    InvocationRequests, StatusOplogReader, calculate_last_known_status,
     calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
     calculate_oplog_processor_checkpoints, calculate_status_with_reader,
     calculate_total_linear_memory_size, fold_committed_status, fold_invocation_result_entries,
     hydrate_initial_pending_evidence, try_fold_status_from, try_fold_status_from_reader,
 };
+use crate::worker::status::{RegionFold, fold_regions_from};
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+use golem_common::model::InvocationResultPosition;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
 use golem_common::model::application::ApplicationId;
@@ -55,7 +58,7 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
     AgentMetadata, AgentResourceDescription, AgentStatus, AgentStatusRecord, AuthoritativeSnapshot,
-    AuthoritativeSnapshotKind, AutomaticSnapshot, FailedUpdateRecord, IdempotencyKey,
+    AuthoritativeSnapshotKind, AutomaticSnapshot, FailedUpdateRecord,
     OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
     PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
     SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
@@ -65,6 +68,7 @@ use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use uuid::Uuid;
 
 fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPin {
     golem_common::model::card::InvocationWalletPin {
@@ -80,12 +84,12 @@ fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPi
 #[test]
 async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let test_case = TestCase::builder(0).build();
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id().clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
-        idempotency_key: key.clone(),
+        idempotency_key: key,
     };
     let attempt = AttemptId::fresh();
     for pending in [
@@ -95,18 +99,18 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     ] {
         let mut baseline = AgentStatusRecord::default();
         baseline.durable_stream_sessions.insert(
-            key.clone(),
+            key,
             golem_common::model::DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(10)),
                 prepared: Some(OplogIndex::from_u64(10)),
-                session_key: Some(session_key.idempotency_key.clone()),
+                session_key: Some(session_key.idempotency_key),
                 prepared_attempt_id: Some(attempt),
                 ..Default::default()
             },
         );
         let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.idempotency_key.clone(),
+            session_key: session_key.idempotency_key,
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -153,7 +157,6 @@ use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use test_r::test;
-use uuid::Uuid;
 
 #[test]
 async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
@@ -218,8 +221,10 @@ fn fold_regions(
 #[test]
 fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord, StreamRecordReference, StreamRegistrationInvocation,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamRegistrationInvocation, StreamTerminal,
+        StreamTerminalAuthor,
     };
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
@@ -230,14 +235,17 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
                 agent_id: "remote".into(),
             },
             callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-            idempotency_key: IdempotencyKey::fresh(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
         }),
-        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: Some("cancel requested".into()),
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
     };
     let entry = |record| OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
@@ -262,7 +270,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     assert!(pending.durable_stream_sessions.iter().next().is_none());
     assert_eq!(
         pending.pending_durable_stream_cancellations,
-        HashSet::from([intent.clone()])
+        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent.clone()])])
     );
     let bytes = golem_common::serialization::serialize(&pending).unwrap();
     let pending: AgentStatusRecord = golem_common::serialization::deserialize(&bytes).unwrap();
@@ -278,7 +286,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     );
     assert_eq!(
         pending.pending_durable_stream_cancellations,
-        HashSet::from([intent.clone()])
+        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent.clone()])])
     );
     let applied = fold(
         pending,
@@ -296,23 +304,27 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
 fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_jumps() {
     use crate::services::worker_fork::lineage::tests::prepared;
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord, StreamRecordReference,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamTerminal, StreamTerminalAuthor,
     };
     let first = crate::durable_host::durable_stream::tests::identity().invocation;
     let mut second = first.clone();
-    second.idempotency_key = IdempotencyKey::fresh();
+    second.idempotency_key = InvocationId(Uuid::new_v4());
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
             first.clone(),
         ),
-        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        consumer_invocation: InvocationId(Uuid::from_u128(1)),
         source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
-        role: StreamCancelRole::OutputConsumer,
-        reason: StreamCancelReason::Cancelled,
-        details: None,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
     };
     let mut removed_intent = intent.clone();
     removed_intent.session_key =
@@ -371,13 +383,14 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
                 .is_none(),
             revert
         );
+        let expected = if revert {
+            intent.clone()
+        } else {
+            removed_intent.clone()
+        };
         assert_eq!(
             status.pending_durable_stream_cancellations,
-            HashSet::from([if revert {
-                intent.clone()
-            } else {
-                removed_intent.clone()
-            }]),
+            HashMap::from([((expected.source.clone(), expected.epoch), vec![expected])]),
         );
     }
 }
@@ -392,6 +405,7 @@ fn successful_update_resets_total_linear_memory_size() {
                 100,
                 Some(32),
                 HashSet::new(),
+                None,
                 None,
             ),
         ),
@@ -423,6 +437,7 @@ fn empty_fold_is_not_the_identity() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(5),
                 last_batch_start: OplogIndex::from_u64(5),
+                delivery: None,
             },
         )]),
         ..AgentStatusRecord::default()
@@ -461,6 +476,42 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// The execution-begun bit is set by a `Restart` and survives later folds without one.
+#[test]
+fn restart_sets_ephemeral_execution_begun_permanently() {
+    let retry = RetryConfig::default();
+    let baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(2),
+        ..AgentStatusRecord::default()
+    };
+    let before = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        baseline,
+        BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(!before.ephemeral_execution_begun);
+
+    let begun = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        before,
+        BTreeMap::from([(OplogIndex::from_u64(4), OplogEntry::restart())]),
+        &retry,
+    )
+    .unwrap();
+    assert!(begun.ephemeral_execution_begun);
+
+    let later = update_status_with_new_entries(
+        AgentMode::Ephemeral,
+        begun,
+        BTreeMap::from([(OplogIndex::from_u64(5), OplogEntry::grow_memory(8))]),
+        &retry,
+    )
+    .unwrap();
+    assert!(later.ephemeral_execution_begun);
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }
@@ -495,6 +546,12 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                         source_fingerprint: export_owner_fingerprint(),
                         source_path: "/source".into(),
                         session: session.into(),
+                        route_scope:
+                            golem_common::model::durable_stream::durable_stream_route_scope(
+                                "environment",
+                                "1",
+                                "route",
+                            ),
                         slot: "output".into(),
                         expected_method: "run".into(),
                         requested_offset: None,
@@ -512,9 +569,12 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                         callee_environment_id: EnvironmentId::new(),
                         callee: target.clone(),
                         callee_fingerprint: export_owner_fingerprint(),
-                        idempotency_key: IdempotencyKey::new(session.to_string()),
+                        idempotency_key: InvocationId(Uuid::new_v5(
+                            &Uuid::NAMESPACE_OID,
+                            session.as_bytes(),
+                        )),
                     },
-                    target_session_key: IdempotencyKey::new("target-session".into()),
+                    target_session_key: InvocationId(Uuid::from_u128(2)),
                     expiry_policy: StreamSessionExpiryPolicy::None,
                     expiry_deadline_millis: None,
                     retained_through: None,
@@ -1014,7 +1074,7 @@ async fn the_status_reader_reads_nothing_past_its_horizon() {
 
 #[test]
 async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let test_case = TestCase::builder(0)
         .agent_invocation_started("a", vec![], idempotency_key)
@@ -1032,6 +1092,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::TransientError("failed".to_string()),
                 retry_from,
                 None,
@@ -1065,15 +1126,16 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
 
 #[test]
 async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let retry_state = RetryPolicyState::Counter(56);
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key.clone())
+        .agent_invocation_started("a", vec![], idempotency_key)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1082,9 +1144,13 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
                 status.status = AgentStatus::Retrying;
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
-                status
-                    .invocation_results
-                    .insert(idempotency_key, status.oplog_idx);
+                status.invocation_results.insert(
+                    idempotency_key,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request: status.current_invocation_started_at,
+                    },
+                );
                 status
             },
         )
@@ -1095,7 +1161,7 @@ async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
 
 #[test]
 async fn exhausted_semantic_retry_state_marks_status_failed() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(2);
     let retry_state = RetryPolicyState::AndThen {
         left: Box::new(RetryPolicyState::Counter(3)),
@@ -1103,11 +1169,12 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
         on_right: true,
     };
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], idempotency_key.clone())
+        .agent_invocation_started("a", vec![], idempotency_key)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::TransientError("transient".to_string()),
                 retry_from,
                 Some(retry_state.clone()),
@@ -1116,9 +1183,13 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
                 status.status = AgentStatus::Failed;
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
-                status
-                    .invocation_results
-                    .insert(idempotency_key, status.oplog_idx);
+                status.invocation_results.insert(
+                    idempotency_key,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request: status.current_invocation_started_at,
+                    },
+                );
                 status
             },
         )
@@ -1135,6 +1206,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1160,6 +1232,7 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
 
 #[test]
 async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let exhausted = RetryPolicyState::Counter(100);
     let test_case = TestCase::builder(0)
@@ -1167,6 +1240,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::TransientError("semantic failure".to_string()),
                 retry_from,
                 Some(exhausted.clone()),
@@ -1185,6 +1259,7 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::Unknown("payload backend unavailable".to_string()),
                 retry_from,
                 None,
@@ -1204,12 +1279,13 @@ async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
 #[test]
 async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
     let retry_from = OplogIndex::from_u64(1);
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1226,7 +1302,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1239,9 +1315,9 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 wallet_pin: Box::new(test_invocation_wallet_pin()),
             },
             {
-                let idempotency_key = idempotency_key.clone();
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
+                    status.current_invocation_started_at = Some(status.oplog_idx);
                     status
                 }
             },
@@ -1249,18 +1325,23 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
         .add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
+                invocation_id: idempotency_key,
                 result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision: ComponentRevision::INITIAL,
             },
             {
-                let idempotency_key = idempotency_key.clone();
                 move |mut status| {
-                    status
-                        .invocation_results
-                        .insert(idempotency_key, status.oplog_idx);
+                    status.invocation_results.insert(
+                        idempotency_key,
+                        InvocationResultPosition {
+                            terminal: status.oplog_idx,
+                            request: status.current_invocation_started_at,
+                        },
+                    );
                     status.current_idempotency_key = None;
+                    status.current_invocation_started_at = None;
                     status
                 }
             },
@@ -1283,6 +1364,7 @@ async fn stale_recovery_success_must_not_clear_a_later_interrupt() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1319,6 +1401,7 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1361,6 +1444,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(InvocationId(Uuid::new_v4())),
                 AgentError::TransientError("invocation attempt failed".to_string()),
                 invocation_retry_from,
                 Some(RetryPolicyState::Counter(3)),
@@ -1371,6 +1455,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 recovery_retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1414,6 +1499,7 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::Unknown("component service unavailable".to_string()),
                 recovery_retry_from,
                 None,
@@ -1443,12 +1529,14 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
 
 #[test]
 async fn invocation_failure_is_classified_separately_from_recovery_failure() {
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let test_case = TestCase::builder(0)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::PermanentError("application failed".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1475,6 +1563,7 @@ async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() 
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::PermissionDenied("startup denied".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
@@ -1495,11 +1584,11 @@ async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() 
 
 #[test]
 async fn invocation_results() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .agent_invocation_finished(
@@ -1507,7 +1596,7 @@ async fn invocation_results() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1520,26 +1609,33 @@ async fn invocation_results() {
 
 #[test]
 async fn invocation_local_failure_finishes_only_its_key_and_keeps_the_agent_idle() {
-    let failed = IdempotencyKey::fresh();
-    let following = IdempotencyKey::fresh();
+    let failed = InvocationId(Uuid::new_v4());
+    let following = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("fail", vec![], failed.clone())
+        .agent_invocation_started("fail", vec![], failed)
         .add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::InvocationLocal,
+                Some(failed),
                 AgentError::InternalError("method gave up".into()),
                 OplogIndex::INITIAL,
                 None,
             ),
             move |mut status| {
-                status.invocation_results.insert(failed, status.oplog_idx);
+                status.invocation_results.insert(
+                    failed,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request: status.current_invocation_started_at.take(),
+                    },
+                );
                 status.current_idempotency_key = None;
                 status.status = AgentStatus::Idle;
                 status
             },
         )
-        .agent_invocation_started("following", vec![], following.clone())
+        .agent_invocation_started("following", vec![], following)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             following,
@@ -1557,6 +1653,7 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
         OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(InvocationId(Uuid::new_v4())),
             AgentError::InternalError("method gave up".into()),
             anchor,
             None,
@@ -1591,10 +1688,10 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
 
 #[test]
 async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations() {
-    let completed = IdempotencyKey::fresh();
-    let pending = IdempotencyKey::fresh();
+    let completed = InvocationId(Uuid::new_v4());
+    let pending = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("completed", vec![], completed.clone())
+        .agent_invocation_started("completed", vec![], completed)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             completed,
@@ -1622,14 +1719,14 @@ async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations()
 
 #[test]
 fn recovery_errors_are_not_invocation_results() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(1),
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: key.clone(),
+                invocation_id: key,
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
@@ -1647,35 +1744,216 @@ fn recovery_errors_are_not_invocation_results() {
             OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
+                None,
                 AgentError::InternalError("replay diverged".to_string()),
                 retry_from,
                 Some(RetryPolicyState::Terminal),
             ),
         ),
     ]);
-    let mut current_idempotency_key = None;
-    let mut cancelled_idempotency_key = None;
+    let mut requests = InvocationRequests::default();
     let mut results = Vec::new();
 
     fold_invocation_result_entries(
-        &mut current_idempotency_key,
-        &mut cancelled_idempotency_key,
+        &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |key, index| results.push((key.clone(), index)),
+        |key, position| results.push((*key, position)),
     );
 
     assert!(results.is_empty());
-    assert_eq!(current_idempotency_key, Some(key));
+    assert_eq!(requests.current, Some(key));
+    assert_eq!(requests.current_started_at, Some(OplogIndex::from_u64(1)));
+}
+
+fn started_invocation(key: &InvocationId) -> OplogEntry {
+    OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: *key,
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "agent:method".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            principal: Principal::anonymous(),
+            scope_card: None,
+        })),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(test_invocation_wallet_pin()),
+    }
+}
+
+fn finished_invocation(key: &InvocationId) -> OplogEntry {
+    OplogEntry::AgentInvocationFinished {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: *key,
+        result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+        method_name: None,
+        consumed_fuel: 0,
+        component_revision: ComponentRevision::INITIAL,
+    }
+}
+
+fn fold_results(
+    entries: Vec<OplogEntry>,
+) -> (
+    Vec<(InvocationId, InvocationResultPosition)>,
+    Option<InvocationId>,
+) {
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .map(|(offset, entry)| (OplogIndex::from_u64(offset as u64 + 1), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut requests = InvocationRequests::default();
+    let mut results = Vec::new();
+    fold_invocation_result_entries(
+        &mut requests,
+        &DeletedRegions::default(),
+        &entries,
+        |key, position| results.push((*key, position)),
+    );
+    (results, requests.current)
+}
+
+fn result(terminal: u64, request: Option<u64>) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: request.map(OplogIndex::from_u64),
+    }
+}
+
+fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
+    OplogEntry::pending_agent_invocation(
+        None,
+        *key,
+        OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "agent:method".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            principal: Principal::anonymous(),
+            scope_card: None,
+        })),
+        TraceId::generate(),
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn invocation_error(invocation_id: &InvocationId) -> OplogEntry {
+    OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        Some(*invocation_id),
+        AgentError::TransientError("failed".to_string()),
+        OplogIndex::INITIAL,
+        None,
+    )
+}
+
+#[test]
+fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
+    let finished = InvocationId(Uuid::new_v4());
+    let running = InvocationId(Uuid::new_v4());
+
+    // A background retry of `finished` records its error while `running` runs. It must neither
+    // replace the finished result nor be attributed to `running`.
+    let (results, current) = fold_results(vec![
+        started_invocation(&finished),
+        finished_invocation(&finished),
+        started_invocation(&running),
+        invocation_error(&finished),
+        invocation_error(&running),
+    ]);
+
+    assert_eq!(
+        results,
+        vec![
+            (finished, result(2, Some(1))),
+            (running, result(5, Some(3))),
+        ]
+    );
+    assert_eq!(current, Some(running));
+
+    let (results, current) = fold_results(vec![
+        started_invocation(&running),
+        finished_invocation(&running),
+    ]);
+    assert_eq!(results, vec![(running, result(2, Some(1)))]);
+    assert_eq!(current, None);
+}
+
+#[test]
+fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
+    let running = InvocationId(Uuid::new_v4());
+    let denied = InvocationId(Uuid::new_v4());
+
+    // A hint separates the cancellation from the error, so the error is not positionally adjacent
+    // to the `CancelPendingInvocation` of the invocation it names.
+    let (results, current) = fold_results(vec![
+        pending_invocation_entry(&denied),
+        started_invocation(&running),
+        OplogEntry::cancel_pending_invocation(denied),
+        OplogEntry::log(
+            None,
+            golem_common::model::oplog::LogLevel::Stderr,
+            String::new(),
+            "denied\n".to_string(),
+            None,
+        ),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(denied),
+            AgentError::PermissionDenied("permission denied".to_string()),
+            OplogIndex::INITIAL,
+            None,
+        ),
+    ]);
+
+    assert_eq!(
+        results,
+        vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
+    );
+    assert_eq!(current, Some(running));
+}
+
+#[test]
+fn invocation_results_point_at_their_request_entry() {
+    let queued = InvocationId(Uuid::new_v4());
+    let cancelled = InvocationId(Uuid::new_v4());
+    let running = InvocationId(Uuid::new_v4());
+
+    // `queued` waits behind `running`, so its request is its pending entry and not the started
+    // entry of the invocation that ran before it. A cancelled invocation never starts, so its
+    // request stays the pending entry. An `Exited` result belongs to the running invocation.
+    let (results, current) = fold_results(vec![
+        started_invocation(&running),
+        pending_invocation_entry(&queued),
+        pending_invocation_entry(&cancelled),
+        finished_invocation(&running),
+        OplogEntry::cancel_pending_invocation(cancelled),
+        started_invocation(&queued),
+        OplogEntry::exited(),
+    ]);
+
+    assert_eq!(
+        results,
+        vec![
+            (running, result(4, Some(1))),
+            (cancelled, result(5, Some(3))),
+            (queued, result(7, Some(6))),
+        ]
+    );
+    assert_eq!(current, Some(queued));
 }
 
 #[test]
 async fn invocation_results_with_jump() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .jump(OplogIndex::from_u64(2))
@@ -1684,7 +1962,7 @@ async fn invocation_results_with_jump() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1697,11 +1975,11 @@ async fn invocation_results_with_jump() {
 
 #[test]
 async fn invocation_results_with_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .agent_invocation_finished(
@@ -1709,7 +1987,7 @@ async fn invocation_results_with_revert() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1723,13 +2001,13 @@ async fn invocation_results_with_revert() {
 
 #[test]
 async fn single_auto_update_for_running() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1757,7 +2035,7 @@ async fn single_auto_update_for_running() {
 
 #[test]
 async fn auto_update_for_running_with_jump() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
@@ -1766,7 +2044,7 @@ async fn auto_update_for_running_with_jump() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1797,8 +2075,8 @@ async fn auto_update_for_running_with_jump() {
 
 #[test]
 async fn single_manual_update() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -1807,7 +2085,7 @@ async fn single_manual_update() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1831,7 +2109,7 @@ async fn single_manual_update() {
         )
         .pending_update(&update1, |status| status.total_linear_memory_size = 200)
         .successful_update(update1, 2000, &HashSet::new())
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1857,8 +2135,8 @@ async fn single_manual_update() {
 
 #[test]
 async fn single_manual_failed_update() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -1867,7 +2145,7 @@ async fn single_manual_failed_update() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1891,7 +2169,7 @@ async fn single_manual_failed_update() {
         )
         .pending_update(&update1, |_| {})
         .failed_update(update1)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -1904,8 +2182,8 @@ async fn single_manual_failed_update() {
 
 #[test]
 async fn single_manual_failed_update_during_snapshot() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update2 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -1914,7 +2192,7 @@ async fn single_manual_failed_update_during_snapshot() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -1926,7 +2204,7 @@ async fn single_manual_failed_update_during_snapshot() {
             target_revision: ComponentRevision::new(2).unwrap(),
         })
         .failed_update(update2)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2147,6 +2425,7 @@ fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
                 None,
                 Default::default(),
                 None,
+                None,
             ),
         ),
     ]);
@@ -2203,6 +2482,7 @@ fn revert_validation_removes_only_crossed_assisted_promotion() {
         None,
         Default::default(),
         Some(details),
+        None,
     );
     let dropped_update = OplogRegion::from_range(3..=4);
 
@@ -2223,6 +2503,257 @@ fn revert_validation_removes_only_crossed_assisted_promotion() {
         &OplogRegion::from_range(3..=5),
     );
     assert!(regions_with_overlap.is_in_deleted_region(OplogIndex::from_u64(2)));
+}
+
+/// A snapshot-based update to revision 2 whose `PendingUpdate` entry is at 5, followed by its
+/// outcome at 9.
+fn snapshot_based_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogIndex, OplogEntry> {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+    BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(9), outcome),
+    ])
+}
+
+fn successful_snapshot_based_update(bootstrap: Option<OplogRegion>) -> OplogEntry {
+    OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        None,
+        bootstrap,
+    )
+}
+
+fn failed_update_to_revision_two() -> OplogEntry {
+    OplogEntry::failed_update(
+        ComponentRevision::new(2).unwrap(),
+        Some("details".to_string()),
+        None,
+        None,
+        None,
+    )
+}
+
+fn skipped_indices(regions: &DeletedRegions) -> Vec<u64> {
+    (1..=10)
+        .filter(|index| regions.is_in_deleted_region(OplogIndex::from_u64(*index)))
+        .collect()
+}
+
+#[test]
+fn a_successful_snapshot_based_update_commits_the_bootstrap_range_of_its_target() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        successful_snapshot_based_update(Some(OplogRegion::from_range(7..=8))),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![2, 3, 4, 5, 7, 8]);
+}
+
+#[test]
+fn a_successful_snapshot_based_update_without_a_bootstrap_range_commits_its_prefix() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        successful_snapshot_based_update(None),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![2, 3, 4, 5]);
+}
+
+#[test]
+fn a_failed_snapshot_based_update_commits_the_history_of_its_attempt() {
+    let regions = super::skipped_regions(&snapshot_based_update_with_outcome(
+        failed_update_to_revision_two(),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![6, 7, 8]);
+}
+
+/// An automatic update queued before the snapshot-based update succeeds at 7, after the
+/// snapshot-based `PendingUpdate` entry at 5. The attempts of the snapshot-based update begin only
+/// after 7, so its failure keeps the automatic update's `SuccessfulUpdate` entry and the history
+/// before it.
+#[test]
+fn a_failed_snapshot_based_update_keeps_the_outcome_of_the_update_before_it() {
+    let mut entries = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+    entries.insert(
+        OplogIndex::from_u64(3),
+        OplogEntry::pending_update(
+            UpdateDescription::Automatic {
+                target_revision: ComponentRevision::new(3).unwrap(),
+            },
+            None,
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(7),
+        OplogEntry::successful_update(
+            ComponentRevision::new(3).unwrap(),
+            100,
+            None,
+            Default::default(),
+            None,
+            None,
+        ),
+    );
+
+    assert_eq!(skipped_indices(&super::skipped_regions(&entries)), vec![8]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(skipped_indices(&status.skipped_regions), vec![8]);
+    assert_eq!(
+        status.component_revision,
+        ComponentRevision::new(3).unwrap()
+    );
+}
+
+/// A failure at 7 of the manual update invocation at 3, which no `PendingUpdate` paired, ends
+/// no queue element, so the attempts of the snapshot-based update at 5 still begin after 5. The
+/// fold of the skipped regions alone, which does not read the manual invocations, agrees with
+/// the status.
+#[test]
+fn a_failure_that_ends_no_queue_element_does_not_move_the_start_of_the_attempts() {
+    let mut entries = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+    entries.insert(OplogIndex::from_u64(3), region_fold::manual_invocation(9));
+    entries.insert(OplogIndex::from_u64(7), region_fold::failed(9, Some(3)));
+
+    assert_eq!(
+        skipped_indices(&super::skipped_regions(&entries)),
+        vec![6, 7, 8]
+    );
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(skipped_indices(&status.skipped_regions), vec![6, 7, 8]);
+}
+
+#[test]
+fn a_snapshot_based_update_that_fails_right_after_its_entry_commits_nothing() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+    let regions = super::skipped_regions(&BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(6), failed_update_to_revision_two()),
+    ]));
+
+    assert!(regions.is_empty());
+}
+
+#[test]
+fn a_failed_automatic_update_commits_nothing() {
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let regions = super::skipped_regions(&BTreeMap::from([
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(update, None),
+        ),
+        (OplogIndex::from_u64(9), failed_update_to_revision_two()),
+    ]));
+
+    assert!(regions.is_empty());
+}
+
+#[test]
+fn revert_validation_leaves_out_the_regions_of_a_snapshot_based_update_whose_outcome_it_drops() {
+    let successful = snapshot_based_update_with_outcome(successful_snapshot_based_update(Some(
+        OplogRegion::from_range(7..=8),
+    )));
+    let failed = snapshot_based_update_with_outcome(failed_update_to_revision_two());
+
+    let dropping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(9..=9));
+    let keeping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(10..=10));
+    let dropping_failure =
+        super::revert_validation_regions(&failed, &OplogRegion::from_range(9..=9));
+    let keeping_failure =
+        super::revert_validation_regions(&failed, &OplogRegion::from_range(10..=10));
+
+    assert!(dropping_success.is_empty());
+    assert_eq!(skipped_indices(&keeping_success), vec![2, 3, 4, 5, 7, 8]);
+    assert!(dropping_failure.is_empty());
+    assert_eq!(skipped_indices(&keeping_failure), vec![6, 7, 8]);
+}
+
+/// A snapshot-assisted update to revision 2 from the record at 3: its admission at 4, its
+/// strategy entry at 5, followed by its outcome at 9.
+fn snapshot_assisted_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogIndex, OplogEntry> {
+    BTreeMap::from([
+        (
+            OplogIndex::from_u64(4),
+            OplogEntry::pending_update(automatic_update(2), None),
+        ),
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::pending_update(assisted_update(2, 1, 1, 3), Some(OplogIndex::from_u64(4))),
+        ),
+        (OplogIndex::from_u64(9), outcome),
+    ])
+}
+
+/// The target of a snapshot-assisted update replays the bootstrap block of the selected record,
+/// which lies inside the record prefix that the update commits.
+#[test]
+fn a_successful_snapshot_assisted_update_commits_its_record_prefix() {
+    let regions = super::skipped_regions(&snapshot_assisted_update_with_outcome(
+        successful_snapshot_based_update(Some(OplogRegion::from_range(2..=2))),
+    ));
+
+    assert_eq!(skipped_indices(&regions), vec![2, 3]);
+}
+
+/// The attempts of a snapshot-assisted update append no entry of the target, so a failed one
+/// leaves the history after its strategy entry to the source.
+#[test]
+fn a_failed_snapshot_assisted_update_commits_no_history() {
+    let regions = super::skipped_regions(&snapshot_assisted_update_with_outcome(
+        failed_update_to_revision_two(),
+    ));
+
+    assert!(skipped_indices(&regions).is_empty());
+}
+
+#[test]
+fn revert_validation_leaves_out_the_record_prefix_of_a_snapshot_assisted_update_whose_outcome_it_drops()
+ {
+    let successful = snapshot_assisted_update_with_outcome(successful_snapshot_based_update(Some(
+        OplogRegion::from_range(2..=2),
+    )));
+
+    let dropping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(9..=9));
+    let keeping_success =
+        super::revert_validation_regions(&successful, &OplogRegion::from_range(10..=10));
+
+    assert!(dropping_success.is_empty());
+    assert_eq!(skipped_indices(&keeping_success), vec![2, 3]);
 }
 
 #[test]
@@ -2303,7 +2834,7 @@ fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
 
 #[test]
 async fn auto_update_for_running_with_jump_and_revert() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
     };
@@ -2312,7 +2843,7 @@ async fn auto_update_for_running_with_jump_and_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2344,8 +2875,8 @@ async fn auto_update_for_running_with_jump_and_revert() {
 
 #[test]
 async fn single_manual_update_with_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2354,7 +2885,7 @@ async fn single_manual_update_with_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2378,7 +2909,7 @@ async fn single_manual_update_with_revert() {
         )
         .pending_update(&update1, |_| {})
         .successful_update(update1, 2000, &HashSet::new())
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2392,8 +2923,8 @@ async fn single_manual_update_with_revert() {
 
 #[test]
 async fn multiple_manual_updates_with_jump_and_revert() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2408,7 +2939,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .host_call(
             "b",
@@ -2432,7 +2963,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
         )
         .pending_update(&update1, |_| {})
         .failed_update(update1)
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
         })
@@ -2454,8 +2985,8 @@ async fn multiple_manual_updates_with_jump_and_revert() {
 /// override sits on top of it.
 #[test]
 async fn two_successful_manual_updates() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
     let update1 = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
         payload: OplogPayload::Inline(Box::new(vec![])),
@@ -2470,7 +3001,7 @@ async fn two_successful_manual_updates() {
     };
 
     let test_case = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .host_call(
             "b",
             HostRequest::NoInput(HostRequestNoInput {}),
@@ -2485,7 +3016,7 @@ async fn two_successful_manual_updates() {
         .pending_update(&update1, |_| {})
         .successful_update(update1, 1000, &HashSet::new())
         // The suffix the second update has to replay.
-        .agent_invocation_started("c", vec![], k2.clone())
+        .agent_invocation_started("c", vec![], k2)
         .host_call(
             "d",
             HostRequest::NoInput(HostRequestNoInput {}),
@@ -2506,7 +3037,7 @@ async fn two_successful_manual_updates() {
 
 #[test]
 async fn a_revert_across_an_update_drops_its_name_from_the_status() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
     let name = FilesystemSnapshotName::update();
     let update = UpdateDescription::SnapshotBased {
         target_revision: ComponentRevision::new(2).unwrap(),
@@ -2516,7 +3047,7 @@ async fn a_revert_across_an_update_drops_its_name_from_the_status() {
     };
 
     let updated = TestCase::builder(1)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k1,
@@ -2563,6 +3094,7 @@ fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
             None,
             HashSet::new(),
             None,
+            None,
         ),
     )]);
 
@@ -2590,15 +3122,15 @@ fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
 
 #[test]
 async fn multiple_reverts() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .grow_memory(100)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k2.clone(),
+            idempotency_key: k2,
             method_name: "b".to_string(),
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
@@ -2609,13 +3141,13 @@ async fn multiple_reverts() {
         })
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            k1.clone(),
+            k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            k2.clone(),
+            k2,
             ComponentRevision::INITIAL,
         )
         .revert(OplogIndex::from_u64(5))
@@ -2624,7 +3156,7 @@ async fn multiple_reverts() {
             k1,
             ComponentRevision::INITIAL,
         )
-        .agent_invocation_started("b", vec![], k2.clone())
+        .agent_invocation_started("b", vec![], k2)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k2,
@@ -2638,12 +3170,12 @@ async fn multiple_reverts() {
 
 #[test]
 async fn cancel_pending_invocation() {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k1.clone(),
+            idempotency_key: k1,
             method_name: "a".to_string(),
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
@@ -2653,7 +3185,7 @@ async fn cancel_pending_invocation() {
             scope_card: None,
         })
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: k2.clone(),
+            idempotency_key: k2,
             method_name: "b".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
@@ -2668,17 +3200,17 @@ async fn cancel_pending_invocation() {
 
 #[test]
 async fn permission_denied_rejection_survives_status_reconstruction() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = InvocationId(Uuid::new_v4());
     let test_case = TestCase::builder(0)
         .pending_invocation(AgentInvocation::AgentMethod {
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key,
             method_name: "denied".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
             scope_card: None,
         })
-        .permission_denied_pending_invocation(idempotency_key.clone())
+        .permission_denied_pending_invocation(idempotency_key)
         .build();
     let expected = test_case.entries.last().unwrap().expected_status.clone();
     let pending_baseline = test_case.entries[1].expected_status.clone();
@@ -2714,10 +3246,10 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
 
 #[test]
 async fn snapshot_tracking() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .snapshot()
         .grow_memory(100)
@@ -2966,6 +3498,7 @@ async fn a_new_snapshot_keeps_a_confirmed_candidate_as_the_previous_usable_snaps
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: Some(first),
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -2985,6 +3518,7 @@ async fn a_new_snapshot_keeps_a_candidate_without_a_name_as_the_previous_usable_
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: None,
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -3075,6 +3609,7 @@ async fn a_record_that_reuses_the_name_of_the_candidate_keeps_that_candidate_as_
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(1).unwrap(),
             filesystem_snapshot: Some(name),
+            bootstrap: None,
         })
     );
     run_test_case(test_case).await;
@@ -3247,6 +3782,7 @@ fn assisted_update(
         snapshot_index: OplogIndex::from_u64(snapshot_index),
         snapshot_revision: ComponentRevision::new(source_component_revision).unwrap(),
         filesystem_snapshot: None,
+        snapshot_bootstrap: None,
     }
 }
 
@@ -3277,6 +3813,7 @@ async fn automatic_strategy_refines_admission_in_place_and_freezes_selection() {
                 index: OplogIndex::from_u64(3),
                 component_revision: ComponentRevision::new(1).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         )
     );
@@ -3348,6 +3885,7 @@ async fn snapshot_assisted_selection_survives_outcome_revert_and_checkpoint_fold
         index: OplogIndex::from_u64(2),
         component_revision: ComponentRevision::new(1).unwrap(),
         filesystem_snapshot: None,
+        bootstrap: None,
     });
     assert_eq!(
         Some(snapshot_assisted_pending_details(&expected.pending_updates[0]).2),
@@ -3443,6 +3981,7 @@ async fn snapshot_assisted_selection_survives_successful_outcome_revert() {
             index: OplogIndex::from_u64(2),
             component_revision: source_revision,
             filesystem_snapshot: None,
+            bootstrap: None,
         }
     );
     run_test_case(test_case).await;
@@ -3515,6 +4054,7 @@ async fn snapshot_assisted_selection_freezes_source_revision_start_index() {
             index: OplogIndex::from_u64(4),
             component_revision: ComponentRevision::new(2).unwrap(),
             filesystem_snapshot: None,
+            bootstrap: None,
         }
     );
     run_test_case(test_case).await;
@@ -3555,6 +4095,7 @@ async fn successful_snapshot_assisted_update_promotes_only_selected_snapshot_pre
             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                 filesystem_snapshot: None,
             },
+            bootstrap: None,
         })
     );
     assert!(status.skipped_regions.is_in_deleted_region(snapshot_index));
@@ -3609,10 +4150,10 @@ async fn failed_snapshot_assisted_update_does_not_promote_snapshot() {
 
 #[test]
 async fn snapshot_tracking_with_revert() {
-    let k1 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
-        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_started("a", vec![], k1)
         .grow_memory(10)
         .snapshot()
         .grow_memory(100)
@@ -3665,18 +4206,18 @@ fn jump_repair_fixture(
     AgentStatusRecord,
     AgentStatusRecord,
 ) {
-    let k1 = IdempotencyKey::fresh();
-    let k2 = IdempotencyKey::fresh();
+    let k1 = InvocationId(Uuid::new_v4());
+    let k2 = InvocationId(Uuid::new_v4());
 
     let test_case = TestCase::builder(0)
         .agent_mode(agent_mode)
-        .agent_invocation_started("a", vec![], k1.clone()) // idx 2
+        .agent_invocation_started("a", vec![], k1) // idx 2
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
             k1,
             ComponentRevision::INITIAL,
         ) // idx 3 (clean idle boundary)
-        .agent_invocation_started("b", vec![], k2.clone()) // idx 4
+        .agent_invocation_started("b", vec![], k2) // idx 4
         .grow_memory(10) // idx 5
         .grow_memory(100) // idx 6
         .jump(OplogIndex::from_u64(4)) // idx 7, deletes region [4, 7]
@@ -4119,7 +4660,7 @@ fn rebuild_fixture() -> TestCase {
         .grow_memory(17)
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
-            IdempotencyKey::fresh(),
+            InvocationId(Uuid::new_v4()),
             ComponentRevision::INITIAL,
         )
         .grow_memory(5)
@@ -4197,6 +4738,13 @@ impl TestCaseBuilder {
                         local_agent_config: Vec::new(),
                         original_phantom_id: None,
                         instance_id,
+                        create_request: golem_common::model::oplog::CreateRequest::new(
+                            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                            None,
+                            golem_common::model::agent::Principal::anonymous(),
+                            &golem_common::model::invocation_context::InvocationContextStack::fresh(
+                            ),
+                        ),
                     },
                 )),
                 expected_status: status.clone(),
@@ -4235,7 +4783,7 @@ impl TestCaseBuilder {
         self,
         function_name: &str,
         request: Vec<SchemaValue>,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
     ) -> Self {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
@@ -4246,7 +4794,7 @@ impl TestCaseBuilder {
         self.add(
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
-                idempotency_key: idempotency_key.clone(),
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(Box::new(payload)),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
@@ -4255,6 +4803,7 @@ impl TestCaseBuilder {
             },
             move |mut status| {
                 status.current_idempotency_key = Some(idempotency_key);
+                status.current_invocation_started_at = Some(status.oplog_idx);
                 status.status = AgentStatus::Running;
                 if !status.pending_invocations.is_empty() {
                     status.pending_invocations.pop();
@@ -4267,22 +4816,31 @@ impl TestCaseBuilder {
     pub fn agent_invocation_finished(
         self,
         result: AgentInvocationResult,
-        idempotency_key: IdempotencyKey,
+        idempotency_key: InvocationId,
         component_revision: ComponentRevision,
     ) -> Self {
         self.add(
             OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
+                invocation_id: idempotency_key,
                 result: OplogPayload::Inline(Box::new(result)),
                 method_name: None,
                 consumed_fuel: 0,
                 component_revision,
             },
             move |mut status| {
-                status
-                    .invocation_results
-                    .insert(idempotency_key, status.oplog_idx);
-                status.current_idempotency_key = None;
+                let mut request = None;
+                if status.current_idempotency_key.as_ref() == Some(&idempotency_key) {
+                    request = status.current_invocation_started_at.take();
+                    status.current_idempotency_key = None;
+                }
+                status.invocation_results.insert(
+                    idempotency_key,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request,
+                    },
+                );
                 status.status = AgentStatus::Idle;
                 status
             },
@@ -4382,6 +4940,7 @@ impl TestCaseBuilder {
                 active_cards: Vec::new(),
                 wallet_generation: 0,
                 filesystem_snapshot: filesystem_snapshot.clone(),
+                bootstrap: None,
             },
             move |mut status| {
                 if let Some(last) = &status.last_automatic_snapshot
@@ -4391,6 +4950,7 @@ impl TestCaseBuilder {
                         index: last.index,
                         component_revision: last.component_revision,
                         filesystem_snapshot: last.files.name().cloned(),
+                        bootstrap: None,
                     });
                 }
                 status.last_automatic_snapshot = Some(AutomaticSnapshot {
@@ -4398,6 +4958,7 @@ impl TestCaseBuilder {
                     timestamp,
                     component_revision: status.component_revision,
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
+                    bootstrap: None,
                 });
                 status
             },
@@ -4440,6 +5001,7 @@ impl TestCaseBuilder {
             status.status = old_status.status;
             status.component_revision = old_status.component_revision;
             status.current_idempotency_key = old_status.current_idempotency_key;
+            status.current_invocation_started_at = old_status.current_invocation_started_at;
             status.total_linear_memory_size = old_status.total_linear_memory_size;
             status.component_size = old_status.component_size;
             status.owned_resources = old_status.owned_resources;
@@ -4474,6 +5036,7 @@ impl TestCaseBuilder {
             status.status = old_status.status;
             status.component_revision = old_status.component_revision;
             status.current_idempotency_key = old_status.current_idempotency_key;
+            status.current_invocation_started_at = old_status.current_invocation_started_at;
             status.total_linear_memory_size = old_status.total_linear_memory_size;
             status.component_size = old_status.component_size;
             status.owned_resources = old_status.owned_resources;
@@ -4499,6 +5062,7 @@ impl TestCaseBuilder {
         let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
         let entry = OplogEntry::pending_agent_invocation(
+            None,
             idempotency_key,
             OplogPayload::Inline(Box::new(invocation_payload)),
             invocation_context.trace_id.clone(),
@@ -4515,39 +5079,61 @@ impl TestCaseBuilder {
         self.add(entry.clone(), move |mut status| {
             status.pending_invocations.push(PendingInvocationRef {
                 timestamp: entry.timestamp(),
+                not_before: None,
                 oplog_index: oplog_idx,
-                idempotency_key: ref_idempotency_key.clone(),
+                idempotency_key: ref_idempotency_key,
                 manual_update_target_revision,
             });
             status
         })
     }
 
-    pub fn cancel_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
-        let entry = OplogEntry::cancel_pending_invocation(idempotency_key.clone()).rounded();
+    pub fn cancel_pending_invocation(self, idempotency_key: InvocationId) -> Self {
+        let entry = OplogEntry::cancel_pending_invocation(idempotency_key).rounded();
         self.add(entry.clone(), move |mut status| {
+            let request = status
+                .pending_invocations
+                .iter()
+                .find(|ti| ti.idempotency_key() == Some(&idempotency_key))
+                .map(|ti| ti.oplog_index);
             status
                 .pending_invocations
                 .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
-            status.cancelled_idempotency_key = Some(idempotency_key);
+            if status.current_idempotency_key.as_ref() != Some(&idempotency_key) {
+                status.invocation_results.insert(
+                    idempotency_key,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request,
+                    },
+                );
+            }
             status
         })
     }
 
-    pub fn permission_denied_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
-        self.cancel_pending_invocation(idempotency_key.clone()).add(
+    pub fn permission_denied_pending_invocation(self, idempotency_key: InvocationId) -> Self {
+        self.cancel_pending_invocation(idempotency_key).add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
+                Some(idempotency_key),
                 AgentError::PermissionDenied("permission denied".to_string()),
                 OplogIndex::INITIAL,
                 None,
             ),
             move |mut status| {
-                status.cancelled_idempotency_key = None;
-                status
+                let request = status
                     .invocation_results
-                    .insert(idempotency_key, status.oplog_idx);
+                    .position(&idempotency_key)
+                    .and_then(|position| position.request);
+                status.invocation_results.insert(
+                    idempotency_key,
+                    InvocationResultPosition {
+                        terminal: status.oplog_idx,
+                        request,
+                    },
+                );
                 status.status = AgentStatus::Idle;
                 status.current_retry_state.clear();
                 status
@@ -4644,6 +5230,7 @@ impl TestCaseBuilder {
             None,
             new_active_plugins.clone(),
             None,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -4708,6 +5295,7 @@ impl TestCaseBuilder {
                 status.authoritative_snapshot = applied_update.map(|au| AuthoritativeSnapshot {
                     index: au.oplog_index,
                     kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    bootstrap: None,
                 });
             };
 
@@ -4744,6 +5332,7 @@ impl TestCaseBuilder {
             None,
             HashSet::new(),
             Some(details.clone()),
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -4765,6 +5354,7 @@ impl TestCaseBuilder {
                 kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot: None,
                 },
+                bootstrap: None,
             });
             status.skipped_regions.add(OplogRegion::from_index_range(
                 OplogIndex::INITIAL.next()..=snapshot_index,
@@ -5288,7 +5878,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id.clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-        idempotency_key: IdempotencyKey::fresh(),
+        idempotency_key: InvocationId(Uuid::new_v4()),
     };
     let attachment_id = AttachmentId::primary(
         session_key.callee_environment_id,
@@ -5298,8 +5888,9 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
     .unwrap();
     let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
-        public_session_id: session_key.idempotency_key.value.clone(),
-        session_key: session_key.idempotency_key.clone(),
+        public_session_id: session_key.idempotency_key.to_string(),
+        route_scope: None,
+        session_key: session_key.idempotency_key,
         expiry_policy: StreamSessionExpiryPolicy::None,
         expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
@@ -5488,6 +6079,8 @@ fn checkpoint_latest_per_grant_id_wins() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -5499,6 +6092,8 @@ fn checkpoint_latest_per_grant_id_wins() {
                 confirmed_up_to: OplogIndex::from_u64(10),
                 sending_up_to: OplogIndex::from_u64(20),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
     ]);
@@ -5543,6 +6138,8 @@ fn checkpoint_different_plugins_tracked_independently() {
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -5554,6 +6151,8 @@ fn checkpoint_different_plugins_tracked_independently() {
                 confirmed_up_to: OplogIndex::from_u64(3),
                 sending_up_to: OplogIndex::from_u64(7),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
     ]);
@@ -5596,6 +6195,8 @@ fn checkpoint_target_agent_id_preserved() {
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(5),
             last_batch_start: OplogIndex::NONE,
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: None,
         },
     )]);
 
@@ -5633,6 +6234,7 @@ fn deactivated_plugin_evicted_from_checkpoints() {
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5669,6 +6271,7 @@ fn deactivated_plugin_retained_when_in_flight() {
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(15),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5709,6 +6312,7 @@ fn successful_update_drops_old_grant_retains_new() {
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5722,6 +6326,7 @@ fn successful_update_drops_old_grant_retains_new() {
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::from([new_grant]),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             },
         ),
         (
@@ -5736,6 +6341,8 @@ fn successful_update_drops_old_grant_retains_new() {
                 confirmed_up_to: OplogIndex::from_u64(12),
                 sending_up_to: OplogIndex::from_u64(12),
                 last_batch_start: OplogIndex::NONE,
+                source_component_revision: ComponentRevision::new(2).unwrap(),
+                delivery: None,
             },
         ),
     ]);
@@ -5819,6 +6426,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
             confirmed_up_to: OplogIndex::from_u64(3),
             sending_up_to: OplogIndex::from_u64(8),
             last_batch_start: OplogIndex::NONE,
+            delivery: None,
         },
     )]);
 
@@ -5897,6 +6505,8 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
                 confirmed_up_to: OplogIndex::INITIAL,
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -5915,6 +6525,8 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
                 confirmed_up_to: OplogIndex::from_u64(4),
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
             },
         ),
         (
@@ -7251,6 +7863,7 @@ fn update_fields_snapshot(filesystem_snapshot: Option<FilesystemSnapshotName>) -
         active_cards: Vec::new(),
         wallet_generation: 0,
         filesystem_snapshot,
+        bootstrap: None,
     }
 }
 
@@ -7325,6 +7938,7 @@ fn update_fields_after_snapshot_entries_keep_one_candidate_and_its_usable_predec
             timestamp: Timestamp::from(1_000),
             component_revision: ComponentRevision::new(3).unwrap(),
             files: SnapshotFiles::Unconfirmed(second),
+            bootstrap: None,
         })
     );
     assert_eq!(
@@ -7333,6 +7947,7 @@ fn update_fields_after_snapshot_entries_keep_one_candidate_and_its_usable_predec
             index: OplogIndex::from_u64(2),
             component_revision: ComponentRevision::new(3).unwrap(),
             filesystem_snapshot: Some(first),
+            bootstrap: None,
         })
     );
 }
@@ -7365,6 +7980,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             },
         ),
     ]);
@@ -7388,6 +8004,112 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
         Some(OplogIndex::from_u64(4))
     );
     assert_eq!(fields.successful_updates.len(), 1);
+}
+
+#[test]
+fn update_fields_carry_the_bootstrap_ranges_of_snapshots_and_snapshot_based_updates() {
+    let snapshot_bootstrap = OplogRegion {
+        start: OplogIndex::from_u64(3),
+        end: OplogIndex::from_u64(7),
+    };
+    let update_bootstrap = OplogRegion {
+        start: OplogIndex::from_u64(11),
+        end: OplogIndex::from_u64(12),
+    };
+    let snapshot_with_bootstrap = OplogEntry::Snapshot {
+        timestamp: Timestamp::from(1_000),
+        data: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards: Vec::new(),
+        wallet_generation: 0,
+        filesystem_snapshot: None,
+        bootstrap: Some(snapshot_bootstrap.clone()),
+    };
+
+    let fields = empty_update_fields()
+        .after(
+            OplogIndex::from_u64(8),
+            &snapshot_with_bootstrap,
+            &super::update_queue::UpdateStep::Unchanged,
+        )
+        .unwrap();
+    assert_eq!(
+        fields
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.bootstrap.clone()),
+        Some(Some(snapshot_bootstrap.clone()))
+    );
+
+    let fields = fields
+        .after(
+            OplogIndex::from_u64(9),
+            &update_fields_snapshot(None),
+            &super::update_queue::UpdateStep::Unchanged,
+        )
+        .unwrap();
+    assert_eq!(
+        fields
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.bootstrap.clone()),
+        Some(None)
+    );
+    assert_eq!(
+        fields.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(8),
+            component_revision: ComponentRevision::new(3).unwrap(),
+            filesystem_snapshot: None,
+            bootstrap: Some(snapshot_bootstrap),
+        })
+    );
+
+    let target = ComponentRevision::new(4).unwrap();
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(10),
+            OplogEntry::PendingUpdate {
+                timestamp: Timestamp::from(2_000),
+                description: UpdateDescription::SnapshotBased {
+                    target_revision: target,
+                    payload: OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
+                },
+                update_attempt_index: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(13),
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::from(3_000),
+                target_revision: target,
+                new_component_size: 20,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: Some(update_bootstrap.clone()),
+            },
+        ),
+    ]);
+    let regions = fold_regions(&AgentStatusRecord::default(), &entries);
+    let fields = super::calculate_update_fields(
+        empty_update_fields(),
+        &regions.deleted,
+        &regions.steps,
+        &entries,
+    )
+    .unwrap();
+
+    assert_eq!(
+        fields.authoritative_snapshot,
+        Some(AuthoritativeSnapshot {
+            index: OplogIndex::from_u64(10),
+            kind: AuthoritativeSnapshotKind::ManualUpdate,
+            bootstrap: Some(update_bootstrap),
+        })
+    );
 }
 
 #[test]
@@ -7502,6 +8224,7 @@ mod region_fold {
                 snapshot_index: idx(snapshot),
                 snapshot_revision: revision(source),
                 filesystem_snapshot,
+                snapshot_bootstrap: None,
             },
             Some(idx(admission)),
         )
@@ -7510,7 +8233,8 @@ mod region_fold {
     pub(super) fn manual_invocation(target: u64) -> OplogEntry {
         OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
-            idempotency_key: IdempotencyKey::fresh(),
+            not_before: None,
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
             })),
@@ -7537,7 +8261,7 @@ mod region_fold {
     }
 
     pub(super) fn succeeded(target: u64) -> OplogEntry {
-        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None)
+        OplogEntry::successful_update(revision(target), 10, None, HashSet::new(), None, None)
     }
 
     pub(super) fn revert(start: u64, end: u64) -> OplogEntry {
@@ -7683,6 +8407,7 @@ mod region_fold {
                 kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot: Some(name.clone()),
                 },
+                bootstrap: None,
             })
         );
         assert_eq!(status.component_revision, revision(2));
@@ -7706,6 +8431,61 @@ mod region_fold {
             (vec![region(2, 2)], None)
         );
         assert_eq!(names_in_use(&status), Box::from([name]));
+    }
+
+    #[test]
+    fn an_assisted_update_keeps_the_selected_record_range_and_promotes_the_update_range() {
+        let selected_range = region(21, 23);
+        let update_range = region(31, 37);
+        let snapshot = OplogEntry::Snapshot {
+            timestamp: Timestamp::from(1_000),
+            data: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: None,
+            bootstrap: Some(selected_range.clone()),
+        };
+        let strategy = OplogEntry::pending_update(
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: revision(2),
+                source_component_revision: revision(1),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: idx(2),
+                snapshot_revision: revision(1),
+                filesystem_snapshot: None,
+                snapshot_bootstrap: Some(selected_range.clone()),
+            },
+            Some(idx(3)),
+        );
+        let pending = [(2, snapshot), (3, automatic_admission(2)), (4, strategy)];
+
+        let status = fold_status(entries(pending.clone()));
+        assert!(matches!(
+            status.pending_updates.front(),
+            Some(PendingUpdateRef {
+                kind: PendingUpdateKind::SnapshotAssistedAutomatic(selection),
+                ..
+            }) if selection.snapshot.bootstrap == Some(selected_range.clone())
+        ));
+
+        let status = fold_status(entries(pending.into_iter().chain([(
+            5,
+            OplogEntry::successful_update(
+                revision(2),
+                10,
+                None,
+                HashSet::new(),
+                None,
+                Some(update_range.clone()),
+            ),
+        )])));
+        assert_eq!(
+            status
+                .authoritative_snapshot
+                .map(|snapshot| (snapshot.index, snapshot.bootstrap)),
+            Some((idx(2), Some(update_range)))
+        );
     }
 
     #[test]
@@ -7791,7 +8571,14 @@ mod region_fold {
             (4, plain_strategy(2, 3)),
             (
                 5,
-                OplogEntry::successful_update(revision(2), 10, None, HashSet::new(), Some(details)),
+                OplogEntry::successful_update(
+                    revision(2),
+                    10,
+                    None,
+                    HashSet::new(),
+                    Some(details),
+                    None,
+                ),
             ),
         ]));
 
@@ -7912,6 +8699,7 @@ mod region_fold {
                     index: idx(2),
                     component_revision: revision(1),
                     filesystem_snapshot: None,
+                    bootstrap: None,
                 },
             }
         ));
@@ -8047,14 +8835,16 @@ mod invocation_payload_decodes {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
-                idempotency_key,
+                not_before,
+                invocation_id: idempotency_key,
                 payload: OplogPayload::Inline(payload),
                 trace_id,
                 trace_states,
                 invocation_context,
             } => OplogEntry::PendingAgentInvocation {
                 timestamp,
-                idempotency_key,
+                not_before,
+                invocation_id: idempotency_key,
                 payload: OplogPayload::SerializedInline {
                     bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
                     cached: None,
@@ -8070,7 +8860,8 @@ mod invocation_payload_decodes {
     fn method_invocation() -> OplogEntry {
         serialized(OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
-            idempotency_key: IdempotencyKey::fresh(),
+            not_before: None,
+            invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "a".to_string(),
                 input: SchemaValue::Record {
@@ -8099,6 +8890,47 @@ mod invocation_payload_decodes {
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(0));
         fold();
         INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.get())
+    }
+
+    #[test]
+    fn pending_invocation_deadline_survives_serialization_and_incremental_status_fold() {
+        let deadline = Timestamp::from(123_456);
+        let mut scheduled = method_invocation();
+        let OplogEntry::PendingAgentInvocation { not_before, .. } = &mut scheduled else {
+            unreachable!()
+        };
+        *not_before = Some(deadline);
+        assert!(scheduled.is_hint());
+
+        let bytes = golem_common::serialization::serialize(&scheduled).unwrap();
+        let scheduled: OplogEntry = golem_common::serialization::deserialize(&bytes).unwrap();
+        let entries = BTreeMap::from([(idx(2), scheduled), (idx(3), method_invocation())]);
+        let fold = |initial, entries| {
+            super::super::update_status_with_new_entries(
+                AgentMode::Durable,
+                initial,
+                entries,
+                &RetryConfig::default(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let full = fold(AgentStatusRecord::default(), entries.clone());
+        let prefix = fold(
+            AgentStatusRecord::default(),
+            BTreeMap::from([(idx(2), entries[&idx(2)].clone())]),
+        );
+        let bytes = golem_common::serialization::serialize(&prefix).unwrap();
+        let restored = golem_common::serialization::deserialize(&bytes).unwrap();
+        let incremental = fold(
+            restored,
+            BTreeMap::from([(idx(3), entries[&idx(3)].clone())]),
+        );
+
+        assert_eq!(full.pending_invocations, incremental.pending_invocations);
+        assert_eq!(full.pending_invocations.len(), 2);
+        assert_eq!(full.pending_invocations[0].not_before, Some(deadline));
+        assert_eq!(full.pending_invocations[1].not_before, None);
     }
 
     #[test]

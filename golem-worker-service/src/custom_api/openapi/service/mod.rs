@@ -21,10 +21,10 @@ use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::{
-    AgentTarget, InvocationFreshnessDisposition, ParsedAgentId, Principal,
+    AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey};
+use golem_common::model::{AgentId, AgentInvocationResult};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use serde_json::Value;
@@ -96,7 +96,7 @@ impl From<DocumentError> for OpenApiError {
 
 struct ProviderCall {
     agent_id: AgentId,
-    key: IdempotencyKey,
+    key: golem_common::model::InvocationRequestKey,
     method: String,
     environment_id: EnvironmentId,
 }
@@ -122,7 +122,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 Some(input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                Some(call.key.clone()),
+                call.key.clone(),
                 None,
                 true,
                 InvocationFreshnessDisposition::KnownFresh,
@@ -241,8 +241,8 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
     let RichRouteBehaviour::HttpRouter(router) = &route.behavior else {
         unreachable!()
     };
-    let key = IdempotencyKey::fresh();
-    let logical = ParsedAgentId::try_new(
+    let key = golem_common::model::InvocationRequestKey::external(None, None);
+    let logical = ParsedAgentKey::try_new(
         router.agent_type.clone(),
         TypedSchemaValue::new(
             router.constructor_input.graph.clone(),
@@ -252,7 +252,9 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
     )
     .map_err(|_| OpenApiError::new("provider-input"))?;
     let identity = logical
-        .with_ephemeral_invocation_phantom(&key)
+        .with_ephemeral_invocation_phantom(
+            &key.owner_key(&router.openapi_provider_method.as_ref().unwrap().method_name),
+        )
         .map_err(|_| OpenApiError::new("provider-input"))?;
     Ok(ProviderCall {
         agent_id: AgentId {

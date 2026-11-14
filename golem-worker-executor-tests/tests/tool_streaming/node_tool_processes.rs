@@ -671,6 +671,9 @@ async fn crash_during_pending_tool_attachments(
     }
     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_collector_history_settled(&history);
+    let stored_key = executor
+        .external_invocation_key(&worker, &key, "builtin_cli")
+        .await?;
     assert_eq!(
         history
             .iter()
@@ -680,7 +683,7 @@ async fn crash_during_pending_tool_attachments(
                     if matches!(
                         &started.invocation,
                         PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.idempotency_key == key
+                            if method.invocation_id == stored_key
                     )
             ))
             .count(),

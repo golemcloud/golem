@@ -27,6 +27,9 @@ import scala.scalajs.js.typedarray.Uint8Array
 object OplogEntryRoundtripSpec extends ZIOSpecDefault {
   import OplogApi._
 
+  private val invocationUuid           = new java.util.UUID(-81985529216486896L, -1089357896855742841L)
+  private def invocationUuidJs: js.Any = golem.host.js.JsUuid.fromUuid(invocationUuid)
+
   /**
    * A valid `typed-schema-value` JS facade, produced through the same encode
    * pipeline the host uses, so the parse round-trip is meaningful.
@@ -112,16 +115,18 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Error],
         e.params.kind == OplogErrorKind.Recovery,
+        e.params.invocationId.isEmpty,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
       )
     },
-    test("Invocation-local error from dynamic") {
+    test("Invocation-local error with invocation ID from dynamic") {
       val raw = wrapEntry(
         "error",
         js.Dynamic.literal(
           timestamp = ts(),
           kind = "invocation-local",
+          invocationId = invocationUuidJs,
           error = "method gave up",
           retryFrom = js.BigInt("17")
         )
@@ -129,6 +134,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Error]
       assertTrue(
         parsed.params.kind == OplogErrorKind.InvocationLocal,
+        parsed.params.invocationId.contains(invocationUuid),
         parsed.params.error == "method gave up",
         parsed.params.retryFrom == BigInt(17)
       )
@@ -166,13 +172,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "cancel-invocation",
         js.Dynamic.literal(
           timestamp = ts(),
-          idempotencyKey = "idem-123"
+          invocationId = invocationUuidJs
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(
         parsed.isInstanceOf[OplogEntry.CancelPendingInvocation],
-        parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.idempotencyKey == "idem-123"
+        parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.invocationId == invocationUuid
       )
     },
     test("BeginRemoteTransaction from dynamic") {
@@ -273,6 +279,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       )
       val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationStarted].params
       assertTrue(
+        parsed.invocationId.isEmpty,
         parsed.walletPin.walletToken.walletIdHash.toSeq == Seq[Byte](1, 2, -1),
         parsed.walletPin.walletToken.generation == BigInt(7),
         parsed.walletPin.scopeCardId.contains(new java.util.UUID(10L, 20L))
@@ -342,6 +349,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
+          invocationId = invocationUuidJs,
           result = js.Dynamic.literal(
             tag = "agent-method",
             `val` = js.Dynamic.literal(output = sampleTypedJs)
@@ -356,7 +364,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.AgentInvocationFinished],
         c.params.response.isDefined == true,
         c.params.response.map(_.value).contains(SchemaValue.S32Value(42)),
-        c.params.consumedFuel == 1000L
+        c.params.consumedFuel == 1000L,
+        c.params.invocationId == invocationUuid
       )
     },
     test("AgentInvocationFinished without response from dynamic (manual-update result)") {
@@ -364,6 +373,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
+          invocationId = invocationUuidJs,
           result = js.Dynamic.literal(tag = "manual-update"),
           consumedFuel = js.BigInt("0"),
           componentRevision = js.BigInt("1")
@@ -850,10 +860,11 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "pending-agent-invocation",
         js.Dynamic.literal(
           timestamp = ts(),
+          notBefore = ts(1800000000, 123),
           invocation = js.Dynamic.literal(
             tag = "exported-function",
             `val` = js.Dynamic.literal(
-              idempotencyKey = "idem-1",
+              invocationId = invocationUuidJs,
               methodName = "increment",
               functionInput = sampleTypedJs,
               traceId = "trace-1",
@@ -867,8 +878,16 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val inv    = parsed.asInstanceOf[OplogEntry.PendingAgentInvocation].params.invocation
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingAgentInvocation],
+        parsed
+          .asInstanceOf[OplogEntry.PendingAgentInvocation]
+          .params
+          .notBefore
+          .contains(
+            ContextApi.DateTime(BigInt(1800000000), 123)
+          ),
         inv.isInstanceOf[AgentInvocation.ExportedFunction],
         inv.asInstanceOf[AgentInvocation.ExportedFunction].params.functionName == "increment",
+        inv.asInstanceOf[AgentInvocation.ExportedFunction].params.invocationId == invocationUuid,
         inv
           .asInstanceOf[AgentInvocation.ExportedFunction]
           .params
@@ -877,6 +896,59 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           .map(_.value)
           .contains(SchemaValue.S32Value(42))
       )
+    },
+    test("nested invocation UUIDs preserve both unsigned halves") {
+      val tags = List("agent-method-invocation", "agent-initialization", "process-oplog-entries", "external-tool")
+      val ids  = tags.map { tag =>
+        val invocation = js.Dynamic.literal(
+          tag = tag,
+          `val` = js.Dynamic.literal(
+            invocationId = invocationUuidJs,
+            methodName = "increment",
+            toolName = "tool",
+            functionInput = sampleTypedJs,
+            input = sampleTypedJs,
+            constructorParameters = sampleTypedJs,
+            traceId = "trace-1",
+            traceStates = js.Array[String](),
+            invocationContext = js.Array[js.Any]()
+          )
+        )
+        val started = OplogEntry
+          .fromJs(
+            wrapEntry(
+              "agent-invocation-started",
+              js.Dynamic.literal(
+                timestamp = ts(),
+                invocation = invocation,
+                walletPin = js.Dynamic.literal(
+                  walletToken = js.Dynamic.literal(walletIdHash = new Uint8Array(0), generation = js.BigInt("7"))
+                )
+              )
+            )
+          )
+          .asInstanceOf[OplogEntry.AgentInvocationStarted]
+          .params
+          .invocationId
+        val pending = OplogEntry
+          .fromJs(
+            wrapEntry(
+              "pending-agent-invocation",
+              js.Dynamic.literal(timestamp = ts(), invocation = invocation)
+            )
+          )
+          .asInstanceOf[OplogEntry.PendingAgentInvocation]
+          .params
+          .invocation match {
+          case AgentInvocation.ExportedFunction(p)     => p.invocationId
+          case AgentInvocation.AgentInitialization(id) => id
+          case AgentInvocation.ProcessOplogEntries(id) => id
+          case AgentInvocation.ExternalTool(id)        => id
+          case other                                   => throw new AssertionError(s"Unexpected invocation: $other")
+        }
+        started.contains(invocationUuid) && pending == invocationUuid
+      }
+      assertTrue(ids.forall(identity))
     },
     test("PendingAgentInvocation with manual-update from dynamic") {
       val raw = wrapEntry(
@@ -918,6 +990,31 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.CompletionDelivered],
         parsed.asInstanceOf[OplogEntry.CompletionDelivered].params.startIndex == BigInt(43),
         parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
+    test("OplogProcessorCheckpoint preserves the source component revision") {
+      val raw = wrapEntry(
+        "oplog-processor-checkpoint",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          plugin = js.Dynamic.literal(
+            pluginName = "processor",
+            pluginVersion = "1.0",
+            parameters = js.Array[js.Tuple2[String, String]]()
+          ),
+          sourceComponentRevision = js.BigInt("9007199254740993"),
+          targetAgentId = js.Dynamic.literal(agentId = "processor-agent"),
+          confirmedUpTo = js.BigInt("11"),
+          sendingUpTo = js.BigInt("15"),
+          lastBatchStart = js.BigInt("12")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.OplogProcessorCheckpoint].params
+      assertTrue(
+        parsed.sourceComponentRevision == BigInt("9007199254740993"),
+        parsed.confirmedUpTo == BigInt(11),
+        parsed.sendingUpTo == BigInt(15),
+        parsed.lastBatchStart == BigInt(12)
       )
     },
     // --- Edge cases ---

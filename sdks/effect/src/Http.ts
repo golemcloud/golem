@@ -43,7 +43,7 @@ export type {
  * `effect-golem` is a *metadata-only* SDK on the HTTP side: agent code
  * never sees raw HTTP requests. The Golem host owns the HTTP server —
  * it matches the request, enforces auth/CORS, decodes path/query/header
- * values, and ultimately calls `invoke(methodName, dataValue, principal)`
+ * values, and ultimately calls `invoke(methodName, dataValue)`
  * with the resulting `DataValue`. The SDK's job is to *advertise* the
  * routing structure via `discoverAgentTypes()` so the host knows how to
  * route incoming requests.
@@ -414,11 +414,16 @@ export interface DurableStreamLoadOptions {
  */
 export interface DurableStreamOptions {
   readonly slots: ReadonlyArray<DurableStreamSlotOptions>
-  readonly allowExternalWrites?: boolean
-  readonly allowStreamDelete?: boolean
-  readonly allowInvocationDelete?: boolean
   readonly load?: DurableStreamLoadOptions
 }
+
+/**
+ * Declared HTTP transport. Omission leaves the default to the registry.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type HttpRouteMode = "durableStreams" | "plain" | "sse" | "webSocket"
 
 /**
  * Mount declaration carried by `AgentMetadata.http`. Compiled to
@@ -524,6 +529,7 @@ export interface EndpointDef<
   readonly authRequired?: boolean
   readonly cors: ReadonlyArray<string>
   readonly durableStreams?: DurableStreamOptions
+  readonly mode?: HttpRouteMode
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +929,7 @@ export interface EndpointOptions<H extends Readonly<Record<string, string>> = No
   readonly cors?: ReadonlyArray<string>
   /** Durable-stream route customization for this endpoint. */
   readonly durableStreams?: DurableStreamOptions
+  readonly mode?: HttpRouteMode
 }
 
 const buildEndpoint = <H extends Readonly<Record<string, string>>>(
@@ -945,6 +952,7 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
     authRequired: opts?.auth,
     cors: opts?.cors ?? [],
     durableStreams: opts?.durableStreams,
+    mode: opts?.mode,
   }) as unknown as EndpointDef<string>
 }
 
@@ -1469,42 +1477,56 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
  * @since 1.5.0
  * @category metadata
  */
-export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => ({
-  httpMethod: verbToWit(ep.verb),
-  pathSuffix: ep.pathSuffix.map(segmentToWit),
-  headerVars: ep.headerVars.map((h) => ({
-    headerName: h.header,
-    variableName: h.varName,
-  })),
-  queryVars: ep.queryVars.map((q) => ({
-    queryParamName: q.queryParam,
-    variableName: q.varName,
-  })),
-  authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
-  corsOptions: { allowedPatterns: [...ep.cors] },
-  durableStreams:
-    ep.durableStreams === undefined
-      ? undefined
-      : {
-          slots: ep.durableStreams.slots.map((slot) => ({
-            source: { tag: slot.source, val: slot.slot },
-            name: slot.name,
-            contentType: slot.contentType,
-          })),
-          allowExternalWrites: ep.durableStreams.allowExternalWrites,
-          allowStreamDelete: ep.durableStreams.allowStreamDelete,
-          allowInvocationDelete: ep.durableStreams.allowInvocationDelete,
-          load:
-            ep.durableStreams.load === undefined
-              ? undefined
-              : {
-                  maxConcurrentReadersPerStream:
-                    ep.durableStreams.load.maxConcurrentReadersPerStream,
-                  maxAppendRequestsPerSecondPerStream:
-                    ep.durableStreams.load.maxAppendRequestsPerSecondPerStream,
-                },
-        },
-})
+export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => {
+  if (
+    ep.mode !== undefined &&
+    ep.mode !== "durableStreams" &&
+    ep.mode !== "plain" &&
+    ep.mode !== "sse" &&
+    ep.mode !== "webSocket"
+  ) {
+    throw new TypeError("mode must be durableStreams, plain, sse, or webSocket")
+  }
+  return {
+    httpMethod: verbToWit(ep.verb),
+    pathSuffix: ep.pathSuffix.map(segmentToWit),
+    headerVars: ep.headerVars.map((h) => ({
+      headerName: h.header,
+      variableName: h.varName,
+    })),
+    queryVars: ep.queryVars.map((q) => ({
+      queryParamName: q.queryParam,
+      variableName: q.varName,
+    })),
+    authDetails: ep.authRequired === undefined ? undefined : { required: ep.authRequired },
+    corsOptions: { allowedPatterns: [...ep.cors] },
+    mode:
+      ep.mode === "durableStreams"
+        ? "durable-streams"
+        : ep.mode === "webSocket"
+          ? "web-socket"
+          : ep.mode,
+    durableStreams:
+      ep.durableStreams === undefined
+        ? undefined
+        : {
+            slots: ep.durableStreams.slots.map((slot) => ({
+              source: { tag: slot.source, val: slot.slot },
+              name: slot.name,
+              contentType: slot.contentType,
+            })),
+            load:
+              ep.durableStreams.load === undefined
+                ? undefined
+                : {
+                    maxConcurrentReadersPerStream:
+                      ep.durableStreams.load.maxConcurrentReadersPerStream,
+                    maxAppendRequestsPerSecondPerStream:
+                      ep.durableStreams.load.maxAppendRequestsPerSecondPerStream,
+                  },
+          },
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Validation

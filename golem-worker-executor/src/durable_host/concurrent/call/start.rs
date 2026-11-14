@@ -216,6 +216,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner,
             invocation_id,
             logical_key_position: None,
+            agent_invocation: ctx.state.get_current_idempotency_key(),
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN)
@@ -234,6 +235,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
         invocation_id: Option<DurableInvocationId>,
     ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+        ctx.state.refuse_on_bootstrap_cursor(format_args!(
+            "the accessor call {}",
+            Pair::HOST_FUNCTION_NAME
+        ))?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         if claim_options.require_recorded_start
             && (durable_execution_state.is_live || durable_execution_state.snapshotting_mode)
@@ -326,17 +331,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             requires_agent_authority,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
-            primary_runtime: ctx.runtime == OwnerRuntime::Agent,
-            replaying_incomplete_entity: ctx
-                .entity_invocation_scope()
-                .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete),
+            store_replay_state: ctx.state.store_replay_state.clone(),
             tool_entity: matches!(
                 ctx.runtime,
                 OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
             ),
             tool_operation: ctx.entity_tool_operation(),
             admission_boundary: None,
-            local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
             execution_scope,
@@ -510,21 +511,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
 
         if is_live {
+            let live_call_permit = live_call_permit.ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "{} requires a live-call permit before execution",
+                    Pair::FQFN
+                ))
+            })?;
             if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
                 Ok(ExecutedAccessStart {
                     start_idx,
-                    persisted: false,
+                    state: SessionState::executing(CallRecording::Unrecorded, live_call_permit),
                     requires_agent_authority: prepared.requires_agent_authority,
                     agent_auth_ctx,
-                    request_upload: PendingUpload::already_durable(),
-                    replay: None,
                     execution_scope: execution_scope.finish(start_idx),
                     retry,
                     scope_replay_recovery: prepared.claim_options.scope_replay_recovery,
                     drop_sink: prepared.drop_sink,
                     cleanup_sink: prepared.cleanup_sink,
-                    live_call_permit,
                     _phantom: PhantomData,
                 })
             } else {
@@ -594,7 +598,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ambient_trap_context(ctx),
                     )
                 });
-                let initiation_permit = live_call_permit.clone();
+                let initiation_permit = Some(live_call_permit.clone());
                 let initiation_scope = execution_scope.clone();
                 let initiation_type = retry.function_type().clone();
                 let sink = prepared.drop_sink.clone();
@@ -698,7 +702,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         vec![DropEvent::AwaitCompletionMarker {
                             receipt: Some(MarkerReceipt::pending(settlement)),
                             trap_context: initiation_context,
-                            live_call_permit: live_call_permit.clone(),
+                            live_call_permit: Some(live_call_permit.clone()),
                         }],
                     )
                 });
@@ -713,17 +717,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let (start_idx, request_upload) = accepted?.take();
                 Ok(ExecutedAccessStart {
                     start_idx,
-                    persisted: true,
+                    state: SessionState::executing(
+                        CallRecording::Recorded { request_upload },
+                        live_call_permit,
+                    ),
                     requires_agent_authority: prepared.requires_agent_authority,
                     agent_auth_ctx,
-                    request_upload,
-                    replay: None,
                     execution_scope: execution_scope.finish(start_idx),
                     retry,
                     scope_replay_recovery: prepared.claim_options.scope_replay_recovery,
                     drop_sink: prepared.drop_sink,
                     cleanup_sink: prepared.cleanup_sink,
-                    live_call_permit,
                     _phantom: PhantomData,
                 })
             }
@@ -732,17 +736,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let start_idx = replay.start_idx();
             Ok(ExecutedAccessStart {
                 start_idx,
-                persisted: false,
+                state: SessionState::replaying(replay),
                 requires_agent_authority: prepared.requires_agent_authority,
                 agent_auth_ctx,
-                request_upload: PendingUpload::already_durable(),
-                replay: Some(replay),
                 execution_scope: execution_scope.finish(start_idx),
                 retry,
                 scope_replay_recovery: prepared.claim_options.scope_replay_recovery,
                 drop_sink: prepared.drop_sink,
                 cleanup_sink: prepared.cleanup_sink,
-                live_call_permit: None,
                 _phantom: PhantomData,
             })
         }
@@ -754,17 +755,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         executed: ExecutedAccessStart<Pair, P>,
     ) -> Self {
-        let is_live = executed.replay.is_none();
+        if executed.state.has_recorded_start() {
+            ctx.state.observe_bootstrap_start(executed.start_idx);
+        }
         DurableCallSession {
             start_idx: executed.start_idx,
-            is_live,
-            persisted: executed.persisted,
-            request_upload: executed.request_upload,
-            replay: executed.replay,
-            finished: false,
+            state: executed.state,
             cancellation_span_id: None,
             span_observer: None,
-            parked_undelivered_replay: false,
             host_internal_calls: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
@@ -778,9 +776,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             agent_auth_ctx: executed.agent_auth_ctx,
             drop_sink: executed.drop_sink,
             cleanup_sink: executed.cleanup_sink,
-            // Taken at prepare time (or at the replay→live switch), before this call's first
-            // oplog append, so the in-flight count never dips to zero mid-call.
-            live_call_permit: executed.live_call_permit,
             _phantom: PhantomData,
         }
     }
@@ -1088,13 +1083,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
         let snapshotting = self.retry.durable_execution_state().snapshotting_mode;
         // The parent is captured explicitly at initiation, never from temporally-open siblings.
         let parent_start_index = self.execution_scope.parent_start_index;
-        let (start_idx, persisted, request_upload) = if snapshotting {
+        let (start_idx, recording) = if snapshotting {
             // Snapshotting persists no durable call records, but the request builder still runs so
             // callers can derive the same in-memory identity shape as a persisted call.
             let oplog = ctx.state.oplog.clone();
             let start_idx = oplog.current_oplog_index().await;
             let _ = build_request(start_idx)?;
-            (start_idx, false, PendingUpload::already_durable())
+            (start_idx, CallRecording::Unrecorded)
         } else {
             let (idx, request_upload) = append_start(
                 &ctx.state.oplog,
@@ -1116,24 +1111,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
                     .await?;
             }
-            (idx, true, request_upload)
+            (idx, CallRecording::Recorded { request_upload })
         };
-        let live_call_permit = Some(LiveCallPermit::new(ctx.state.live_host_call_counter()));
+        let permit = LiveCallPermit::new(ctx.state.live_host_call_counter());
         Ok(DurableCallSession::finish_access_start(
             ctx,
             ExecutedAccessStart {
                 start_idx,
-                persisted,
+                state: SessionState::executing(recording, permit),
                 requires_agent_authority: self.requires_agent_authority,
                 agent_auth_ctx: self.agent_auth_ctx,
-                request_upload,
-                replay: None,
                 execution_scope: self.execution_scope.finish(start_idx),
                 retry: self.retry,
                 scope_replay_recovery: ScopeReplayRecovery::default(),
                 drop_sink: self.drop_sink,
                 cleanup_sink: self.cleanup_sink,
-                live_call_permit,
                 _phantom: PhantomData,
             },
         ))
@@ -1187,17 +1179,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             ctx,
             ExecutedAccessStart {
                 start_idx,
-                persisted: false,
+                state: SessionState::replaying(replay),
                 requires_agent_authority: self.requires_agent_authority,
                 agent_auth_ctx: self.agent_auth_ctx,
-                request_upload: PendingUpload::already_durable(),
-                replay: Some(replay),
                 execution_scope: self.execution_scope.finish(start_idx),
                 retry: self.retry,
                 scope_replay_recovery: ScopeReplayRecovery::default(),
                 drop_sink: self.drop_sink,
                 cleanup_sink: self.cleanup_sink,
-                live_call_permit: None,
                 _phantom: PhantomData,
             },
         )

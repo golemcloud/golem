@@ -26,7 +26,7 @@ use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::services::{HasComponentService, HasOplog};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor::workerctx::{
@@ -104,6 +104,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     let worker = active.primary();
     let authority_wallet = worker.get_wallet_cards().await?;
     let key = IdempotencyKey::fresh();
+    let stored_key = executor
+        .external_invocation_key(&id, &key, "tcp_collect_p3")
+        .await?;
     let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_port = entity_listener.local_addr()?.port();
@@ -190,9 +193,9 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         activation,
         principal.clone(),
         InvocationExecutionMode::Live,
-        IdempotencyKey::fresh(),
+        golem_common::model::InvocationId(uuid::Uuid::new_v4()),
         false,
-        IdempotencyKey::fresh(),
+        golem_common::model::InvocationId(uuid::Uuid::new_v4()),
     )
     .unwrap()
     .with_authority_wallet(authority_wallet);
@@ -211,11 +214,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             );
             let parsed = store.data().parsed_agent_id().unwrap();
             let metadata = store.data().component_metadata().metadata.clone();
-            let init_key = IdempotencyKey::fresh();
-            store
-                .data_mut()
-                .set_current_idempotency_key(init_key.clone())
-                .await;
+            let init_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+            store.data_mut().set_current_idempotency_key(init_key).await;
             store
                 .data_mut()
                 .set_current_invocation_context(InvocationContextStack::fresh())
@@ -226,12 +226,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 invocation_context: InvocationContextStack::fresh(),
                 principal: principal.clone(),
             };
-            // Replay mode suppresses primary invocation markers. The entity scope remains Live.
+            // Entity execution bypasses primary pending admission. The entity scope remains Live.
             let result = invoke_observed_and_traced(
                 lower_invocation(init, &metadata, Some(&parsed))?,
                 store,
                 instance,
-                InvocationMode::Replay,
                 None,
             )
             .await?;
@@ -242,10 +241,10 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             );
             drop(result);
             assert!(store.data().durable_ctx().total_linear_memory_size() > 0);
-            let method_key = IdempotencyKey::fresh();
+            let method_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
             store
                 .data_mut()
-                .set_current_idempotency_key(method_key.clone())
+                .set_current_idempotency_key(method_key)
                 .await;
             let method = AgentInvocation::AgentMethod {
                 idempotency_key: method_key,
@@ -259,7 +258,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 lower_invocation(method, &metadata, Some(&parsed))?,
                 store,
                 instance,
-                InvocationMode::Replay,
                 None,
             )
             .await
@@ -380,7 +378,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         &raw_after_stop[..committed_prefix.len()],
         committed_prefix.as_slice()
     );
-    assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+    assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
     assert_eq!(
         stopped
             .values()

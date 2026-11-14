@@ -19,15 +19,17 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OwnedAgentId,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    scheduler_sqlite_storage_config, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, scheduler_sqlite_storage_config, start,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -82,6 +84,20 @@ inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
     PrecompiledComponent
 );
+
+async fn external_invocation_id(
+    executor: &TestWorkerExecutor,
+    worker: &AgentId,
+    key: &IdempotencyKey,
+    method: &str,
+) -> anyhow::Result<InvocationId> {
+    let fingerprint = executor.get_worker_metadata(worker).await?.fingerprint;
+    Ok(
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
+            .finalize(worker.clone(), fingerprint, method)
+            .id(),
+    )
+}
 
 macro_rules! method_failure_test {
     ($test_name:ident, $fixture:literal, $agent_type:literal, $declared:literal, [$($failure:literal),+]) => {
@@ -210,10 +226,11 @@ async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
             .into_typed::<i64>()?,
         8
     );
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "fail").await?;
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let starts: Vec<_> = oplog.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
     )).collect();
     assert_eq!(starts.len(), 1);
     assert_eq!(
@@ -298,6 +315,10 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         .await;
     let key = IdempotencyKey::fresh();
     let metadata = executor.get_worker_metadata(&worker).await?;
+    let invocation_id =
+        external_invocation_id(&executor, &worker, &key, "fail_stream_after_http").await?;
+    let request_key =
+        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
     let (_, input) = data_value!(url).into_parts();
     let invocation = InvocationStart {
         agent_id: Some(worker.clone().into()),
@@ -312,6 +333,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+        request_key: Some(request_key.into()),
         ..Default::default()
     };
     let mut failure = Box::pin(executor.invoke_agent_session(invocation));
@@ -321,6 +343,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     }
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     let queued = IdempotencyKey::fresh();
+    let queued_id = external_invocation_id(&executor, &worker, &queued, "value").await?;
     executor
         .invoke_agent_with_key(&component, &agent, &queued, "value", data_value!())
         .await?;
@@ -349,7 +372,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     assert!(!held.iter().any(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.idempotency_key == queued)
+                if method.invocation_id == queued_id)
     )));
     release_body.notify_one();
     let error = failure
@@ -368,7 +391,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     assert_eq!(entries.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
             if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.idempotency_key == key)
+                if method.invocation_id == invocation_id)
     )).count(), 1);
     let terminal = entries.iter().find(|entry| matches!(
         &entry.entry, PublicOplogEntry::Error(error) if error.kind == OplogErrorKind::InvocationLocal
@@ -526,10 +549,11 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
         1,
         "replay must not repeat the completed HTTP effect"
     );
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "fail_after_http").await?;
     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let starts: Vec<_> = entries.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+            if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
     )).collect();
     assert_eq!(starts.len(), 1);
     assert_eq!(entries.iter().filter(|entry| matches!(
@@ -597,7 +621,13 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
         let worker = AgentId::from_agent_id(
             component.id,
             &agent
-                .with_ephemeral_invocation_phantom(&key)
+                .with_ephemeral_invocation_phantom(
+                    &InvocationRequestKey::external(
+                        executor.auth_ctx().idempotency_scope(),
+                        Some(&key),
+                    )
+                    .owner_key("fail_after_http"),
+                )
                 .map_err(anyhow::Error::msg)?,
         )
         .map_err(anyhow::Error::msg)?;
@@ -664,10 +694,12 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
             anyhow::Ok(())
         })
         .await??;
+        let invocation_id =
+            external_invocation_id(&executor, &worker, &key, "fail_after_http").await?;
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let starts: Vec<_> = entries.iter().filter(|entry| matches!(
             &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
         )).collect();
         assert_eq!(starts.len(), 1);
         assert_eq!(entries.iter().filter(|entry| matches!(
@@ -857,16 +889,18 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
             .await?;
         gate.entered().await;
+        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let anchor = entries.iter().find(|entry| matches!(
             &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
         )).expect("the gated invocation start must be committed").oplog_index;
         // Deliberately forge an incompatible completed outcome. Reconstruction must not
         // accept a successful body or an actual Wasm trap as the recorded method error.
         let terminal = OplogEntry::error(
             None,
             OplogErrorKind::InvocationLocal,
+            Some(invocation_id),
             AgentError::InternalError("recorded method failure".into()),
             anchor,
             None,
@@ -902,7 +936,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             .invoke_agent_session(InvocationStart {
                 agent_id: Some(worker.clone().into()),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
-                idempotency_key: Some(key.into()),
+                idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
@@ -1077,6 +1111,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 scope_card: None,
                 origin_invocation: None,
                 external_tool: None,
+                request_key: Some(InvocationRequestKey::external(None, None).into()),
             })
             .await
             .expect_err("scheduled streaming invocation must be rejected");
@@ -1159,6 +1194,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: Some(InvocationRequestKey::external(None, None).into()),
         })
         .await
         .expect_err("the old streaming schema must still reject scheduling");
@@ -1620,8 +1656,12 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         .into_typed::<String>()?;
     assert_eq!(initial_result, "immediate-schedule-retry!");
 
+    let request_key = InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&idempotency_key),
+    );
     let final_agent_id = logical_agent_id
-        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .with_ephemeral_invocation_phantom(&request_key.owner_key("changeAndGet"))
         .map_err(anyhow::Error::msg)?;
     let worker_id =
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
@@ -1653,6 +1693,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: Some(request_key.into()),
         })
         .await?;
 
@@ -1708,6 +1749,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: None,
         })
         .await?;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
@@ -1735,8 +1777,12 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
+    let request_key = InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(&idempotency_key),
+    );
     let final_agent_id = agent_id!("EphemeralEchoAgent", "scheduled-revision")
-        .with_ephemeral_invocation_phantom(&idempotency_key)
+        .with_ephemeral_invocation_phantom(&request_key.owner_key("changeAndGet"))
         .map_err(anyhow::Error::msg)?;
     let worker_id =
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
@@ -1771,6 +1817,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
+            request_key: Some(request_key.into()),
         })
         .await?;
 
@@ -2001,6 +2048,68 @@ async fn explicit_structural_ephemeral_creation_has_no_canonical_key(
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
+async fn reverted_inactive_ephemeral_agent_stays_inactive(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::{RevertLastInvocations, RevertWorkerTarget};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralCounter", "reverted-inactive");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &logical_agent_id, "increment", data_value!())
+        .await?;
+    let final_agent_id = result.agent_id().clone();
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    // The revert reconstructs the agent for observation only and stops it externally before it
+    // appends the cut. The retained `Restart` keeps the agent fail-stop afterwards.
+    executor
+        .revert(
+            &final_agent_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 1,
+            }),
+        )
+        .await?;
+    let error = executor
+        .resume(&final_agent_id, false)
+        .await
+        .expect_err("an inactive ephemeral agent must not start after a revert");
+    assert!(
+        error
+            .to_string()
+            .contains("An ephemeral agent cannot accept another invocation or be resumed"),
+        "{error}"
+    );
+    assert!(
+        executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_))),
+        "the revert must be recorded"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
 async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2134,7 +2243,13 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
     let worker = AgentId::from_agent_id(
         component.id,
         &ephemeral_agent
-            .with_ephemeral_invocation_phantom(&idempotency_key)
+            .with_ephemeral_invocation_phantom(
+                &InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&idempotency_key),
+                )
+                .owner_key("allocate_memory"),
+            )
             .map_err(anyhow::Error::msg)?,
     )
     .map_err(anyhow::Error::msg)?;
@@ -2244,7 +2359,13 @@ async fn ephemeral_agent_fails_terminally_when_active_memory_limit_is_lowered(
     let worker = AgentId::from_agent_id(
         component.id,
         &agent
-            .with_ephemeral_invocation_phantom(&key)
+            .with_ephemeral_invocation_phantom(
+                &InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(&key),
+                )
+                .owner_key(METHOD),
+            )
             .map_err(anyhow::Error::msg)?,
     )
     .map_err(anyhow::Error::msg)?;
@@ -2496,8 +2617,6 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
-    use golem_service_base::error::worker_executor::InterruptKind;
-    use golem_worker_executor::services::HasWasmtimeEngine;
     use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
     use std::sync::Arc;
     use std::time::Duration;
@@ -2524,10 +2643,13 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
                 .into_typed::<u64>()?,
             0
         );
-        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
-        let initial_loads = executor.instance_load_count(&worker_id);
         let first_key = IdempotencyKey::fresh();
-        let mut started = executor.gate_next_invocation_started(&owned).await?;
+        let stored_first_key = executor
+            .external_invocation_key(&worker_id, &first_key, "inc_by")
+            .await?;
+        let mut started = executor
+            .gate_next_invocation_started_append(&worker_id)
+            .await;
         let first = {
             let executor = executor.clone();
             let component = component.clone();
@@ -2548,24 +2670,30 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
         tokio::time::timeout(Duration::from_secs(20), started.entered()).await?;
         let history = executor.stored_oplog(&worker_id).await;
         assert!(history.iter().any(|entry| matches!(entry,
-            OplogEntry::PendingAgentInvocation { idempotency_key, .. } if *idempotency_key == first_key)));
+            OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if *idempotency_key == stored_first_key)));
         assert!(!history.iter().any(|entry| matches!(entry,
-            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == first_key)));
+            OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if *idempotency_key == stored_first_key)));
+        started.abort();
+        first.abort();
+        let _ = first.await;
+        drop(executor);
+
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         executor
-            .interrupt_loaded_worker(&worker_id, InterruptKind::Restart)
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent,
+                &first_key,
+                "inc_by",
+                data_value!(7u64),
+            )
             .await?;
-        executor
-            .active_agent(&owned)
-            .await
-            .unwrap()
-            .primary()
-            .engine()
-            .increment_epoch();
-        started.release();
-        tokio::time::timeout(Duration::from_secs(60), first).await???;
-        assert!(executor.instance_load_count(&worker_id) > initial_loads);
+        assert!(executor.instance_load_count(&worker_id) > 0);
 
         let second_key = IdempotencyKey::fresh();
+        let stored_second_key = executor
+            .external_invocation_key(&worker_id, &second_key, "inc_by")
+            .await?;
         let before_completion_restart = executor.instance_load_count(&worker_id);
         let mut completion = executor.gate_next_agent_invocation_success(&worker_id);
         let second = {
@@ -2588,14 +2716,17 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
         tokio::time::timeout(Duration::from_secs(20), completion.entered()).await?;
         let history = executor.stored_oplog(&worker_id).await;
         assert!(history.iter().any(|entry| matches!(entry,
-            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == second_key)));
+            OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if *idempotency_key == stored_second_key)));
         assert!(!history.iter().rev().take_while(|entry| !matches!(entry,
-            OplogEntry::AgentInvocationStarted { idempotency_key, .. } if *idempotency_key == second_key))
+            OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if *idempotency_key == stored_second_key))
             .any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. })));
         completion.abort_as_restart();
         tokio::time::timeout(Duration::from_secs(60), second).await???;
         assert!(executor.instance_load_count(&worker_id) > before_completion_restart);
         let output_key = IdempotencyKey::fresh();
+        let stored_output_key = executor
+            .external_invocation_key(&worker_id, &output_key, "inc_and_return_text")
+            .await?;
         let expected_output = "x".repeat(10_000);
         assert_eq!(
             executor
@@ -2650,7 +2781,8 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
         for entry in &history {
             match entry {
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key, ..
+                    invocation_id: idempotency_key,
+                    ..
                 } => {
                     active_key = Some(idempotency_key);
                 }
@@ -2662,12 +2794,12 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
                 _ => {}
             }
         }
-        for key in [&first_key, &second_key, &output_key] {
+        for key in [&stored_first_key, &stored_second_key, &stored_output_key] {
             let pending = history
                 .iter()
                 .filter_map(|entry| match entry {
                     OplogEntry::PendingAgentInvocation {
-                        idempotency_key,
+                        invocation_id: idempotency_key,
                         payload,
                         ..
                     } if idempotency_key == key => Some(payload),
@@ -2683,7 +2815,7 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
                 .iter()
                 .filter_map(|entry| match entry {
                     OplogEntry::AgentInvocationStarted {
-                        idempotency_key,
+                        invocation_id: idempotency_key,
                         payload,
                         ..
                     } if idempotency_key == key => Some(payload),

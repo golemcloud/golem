@@ -266,8 +266,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     store
         .data_mut()
         .durable_ctx_mut()
-        .set_invocation_principal(Some(principal.clone()));
-    let principal = principal.into();
+        .set_invocation_principal(Some(principal));
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
     let replay = store.data().durable_ctx().state.replay_state.clone();
@@ -297,7 +296,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdin,
                         stdout,
                         stderr,
-                        principal,
                     ),
                 )
                 .await?;
@@ -364,7 +362,6 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         stdin,
                         stdout,
                         stderr,
-                        principal,
                         wrapped,
                     ),
                 )
@@ -490,7 +487,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         if guest_body_accepts_admission_rejection(&result) {
             return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
         }
-        rollback_live_attachment_admission_rejection(&operation).await;
+        rollback_live_attachment_admission_rejection(&operation).await?;
     }
     finish?;
     if matches!(&result, Ok(Ok(_))) || locally_cancelled {

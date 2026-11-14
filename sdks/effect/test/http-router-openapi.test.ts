@@ -13,6 +13,7 @@ import { GuestSchemaValueStreamHandle } from "../src/internal/schema-model/schem
 import { STREAM_INTERNAL } from "../src/internal/schema-model/streamInternal.js"
 import { schemaValueToWitAsync } from "../src/internal/schema-model/wit.js"
 import { HttpServerResponse } from "effect/http"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const transport = vi.hoisted(() => ({
   wrap: vi.fn(async (source: AsyncIterable<unknown>) => ({ source })),
@@ -121,7 +122,7 @@ describe("real Effect HttpApi and generated provider", () => {
           )
         }),
       )
-      await guest.initialize(name, emptyInput(), principal)
+      await withCaller(principal, () => guest.initialize(name, emptyInput()))
       expect(initialized).toBe(0)
       const body = new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
         kind: "native",
@@ -155,11 +156,11 @@ describe("real Effect HttpApi and generated provider", () => {
       )
       if (mode === "encode-failure") {
         transport.wrap.mockRejectedValueOnce(new Error("transport rejected output"))
-        await expect(guest.invoke("handle", input, principal)).rejects.toThrow(
+        await expect(withCaller(principal, () => guest.invoke("handle", input))).rejects.toThrow(
           "transport rejected output",
         )
       } else {
-        const wire = await guest.invoke("handle", input, principal)
+        const wire = await withCaller(principal, () => guest.invoke("handle", input))
         expect(released).toBe(0)
         const output = schemaValueFromWit(wire!)
         if (
@@ -235,8 +236,8 @@ describe("real Effect HttpApi and generated provider", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void))
     expect(generations).toBe(0)
 
-    await guest.initialize("CatalogRouter", emptyInput(), principal)
-    const wire = await guest.invoke("describeCatalog", emptyInput(), principal)
+    await withCaller(principal, () => guest.initialize("CatalogRouter", emptyInput()))
+    const wire = await withCaller(principal, () => guest.invoke("describeCatalog", emptyInput()))
     const value = schemaValueFromWit(wire!)
     if (value.tag !== "string") throw new Error("provider must return one string")
     const document = JSON.parse(value.value)
@@ -262,8 +263,10 @@ describe("real Effect HttpApi and generated provider", () => {
       }),
     }).register()
     expect(generations).toBe(0)
-    await guest.initialize("BadProvider", emptyInput(), principal)
-    await expect(guest.invoke("openApi", emptyInput(), principal)).rejects.toMatchObject({
+    await withCaller(principal, () => guest.initialize("BadProvider", emptyInput()))
+    await expect(
+      withCaller(principal, () => guest.invoke("openApi", emptyInput())),
+    ).rejects.toMatchObject({
       tag: "custom-error",
       val: {
         value: {

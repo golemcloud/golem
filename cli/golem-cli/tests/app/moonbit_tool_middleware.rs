@@ -118,7 +118,9 @@ fn modified_at(path: &PathBuf) -> std::time::SystemTime {
 fn assert_component_contracts(ctx: &TestContext, profile: &str) {
     let required_imports = [
         "interface:golem:agent/common@2.0.0",
+        "interface:golem:agent/invocation-context@2.0.0",
         "interface:golem:api/host@1.5.0",
+        "interface:golem:core/http@2.0.0",
         "interface:golem:core/types@2.0.0",
         "interface:golem:tool/common@0.1.0",
         "interface:golem:tool/host@0.1.0",

@@ -38,6 +38,9 @@ pub trait DurableStreamAgent {
     #[endpoint(put = "/bytes/{count}?delay_ms={delay_ms}")]
     fn bytes(&self, count: u32, delay_ms: u64) -> AgentStream<u8>;
 
+    #[endpoint(put = "/trapped-output")]
+    fn trapped_output(&self, input: AgentStream<String>) -> AgentStream<String>;
+
     #[endpoint(put = "/delayed-output/{handle_delay_ms}?delay_ms={delay_ms}")]
     async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String>;
 
@@ -63,9 +66,6 @@ pub trait DurableStreamAgent {
                 name = "events",
                 content_type = "application/vnd.golem.events"
             ),
-            allow_external_writes = true,
-            allow_stream_delete = false,
-            allow_invocation_delete = false,
             max_concurrent_readers_per_stream = 1,
         )
     )]
@@ -76,9 +76,6 @@ pub trait DurableStreamAgent {
         durable_streams(
             input("input", name = "messages"),
             output("$result", name = "responses"),
-            allow_external_writes = true,
-            allow_stream_delete = false,
-            allow_invocation_delete = false,
             max_concurrent_readers_per_stream = 1,
             max_append_requests_per_second_per_stream = 1,
         )
@@ -93,16 +90,6 @@ pub trait DurableStreamAgent {
         )
     )]
     fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
-
-    #[endpoint(
-        put = "/locked-echo",
-        durable_streams(
-            input("input", name = "locked-messages"),
-            output("$result", name = "locked-responses"),
-            allow_external_writes = false,
-        )
-    )]
-    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 
     #[endpoint(put = "/echo-records")]
     fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
@@ -159,6 +146,16 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
 
     fn bytes(&self, count: u32, delay_ms: u64) -> AgentStream<u8> {
         stream_with_delay((0..count).map(|i| (i % 251) as u8), delay_ms)
+    }
+
+    fn trapped_output(&self, mut input: AgentStream<String>) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one("before-trap".to_string()).await.unwrap();
+            assert_eq!(input.next().await.unwrap(), Some("trap".to_string()));
+            panic!("durable stream producer trap");
+        });
+        stream
     }
 
     async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String> {
@@ -225,10 +222,6 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 
     fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
-        copy_stream(input, |value| value)
-    }
-
-    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
         copy_stream(input, |value| value)
     }
 
