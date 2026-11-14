@@ -372,6 +372,9 @@ until the cleanup has deleted the user of the deleted account (see
 | `GET /healthz` | Liveness. |
 | `GET /readyz` | Readiness: returns 503 when the database is unreachable. |
 
+The form targets answer 403 to a post whose `Origin` header is not the origin of `BETTER_AUTH_URL`,
+also to a post without `Origin`. The webhook route of Polar does not check `Origin`.
+
 ## Development
 
 Use Node.js 24 and pnpm.

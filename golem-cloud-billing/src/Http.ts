@@ -95,12 +95,11 @@ export const routes = HttpRouter.use((router) =>
       return "other"
     }
 
-    // The billing app's own form posts carry no CSRF token; a browser sends `Origin` on every
-    // POST, so a cross-site post is rejected here.
-    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) => {
-      const origin = request.headers["origin"]
-      return origin === undefined || origin === config.baseUrl.origin
-    }
+    // The billing app's own form posts carry no CSRF token. A browser sends `Origin` on every
+    // form post, so a post without `Origin`, with `Origin: null`, or from another origin is
+    // rejected here, also when the browser sends the session cookie.
+    const isSameOrigin = (request: HttpServerRequest.HttpServerRequest) =>
+      request.headers["origin"] === config.baseUrl.origin
 
     // The browser reaches Better Auth only for the OAuth callback. The pages call the other
     // endpoints on the server through `auth.api`. The rest of /api/auth stays unrouted: it

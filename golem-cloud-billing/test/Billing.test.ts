@@ -469,6 +469,35 @@ describe("Polar billing", () => {
     })
   })
 
+  describe("form posts", () => {
+    const routes = ["/sign-in/github", "/sign-out", "/billing/checkout", "/billing/portal", "/billing/overage"]
+    const origins: ReadonlyArray<readonly [string, Record<string, string>]> = [
+      ["without Origin", {}],
+      ["with Origin null", { origin: "null" }],
+      ["from another site", { origin: "https://evil.test" }]
+    ]
+
+    it.each(routes.flatMap((route) => origins.map(([name, headers]) => [route, name, headers] as const)))(
+      "refuses a post to %s %s",
+      async (route, _, headers) => {
+        const { jar } = await signedIn()
+        const before = upstreams.requests.length
+
+        const response = await request(
+          app.handler,
+          jar,
+          "POST",
+          route,
+          { "content-type": "application/x-www-form-urlencoded", ...headers },
+          "mode=allowOverage"
+        )
+
+        expect(response.status).toBe(403)
+        expect(upstreams.requests.slice(before)).toEqual([])
+      }
+    )
+  })
+
   describe("webhooks", () => {
     /** The `subscription.past_due` state of `sub_1` after a payment failed at `failedAt`. */
     const pastDue = (accountId: string, failedAt: Date) =>
