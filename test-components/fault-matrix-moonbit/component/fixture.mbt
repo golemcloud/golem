@@ -22,6 +22,7 @@ pub(all) struct GateAgentId {
 #derive.golem_schema
 pub(all) struct Gate {
   agent_id : GateAgentId
+  fingerprint : @schema.Uuid
   oplog_idx : UInt64
 }
 
@@ -34,6 +35,7 @@ fn Gate::from_host(id : @types.PromiseId) -> Gate {
       },
       agent_id: id.agent_id.agent_id,
     },
+    fingerprint: @schema.Uuid::from_wit(id.fingerprint),
     oplog_idx: id.oplog_idx,
   }
 }
@@ -45,6 +47,7 @@ fn Gate::to_host(self : Gate) -> @types.PromiseId {
       component_id: { uuid: self.agent_id.component_id.uuid.to_wit(), },
       agent_id: self.agent_id.agent_id,
     },
+    fingerprint: self.fingerprint.to_wit(),
     oplog_idx: self.oplog_idx,
   }
 }

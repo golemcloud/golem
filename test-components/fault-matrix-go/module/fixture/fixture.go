@@ -22,21 +22,24 @@ type GateAgentID struct {
 }
 
 type Gate struct {
-	AgentID  GateAgentID
-	OplogIdx uint64
+	AgentID     GateAgentID
+	Fingerprint golem.UUID
+	OplogIdx    uint64
 }
 
 func gateOf(id golem.PromiseID) Gate {
 	return Gate{
-		AgentID:  GateAgentID{ComponentID: GateComponentID{UUID: id.AgentID.ComponentID}, AgentID: id.AgentID.AgentID},
-		OplogIdx: id.OplogIndex,
+		AgentID:     GateAgentID{ComponentID: GateComponentID{UUID: id.AgentID.ComponentID}, AgentID: id.AgentID.AgentID},
+		Fingerprint: id.Fingerprint,
+		OplogIdx:    id.OplogIndex,
 	}
 }
 
 func (g Gate) promiseID() golem.PromiseID {
 	return golem.PromiseID{
-		AgentID:    golem.AgentID{ComponentID: g.AgentID.ComponentID.UUID, AgentID: g.AgentID.AgentID},
-		OplogIndex: g.OplogIdx,
+		AgentID:     golem.AgentID{ComponentID: g.AgentID.ComponentID.UUID, AgentID: g.AgentID.AgentID},
+		Fingerprint: g.Fingerprint,
+		OplogIndex:  g.OplogIdx,
 	}
 }
 

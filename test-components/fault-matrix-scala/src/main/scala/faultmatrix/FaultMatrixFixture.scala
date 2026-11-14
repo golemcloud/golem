@@ -27,10 +27,11 @@ object GateAgentId {
 }
 
 /** The schema shape of `golem:core/types@2.0.0` promise-id. */
-final case class Gate(agentId: GateAgentId, oplogIdx: ULong) {
+final case class Gate(agentId: GateAgentId, fingerprint: UUID, oplogIdx: ULong) {
   def toHost: HostApi.PromiseId =
     JsPromiseId(
       JsAgentId(JsComponentId(JsUuid.fromUuid(agentId.componentId.uuid)), agentId.agentId),
+      JsUuid.fromUuid(fingerprint),
       js.BigInt(oplogIdx.value.toString)
     )
 }
@@ -40,6 +41,7 @@ object Gate {
   def fromHost(id: HostApi.PromiseId): Gate =
     Gate(
       GateAgentId(GateComponentId(JsUuid.toUuid(id.agentId.componentId.uuid)), id.agentId.agentId),
+      JsUuid.toUuid(id.fingerprint),
       ULong(BigInt(id.oplogIdx.toString))
     )
 }

@@ -30,12 +30,12 @@ mod rows {
     use anyhow::{Context, ensure};
     use golem_api_grpc::proto::golem::worker::{
         ResumeOperation, invocation_response, invocation_session_completion,
-        invocation_session_result,
+        invocation_session_result, stream_terminal,
     };
     use golem_client::model::ComponentDto;
     use golem_common::base_model::agent::AgentTypeName;
     use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
-    use golem_common::model::agent::ParsedAgentId;
+    use golem_common::model::agent::ParsedAgentKey;
     use golem_common::model::{AgentId, PromiseId, RoutingTable};
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
@@ -176,15 +176,15 @@ mod rows {
         })
     }
 
-    fn agent(name: &str) -> ParsedAgentId {
+    fn agent(name: &str) -> ParsedAgentKey {
         agent_id!(FIXTURE_AGENT_TYPE, name.to_string())
     }
 
-    fn fresh_agent() -> ParsedAgentId {
+    fn fresh_agent() -> ParsedAgentKey {
         agent(&uuid::Uuid::new_v4().to_string())
     }
 
-    async fn gate(row: &Row, agent: &ParsedAgentId) -> anyhow::Result<PromiseId> {
+    async fn gate(row: &Row, agent: &ParsedAgentKey) -> anyhow::Result<PromiseId> {
         row.user
             .invoke_and_await_agent(&row.component, agent, "create_gate", data_value!())
             .await?
@@ -231,13 +231,20 @@ mod rows {
             .and_then(|terminal| terminal.response.as_ref())
         {
             None => Terminal::Open,
-            Some(invocation_response::Response::OutputEnd(_)) => Terminal::End,
-            Some(invocation_response::Response::OutputError(error)) => {
-                Terminal::Failed(error.details.clone())
-            }
-            Some(invocation_response::Response::StreamCancel(cancel)) => {
-                Terminal::Cancelled(cancel.details.clone().unwrap_or_default())
-            }
+            Some(invocation_response::Response::StreamEnd(end)) => match end
+                .outcome
+                .as_ref()
+                .and_then(|outcome| outcome.terminal.as_ref())
+            {
+                Some(stream_terminal::Terminal::Finished(_)) => Terminal::End,
+                Some(stream_terminal::Terminal::Failed(error)) => {
+                    Terminal::Failed(format!("{:?}", error.error))
+                }
+                Some(stream_terminal::Terminal::ConsumerCancelled(cancelled)) => {
+                    Terminal::Cancelled(cancelled.details.clone().unwrap_or_default())
+                }
+                None => anyhow::bail!("output stream end has no outcome"),
+            },
             Some(other) => anyhow::bail!("unexpected output terminal {other:?}"),
         };
         Ok(Delivery::new(records, terminal))
@@ -261,7 +268,7 @@ mod rows {
     async fn start_gated(
         deps: &EnvBasedTestDependencies,
         row: &Row,
-        agent: &ParsedAgentId,
+        agent: &ParsedAgentKey,
         run: u32,
     ) -> anyhow::Result<(InvocationSession, PromiseId, StreamId)> {
         let gate = gate(row, agent).await?;

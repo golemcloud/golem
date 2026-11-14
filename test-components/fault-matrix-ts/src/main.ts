@@ -18,6 +18,7 @@ const PromiseIdSchema = z.object({
     componentId: z.object({ uuid: s.uuid() }),
     agentId: z.string(),
   }),
+  fingerprint: s.uuid(),
   oplogIdx: s.u64(),
 });
 
@@ -87,6 +88,7 @@ export const FaultMatrixFixtureImpl = FaultMatrixFixture.implement({
           ...id.agentId,
           componentId: { uuid: Uuid.from(id.agentId.componentId.uuid) },
         },
+        fingerprint: Uuid.from(id.fingerprint),
       };
     },
     produce({ run, count, pause_after, gate }) {
