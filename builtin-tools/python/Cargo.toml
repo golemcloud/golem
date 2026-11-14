@@ -20,4 +20,4 @@ strip = "symbols"
 [dependencies]
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 rustpython = { git = "https://github.com/RustPython/RustPython", rev = "d79b41ba289844be0fe391bab5a083f6688af648", default-features = false, features = ["stdlib", "stdio", "importlib", "freeze-stdlib", "host_env"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "d3b26c17256b958ef02094ef2a2e90f9fcec46e2", version = "=0.63.0", features = ["async", "async-spawn", "inter-task-wakeup"] }

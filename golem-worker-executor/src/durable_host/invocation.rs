@@ -393,11 +393,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
-    async fn set_current_idempotency_key(&mut self, key: IdempotencyKey) {
+    async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.state.set_current_idempotency_key(key)
     }
 
-    async fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
+    async fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
         self.state.get_current_idempotency_key()
     }
 
@@ -787,15 +787,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .state
                 .oplog
                 .add_pair(
-                    OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
+                    OplogEntry::cancel_pending_invocation(*idempotency_key),
                     Box::new({
                         let error = error.clone();
                         let retry_policy_state = retry_policy_state.clone();
                         let retry_from = *retry_from;
+                        let invocation_id = *idempotency_key;
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
                                 OplogErrorKind::Invocation,
+                                Some(invocation_id),
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 retry_policy_state,
@@ -860,6 +862,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
                 OplogErrorKind::Invocation,
+                current_idempotency_key,
                 error.clone(),
                 *retry_from,
                 retry_policy_state,
@@ -957,6 +960,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        let invocation_id = self.state.get_current_idempotency_key().ok_or_else(|| {
+            WorkerExecutorError::runtime("agent invocation finished without a current invocation")
+        })?;
+
         if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
             // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
@@ -969,7 +976,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let response = self
                 .state
                 .replay_state
-                .get_oplog_entry_agent_invocation_finished()
+                .get_oplog_entry_agent_invocation_finished(&invocation_id)
                 .await?;
             if let Some((finished_index, recorded_result)) = response {
                 if !recorded_result.replay_equivalent(&output.result) {
@@ -1030,6 +1037,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .oplog()
                 .add_agent_invocation_finished(
+                    invocation_id,
                     &output.result,
                     method_name,
                     consumed_fuel,

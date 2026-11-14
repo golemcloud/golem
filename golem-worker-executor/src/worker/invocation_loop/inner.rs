@@ -1,10 +1,11 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl SelectedWork {
     pub(super) fn next(
         queue: &mut VecDeque<QueuedWorkerInvocation>,
         status: Arc<AgentStatusRecord>,
-        constructor_key: Option<&IdempotencyKey>,
+        constructor_key: Option<&InvocationId>,
         filesystem_turn_used: &mut bool,
         now: Timestamp,
     ) -> Self {

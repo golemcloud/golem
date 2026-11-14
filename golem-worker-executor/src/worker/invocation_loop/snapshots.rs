@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
@@ -288,9 +289,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
         let idempotency_key = {
             let ctx = self.store.data_mut();
-            let idempotency_key = IdempotencyKey::fresh();
-            ctx.set_current_idempotency_key(idempotency_key.clone())
-                .await;
+            let idempotency_key = InvocationId(Uuid::new_v4());
+            ctx.set_current_idempotency_key(idempotency_key).await;
             idempotency_key
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
@@ -483,10 +483,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn snapshot_guest_for_periodic(
         &mut self,
     ) -> Result<golem_common::model::oplog::RawSnapshotData, CommandOutcome> {
-        let idempotency_key = IdempotencyKey::fresh();
+        let idempotency_key = InvocationId(Uuid::new_v4());
         self.store
             .data_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
+            .set_current_idempotency_key(idempotency_key)
             .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
@@ -766,6 +766,7 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
                 .agent_wallet_cards_snapshot(),
             self.0.store.data().durable_ctx().wallet_generation(),
             name,
+            self.0.store.data().durable_ctx().bootstrap_range(),
         ))
     }
 

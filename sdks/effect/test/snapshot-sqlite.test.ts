@@ -33,6 +33,7 @@ import { toWitCodec } from "../src/WitCodec.js"
 import { DatabaseSync } from "node:sqlite"
 import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
+import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const oidcZoe = {
   tag: "oidc",
@@ -146,7 +147,7 @@ describe("snapshot + sqlite databases", () => {
       restoreCalled = { db, bytes }
     })
 
-    await guest.initialize("SqliteCounterTest", wire(xWv), oidcZoe)
+    await withCaller(oidcZoe, () => guest.initialize("SqliteCounterTest", wire(xWv)))
 
     const snapshot = await dispatchSaveSnapshot()
     expect(snapshot.mimeType).toMatch(/^multipart\/mixed; boundary=/)
@@ -162,7 +163,7 @@ describe("snapshot + sqlite databases", () => {
   })
 
   it("save fails fast if the user declared a DB but never attached it", async () => {
-    await guest.initialize("SqliteForgetfulAttach", wire(), oidcZoe)
+    await withCaller(oidcZoe, () => guest.initialize("SqliteForgetfulAttach", wire()))
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
   })
 
@@ -173,7 +174,7 @@ describe("snapshot + sqlite databases", () => {
     __setIsAutocommitDatabaseSyncForTest(() => false)
     __setSerializeDatabaseSyncForTest(() => new Uint8Array([0]))
 
-    await guest.initialize("SqliteCounterTest", wire(xWv), oidcZoe)
+    await withCaller(oidcZoe, () => guest.initialize("SqliteCounterTest", wire(xWv)))
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/SnapshotDatabaseNotInAutocommitError/)
   })
 
@@ -184,7 +185,7 @@ describe("snapshot + sqlite databases", () => {
     __setSerializeDatabaseSyncForTest(() => new Uint8Array([1, 2]))
     __setRestoreDatabaseSyncForTest(() => {})
 
-    await guest.initialize("SqliteCounterTest", wire(xWv), oidcZoe)
+    await withCaller(oidcZoe, () => guest.initialize("SqliteCounterTest", wire(xWv)))
     const snap = await dispatchSaveSnapshot()
 
     // Hand-craft an envelope with an extra 'db:bogus' part by editing
@@ -338,7 +339,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
             return Object.fromEntries(values)
           }),
         )
-        await guest.initialize(agent.name, wire(), oidcZoe)
+        await withCaller(oidcZoe, () => guest.initialize(agent.name, wire()))
         const snapshot = await dispatchSaveSnapshot()
         const decoded = decodeEnvelope(snapshot, oidcZoe)
         if (decoded.kind !== "multipart") throw new Error("expected multipart")
@@ -426,7 +427,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       const agent = configure(["file"], () =>
         Effect.succeed({ file: db as unknown as DatabaseSync }),
       )
-      await guest.initialize(agent.name, wire(), oidcZoe)
+      await withCaller(oidcZoe, () => guest.initialize(agent.name, wire()))
       if (fault === "closed") db.close()
       if (fault === "transaction") db._autocommit = false
       if (fault === "attached") {

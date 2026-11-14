@@ -65,7 +65,8 @@ impl RawSessionCache {
         for (offset, entry) in buffer.iter().enumerate() {
             let index = OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1);
             if let OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
+                invocation_id: idempotency_key,
+                ..
             } = entry
             {
                 if status
@@ -109,7 +110,8 @@ impl RawSessionCache {
 
     pub fn apply_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
         if let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
+            invocation_id: idempotency_key,
+            ..
         } = entry
         {
             for (status, _) in self.entries.values_mut() {

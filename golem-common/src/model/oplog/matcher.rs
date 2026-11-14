@@ -272,7 +272,7 @@ impl PublicOplogEntry {
                         PublicAgentInvocation::AgentInitialization(inv_params) => {
                             Self::string_match("agent-initialization", &[], query_path, query)
                                 || Self::string_match(
-                                    &inv_params.idempotency_key.value,
+                                    &inv_params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -287,7 +287,7 @@ impl PublicOplogEntry {
                                     query,
                                 )
                                 || Self::string_match(
-                                    &inv_params.idempotency_key.value,
+                                    &inv_params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -297,7 +297,7 @@ impl PublicOplogEntry {
                             Self::string_match("external-tool", &[], query_path, query)
                                 || Self::string_match(&inv_params.tool_name, &[], query_path, query)
                                 || Self::string_match(
-                                    &inv_params.idempotency_key.value,
+                                    &inv_params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -312,7 +312,7 @@ impl PublicOplogEntry {
                         PublicAgentInvocation::ProcessOplogEntries(inv_params) => {
                             Self::string_match("process-oplog-entries", &[], query_path, query)
                                 || Self::string_match(
-                                    &inv_params.idempotency_key.value,
+                                    &inv_params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -331,6 +331,7 @@ impl PublicOplogEntry {
                     || Self::string_match("invoke", &[], query_path, query)
                     || Self::string_match("agent-invocation-finished", &[], query_path, query)
                     || Self::string_match(&params.consumed_fuel.to_string(), &[], query_path, query)
+                    || Self::string_match(&params.invocation_id.to_string(), &[], query_path, query)
             }
             PublicOplogEntry::Suspend(_params) => {
                 Self::string_match("suspend", &[], query_path, query)
@@ -338,6 +339,9 @@ impl PublicOplogEntry {
             PublicOplogEntry::Error(params) => {
                 Self::string_match("error", &[], query_path, query)
                     || Self::string_match(&params.error, &[], query_path, query)
+                    || params.invocation_id.as_ref().is_some_and(|invocation_id| {
+                        Self::string_match(&invocation_id.to_string(), &[], query_path, query)
+                    })
             }
             PublicOplogEntry::RecoverySucceeded(_params) => {
                 Self::string_match("recoverysucceeded", &[], query_path, query)
@@ -358,7 +362,7 @@ impl PublicOplogEntry {
                         PublicAgentInvocation::AgentInitialization(params) => {
                             Self::string_match("agent-initialization", &[], query_path, query)
                                 || Self::string_match(
-                                    &params.idempotency_key.value,
+                                    &params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -368,7 +372,7 @@ impl PublicOplogEntry {
                             Self::string_match("agent-method-invocation", &[], query_path, query)
                                 || Self::string_match(&params.method_name, &[], query_path, query)
                                 || Self::string_match(
-                                    &params.idempotency_key.value,
+                                    &params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -387,7 +391,7 @@ impl PublicOplogEntry {
                         PublicAgentInvocation::ProcessOplogEntries(params) => {
                             Self::string_match("process-oplog-entries", &[], query_path, query)
                                 || Self::string_match(
-                                    &params.idempotency_key.value,
+                                    &params.invocation_id.to_string(),
                                     &[],
                                     query_path,
                                     query,
@@ -476,7 +480,7 @@ impl PublicOplogEntry {
             PublicOplogEntry::CancelPendingInvocation(params) => {
                 Self::string_match("cancel", &[], query_path, query)
                     || Self::string_match("cancel-invocation", &[], query_path, query)
-                    || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
+                    || Self::string_match(&params.invocation_id.to_string(), &[], query_path, query)
             }
             PublicOplogEntry::BeginRemoteTransaction(_params) => {
                 Self::string_match("beginremotetransaction", &[], query_path, query)
@@ -629,14 +633,9 @@ impl PublicOplogEntry {
                     || Self::string_match("stream-items", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.record, &[], query_path, query)
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                Self::string_match("streamend", &[], query_path, query)
-                    || Self::string_match("stream-end", &[], query_path, query)
-                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                Self::string_match("streamcancel", &[], query_path, query)
-                    || Self::string_match("stream-cancel", &[], query_path, query)
+            PublicOplogEntry::StreamTerminal(params) => {
+                Self::string_match("streamterminal", &[], query_path, query)
+                    || Self::string_match("stream-terminal", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.record, &[], query_path, query)
             }
             PublicOplogEntry::StreamSession(params) => {

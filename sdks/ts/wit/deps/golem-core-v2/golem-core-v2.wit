@@ -86,6 +86,20 @@ interface types {
         agent-id: string,
     }
 
+    /// The owner whose oplog records an invocation
+    variant invocation-owner {
+        /// An agent. A tool invocation is owned by the agent of its external-tool owner.
+        agent(agent-id),
+        /// A tool. The runtime does not produce this case yet.
+        tool(string),
+    }
+
+    /// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+    record invocation-id {
+        owner: invocation-owner,
+        id: uuid,
+    }
+
     /// Represents a Golem account
     record account-id {
         uuid: uuid,
@@ -647,6 +661,20 @@ interface types {
         graph: schema-graph,
         value: schema-value-tree,
     }
+
+    /// The producer's failure, independent of a reader dropping its stream.
+    variant stream-error {
+        failed(typed-schema-value),
+        trapped(string),
+        /// An invocation cancellation request was recorded and honoured.
+        cancelled,
+        /// The producing invocation completed with its writer still open.
+        abandoned,
+        interrupted(string),
+        resource-exhausted(string),
+    }
+
+    type stream-outcome = result<_, stream-error>;
 
     /// A declared tool failure shared by invocation and oplog interfaces.
     record custom-tool-error {

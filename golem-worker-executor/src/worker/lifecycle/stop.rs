@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::state::{RunningStop, StopPhase, StoppingStop};
 use crate::worker::*;
 
@@ -525,7 +529,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 continue;
             }
             invocation_results.insert(
-                idempotency_key.clone(),
+                *idempotency_key,
                 InvocationResult::Cached {
                     result: Err(FailedInvocationResult {
                         trap_type: TrapType::Error {
@@ -687,13 +691,13 @@ pub(in crate::worker) fn complete_stopping_worker(
 
 pub(in crate::worker) fn invocation_keys_to_fail(
     status: &AgentStatusRecord,
-    first_key: Option<&IdempotencyKey>,
+    first_key: Option<&InvocationId>,
     include_pending_and_current: bool,
-) -> Vec<IdempotencyKey> {
+) -> Vec<InvocationId> {
     let mut keys = Vec::new();
 
     if let Some(key) = first_key {
-        keys.push(key.clone());
+        keys.push(*key);
     }
 
     if !include_pending_and_current {
@@ -706,14 +710,14 @@ pub(in crate::worker) fn invocation_keys_to_fail(
         .filter_map(|entry| entry.idempotency_key())
     {
         if !keys.contains(pending_key) {
-            keys.push(pending_key.clone());
+            keys.push(*pending_key);
         }
     }
 
     if let Some(current_key) = &status.current_idempotency_key
         && !keys.contains(current_key)
     {
-        keys.push(current_key.clone());
+        keys.push(*current_key);
     }
 
     keys

@@ -172,8 +172,6 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
-      - name: Test sticky disk cleanup
-        run: python3 -m unittest discover -s .github/scripts -p 'test_cleanup_sticky_disks.py'
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs

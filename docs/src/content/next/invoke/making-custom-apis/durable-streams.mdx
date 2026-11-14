@@ -36,6 +36,8 @@ For a method mounted at `{base}`, Golem provides:
 
 Session and fork IDs contain 1–128 ASCII letters, digits, `.`, `_`, or `-`. A session identifies one invocation and all of its input, output, and result slots. A direct `stream<T>` result is `$result`; when a result record contains streams, each field is a separate output slot and there is no aggregate `$result`. A non-stream result is a single JSON value in `$result`. Unit results have no result slot.
 
+A session ID is scoped to its route in the deployment that serves it, not to the caller, so every client of the route reads and writes the same session. A creating `PUT` must repeat the original request, including its caller: a `PUT` from a different caller, or with different arguments, returns `422`. A new deployment of the environment serves new routes: session IDs from the previous deployment do not resolve there, and reusing one creates a new session.
+
 Top-level `stream<u8>` slots are opaque byte streams. They use `application/octet-stream` by default and offsets advance through bytes. All other slots are typed JSON streams using `application/json`; each array member in a read response is one logical item. A custom opaque MIME type is available only for direct byte streams. Golem has no native `text/plain` mode for `stream<string>`.
 
 See [Customizing Durable Stream Routes](/next/invoke/making-custom-apis#customizing-durable-stream-routes) for public slot aliases, byte-stream MIME types, operation switches, and per-route admission limits. There is no fork opt-out.
@@ -159,9 +161,9 @@ Creation `PUT`, lazy slot `PUT`, lazy input `POST`, and fork creation support on
 - `Stream-TTL: <seconds>` is a sliding idle timeout in whole seconds.
 - `Stream-Expires-At: <RFC3339 timestamp>` is an absolute future deadline.
 
-The headers are mutually exclusive; malformed, duplicated, past, or conflicting policies return `400`. The policy belongs to the entire session, not one slot. `HEAD` reports the configured value. A new origin `GET` and an accepted or duplicate `POST` refresh a sliding TTL; refresh records are coalesced until they extend the deadline by at least 10% of the TTL. `HEAD`, replayed `PUT`, subsequent activity inside an already-open live response, and agent output do not refresh it.
+The headers are mutually exclusive; malformed, duplicated, past, or conflicting policies in one request return `400`. A Session `PUT` or a lazy create whose policy differs from the policy of the live session returns `422`. A Slot `PUT` on an existing slot whose policy differs returns `409`. The policy belongs to the entire session, not one slot. `HEAD` reports the configured value. A new origin `GET` and an accepted or duplicate `POST` refresh a sliding TTL; refresh records are coalesced until they extend the deadline by at least 10% of the TTL. `HEAD`, replayed `PUT`, subsequent activity inside an already-open live response, and agent output do not refresh it.
 
-Expiry cooperatively cancels open streams, retires the whole URL family to `404`, and—on the normal durable-agent path—allows an explicit session `PUT` or eligible slot `PUT` to create a new invocation with the same public session ID and fresh stream identities. Lazy `POST` does not recreate an expired session. Ephemeral agents cannot release their key-derived identity and require a new session ID; expired fork targets also cannot be recreated.
+Expiry cooperatively cancels open streams, retires the whole URL family to `404`, and—on the normal durable-agent path—allows an explicit session `PUT` or eligible slot `PUT` to create a new invocation with the same public session ID and fresh stream identities. Lazy `POST` does not recreate an expired session. Ephemeral agents cannot release their key-derived identity and require a new session ID (a `PUT` with the expired ID returns `422`); expired fork targets also cannot be recreated.
 
 ## Authentication and browsers
 
@@ -176,13 +178,13 @@ The deployment-specific OpenAPI document is authoritative for the concrete slots
 | Resource and method | Success | Important failures | Main request / response headers |
 | --- | --- | --- | --- |
 | Base `PUT` | `201`; idempotent existing invocation `200` | `400` arguments/expiry; `409` identity, arguments, or policy conflict | Request expiry; response `Location` |
-| Session `PUT` | `201` / `200` | `400`; `404`; `409`; `503` | Request expiry; response `Location` when supplied by the concrete contract |
+| Session `PUT` | `201` / `200` | `400`; `404`; `409`; `422` when the session ID was already used for a different request; `503` | Request expiry; response `Location` when supplied by the concrete contract |
 | Session `GET` / `HEAD` | `200` manifest / bodyless metadata | `404`; `503` | `Stream-Closed`, `Cache-Control`; `HEAD` also expiry policy |
 | Session `DELETE` | First and repeated cancellation `204` | Unknown `404`; disabled `405`; `503` | `Allow`, `Retry-After` when applicable |
-| Slot `PUT` | Created `201`; existing `200` | Invalid lazy create/body `400`; unknown `404`; tombstone/type conflict `409`; `503` | Request expiry and optional matching `Content-Type`; response metadata |
+| Slot `PUT` | Created `201`; existing `200` | Invalid lazy create/body `400`; unknown `404`; tombstone/type/policy conflict `409`; lazy create that conflicts with the session `422`; `503` | Request expiry and optional matching `Content-Type`; response metadata |
 | Slot `HEAD` | `200` | Unknown `404`; tombstone `410`; `503` | Offset, closed/cancelled/up-to-date, expiry, cache, ETag |
 | Slot `GET` | Data/SSE `200`; empty long-poll `204`; conditional closed page `304` | Invalid query/offset `400`; unknown `404`; tombstone `410`; admission `429` or `503` | `If-None-Match`; response offset, closed, cancelled, up-to-date, cursor, ETag, SSE encoding, cache, `Retry-After` |
-| Input `POST` | Ordinary append/close `204`; new producer append `200`; duplicate producer request `204` | `400`; fenced `403`; output slot/disabled `405`; conflict/gap/closed `409`; tombstone `410`; body/batch `413`; rate `429`; `503` | Content type, closure, producer tuple, expiry on lazy create; response offset/closed and producer outcome |
+| Input `POST` | Ordinary append/close `204`; new producer append `200`; duplicate producer request `204` | `400`; fenced `403`; output slot/disabled `405`; conflict/gap/closed `409`; tombstone `410`; body/batch `413`; lazy create that conflicts with the session `422`; rate `429`; `503` | Content type, closure, producer tuple, expiry on lazy create; response offset/closed and producer outcome |
 | Slot `DELETE` | Tombstone `204` | Unknown `404`; disabled `405`; already deleted `410`; `503` | `Allow`, `Retry-After` when applicable |
 | Fork slot `PUT` | Created `201`; identical retry `200` | Invalid source/cut `400`; read-only initial data `403`; unknown `404`; conflict/deleted source/session limit `409`; copy/body limit `413`; rate `429`; `503` | Fork source/offset/sub-offset, optional initial body/close and expiry; response `Location` and metadata |
 

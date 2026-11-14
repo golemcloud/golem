@@ -612,6 +612,8 @@ pub enum PhantomSelection {
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct DurableStreamRoutePolicy {
+    /// The original base route ID, shared by every endpoint in this route family.
+    pub family_id: RouteId,
     pub slots: Vec<DurableStreamSlot>,
     pub allow_external_writes: bool,
     pub allow_stream_delete: bool,
@@ -915,6 +917,7 @@ mod tests {
     #[test]
     fn durable_stream_policy_resolves_public_and_canonical_slot_names() {
         let policy = DurableStreamRoutePolicy {
+            family_id: 37,
             slots: vec![
                 DurableStreamSlot {
                     canonical_name: "input".into(),

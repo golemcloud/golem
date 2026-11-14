@@ -44,9 +44,8 @@ mod raw;
 mod active {
     use super::*;
     use golem_agentic::golem::{
-        agent::common::Principal,
         core::types::TypedSchemaValue,
-        tool::streams::{ByteStreamItem, ToolStdoutWriter},
+        tool::streams::{ByteStreamItem, ToolOutputWriter},
     };
     use wit_bindgen::rt::async_support::StreamReader;
     struct Component;
@@ -68,8 +67,8 @@ mod active {
             _: Vec<String>,
             _: TypedSchemaValue,
             _: Option<StreamReader<ByteStreamItem>>,
-            _: Option<ToolStdoutWriter>,
-            _: Principal,
+            _: Option<ToolOutputWriter>,
+            _: Option<ToolOutputWriter>,
         ) -> Result<tool::InvocationResult, tool::ToolError> {
             Err(tool::ToolError::InvalidToolName(String::new()))
         }

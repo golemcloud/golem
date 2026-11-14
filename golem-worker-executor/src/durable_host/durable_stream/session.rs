@@ -22,7 +22,6 @@ use golem_common::model::oplog::DurableStreamEventSummary;
 /// Preparing this record does not reserve an oplog position or hold the mutation lane.
 pub(crate) struct PreparedConsumerObservation {
     entry: OplogEntry,
-    record: StreamSessionRecord,
     admission: Arc<StreamWriteAdmission>,
 }
 
@@ -53,13 +52,6 @@ impl PreparedConsumerObservation {
                     self.admission
                         .submit(move |owner, context| async move {
                             context.begin_durable_effect();
-                            let keys = ProducerMetadataKey::session_record(
-                                &self.record,
-                                owner.environment_id,
-                                &owner.producer,
-                                owner.producer_fingerprint,
-                            );
-                            drop(owner.index_for(keys).await?);
                             owner.commit_through(&context, index).await?;
                             owner.notify_session_records_changed(Some(&context));
                             Ok::<_, StreamStoreError>(())
@@ -151,11 +143,119 @@ impl DurableStreamStore {
                     payload,
                     DurableStreamEventSummary::session(&record),
                 ),
-                record,
                 admission,
             })
         })
         .await
+    }
+
+    /// Replaces affected consumer heads with their persisted baseline plus the current oplog tail.
+    /// Native observations reserve positions before their producer mutation is submitted.
+    pub(super) async fn refresh_consumer_journals(
+        &self,
+        index: &mut ProducerStreamIndex,
+        records: &[StreamSessionRecord],
+    ) -> Result<(), StreamStoreError> {
+        let keys = records
+            .iter()
+            .flat_map(|record| {
+                ProducerMetadataKey::session_record(
+                    record,
+                    self.environment_id,
+                    &self.producer,
+                    self.producer_fingerprint,
+                )
+            })
+            .filter(|key| matches!(key, ProducerMetadataKey::ConsumerHead(_, _)))
+            .collect::<HashSet<_>>();
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut refreshed = ProducerStreamIndex::default();
+        let mut covered = OplogIndex::NONE;
+        if let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() {
+            let keys = keys.iter().cloned().collect::<Vec<_>>();
+            let (horizon, rows) = service
+                .lookup_durable_stream_producer_metadata(
+                    &OwnedAgentId::new(self.environment_id, &self.producer),
+                    *mode,
+                    *fingerprint,
+                    keys.clone(),
+                )
+                .await
+                .map_err(StreamStoreError::from)?;
+            if rows.len() != keys.len() {
+                return Err(StreamStoreError::CorruptHistory(
+                    "consumer metadata lookup returned an incorrect row count".into(),
+                ));
+            }
+            for (key, row) in keys.into_iter().zip(rows) {
+                if let Some(row) = row {
+                    refreshed
+                        .hydrate_metadata_row(key, row)
+                        .map_err(StreamStoreError::CorruptHistory)?;
+                }
+            }
+            covered = horizon;
+        }
+        let current = self.oplog.current_oplog_index().await;
+        while covered < current {
+            let count = (current.as_u64() - covered.as_u64()).min(1024);
+            for (position, entry) in self.oplog.read_exact(covered.next(), count).await? {
+                covered = position;
+                if self
+                    .fork_lineage
+                    .deleted_regions()
+                    .is_in_deleted_region(position)
+                {
+                    continue;
+                }
+                let OplogEntry::StreamSession { record, .. } = entry else {
+                    continue;
+                };
+                let record = self
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(StreamStoreError::Oplog)?;
+                if !ProducerMetadataKey::session_record(
+                    &record,
+                    self.environment_id,
+                    &self.producer,
+                    self.producer_fingerprint,
+                )
+                .iter()
+                .any(|key| {
+                    keys.contains(key) && matches!(key, ProducerMetadataKey::ConsumerHead(_, _))
+                }) {
+                    continue;
+                }
+                Self::validate_consumer_reobservation(self.oplog.as_ref(), position, &record)
+                    .await?;
+                refreshed.apply_consumer_journal_record(
+                    &record,
+                    self.environment_id,
+                    &self.producer,
+                    self.producer_fingerprint,
+                )?;
+            }
+        }
+        for key in keys {
+            let ProducerMetadataKey::ConsumerHead(session, reader) = key else {
+                unreachable!()
+            };
+            let identity = (session.clone(), reader);
+            index.consumer_journals.remove(&identity);
+            if let Some(journal) = refreshed.consumer_journals.remove(&identity) {
+                index.consumer_journals.insert(identity, journal);
+                index
+                    .session_consumer_streams
+                    .entry(session)
+                    .or_default()
+                    .insert(reader);
+            }
+        }
+        Ok(())
     }
 
     /// Materializes persisted owner-relative bindings into transport mappings.
@@ -454,6 +554,8 @@ impl DurableStreamStore {
             }))
             .await?;
         let mut staged = index.clone();
+        self.refresh_consumer_journals(&mut staged, &records)
+            .await?;
         for record in &records {
             if staged.deleting
                 && !matches!(
@@ -831,7 +933,7 @@ impl DurableStreamStore {
                 };
                 let attached = StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: prepared.session_key.clone(),
+                    session_key: prepared.session_key,
                     attachment_id: prepared.attempt.attachment_id,
                     attempt_id: prepared.attempt.attempt_id,
                     epoch,
@@ -1008,13 +1110,15 @@ impl DurableStreamStore {
     }
 
     /// Records the session terminal after all required stream finalization is durable.
+    /// The input terminal also closes unfinished outputs when the invocation failed.
     pub async fn finish_session(
         &self,
         context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
-        input_cancel_reason: StreamCancelReason,
+        authored_by: StreamTerminalAuthor,
+        input_terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
         if self
             .index_for([ProducerMetadataKey::Session(session_key.clone())])
@@ -1024,7 +1128,11 @@ impl DurableStreamStore {
         {
             return Ok(());
         }
-        let memory = Self::finish_session_retained_bytes(&result);
+        let memory = Self::finish_session_retained_bytes(&result).max(
+            super::terminals::terminal_retained_bytes(&input_terminal)?
+                .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
+                .saturating_mul(4),
+        );
         self.run_lifecycle(context, memory, move |owner, context| async move {
             owner
                 .finish_session_owned(
@@ -1032,7 +1140,8 @@ impl DurableStreamStore {
                     session_key,
                     entity_parent_start_index,
                     result,
-                    input_cancel_reason,
+                    authored_by,
+                    input_terminal,
                 )
                 .await
         })
@@ -1045,7 +1154,8 @@ impl DurableStreamStore {
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
         result: Result<(), Vec<u8>>,
-        input_cancel_reason: StreamCancelReason,
+        authored_by: StreamTerminalAuthor,
+        input_terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
         let mut index = self.index_for_session_streams(&session_key).await?;
         if index.finished_sessions.contains(&session_key) {
@@ -1092,7 +1202,7 @@ impl DurableStreamStore {
         }
 
         let session_reference_for_batch =
-            StreamRegistrationInvocation::Local(session_key.idempotency_key.clone());
+            StreamRegistrationInvocation::Local(session_key.idempotency_key);
         context.begin_durable_effect();
         let entries = self
             .oplog
@@ -1102,36 +1212,42 @@ impl DurableStreamStore {
                         let oplog_index =
                             OplogIndex::from_u64(first_index.as_u64() + position as u64);
                         match role.direction() {
-                            SessionStreamRole::Input => DurableStreamOplogRecord::Cancel(
+                            SessionStreamRole::Input => DurableStreamOplogRecord::Terminal(
                                 stream_attribution,
-                                StreamCancelRecord {
+                                StreamTerminalRecord {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                                     stream_id,
                                     sequence,
                                     offset: StreamOffset::new(oplog_index, 0),
-                                    authored_by: StreamTerminalAuthor::Protocol,
-                                    role: StreamCancelRole::InputConsumer,
-                                    reason: input_cancel_reason,
-                                    details: Some(
-                                        "invocation finished before consuming the complete input"
-                                            .to_string(),
-                                    ),
+                                    authored_by,
+                                    origin: StreamTerminalOrigin::Control,
+                                    terminal: input_terminal.clone(),
                                 },
                             ),
                             SessionStreamRole::Output => {
-                                let details = match &result {
-                                    Ok(()) => b"output stream ended without a terminal".to_vec(),
-                                    Err(details) => details.clone(),
+                                let terminal = match &result {
+                                    Ok(())
+                                        if matches!(
+                                            role,
+                                            SessionStreamRole::ToolStdout
+                                                | SessionStreamRole::ToolStderr
+                                        ) =>
+                                    {
+                                        StreamTerminal::Failed(StreamError::Abandoned)
+                                    }
+                                    Ok(()) => StreamTerminal::Finished,
+                                    Err(_) => input_terminal.clone(),
                                 };
-                                DurableStreamOplogRecord::End(
+                                DurableStreamOplogRecord::Terminal(
                                     stream_attribution,
-                                    StreamEndRecord {
+                                    StreamTerminalRecord {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                                         stream_id,
                                         sequence,
                                         offset: StreamOffset::new(oplog_index, 0),
-                                        authored_by: StreamTerminalAuthor::Protocol,
-                                        result: StreamEndResult::ErrorContext(details),
+                                        authored_by,
+                                        origin: StreamTerminalOrigin::Control,
+                                        terminal,
                                     },
                                 )
                             }
@@ -1159,7 +1275,7 @@ impl DurableStreamStore {
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
-                OplogEntry::StreamEnd {
+                OplogEntry::StreamTerminal {
                     entity_parent_start_index,
                     record,
                     ..
@@ -1169,30 +1285,7 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    let event = index.apply_end(
-                        oplog_index,
-                        entity_parent_start_index,
-                        record,
-                        self.producer_fingerprint,
-                    )?;
-                    terminal_events.push(self.enqueue_events(
-                        Some(context),
-                        event.stream_id,
-                        vec![event],
-                        false,
-                    )?);
-                }
-                OplogEntry::StreamCancel {
-                    entity_parent_start_index,
-                    record,
-                    ..
-                } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(StreamStoreError::Oplog)?;
-                    let event = index.apply_cancel(
+                    let event = index.apply_terminal(
                         oplog_index,
                         entity_parent_start_index,
                         record,

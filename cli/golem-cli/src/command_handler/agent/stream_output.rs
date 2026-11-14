@@ -18,7 +18,7 @@ use crate::model::agent::AgentLogStreamOptions;
 use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
 use colored::Colorize;
-use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
+use golem_common::model::{LogLevel, Timestamp};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -26,6 +26,40 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
+
+/// Splits a write into complete lines, each with its invocation ID. A line split across several
+/// writes of one invocation keeps the invocation ID of the write that started it; a pending line
+/// of another invocation is completed first. An unterminated last line stays in `pending`.
+fn complete_lines(
+    pending: &mut String,
+    pending_invocation_id: &mut Option<String>,
+    message: &str,
+    invocation_id: Option<String>,
+) -> Vec<(String, Option<String>)> {
+    let mut complete = Vec::new();
+    if !pending.is_empty() && *pending_invocation_id != invocation_id {
+        complete.push((std::mem::take(pending), pending_invocation_id.take()));
+    }
+    let continues_pending = !pending.is_empty();
+    let lines = message.lines().collect::<Vec<_>>();
+    for (idx, line) in lines.iter().enumerate() {
+        let (text, id) = if idx == 0 && continues_pending {
+            (
+                format!("{}{line}", std::mem::take(pending)),
+                pending_invocation_id.take(),
+            )
+        } else {
+            (line.to_string(), invocation_id.clone())
+        };
+        if idx == lines.len() - 1 && !message.ends_with('\n') {
+            *pending = text;
+            *pending_invocation_id = id;
+        } else {
+            complete.push((text, id));
+        }
+    }
+    complete
+}
 
 #[derive(Clone)]
 pub struct AgentStreamOutput {
@@ -37,8 +71,10 @@ pub struct AgentStreamOutput {
 struct AgentStreamOutputState {
     pub last_stdout_timestamp: Timestamp,
     pub stdout: String,
+    pub stdout_invocation_id: Option<String>,
     pub last_stderr_timestamp: Timestamp,
     pub stderr: String,
+    pub stderr_invocation_id: Option<String>,
     pub last_timestamp: Timestamp,
     pub last_timestamp_hashes: HashSet<u64>,
 }
@@ -49,8 +85,10 @@ impl AgentStreamOutput {
             state: Arc::new(Mutex::new(AgentStreamOutputState {
                 last_stdout_timestamp: Timestamp::now_utc(),
                 stdout: String::new(),
+                stdout_invocation_id: None,
                 last_stderr_timestamp: Timestamp::now_utc(),
                 stderr: String::new(),
+                stderr_invocation_id: None,
                 last_timestamp: Timestamp::from_str("2000-01-01T00:00:00Z").unwrap(),
                 last_timestamp_hashes: HashSet::new(),
             })),
@@ -59,62 +97,54 @@ impl AgentStreamOutput {
         }
     }
 
-    pub async fn emit_stdout(&self, timestamp: Timestamp, message: String) {
+    /// A line split across several writes keeps the invocation ID of the write that started it.
+    pub async fn emit_stdout(
+        &self,
+        timestamp: Timestamp,
+        message: String,
+        invocation_id: Option<String>,
+    ) {
         let mut state = self.state.lock().await;
         state.last_stdout_timestamp = timestamp;
 
         if !self
-            .check_already_seen(&mut state, timestamp, &message)
+            .check_already_seen(&mut state, timestamp, ("stdout", &message, &invocation_id))
             .await
         {
-            let lines = message.lines().collect::<Vec<_>>();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == (lines.len() - 1) {
-                    // last line, if message did not end with newline, just store it
-                    if message.ends_with('\n') {
-                        self.print_stdout(timestamp, &format!("{}{}", state.stdout, line));
-                        state.stdout = String::new();
-                    } else {
-                        state.stdout = format!("{}{}", state.stdout, line);
-                    }
-                } else if idx == 0 {
-                    // first line, there are more
-                    self.print_stdout(timestamp, &format!("{}{}", state.stdout, line));
-                    state.stdout = String::new();
-                } else {
-                    // middle line
-                    self.print_stdout(timestamp, line);
-                }
+            let state = &mut *state;
+            for (line, invocation_id) in complete_lines(
+                &mut state.stdout,
+                &mut state.stdout_invocation_id,
+                &message,
+                invocation_id,
+            ) {
+                self.print_stdout(timestamp, &line, invocation_id);
             }
         }
     }
 
-    pub async fn emit_stderr(&self, timestamp: Timestamp, message: String) {
+    /// A line split across several writes keeps the invocation ID of the write that started it.
+    pub async fn emit_stderr(
+        &self,
+        timestamp: Timestamp,
+        message: String,
+        invocation_id: Option<String>,
+    ) {
         let mut state = self.state.lock().await;
         state.last_stderr_timestamp = timestamp;
 
         if !self
-            .check_already_seen(&mut state, timestamp, &message)
+            .check_already_seen(&mut state, timestamp, ("stderr", &message, &invocation_id))
             .await
         {
-            let lines = message.lines().collect::<Vec<_>>();
-            for (idx, line) in lines.iter().enumerate() {
-                if idx == (lines.len() - 1) {
-                    // last line, if message did not end with newline, just store it
-                    if message.ends_with('\n') {
-                        self.print_stderr(timestamp, &format!("{}{}", state.stderr, line));
-                        state.stderr = String::new();
-                    } else {
-                        state.stderr = format!("{}{}", state.stderr, line);
-                    }
-                } else if idx == 0 {
-                    // first line, there are more
-                    self.print_stderr(timestamp, &format!("{}{}", state.stderr, line));
-                    state.stderr = String::new();
-                } else {
-                    // middle line
-                    self.print_stderr(timestamp, line);
-                }
+            let state = &mut *state;
+            for (line, invocation_id) in complete_lines(
+                &mut state.stderr,
+                &mut state.stderr_invocation_id,
+                &message,
+                invocation_id,
+            ) {
+                self.print_stderr(timestamp, &line, invocation_id);
             }
         }
     }
@@ -125,11 +155,12 @@ impl AgentStreamOutput {
         level: LogLevel,
         context: String,
         message: String,
+        invocation_id: Option<String>,
     ) {
         let mut state = self.state.lock().await;
 
         if !self
-            .check_already_seen(&mut state, timestamp, &message)
+            .check_already_seen(&mut state, timestamp, ("log", &message, &invocation_id))
             .await
         {
             let level_str = match level {
@@ -146,30 +177,21 @@ impl AgentStreamOutput {
                 level_str,
                 context.clone(),
                 message.clone(),
+                invocation_id,
             ));
         }
     }
 
+    /// Connection notices are stamped with the local clock, so they stay out of deduplication,
+    /// which compares the server timestamps of agent events.
     pub async fn emit_stream_closed(&self, timestamp: Timestamp) {
-        let mut state = self.state.lock().await;
-
-        if !self
-            .check_already_seen(&mut state, timestamp, "Stream closed")
-            .await
-            && !self.options.logs_only
-        {
+        if !self.options.logs_only {
             self.output_event(AgentStreamEvent::stream_closed(timestamp));
         }
     }
 
     pub async fn emit_stream_error(&self, timestamp: Timestamp, error: tungstenite::error::Error) {
-        let mut state = self.state.lock().await;
-
-        if !self
-            .check_already_seen(&mut state, timestamp, "Stream error")
-            .await
-            && !self.options.logs_only
-        {
+        if !self.options.logs_only {
             self.output_event(AgentStreamEvent::stream_error(timestamp, error));
         }
     }
@@ -178,7 +200,7 @@ impl AgentStreamOutput {
         &self,
         timestamp: Timestamp,
         function_name: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: String,
     ) {
         let mut state = self.state.lock().await;
 
@@ -186,7 +208,7 @@ impl AgentStreamOutput {
             .check_already_seen(
                 &mut state,
                 timestamp,
-                &format!("{function_name} {idempotency_key} started"),
+                &format!("{function_name} {invocation_id} started"),
             )
             .await
             && !self.options.logs_only
@@ -194,7 +216,7 @@ impl AgentStreamOutput {
             self.output_event(AgentStreamEvent::invocation_started(
                 timestamp,
                 function_name.clone(),
-                idempotency_key.clone(),
+                invocation_id.clone(),
             ));
         }
     }
@@ -203,7 +225,7 @@ impl AgentStreamOutput {
         &self,
         timestamp: Timestamp,
         function_name: String,
-        idempotency_key: IdempotencyKey,
+        invocation_id: String,
     ) {
         let mut state = self.state.lock().await;
 
@@ -211,7 +233,7 @@ impl AgentStreamOutput {
             .check_already_seen(
                 &mut state,
                 timestamp,
-                &format!("{function_name} {idempotency_key} finished"),
+                &format!("{function_name} {invocation_id} finished"),
             )
             .await
             && !self.options.logs_only
@@ -219,23 +241,14 @@ impl AgentStreamOutput {
             self.output_event(AgentStreamEvent::invocation_finished(
                 timestamp,
                 function_name.clone(),
-                idempotency_key.clone(),
+                invocation_id.clone(),
             ));
         }
     }
 
+    /// A lag notice is stamped with the local clock too, so it also stays out of deduplication.
     pub async fn emit_missed_messages(&self, timestamp: Timestamp, number_of_missed_messages: u64) {
-        let mut state = self.state.lock().await;
-
-        if !self
-            .check_already_seen(
-                &mut state,
-                timestamp,
-                &format!("{number_of_missed_messages} messages missed"),
-            )
-            .await
-            && !self.options.logs_only
-        {
+        if !self.options.logs_only {
             self.output_event(AgentStreamEvent::missed_messages(
                 timestamp,
                 number_of_missed_messages,
@@ -246,11 +259,13 @@ impl AgentStreamOutput {
     pub async fn flush(&self) {
         let mut state = self.state.lock().await;
         if !state.stdout.is_empty() {
-            self.print_stdout(state.last_stdout_timestamp, &state.stdout);
+            let invocation_id = state.stdout_invocation_id.take();
+            self.print_stdout(state.last_stdout_timestamp, &state.stdout, invocation_id);
             state.stdout = String::new();
         }
         if !state.stderr.is_empty() {
-            self.print_stderr(state.last_stdout_timestamp, &state.stderr);
+            let invocation_id = state.stderr_invocation_id.take();
+            self.print_stderr(state.last_stderr_timestamp, &state.stderr, invocation_id);
             state.stderr = String::new();
         }
     }
@@ -259,10 +274,10 @@ impl AgentStreamOutput {
         &self,
         state: &mut AgentStreamOutputState,
         timestamp: Timestamp,
-        message: &str,
+        key: impl Hash,
     ) -> bool {
         let mut hasher = DefaultHasher::new();
-        message.hash(&mut hasher);
+        key.hash(&mut hasher);
         let hash = hasher.finish();
 
         match state.last_timestamp.cmp(&timestamp) {
@@ -290,12 +305,12 @@ impl AgentStreamOutput {
         }
     }
 
-    fn print_stdout(&self, timestamp: Timestamp, message: &str) {
-        self.output_event(AgentStreamEvent::stdout(timestamp, message));
+    fn print_stdout(&self, timestamp: Timestamp, message: &str, invocation_id: Option<String>) {
+        self.output_event(AgentStreamEvent::stdout(timestamp, message, invocation_id));
     }
 
-    fn print_stderr(&self, timestamp: Timestamp, message: &str) {
-        self.output_event(AgentStreamEvent::stderr(timestamp, message));
+    fn print_stderr(&self, timestamp: Timestamp, message: &str, invocation_id: Option<String>) {
+        self.output_event(AgentStreamEvent::stderr(timestamp, message, invocation_id));
     }
 
     fn output_event(&self, event: AgentStreamEvent) {
@@ -329,5 +344,54 @@ impl AgentStreamOutput {
         } else {
             print_line(s);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complete_lines;
+    use test_r::test;
+
+    #[test]
+    fn complete_lines_attribute_each_line_to_the_invocation_that_wrote_it() {
+        let (a, b) = (Some("a".to_string()), Some("b".to_string()));
+        let mut pending = String::new();
+        let mut pending_id = None;
+        let mut write = |message: &str, id: &Option<String>| {
+            complete_lines(&mut pending, &mut pending_id, message, id.clone())
+        };
+
+        assert_eq!(
+            write("one\ntwo\nthree\n", &a),
+            vec![
+                ("one".to_string(), a.clone()),
+                ("two".to_string(), a.clone()),
+                ("three".to_string(), a.clone())
+            ]
+        );
+        assert_eq!(write("par", &a), vec![]);
+        assert_eq!(
+            write("tial\nnext", &a),
+            vec![("partial".to_string(), a.clone())]
+        );
+        assert_eq!(
+            write("done\n", &b),
+            vec![
+                ("next".to_string(), a.clone()),
+                ("done".to_string(), b.clone())
+            ]
+        );
+        assert_eq!(write("init ", &None), vec![]);
+        assert_eq!(
+            write("done\nfirst ", &None),
+            vec![("init done".to_string(), None)]
+        );
+        assert_eq!(
+            write("call\n", &a),
+            vec![
+                ("first ".to_string(), None),
+                ("call".to_string(), a.clone())
+            ]
+        );
     }
 }

@@ -40,6 +40,7 @@ pub mod error;
 pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod invocation_id;
 pub mod json;
 pub mod login;
 pub mod mcp_deployment;
@@ -65,6 +66,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
+pub use invocation_id::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
@@ -147,6 +149,9 @@ newtype_uuid!(
     wit_name: "agent-fingerprint",
     wit_owner: "golem:core@2.0.0/types"
 );
+
+// The unique part of an accepted invocation identity, without its owning agent.
+newtype_uuid!(InvocationId);
 
 #[cfg(feature = "full")]
 impl From<Timestamp> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
@@ -591,12 +596,14 @@ impl IdempotencyKey {
 
     /// Generates a deterministic idempotency key in the namespace of `base` from arbitrary bytes.
     pub fn derived_from_bytes(base: &IdempotencyKey, name: &[u8]) -> Self {
-        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
-            base_uuid
-        } else {
-            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
-        };
-        Self::from_uuid(Uuid::new_v5(&namespace, name))
+        Self::from_uuid(Uuid::new_v5(&base.to_uuid(), name))
+    }
+
+    /// The UUID of this key: the key itself when it is a UUID, otherwise a UUIDv5 of the key in
+    /// the ROOT_NS namespace.
+    pub fn to_uuid(&self) -> Uuid {
+        Uuid::parse_str(&self.value)
+            .unwrap_or_else(|_| Uuid::new_v5(&Self::ROOT_NS, self.value.as_bytes()))
     }
 }
 

@@ -20,7 +20,7 @@ export const toolProcessModules = [
 // Preview 3 lift/lower wrappers. It replaces the skeleton's `wit-bindgen-p3` entry as a whole.
 const witBindgenP3 =
   '{ package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", ' +
-  'rev = "6f161c1bce440d7b0506950ee38338ce36742957", version = "=0.63.0", ' +
+  'rev = "d3b26c17256b958ef02094ef2a2e90f9fcec46e2", version = "=0.63.0", ' +
   'default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], ' +
   "optional = true }";
 

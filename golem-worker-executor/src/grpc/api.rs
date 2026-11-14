@@ -33,8 +33,7 @@ use super::{
     deliver_card_transfer_response, durable_stream_attachment_control_response,
     durable_stream_segment_read_response, extract_owned_agent_id, golem, invocation_session,
     oplog_entry_frames, process_oplog_entries_response, proto_agent_id_string,
-    proto_idempotency_key_string, proto_promise_id_string, recorded_grpc_api_request,
-    resolve_revert_last_invocations_response,
+    proto_promise_id_string, recorded_grpc_api_request, resolve_revert_last_invocations_response,
 };
 
 #[tonic::async_trait]
@@ -756,7 +755,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "cancel_invocation",
             agent_id = proto_agent_id_string(&request.agent_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            idempotency_key = request
+                .idempotency_key
+                .map(|key| uuid::Uuid::from(key).to_string()),
         );
 
         let result = self

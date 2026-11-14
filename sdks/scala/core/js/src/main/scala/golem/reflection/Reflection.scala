@@ -23,7 +23,7 @@ import golem.schema.validation.ValueValidation
 import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
 import golem.config.ConfigOverride
 import golem.tool.{ToolGraphs, ToolRpcFailure}
-import golem.{Datetime, FutureInterop}
+import golem.{Datetime, FutureInterop, InvocationId}
 import zio.blocks.schema.json.Json
 
 import java.util.UUID
@@ -485,7 +485,7 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
     )
 }
 
-final case class InvocationMetadata(agentId: ParsedAgentId, idempotencyKey: String)
+final case class InvocationMetadata(agentId: ParsedAgentId, invocationId: InvocationId)
 final case class Invocation[+A](metadata: InvocationMetadata, value: Option[A])
 final case class ScheduledInvocation(metadata: InvocationMetadata, cancellationToken: CancellationToken)
 
@@ -567,7 +567,12 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
         FutureInterop
           .fromPromise(pending.get())
           .map { result =>
-            decodeOptional(result.toOption).map(value => Invocation(toMetadata(metadata), value))
+            metadata match {
+              case Some(started) =>
+                decodeOptional(result.toOption).map(value => Invocation(toMetadata(started), value))
+              case None =>
+                Left(GolemReflectError.Remote(AgentRpcError.Protocol("completed invocation has no metadata")))
+            }
           }
           .recover {
             case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
@@ -596,7 +601,7 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
     )
 
   private def toMetadata(value: golem.runtime.rpc.InvocationMetadata): InvocationMetadata =
-    InvocationMetadata(ParsedAgentId(value.agentId), value.idempotencyKey)
+    InvocationMetadata(ParsedAgentId(value.agentId), value.invocationId)
 
   private def remoteError(error: WasmRpcApi.RpcError): GolemReflectError =
     GolemReflectError.Remote(Transport.decodeRpcError(error))

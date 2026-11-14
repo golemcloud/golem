@@ -37,6 +37,8 @@ Parse stdout by splitting on exact `@toon` and `@end` marker lines. The content 
 
 Stream events use `$type: "agent.stream"` and a rich event shape with common fields such as `timestamp`, `kind`, `level`, `context`, and `message`. Agent-facing code should branch on `kind` rather than parsing the message text. Typical `kind` values include `log`, `stdout`, `stderr`, `stream-closed`, `stream-error`, `invocation-started`, `invocation-finished`, and `missed-messages`.
 
+Events that an invocation produced carry `invocationId`, in the form `<agent-id>.<uuid>`. Use it to tell the output of overlapping or nested invocations apart. Output written outside an invocation, for example while the agent initializes, has no `invocationId`. Text output prints the invocation ID before each `stdout`, `stderr` and `log` line, except with `--logs-only`.
+
 `--stream-no-log-level` and `--stream-no-timestamp` affect only text output. In structured formats (`json`, `yaml`, `toon`), `level` and `timestamp` fields are always present for reliable parsing.
 
 ### Examples

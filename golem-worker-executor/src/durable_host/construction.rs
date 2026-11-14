@@ -363,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )?),
             primary_invocation_start_index: None,
             invocation_principal: None,
+            invocation_id: None,
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),
@@ -635,6 +636,8 @@ impl PrivateDurableWorkerState {
             baseline_role,
             snapshot_replay_purpose,
             authoritative_replay_failure: Arc::new(AtomicBool::new(false)),
+            bootstrap: None,
+            bootstrap_range: None,
             resource_limit_entry,
         })
     }

@@ -507,7 +507,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        key: &IdempotencyKey,
+        key: &InvocationId,
     ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         if let Some(value) = status.durable_stream_sessions.get(key) {
             return Ok(Some(value.clone()));
@@ -531,10 +531,17 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        route_scope: &str,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         self.stream_session_index
-            .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
+            .lookup_public_binding(
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                route_scope,
+                public_session_id,
+            )
             .await
     }
 
@@ -614,8 +621,7 @@ impl WorkerService for DefaultWorkerService {
                                 let metadata = InvocationResultIndexMetadata {
                                     covered_through: OplogIndex::NONE,
                                     revert_generation: status_generation,
-                                    current_idempotency_key: None,
-                                    cancelled_idempotency_key: None,
+                                    requests: InvocationRequests::default(),
                                 };
                                 let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
@@ -687,23 +693,22 @@ impl WorkerService for DefaultWorkerService {
                     let mut mappings = HashMap::new();
                     let mut advanced = metadata.clone();
                     fold_invocation_result_entries(
-                        &mut advanced.current_idempotency_key,
-                        &mut advanced.cancelled_idempotency_key,
+                        &mut advanced.requests,
                         &status.deleted_regions,
                         &entries,
-                        |key, index| {
-                            mappings.insert(key.clone(), index);
+                        |key, position| {
+                            mappings.insert(*key, position);
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
 
                     let mut fields = Vec::with_capacity(mappings.len() + 1);
-                    for (key, oplog_index) in mappings {
+                    for (key, position) in mappings {
                         fields.push((
                             invocation_result_index_field(&key),
                             serialize(&PersistedInvocationResult {
                                 revert_generation: advanced.revert_generation,
-                                oplog_index,
+                                position,
                             }).map_err(WorkerExecutorError::runtime)?,
                         ));
                     }
@@ -753,7 +758,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         let values = self
             .key_value_storage
@@ -795,12 +800,12 @@ impl WorkerService for DefaultWorkerService {
         if value.revert_generation != metadata.revert_generation
             || status
                 .deleted_regions
-                .is_in_deleted_region(value.oplog_index)
+                .is_in_deleted_region(value.position.terminal)
         {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         }
 
-        Ok(InvocationResultIndexLookup::Found(value.oplog_index))
+        Ok(InvocationResultIndexLookup::Found(value.position))
     }
 
     async fn resolve_agent_identity(
