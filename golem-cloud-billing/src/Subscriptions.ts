@@ -1,7 +1,6 @@
 import { Context, Data, Effect, Layer } from "effect"
 import type pg from "pg"
-import { Auth } from "./Auth.ts"
-import { Database, withAdvisoryLock } from "./Database.ts"
+import { Database, requireTables, type SchemaError } from "./Database.ts"
 
 /**
  * The statuses in which Polar bills the usage events of a subscription (`billable` of a Polar
@@ -164,8 +163,8 @@ export class Subscriptions extends Context.Service<Subscriptions, SubscriptionsS
  * The tables of the app besides the tables of Better Auth: the subscriptions and their orders,
  * the usage events of the usage push, the deleted accounts that the cleanup has finished, the
  * deletion holds that the app placed in the registry, and the usage settlements of operators with
- * their history. The web app, the usage push and the cleanup each create them, because each reads
- * tables that another one writes and can run first.
+ * their history. `Migrations.migrate` creates them; the web app, the usage push and the cleanup
+ * only check that they exist.
  *
  * An operator script outside the app records a usage settlement with the admin database user: it
  * sets `usage_settlements.settled_through` of the account, and adds a row with the same time, the
@@ -240,6 +239,18 @@ export const tables = `
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
   CREATE INDEX IF NOT EXISTS usage_settlement_history_account ON usage_settlement_history (account_id, recorded_at)`
+
+/** The tables that `tables` creates. */
+export const tableNames: ReadonlyArray<string> = [
+  "polar_subscriptions",
+  "polar_orders",
+  "polar_webhook_deliveries",
+  "usage_events",
+  "deleted_account_cleanups",
+  "deletion_holds",
+  "usage_settlements",
+  "usage_settlement_history"
+]
 
 /**
  * The usage events of account $1 that an order can still bill: not held, recorded after the usage
@@ -318,17 +329,11 @@ const columns = `subscription_id, account_id::text AS account_id, product_id, st
 const failure = (error: unknown) =>
   new SubscriptionsError({ reason: error instanceof Error ? error.message : String(error) })
 
-/**
- * Creates the tables under the lock of the migrations, so that replicas that start together do
- * not race, and returns the queries.
- */
-const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
+/** Checks that the tables exist, and returns the queries. */
+const make: Effect.Effect<SubscriptionsShape, SchemaError, Database> =
   Effect.gen(function* () {
-    const { pool, config } = yield* Database
-    yield* Effect.tryPromise({
-      try: () => withAdvisoryLock(config, "golem-cloud-billing/migrations", () => pool.query(tables)),
-      catch: failure
-    })
+    yield* requireTables(tableNames)
+    const { pool } = yield* Database
 
     const query = <R extends object>(text: string, values: ReadonlyArray<unknown> = []) =>
       Effect.tryPromise({ try: () => pool.query<R & pg.QueryResultRow>(text, [...values]), catch: failure })
@@ -544,18 +549,6 @@ const make: Effect.Effect<SubscriptionsShape, SubscriptionsError, Database> =
     }
   })
 
-/** The subscriptions of the web app. It creates the tables after Auth has created the schema of the app. */
-export const layer: Layer.Layer<Subscriptions, SubscriptionsError, Auth | Database> = Layer.effect(
-  Subscriptions,
-  Effect.gen(function* () {
-    yield* Auth
-    return yield* make
-  })
-)
-
-/** The subscriptions of a command that runs without the web app, in the schema that an operator created. */
-export const commandLayer: Layer.Layer<Subscriptions, SubscriptionsError, Database> = Layer.effect(
-  Subscriptions,
-  make
-)
+/** The subscriptions of the web app and of the cleanup, in the schema that `Migrations.migrate` created. */
+export const layer: Layer.Layer<Subscriptions, SchemaError, Database> = Layer.effect(Subscriptions, make)
 

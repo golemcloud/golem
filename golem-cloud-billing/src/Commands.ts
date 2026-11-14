@@ -3,6 +3,7 @@ import { FetchHttpClient } from "effect/http"
 import * as Cleanup from "./Cleanup.ts"
 import * as Database from "./Database.ts"
 import * as Metering from "./Metering.ts"
+import * as Migrations from "./Migrations.ts"
 import * as Polar from "./Polar.ts"
 import * as RegistryAccounts from "./RegistryAccounts.ts"
 import * as Subscriptions from "./Subscriptions.ts"
@@ -42,6 +43,22 @@ export const pushUsage = Effect.gen(function* () {
 )
 
 /**
+ * `migrate` applies the database migrations of the app once (see `Migrations.ts`), as the owner
+ * role of the schema, and exits. It reads only the database settings. A run on a migrated schema
+ * changes nothing. The web app, `push-usage` and `cleanup-deleted-accounts` fail until it has run.
+ */
+export const migrate = Effect.gen(function* () {
+  yield* Migrations.migrate
+  const { schema } = yield* Database.Database
+  yield* Effect.logInfo("Applied the database migrations").pipe(Effect.annotateLogs({ schema }))
+}).pipe(
+  Effect.provide(Database.layerFromEnv),
+  Effect.tapCause((cause) =>
+    Effect.logError("The database migrations failed").pipe(Effect.annotateLogs({ error: messageOf(cause) }))
+  )
+)
+
+/**
  * `cleanup-deleted-accounts` deletes the Polar customer and the Better Auth user of each account
  * that the registry deleted, once (see `Cleanup.ts`). Like `push-usage`, it reads only the
  * database and Polar settings. Its Polar token needs only `customers:write`.
@@ -57,7 +74,7 @@ export const cleanupDeletedAccounts = Effect.gen(function* () {
   )
 }).pipe(
   Effect.provide(
-    Layer.mergeAll(RegistryAccounts.layer, Subscriptions.commandLayer, Polar.layer).pipe(
+    Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
       Layer.provideMerge(Database.layerFromEnv),
       Layer.provide(Polar.configLayer),
       Layer.provide(FetchHttpClient.layer)

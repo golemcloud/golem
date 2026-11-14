@@ -1,6 +1,7 @@
 import { Data, Effect } from "effect"
 import type pg from "pg"
-import { Database } from "./Database.ts"
+import { tableNames as authTables } from "./Auth.ts"
+import { Database, requireTables, type SchemaError } from "./Database.ts"
 import { Polar, type PolarError } from "./Polar.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
 import { holdFor } from "./Settlement.ts"
@@ -49,9 +50,10 @@ const failure = (error: unknown) =>
 
 export const cleanupDeletedAccounts: Effect.Effect<
   CleanupSummary,
-  CleanupError | SubscriptionsError | RegistryAccountsError,
+  CleanupError | SubscriptionsError | RegistryAccountsError | SchemaError,
   Database | Subscriptions | RegistryAccounts | Polar
 > = Effect.gen(function* () {
+  yield* requireTables(authTables)
   const { pool } = yield* Database
   const subscriptions = yield* Subscriptions
   const registryAccounts = yield* RegistryAccounts
@@ -59,12 +61,9 @@ export const cleanupDeletedAccounts: Effect.Effect<
   const query = <R extends pg.QueryResultRow>(text: string, values: ReadonlyArray<unknown> = []) =>
     Effect.tryPromise({ try: () => pool.query<R>(text, [...values]), catch: failure })
 
-  // Better Auth creates `user` when the web app starts; the cleanup can run before that.
-  const hasUsers =
-    (yield* query<{ exists: boolean }>(`SELECT to_regclass('"user"') IS NOT NULL AS exists`)).rows[0]?.exists === true
   const candidates = yield* query<{ account_id: string }>(
     `SELECT account_id::text AS account_id FROM polar_subscriptions
-     ${hasUsers ? `UNION SELECT golem_account_id::text FROM "user" WHERE golem_account_id IS NOT NULL` : ""}`
+     UNION SELECT golem_account_id::text FROM "user" WHERE golem_account_id IS NOT NULL`
   )
   const deleted = yield* registryAccounts.deletedAmong(candidates.rows.map((row) => row.account_id))
   const finished = new Set(
@@ -121,10 +120,10 @@ export const cleanupDeletedAccounts: Effect.Effect<
 
   // The sweep of the web app skips a deleted account, so its recorded hold has no use any more.
   yield* query("DELETE FROM deletion_holds WHERE account_id = ANY($1::uuid[])", [[...finished]])
-  // Sessions and GitHub accounts reference the user with ON DELETE CASCADE.
-  const deletedUsers = hasUsers
-    ? (yield* query(`DELETE FROM "user" WHERE golem_account_id = ANY($1::uuid[])`, [[...finished]])).rowCount ?? 0
-    : 0
+  // Sessions and GitHub accounts reference the user with ON DELETE CASCADE. The cascade runs as
+  // the owner of those tables, so the role of the cleanup needs no privilege on them.
+  const deletedUsers =
+    (yield* query(`DELETE FROM "user" WHERE golem_account_id = ANY($1::uuid[])`, [[...finished]])).rowCount ?? 0
   if (failed > 0) {
     return yield* new CleanupError({ reason: `${failed} Polar customers of deleted accounts are not deleted` })
   }

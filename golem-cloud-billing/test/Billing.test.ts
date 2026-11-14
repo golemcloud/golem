@@ -44,8 +44,8 @@ describe("Polar billing", () => {
 
   beforeAll(async () => {
     await registry.create()
-    config = registry.config
-    pool = queryPool(config)
+    config = registry.configs.web
+    pool = queryPool(registry.ownerConfig)
     app = makeApp(config)
     services = makeServices(config)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))

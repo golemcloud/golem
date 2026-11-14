@@ -4,7 +4,7 @@ The billing app of the hosted Golem Cloud. Users sign in with GitHub, subscribe 
 through Polar.sh, and manage the subscription in the customer portal of Polar. Self-hosted Golem
 does not use it.
 
-The app calls the HTTP API of the registry service, and reads three metering tables and a few
+The app calls the HTTP API of the registry service, and reads two metering tables and a few
 account columns of the registry (see [Database](#database)). It uses nothing else in Golem, and
 the registry knows nothing about the app. In the hosted deployment both use the same PostgreSQL
 database: the registry keeps its tables in `public`, and the app keeps its tables in its own
@@ -47,16 +47,55 @@ is gone.
 
 ## Database
 
-The connections of the app set `search_path` to its schema (`billing` by default), and Better Auth
-creates its tables there. On startup the app applies the Better Auth migrations under a PostgreSQL
-advisory lock, so that replicas migrate one at a time.
+The connections of the app set `search_path` to its schema (`billing` by default). The app keeps
+its tables there: the tables of Better Auth (`user`, `session`, `account` and `verification`),
+`polar_subscriptions`, `polar_orders`, `polar_webhook_deliveries`, `usage_events`,
+`deleted_account_cleanups`, `deletion_holds`, `usage_settlements` and `usage_settlement_history`.
 
-In the hosted deployment the app connects with its own role, which owns its schema. The registry
-tables hold API token secrets and agent secrets, so the role can read only these registry data:
+`node main.mjs migrate` creates and changes these tables. It is the only DDL of the app. It runs
+once and exits, with a nonzero exit code when it fails, and needs only the `GOLEM__DB__*`
+variables. It runs under a PostgreSQL advisory lock, so two runs migrate one after the other, and
+a run on a migrated schema changes nothing. It does not create the schema: an administrator
+creates the schema for the owner role first, and `migrate` fails without it. The web app,
+`push-usage` and `cleanup-deleted-accounts` run no DDL. At start, each checks that the tables
+exist, and fails with a message that names `migrate` when one is missing.
 
-- the three metering tables (see [Billable overage](#billable-overage)),
-- `accounts (account_id, deleted_at)`: the registry answers 404 both for a deleted account and for
-  an account that the billing account cannot see, and only this column tells them apart.
+Better Auth reads the columns of every table in the database during `migrate`. When a registry
+migration changes a table at the same moment, the read fails; `migrate` tries it again up to five
+times.
+
+In the hosted deployment, `ci-scripts/setup-cloud-billing.sh` of golem-cloud creates one role for
+`migrate` and one for each workload. Each workload role has USAGE on the schemas `billing` and
+`public`, and only the privileges that the workload needs. `test/registry.ts` gives the tests the
+same grants.
+
+- `golem_cloud_billing` owns the schema `billing` and every table in it. Only `migrate` uses it. It
+  has no privilege on the registry tables.
+- `golem_cloud_billing_web`, for the web app: SELECT, INSERT and UPDATE on `user`, `account`,
+  `polar_subscriptions` and `polar_orders`; SELECT, INSERT, UPDATE and DELETE on `session` and
+  `deletion_holds`; SELECT, INSERT and DELETE on `verification`; SELECT and INSERT on
+  `polar_webhook_deliveries`; SELECT on `usage_events` and `usage_settlements`; SELECT
+  (`account_id`, `deleted_at`) on `public.accounts`.
+- `golem_cloud_billing_push`, for `push-usage`: SELECT, INSERT and UPDATE on `usage_events`;
+  SELECT on `polar_subscriptions`, `public.account_monthly_policy_revisions` and
+  `public.account_monthly_policy_attribution`.
+- `golem_cloud_billing_cleanup`, for `cleanup-deleted-accounts`: SELECT (`golem_account_id`) and
+  DELETE on `user`; SELECT and INSERT on `deleted_account_cleanups`; SELECT and DELETE on
+  `deletion_holds`; SELECT on `polar_subscriptions`, `polar_orders`, `usage_events` and
+  `usage_settlements`; SELECT (`account_id`, `deleted_at`) on `public.accounts`. The ON DELETE
+  CASCADE of `session` and `account` runs as the owner of those tables, so a delete of a user also
+  deletes its sessions and GitHub accounts.
+
+No workload role can create a table, or write `usage_settlements` or `usage_settlement_history`.
+An operator records a usage settlement as the admin user (see [Deletion hold](#deletion-hold)).
+
+The registry tables hold API token secrets and agent secrets, so the workloads read only these
+registry data:
+
+- two metering tables, for the usage push (see [Billable overage](#billable-overage)),
+- `accounts (account_id, deleted_at)`, for the web app and the cleanup: the registry answers 404
+  both for a deleted account and for an account that the billing account cannot see, and only
+  this column tells them apart.
 
 The other columns of `accounts`, for example the email, stay out of reach. Everything
 else comes from the registry HTTP API. As the signed-in user, the app calls
@@ -64,27 +103,7 @@ else comes from the registry HTTP API. As the signed-in user, the app calls
 the billing account, the webhooks and the sweep call `GET /v1/me/token`,
 `GET /v1/accounts/{account_id}`, `PUT /v1/accounts/{account_id}/plan`, and `PUT` and `DELETE`
 `/v1/accounts/{account_id}/deletion-holds/{holder_account_id}` (see
-[Subscriptions](#subscriptions)). The app also keeps tables of its own: `polar_subscriptions`,
-`polar_orders`, `polar_webhook_deliveries`, `usage_events`, `deleted_account_cleanups`,
-`deletion_holds`, `usage_settlements` and `usage_settlement_history`. An administrator creates the
-role once:
-
-```sql
-CREATE ROLE golem_cloud_billing LOGIN PASSWORD '…' CONNECTION LIMIT 10;
-CREATE SCHEMA billing AUTHORIZATION golem_cloud_billing;
-GRANT CONNECT ON DATABASE <database> TO golem_cloud_billing;
-GRANT USAGE ON SCHEMA public TO golem_cloud_billing;
-GRANT SELECT ON public.account_usage_stats, public.account_monthly_policy_revisions,
-  public.account_monthly_policy_attribution TO golem_cloud_billing;
-GRANT SELECT (account_id, deleted_at) ON public.accounts TO golem_cloud_billing;
-```
-
-When the schema does not exist, the app creates it, which needs the CREATE privilege on the
-database. A local database where the app connects as its owner works without any setup.
-
-Better Auth reads the columns of every table in the database when the app starts. When a registry
-migration changes a table at the same moment, the read fails; the app tries it again up to five
-times.
+[Subscriptions](#subscriptions)).
 
 ## Subscriptions
 
@@ -295,7 +314,6 @@ of the registry), so it can also read a month that has closed:
 
 | Table | Content |
 | --- | --- |
-| `account_usage_stats` | the usage of each account and month |
 | `account_monthly_policy_revisions` | the monthly policy revisions: mode, usage baselines and monthly amounts |
 | `account_monthly_policy_attribution` | the usage that each policy revision received |
 
@@ -359,7 +377,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `GOLEM__DB__CONFIG__HOST` | | PostgreSQL host. Same variable as the registry service. |
 | `GOLEM__DB__CONFIG__PORT` | `5432` | PostgreSQL port. |
 | `GOLEM__DB__CONFIG__DATABASE` | | Database name. |
-| `GOLEM__DB__CONFIG__USERNAME` | | Database user. In the hosted deployment, the role of the app (see [Database](#database)). |
+| `GOLEM__DB__CONFIG__USERNAME` | | Database user. In the hosted deployment, the role of the workload, and the owner role for `migrate` (see [Database](#database)). |
 | `GOLEM__DB__CONFIG__PASSWORD` | | Database password. |
 | `GOLEM__DB__CONFIG__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
 | `GOLEM__DB__TYPE` | `Postgres` | Must be `Postgres` when set. |
@@ -401,16 +419,20 @@ Use Node.js 24 and pnpm.
 ```shell
 pnpm install
 pnpm typecheck
-pnpm start   # node src/main.ts; Node.js strips the types
-pnpm build   # bundles src/main.ts and its dependencies into dist/main.mjs
+pnpm start migrate   # node src/main.ts migrate; Node.js strips the types
+pnpm start
+pnpm build           # bundles src/main.ts and its dependencies into dist/main.mjs
 ```
+
+On a local database, create the schema (`CREATE SCHEMA billing`) before the first `migrate`.
 
 The tests need a PostgreSQL server and read its address from the libpq variables. Each test file
 creates its own schema and drops it afterwards. GitHub, the registry service API and Polar are
-faked. The tests that read registry tables (billing, identity bridge, metering, usage push and
-cleanup) create a database with all registry migrations of
-`../golem-registry-service/db/migration/postgres` and the grants of the hosted deployment, so the
-user needs CREATEDB and CREATEROLE.
+faked. The tests that read registry tables (billing, identity bridge, metering, usage push,
+cleanup and migrations) create a database with all registry migrations of
+`../golem-registry-service/db/migration/postgres`. They run `migrate` as the owner role, and each
+workload as its own role with the grants of the hosted deployment, so the user needs CREATEDB and
+CREATEROLE.
 
 ```shell
 docker run -d --name billing-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17-alpine

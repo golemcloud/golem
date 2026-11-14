@@ -1,12 +1,11 @@
 import { inspect } from "node:util"
 import { type BetterAuthOptions, betterAuth, type GenericEndpointContext, type Session } from "better-auth"
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto"
-import { getMigrations } from "better-auth/db/migration"
 import { decryptOAuthToken } from "better-auth/oauth2"
 import { Context, Data, Effect, Layer, Option, Redacted } from "effect"
 import type pg from "pg"
-import { BillingConfig, type PostgresConfig } from "./BillingConfig.ts"
-import { Database, withAdvisoryLock } from "./Database.ts"
+import { BillingConfig } from "./BillingConfig.ts"
+import { Database, requireTables, type SchemaError } from "./Database.ts"
 import { Registry, type RegistryShape } from "./Registry.ts"
 import { RegistryAccounts, type RegistryAccountsShape } from "./RegistryAccounts.ts"
 
@@ -26,29 +25,21 @@ export interface AuthOptions {
   readonly log: (level: AuthLogLevel, message: string, args: ReadonlyArray<unknown>) => void
 }
 
-export const authOptions = (options: AuthOptions) =>
+/** The tables of Better Auth, which `Migrations.migrate` creates from `schemaOptions`. */
+export const tableNames: ReadonlyArray<string> = ["user", "session", "account", "verification"]
+
+/**
+ * The options of Better Auth that decide its tables: the database and the extra fields of the user
+ * and the session. The web app and `Migrations.migrate` both use them, so the migration creates the
+ * tables that the web app reads.
+ */
+export const schemaOptions = (pool: pg.Pool) =>
   ({
-    appName: "Golem Cloud",
-    baseURL: options.baseUrl.origin,
-    secret: Redacted.value(options.secret),
     // The pool sets `search_path` to the schema of the billing app, and Better Auth reads its
     // schema from there. With `database.schemaName` instead, the migrations would run
     // `CREATE SCHEMA IF NOT EXISTS`, which needs the CREATE privilege on the database even when
     // the schema exists.
-    database: options.pool,
-    socialProviders: {
-      github: {
-        clientId: options.github.clientId,
-        clientSecret: Redacted.value(options.github.clientSecret)
-      }
-    },
-    account: {
-      encryptOAuthTokens: true,
-      // A GitHub identity signs in only to the user that it created. With linking, a GitHub
-      // identity with the verified email of an existing user would join that user, and the
-      // identity bridge would exchange the GitHub token of the other identity.
-      accountLinking: { enabled: false }
-    },
+    database: pool,
     user: {
       additionalFields: {
         golemAccountId: {
@@ -73,6 +64,35 @@ export const authOptions = (options: AuthOptions) =>
         }
       }
     },
+    telemetry: { enabled: false }
+  }) satisfies BetterAuthOptions
+
+/** The logger option of Better Auth, which passes each log line to `log`. */
+export const loggerOptions = (log: AuthOptions["log"]) =>
+  ({
+    level: "info",
+    log: (level, message, ...args) => log(level, message, args)
+  }) satisfies BetterAuthOptions["logger"]
+
+export const authOptions = (options: AuthOptions) =>
+  ({
+    ...schemaOptions(options.pool),
+    appName: "Golem Cloud",
+    baseURL: options.baseUrl.origin,
+    secret: Redacted.value(options.secret),
+    socialProviders: {
+      github: {
+        clientId: options.github.clientId,
+        clientSecret: Redacted.value(options.github.clientSecret)
+      }
+    },
+    account: {
+      encryptOAuthTokens: true,
+      // A GitHub identity signs in only to the user that it created. With linking, a GitHub
+      // identity with the verified email of an existing user would join that user, and the
+      // identity bridge would exchange the GitHub token of the other identity.
+      accountLinking: { enabled: false }
+    },
     databaseHooks: {
       session: {
         create: {
@@ -80,14 +100,10 @@ export const authOptions = (options: AuthOptions) =>
         }
       }
     },
-    logger: {
-      level: "info",
-      log: (level, message, ...args) => options.log(level, message, args)
-    },
+    logger: loggerOptions(options.log),
     // Errors that end the OAuth flow redirect to the landing page with `?error=<code>`. The
     // default error page of Better Auth is not routed.
-    onAPIError: { errorURL: "/" },
-    telemetry: { enabled: false }
+    onAPIError: { errorURL: "/" }
   }) satisfies BetterAuthOptions
 
 export const makeAuth = (options: AuthOptions) => betterAuth(authOptions(options))
@@ -107,8 +123,17 @@ const logAt = (level: AuthLogLevel) => {
   }
 }
 
-const describeCause = (cause: unknown): string =>
+export const describeCause = (cause: unknown): string =>
   cause instanceof Error ? cause.message : inspect(cause, { depth: 4, breakLength: Infinity })
+
+/** Writes a log line of Better Auth to the Effect logger of `services`. */
+export const logWith =
+  (services: Context.Context<never>): AuthOptions["log"] =>
+  (level, message, args) => {
+    Effect.runForkWith(services)(
+      logAt(level)(message).pipe(Effect.annotateLogs({ source: "better-auth", details: args.map(describeCause) }))
+    )
+  }
 
 export class IdentityBridgeError extends Data.TaggedError("IdentityBridgeError")<{
   readonly reason: string
@@ -125,14 +150,6 @@ export class SessionError extends Data.TaggedError("SessionError")<{
 }> {
   override get message(): string {
     return `Cannot read the session: ${this.reason}: ${describeCause(this.cause)}`
-  }
-}
-
-export class MigrationError extends Data.TaggedError("MigrationError")<{
-  readonly cause: unknown
-}> {
-  override get message(): string {
-    return `Cannot apply the database migrations: ${describeCause(this.cause)}`
   }
 }
 
@@ -240,68 +257,17 @@ export interface AuthShape {
 export class Auth extends Context.Service<Auth, AuthShape>()("golem-cloud-billing/Auth") {}
 
 /**
- * Creates the schema of the billing app if it is missing, applies the Better Auth migrations,
- * then turns `user.golem_account_id` into a `uuid` column. Better Auth has no `uuid` field type,
- * so it creates the column as `text`; its migration check accepts `uuid` for a string field, so
- * later runs leave the column alone.
- *
- * In the hosted deployment an operator creates the schema for the database role of the app, and
- * the role owns only that schema. Creating a missing schema needs the CREATE privilege on the
- * database, which a local development database gives.
- *
- * Call it before `betterAuth`: a new Better Auth instance checks the schema at once and logs
- * an error for every missing table.
+ * Better Auth of the web app. The web app creates no table: `Migrations.migrate` has created the
+ * tables of Better Auth before. The layer checks them before it creates Better Auth, which would
+ * log an error for each missing table, and fails when one is missing.
  */
-/**
- * PostgreSQL error codes of a table, column or schema that another session dropped or changed
- * during the introspection of `getMigrations`. Better Auth reads the columns of every table in
- * the database, also outside its schema, so migrations of the registry service that run at the
- * same time can fail the read. A later attempt sees the finished change.
- */
-const concurrentDdlCodes = new Set(["42P01", "42703", "3F000"])
-
-const getMigrationsRetryingConcurrentDdl = async (options: BetterAuthOptions) => {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await getMigrations(options)
-    } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
-      if (attempt === 5 || typeof code !== "string" || !concurrentDdlCodes.has(code)) {
-        throw error
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
-    }
-  }
-}
-
-export const migrate = (options: BetterAuthOptions, pool: pg.Pool, db: PostgresConfig): Promise<void> =>
-  withAdvisoryLock(db, "golem-cloud-billing/migrations", async () => {
-    const schema = db.schema
-    const existing = await pool.query("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1", [schema])
-    if (existing.rowCount === 0) {
-      await pool.query(`CREATE SCHEMA "${schema}"`)
-    }
-    const { runMigrations } = await getMigrationsRetryingConcurrentDdl(options)
-    await runMigrations()
-    const column = await pool.query<{ data_type: string }>(
-      `SELECT data_type FROM information_schema.columns
-       WHERE table_schema = $1 AND table_name = 'user' AND column_name = 'golem_account_id'`,
-      [schema]
-    )
-    if (column.rows[0]?.data_type !== "uuid") {
-      await pool.query(
-        `ALTER TABLE "${schema}"."user"
-         ALTER COLUMN golem_account_id TYPE uuid USING golem_account_id::uuid`
-      )
-    }
-  })
-
-export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database | Registry | RegistryAccounts> =
+export const layer: Layer.Layer<Auth, SchemaError, BillingConfig | Database | Registry | RegistryAccounts> =
   Layer.effect(
     Auth,
     Effect.gen(function* () {
+      yield* requireTables(tableNames)
       const config = yield* BillingConfig
-      const { pool, schema } = yield* Database
+      const { pool } = yield* Database
       const registry = yield* Registry
       const registryAccounts = yield* RegistryAccounts
       const services = yield* Effect.context<never>()
@@ -313,20 +279,8 @@ export const layer: Layer.Layer<Auth, MigrationError, BillingConfig | Database |
         secret: config.authSecret,
         github: config.github,
         onSessionCreate: (session, context) => Effect.runPromiseWith(services)(link(session, context)),
-        log: (level, message, args) => {
-          Effect.runForkWith(services)(
-            logAt(level)(message).pipe(
-              Effect.annotateLogs({ source: "better-auth", details: args.map(describeCause) })
-            )
-          )
-        }
+        log: logWith(services)
       })
-
-      yield* Effect.tryPromise({
-        try: () => migrate(options, pool, config.db),
-        catch: (cause) => new MigrationError({ cause })
-      })
-      yield* Effect.logInfo("Applied the database migrations").pipe(Effect.annotateLogs({ schema }))
       const auth = betterAuth(options)
 
       const getSignedIn = (headers: Headers) =>

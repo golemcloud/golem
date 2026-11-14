@@ -3,7 +3,6 @@ import { Effect, Layer, Redacted } from "effect"
 import { FetchHttpClient } from "effect/http"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import * as App from "../src/App.ts"
 import { BillingConfig } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
 import * as Database from "../src/Database.ts"
@@ -51,10 +50,10 @@ describe("cleanup of deleted accounts", () => {
     Effect.runPromise(
       Cleanup.cleanupDeletedAccounts.pipe(
         Effect.provide(
-          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.commandLayer, Polar.layer).pipe(
+          Layer.mergeAll(RegistryAccounts.layer, Subscriptions.layer, Polar.layer).pipe(
             Layer.provideMerge(Database.layer),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config)),
+            Layer.provide(Layer.succeed(BillingConfig, registry.configs.cleanup)),
             Layer.provide(
               Layer.succeed(Polar.PolarConfig, { apiUrl: new URL(polarUrl), accessToken: Redacted.make(polarToken) })
             )
@@ -116,19 +115,8 @@ describe("cleanup of deleted accounts", () => {
 
   beforeAll(async () => {
     await registry.create()
-    pool = queryPool(registry.config)
+    pool = queryPool(registry.ownerConfig)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => polar.fetch(input, init))
-    // The web app creates the tables of Better Auth.
-    await Effect.runPromise(
-      Effect.scoped(
-        Layer.build(
-          App.services.pipe(
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(Layer.succeed(BillingConfig, registry.config))
-          )
-        )
-      )
-    )
   }, 60_000)
 
   afterAll(async () => {
