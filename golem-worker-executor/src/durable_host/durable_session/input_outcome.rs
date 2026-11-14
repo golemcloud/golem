@@ -95,8 +95,13 @@ impl StreamSession {
         &self,
         mut record: StreamConsumerTerminalRecord,
     ) -> Result<PendingConsumerObservation, SessionError> {
+        let positions = self
+            .current_control_metadata()
+            .await?
+            .consumer_outcome_positions(record.reader_id)
+            .to_vec();
         let mut recorded: Option<ConsumerObservations> = None;
-        for index in self.consumer_history_positions(record.reader_id).await? {
+        for index in positions {
             let StreamSessionRecord::ConsumerOutcome(original) =
                 self.session_record_at(index).await?
             else {
