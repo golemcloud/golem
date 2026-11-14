@@ -183,6 +183,8 @@ pub trait GolemHostApi {
         method: String,
     ) -> Result<(), String>;
     fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String>;
+    /// Schedules `method` through the kept handle for a time that never comes due in a test.
+    fn kept_agent_rpc_schedule_result(&self, method: String) -> Result<(), String>;
     /// Calls a method returning `AgentStream<u64>` through the kept handle and drains the stream.
     async fn kept_agent_rpc_invoke_and_await_u64_stream_result(
         &self,
@@ -790,6 +792,22 @@ impl GolemHostApi for GolemHostApiImpl {
     fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String> {
         self.kept_rpc()
             .invoke(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn kept_agent_rpc_schedule_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .schedule_invocation(
+                // 2100-01-01, so the scheduled call never comes due during a test.
+                Datetime {
+                    seconds: 4_102_444_800,
+                    nanoseconds: 0,
+                },
+                &method,
+                encode_parameters(Vec::new())?,
+                None,
+            )
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
     }

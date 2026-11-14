@@ -421,7 +421,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .to_string(),
             });
         }
-        let status = worker.get_last_known_status().await;
+        // This caller holds no task-scope bind, so a deletion may already have stopped the
+        // cached generation's state actor.
+        let status = worker
+            .deleted_incarnation_as_not_found(
+                Some(expected_fingerprint),
+                worker.try_get_last_known_status().await,
+            )
+            .await?;
         let component = self
             .component_service()
             .get_metadata(worker.component_id(), Some(status.component_revision))
@@ -440,8 +447,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 details: "live streams cannot be used in scheduled invocations".to_string(),
             });
         }
+        let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
         worker
-            .schedule_invocation(invocation, scheduled_at)
+            .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)
             .await
             .map_err(Into::into)
     }

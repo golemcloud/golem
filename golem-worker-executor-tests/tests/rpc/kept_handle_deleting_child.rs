@@ -205,7 +205,7 @@ async fn kept_call_during_gated_deletion(
     stage: WorkerDeletionStage,
     fail_removal: bool,
     suffix: &str,
-) -> anyhow::Result<Vec<(String, Result<(), String>)>> {
+) -> anyhow::Result<GatedDeletionAnswers> {
     let context = TestContext::new(last_unique_id);
     let faults = KeyValueStorageFaults::default();
     let executor = start_with_overrides(
@@ -230,6 +230,7 @@ async fn kept_call_during_gated_deletion(
         .await?;
     let caller_name = format!("kept-deleting-caller-{suffix}");
     let child_name = format!("kept-deleting-child-{suffix}");
+    watch_panics_naming(&format!("\"{child_name}\""));
     let caller: ParsedAgentKey = agent_id!("GolemHostApi", caller_name.as_str());
     let counter: ParsedAgentKey = agent_id!("Counter", child_name.as_str());
     executor
@@ -303,12 +304,61 @@ async fn kept_call_during_gated_deletion(
         .into_typed::<Result<(), String>>()?;
         results.push((method.to_string(), result));
     }
+    // The pinned schedule path reads the child's status after it resolves the cached
+    // generation, whose state actor the deletion may have stopped.
+    let schedule = match tokio::time::timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "kept_agent_rpc_schedule_result",
+            data_value!("increment"),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "kept_agent_rpc_schedule_result did not finish while the deletion was gated"
+        )
+    })? {
+        Err(error) => Err(format!("{error:#}")),
+        Ok(result) => Ok(result.into_typed::<Result<(), String>>()?),
+    };
 
     if !fail_removal {
         hook.release.add_permits(1);
         tokio::time::timeout(Duration::from_secs(30), deleting.take().unwrap()).await???;
     }
-    Ok(results)
+    Ok(GatedDeletionAnswers {
+        calls: results,
+        schedule,
+        panics: panics_naming(&format!("\"{child_name}\"")),
+    })
+}
+
+struct GatedDeletionAnswers {
+    calls: Vec<(String, Result<(), String>)>,
+    // The guest's answer to the schedule through the kept handle, or the rendered failure of the
+    // caller's invocation.
+    schedule: Result<Result<(), String>, String>,
+    // Panics naming the child, and every state actor panic.
+    panics: Vec<String>,
+}
+
+// A failed schedule through the kept handle traps the caller, so the caller's invocation fails
+// with `refusal`. Resolving the cached generation does not panic on its stopped state actor,
+// which aborts an executor built with panic = "abort".
+fn assert_schedule_refused_without_a_panic(answers: &GatedDeletionAnswers, refusal: &str) {
+    assert!(
+        answers.panics.is_empty(),
+        "the kept schedule must not panic on the stopped state actor: {:#?}",
+        answers.panics
+    );
+    assert!(
+        matches!(&answers.schedule, Err(error) if error.contains(refusal)),
+        "the kept schedule must fail the caller's invocation with {refusal:?}: {:?}",
+        answers.schedule
+    );
 }
 
 #[test]
@@ -331,7 +381,8 @@ async fn kept_handle_to_a_child_whose_durable_state_is_removed_is_not_found(
         "removed",
     )
     .await?;
-    for (method, result) in results {
+    assert_schedule_refused_without_a_panic(&results, "Not found: Worker");
+    for (method, result) in results.calls {
         assert!(
             matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
             "{method} through a handle to a child whose durable state is removed must fail as \
@@ -361,7 +412,11 @@ async fn kept_handle_to_a_child_being_deleted_is_refused(
         "running",
     )
     .await?;
-    assert_refused_as_being_deleted(results);
+    assert_schedule_refused_without_a_panic(
+        &results,
+        "Remote agent error: Invalid input: Worker is being deleted",
+    );
+    assert_refused_as_being_deleted(results.calls);
     Ok(())
 }
 
@@ -385,7 +440,11 @@ async fn kept_handle_to_a_child_whose_deletion_failed_is_refused(
         "failed",
     )
     .await?;
-    assert_refused_as_being_deleted(results);
+    assert_schedule_refused_without_a_panic(
+        &results,
+        "Remote agent error: Invalid input: Worker is being deleted",
+    );
+    assert_refused_as_being_deleted(results.calls);
     Ok(())
 }
 
@@ -410,7 +469,7 @@ async fn pinned_call_racing_deletion(
     agent_counters: &PrecompiledComponent,
     method: &str,
     suffix: &str,
-) -> anyhow::Result<(Result<(), String>, Vec<String>)> {
+) -> anyhow::Result<PinnedRaceAnswers> {
     let context = TestContext::new(last_unique_id);
     let gate = Arc::new(RaceGate {
         target: Mutex::new(None),
@@ -466,8 +525,9 @@ async fn pinned_call_racing_deletion(
         AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
     let owned_counter = OwnedAgentId::new(context.default_environment_id, &counter_worker);
 
-    // The only forced-revision metadata lookup of the child on this path is the one in
-    // `rpc_target_worker`, after the pin, so the call is held there with the child pinned.
+    // The only forced-revision metadata lookup of the child on these paths follows the pin, in
+    // `rpc_target_worker` for a call and in `schedule_invocation` for a schedule, so the call is
+    // held there with the child pinned.
     *gate.target.lock().unwrap() = Some(counter_component.id);
     gate.armed.store(true, Ordering::Release);
     let call = tokio::spawn({
@@ -517,10 +577,38 @@ async fn pinned_call_racing_deletion(
     hook.release.add_permits(1);
     let _ = tokio::time::timeout(Duration::from_secs(30), deleting).await;
 
-    let result = result
-        .map_err(|error| anyhow::anyhow!("the caller task failed: {error}"))??
-        .into_typed::<Result<(), String>>()?;
-    Ok((result, panics_naming(&format!("\"{child_name}\""))))
+    let result = match result.map_err(|error| anyhow::anyhow!("the caller task failed: {error}"))? {
+        Ok(result) => Ok(result.into_typed::<Result<(), String>>()?),
+        Err(error) => Err(format!("{error:#}")),
+    };
+    let caller_worker =
+        AgentId::from_agent_id(caller_component.id, &caller).map_err(anyhow::Error::msg)?;
+    let caller_errors = executor
+        .get_oplog(
+            &caller_worker,
+            golem_common::model::oplog::OplogIndex::INITIAL,
+        )
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            golem_common::model::oplog::PublicOplogEntry::Error(error) => Some(error.error),
+            _ => None,
+        })
+        .collect();
+    Ok(PinnedRaceAnswers {
+        result,
+        caller_errors,
+        panics: panics_naming(&format!("\"{child_name}\"")),
+    })
+}
+
+struct PinnedRaceAnswers {
+    // The guest's answer, or the rendered failure of the caller's invocation.
+    result: Result<Result<(), String>, String>,
+    // The errors of the caller's failed attempts, from its oplog.
+    caller_errors: Vec<String>,
+    // Panics naming the child, and every state actor panic.
+    panics: Vec<String>,
 }
 
 #[test]
@@ -545,9 +633,12 @@ async fn kept_handle_call_overtaken_by_the_deletion_is_not_found_without_a_panic
         )
         .await;
         match result {
-            Ok((Err(error), panics))
-                if error.starts_with("RpcError::NotFound(") && panics.is_empty() => {}
-            Ok((result, panics)) => failures.push(format!(
+            Ok(PinnedRaceAnswers {
+                result: Ok(Err(error)),
+                panics,
+                ..
+            }) if error.starts_with("RpcError::NotFound(") && panics.is_empty() => {}
+            Ok(PinnedRaceAnswers { result, panics, .. }) => failures.push(format!(
                 "{method}: result {result:?}, executor state-actor panics or panics naming the child: {panics:#?}"
             )),
             Err(error) => failures.push(format!("{method}: {error:?}")),
@@ -558,6 +649,48 @@ async fn kept_handle_call_overtaken_by_the_deletion_is_not_found_without_a_panic
         "pinned calls enqueued after the deletion removed the durable state must fail as not \
          found without a panic, which aborts an executor built with panic = \"abort\": \
          {failures:#?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn kept_handle_schedule_overtaken_by_the_deletion_is_not_found_without_a_panic(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The deletion removes the child's durable state while the schedule is held after its pinned
+    // status read. A failed schedule traps the caller, so every attempt the caller makes must fail
+    // as not found, as the pinned calls do above, and none with an internal error from the
+    // stopped state actor.
+    let answers = pinned_call_racing_deletion(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        agent_counters,
+        "kept_agent_rpc_schedule_result",
+        "schedule",
+    )
+    .await?;
+    assert!(answers.panics.is_empty(), "{:#?}", answers.panics);
+    assert!(
+        matches!(&answers.result, Err(error) if error.contains("Not found: Worker")),
+        "the caller's invocation must fail as not found: {:?}",
+        answers.result
+    );
+    assert!(
+        !answers.caller_errors.is_empty()
+            && answers
+                .caller_errors
+                .iter()
+                .all(|error| error.contains("Not found: Worker")),
+        "every attempt of the pinned schedule overtaken by the deletion must fail as not found: \
+         {:#?}",
+        answers.caller_errors
     );
     Ok(())
 }

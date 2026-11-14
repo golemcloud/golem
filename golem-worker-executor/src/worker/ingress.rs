@@ -1283,7 +1283,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         }
-        let status = self.state_actor.status().await;
+        // A local caller holds no task-scope bind, so a deletion or a retirement may have stopped
+        // the state actor after the enqueue. Failing here leaves the wake to a same-key retry,
+        // which returns this receipt and registers the wake of the committed invocation.
+        let status = self.try_get_last_known_status().await?;
         if let Some(pending) = status
             .pending_invocations
             .iter()
