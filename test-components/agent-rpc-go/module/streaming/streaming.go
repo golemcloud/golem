@@ -93,8 +93,8 @@ func uintRange(start, count uint32) []uint32 {
 func both[A, B any](a golem.AgentStream[A], b golem.AgentStream[B]) ([]A, []B) {
 	var wg sync.WaitGroup
 	var first []A
-	wg.Go(func() { first = a.Collect() })
-	second := b.Collect()
+	wg.Go(func() { first = golem.Must(a.Collect()) })
+	second := golem.Must(b.Collect())
 	wg.Wait()
 	return first, second
 }
@@ -109,15 +109,11 @@ type callerState struct{ targetName string }
 func init() {
 	target := Target.Implement(func(id TargetID) *targetState { return &targetState{name: id.Name} })
 	target.Handle(consume, func(_ *golem.Context[targetState], in StreamIn) []uint32 {
-		return in.Input.Collect()
+		return golem.Must(in.Input.Collect())
 	})
 	target.Handle(consumeOneThenDrop, func(_ *golem.Context[targetState], in StreamIn) uint32 {
 		defer in.Input.Close()
-		first, ok := in.Input.Next()
-		if !ok {
-			panic("the input ended before its first value")
-		}
-		return first
+		return golem.Must(in.Input.Next())
 	})
 	target.Handle(produce, func(*golem.Context[targetState], golem.Unit) golem.AgentStream[uint32] {
 		return golem.StreamOf[uint32](3, 5, 8)
@@ -125,7 +121,10 @@ func init() {
 	target.Handle(transform, func(_ *golem.Context[targetState], in StreamIn) golem.AgentStream[uint32] {
 		return golem.ProduceStream(func(w *golem.AgentStreamWriter[uint32]) error {
 			defer in.Input.Close()
-			for v := range in.Input.All() {
+			for v, err := range in.Input.All() {
+				if err != nil {
+					return err
+				}
 				if err := w.Write(v + 100); errors.Is(err, golem.ErrReaderGone) {
 					return nil
 				}
@@ -200,37 +199,38 @@ func init() {
 		t := targetOf(ctx)
 		var r GoStreamingRpcReport
 		r.Consumed = consume.MustCall(t, StreamIn{Input: golem.StreamOf[uint32](1, 2, 3)})
-		r.Produced = produce.MustCall(t, golem.Unit{}).Collect()
-		r.Transformed = transform.MustCall(t, StreamIn{Input: golem.StreamOf[uint32](4, 5, 6)}).Collect()
+		r.Produced = golem.Must(produce.MustCall(t, golem.Unit{}).Collect())
+		r.Transformed = golem.Must(transform.MustCall(t, StreamIn{Input: golem.StreamOf[uint32](4, 5, 6)}).Collect())
 		scalar := scalarAndStream.MustCall(t, golem.Unit{})
-		r.ScalarLabel, r.ScalarValues = scalar.A, scalar.B.Collect()
+		r.ScalarLabel, r.ScalarValues = scalar.A, golem.Must(scalar.B.Collect())
 		nested := consumeNested.MustCall(t, NestedIn{Input: NestedStreamInput{
 			Labels: golem.StreamOf("alpha", "beta", "gamma"),
 			Values: golem.StreamOf[uint32](7, 8, 9),
 		}})
 		r.NestedLabels, r.NestedValues = nested.A, nested.B
-		for item := range produceNestedItems.MustCall(t, golem.Unit{}).All() {
+		for item, err := range produceNestedItems.MustCall(t, golem.Unit{}).All() {
+			golem.Must0(err)
 			r.NestedItemLabels = append(r.NestedItemLabels, item.Label)
-			r.NestedItemValues = append(r.NestedItemValues, item.Values.Collect())
+			r.NestedItemValues = append(r.NestedItemValues, golem.Must(item.Values.Collect()))
 		}
 		siblings := produceSiblings.MustCall(t, golem.Unit{})
 		r.FirstSibling, r.SecondSibling = both(siblings.A, siblings.B)
-		r.Forwarded = forwardUnread.MustCall(t, StreamIn{Input: golem.StreamOf(uintRange(2000, 192)...)}).Collect()
-		r.Recoverable = produceRecoverableResults.MustCall(t, golem.Unit{}).Collect()
+		r.Forwarded = golem.Must(forwardUnread.MustCall(t, StreamIn{Input: golem.StreamOf(uintRange(2000, 192)...)}).Collect())
+		r.Recoverable = golem.Must(produceRecoverableResults.MustCall(t, golem.Unit{}).Collect())
 		early := produceMany.MustCall(t, golem.Unit{})
-		r.EarlyValue, _ = early.Next()
+		r.EarlyValue = golem.Must(early.Next())
 		early.Close()
 		r.Ping = ping.MustCall(t, golem.Unit{})
 		r.Increment = increment.MustCall(t, golem.Unit{})
 		return r
 	})
 	caller.Handle(callProducerFailure, func(ctx *golem.Context[callerState], _ golem.Unit) []uint32 {
-		return produceFailure.MustCall(targetOf(ctx), golem.Unit{}).Collect()
+		return golem.Must(produceFailure.MustCall(targetOf(ctx), golem.Unit{}).Collect())
 	})
 	caller.Handle(callProducerCancellation, func(ctx *golem.Context[callerState], _ golem.Unit) golem.Tuple2[uint32, string] {
 		t := targetOf(ctx)
 		stream := produceCancellable.MustCall(t, golem.Unit{})
-		first, _ := stream.Next()
+		first := golem.Must(stream.Next())
 		stream.Close()
 		return golem.Tuple2[uint32, string]{A: first, B: ping.MustCall(t, golem.Unit{})}
 	})
@@ -251,7 +251,7 @@ func init() {
 	caller.Handle(dropOutputEarly, func(ctx *golem.Context[callerState], _ golem.Unit) golem.Tuple2[uint32, string] {
 		t := targetOf(ctx)
 		stream := produceMany.MustCall(t, golem.Unit{})
-		first, _ := stream.Next()
+		first := golem.Must(stream.Next())
 		stream.Close()
 		return golem.Tuple2[uint32, string]{A: first, B: ping.MustCall(t, golem.Unit{})}
 	})

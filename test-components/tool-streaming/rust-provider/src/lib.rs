@@ -718,7 +718,10 @@ impl Typed for TypedImpl {
             while let Some(value) = input.next().await {
                 let value = match value {
                     Ok(value) => value,
-                    Err(error) => { let _ = writer.finish(Err(error)).await; return; }
+                    Err(error) => {
+                        let _ = writer.finish(Err(error)).await;
+                        return;
+                    }
                 };
                 if writer.write_one(value * 3 + 1).await.is_err() {
                     return;
@@ -1048,18 +1051,15 @@ impl TypedInputStream for TypedInputStreamImpl {
         let first = input
             .next()
             .await
-            .expect("read first typed tool input item")
-            .expect("typed tool input has a first item");
+            .expect("typed tool input has a first item")
+            .expect("read first typed tool input item");
         wait_at_promise_checkpoint("typed-input-provider-consumed-first").await;
         let mut evidence = vec![TypedInputEvidence {
             label: first.label,
             ordinal: first.ordinal,
         }];
-        while let Some(item) = input
-            .next()
-            .await
-            .expect("read remaining typed tool input item")
-        {
+        while let Some(item) = input.next().await {
+            let item = item.expect("read remaining typed tool input item");
             evidence.push(TypedInputEvidence {
                 label: item.label,
                 ordinal: item.ordinal,

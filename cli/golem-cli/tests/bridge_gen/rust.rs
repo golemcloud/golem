@@ -205,10 +205,10 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
         }
         source.push_str(&format!(
             r#"
-            async fn exercise_{name}(mut input: {reader}) -> Result<(), String> {{
+            async fn exercise_{name}(mut input: {reader}) -> Result<(), golem_rust::agentic::StreamError> {{
                 let (mut writer, output) = {name}();
-                if let Some(item) = input.next().await? {{
-                    writer.write_one(item).await?;
+                if let Some(item) = input.next().await {{
+                    writer.write_one(item?).await?;
                 }}
                 writer.write_all(input.collect().await?).await?;
                 drop(writer);
