@@ -503,7 +503,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
                     WHERE d.http_api_deployment_id = $1
                         AND dr.revision_id = $2
-                        AND d.deleted_at IS NULL
+                        AND NOT dr.deleted
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL

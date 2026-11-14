@@ -18,6 +18,7 @@ use super::release_grant_lifecycle::{
     PublicationDecision, ReleaseLifecycle, ReleaseManagementDecision, publication_decision,
     release_management_decision,
 };
+use crate::repo::component::ComponentRevisionSelection;
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
     TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
@@ -498,7 +499,7 @@ impl ToolReleaseService {
                 .get_component_revision(
                     *component_id,
                     *component_revision,
-                    false,
+                    ComponentRevisionSelection::Current,
                     &AuthCtx::system(),
                 )
                 .await
@@ -577,7 +578,12 @@ impl ToolReleaseService {
         };
         let component = self
             .component_service
-            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .get_component_revision(
+                component_id,
+                component_revision,
+                ComponentRevisionSelection::Current,
+                &AuthCtx::system(),
+            )
             .await
             .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
         let deployed = self

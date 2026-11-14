@@ -18,6 +18,7 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::permission_share::{PermissionShareError, PermissionShareService};
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::card::CardRepo;
+use crate::repo::component::ComponentRevisionSelection;
 use crate::repo::environment::EnvironmentDefaultCardRef;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -390,7 +391,7 @@ impl CardService {
                     .get_component_revision(
                         managed_by.component_id,
                         managed_by.component_revision,
-                        false,
+                        ComponentRevisionSelection::Current,
                         &AuthCtx::System,
                     )
                     .await
@@ -458,7 +459,7 @@ impl CardService {
                 .get_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    true,
+                    ComponentRevisionSelection::Any,
                     &AuthCtx::System,
                 )
                 .await?
@@ -468,7 +469,7 @@ impl CardService {
                 .get_component_revision(
                     managed_by.component_id,
                     managed_by.component_revision,
-                    true,
+                    ComponentRevisionSelection::Any,
                     &AuthCtx::System,
                 )
                 .await?
