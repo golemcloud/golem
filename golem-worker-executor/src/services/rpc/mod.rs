@@ -153,12 +153,17 @@ pub trait Rpc: Send + Sync {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
+    /// `expected_callee_fingerprint` pins the call to one incarnation of the target: when that
+    /// incarnation no longer exists, the call fails with [`RpcError::NotFound`] and the method
+    /// never runs on another incarnation. Durable targets always pass the fingerprint of their
+    /// activation; ephemeral targets pass none.
     async fn invoke_and_await(
         &self,
         target: AgentTarget,
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,
@@ -221,12 +226,14 @@ pub trait Rpc: Send + Sync {
         .into())
     }
 
+    /// `expected_callee_fingerprint` has the same meaning as for [`Rpc::invoke_and_await`].
     async fn invoke(
         &self,
         target: AgentTarget,
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         self_created_by: AccountId,

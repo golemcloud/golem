@@ -611,4 +611,46 @@ mod tests {
 
         assert!(request.config().is_err());
     }
+
+    // `CreateIntent::Invocation` records the invocation's key only when the ephemeral target's
+    // phantom ID derives from it, and invocation-session clients derive that phantom from
+    // `request_key.owner_key(method)`, not from the raw key the public API also sends.
+    #[test]
+    fn invocation_start_create_key_is_the_owner_key_its_phantom_derives_from() {
+        use golem_common::model::account::AccountId;
+        use golem_common::model::agent::ephemeral_invocation_phantom_id;
+        use golem_common::model::{IdempotencyKey, IdempotencyScope, InvocationRequestKey};
+
+        let method = "handle";
+        let raw = IdempotencyKey::new("user-key".to_string());
+        let cases = [
+            // Raw HTTP handler / OpenAPI provider: request_key only.
+            (InvocationRequestKey::external(None, None), None),
+            // Public invocation API: scoped request_key plus the raw user key.
+            (
+                InvocationRequestKey::external(
+                    Some(IdempotencyScope::User(AccountId::new())),
+                    Some(&raw),
+                ),
+                Some(raw.clone()),
+            ),
+        ];
+        for (request_key, raw) in cases {
+            let phantom = ephemeral_invocation_phantom_id(&request_key.owner_key(method));
+            let request = golem_api_grpc::proto::golem::worker::InvocationStart {
+                method_name: Some(method.to_string()),
+                request_key: Some(request_key.clone().into()),
+                idempotency_key: raw.map(Into::into),
+                ..Default::default()
+            };
+            assert_eq!(
+                request
+                    .idempotency_key()
+                    .unwrap()
+                    .map(|key| ephemeral_invocation_phantom_id(&key)),
+                Some(phantom),
+                "create key for {request_key:?} does not identify the derived phantom"
+            );
+        }
+    }
 }

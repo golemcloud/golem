@@ -27,9 +27,9 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::concurrent::finish_span_in_memory;
-use crate::durable_host::durability::HostFailureKind;
 use crate::preview2::golem::agent::host::RpcError;
 use crate::services::oplog::OplogOps;
+use crate::services::rpc::ReplayedDemand;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcDemand;
 use crate::services::rpc::RpcError as InternalRpcError;
@@ -398,12 +398,13 @@ fn set_rpc_target_replay_pending<Ctx: WorkerCtx>(
     Ok(())
 }
 
-/// Activates the remote RPC target by creating a fresh demand and verifying that the live
-/// fingerprint matches the one persisted at construction time. Failures are returned as
-/// [`ClassifiedHostError`]s so every call site classifies activation errors the same way: a
-/// `create_demand` failure inherits its transient/permanent kind from [`classify_rpc_error`], while
-/// a fingerprint change is always permanent. `idempotency_key` identifies the create the
-/// activation may perform; only the recorded activation call passes one.
+/// Activates the remote RPC target. With `expected_fingerprint`, the activation was recorded
+/// before: it returns a [`ReplayedDemand`] of that incarnation and makes no create request. Each
+/// call to the target then carries the fingerprint (see [`Rpc::invoke_and_await`]), so a call
+/// never runs on another incarnation. Without one, it creates a demand, and `idempotency_key`
+/// identifies that create; only the recorded activation call and its repair pass one. A
+/// `create_demand` failure is returned as a [`ClassifiedHostError`] with the transient/permanent
+/// kind from [`classify_rpc_error`].
 pub(super) async fn activate_rpc_target(
     rpc: &dyn Rpc,
     remote_agent_id: &OwnedAgentId,
@@ -417,6 +418,9 @@ pub(super) async fn activate_rpc_target(
     expected_fingerprint: Option<AgentFingerprint>,
     idempotency_key: Option<IdempotencyKey>,
 ) -> Result<Box<dyn RpcDemand>, Error> {
+    if let Some(recorded_fingerprint) = expected_fingerprint {
+        return Ok(Box::new(ReplayedDemand::new(recorded_fingerprint)));
+    }
     let demand = rpc
         .create_demand(
             AgentTarget::Current(remote_agent_id.agent_id()),
@@ -433,17 +437,6 @@ pub(super) async fn activate_rpc_target(
         )
         .await
         .map_err(|err| classified_host_error(classify_rpc_error(&err), err.to_string()))?;
-    let target_fingerprint = demand.fingerprint();
-    if let Some(expected_fingerprint) = expected_fingerprint
-        && target_fingerprint != expected_fingerprint
-    {
-        return Err(classified_host_error(
-            HostFailureKind::Permanent,
-            format!(
-                "RPC target activation fingerprint changed during replay: persisted={expected_fingerprint}, live={target_fingerprint}"
-            ),
-        ));
-    }
     Ok(demand)
 }
 
@@ -547,24 +540,23 @@ impl WasmRpcTargetActivation {
         }
     }
 
+    /// The activation a spawned call rebuilds before it dispatches. Only a target whose activation
+    /// was recorded before the Store was replaced has one; it is rebuilt from the recorded
+    /// fingerprint and creates nothing.
     pub(super) fn deferred_activation(&self) -> Option<RpcTargetActivation> {
         match self {
-            WasmRpcTargetActivation::DeferredEphemeral { .. } => None,
-            WasmRpcTargetActivation::DeferredDurable { env, config } => Some(RpcTargetActivation {
-                target_fingerprint: None,
-                env: env.clone(),
-                config: config.clone(),
-            }),
             WasmRpcTargetActivation::ReplayPending {
                 target_fingerprint,
                 env,
                 config,
             } => Some(RpcTargetActivation {
-                target_fingerprint: Some(*target_fingerprint),
+                target_fingerprint: *target_fingerprint,
                 env: env.clone(),
                 config: config.clone(),
             }),
-            WasmRpcTargetActivation::Activated { .. } => None,
+            WasmRpcTargetActivation::DeferredEphemeral { .. }
+            | WasmRpcTargetActivation::DeferredDurable { .. }
+            | WasmRpcTargetActivation::Activated { .. } => None,
         }
     }
 

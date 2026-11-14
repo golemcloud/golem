@@ -168,6 +168,20 @@ pub trait GolemHostApi {
         constructor: String,
         method: String,
     ) -> Result<(), String>;
+    /// Creates an RPC handle to the agent, calls `method` through it, and keeps the handle for
+    /// the `kept_agent_rpc_*` methods of later invocations.
+    fn keep_agent_rpc(
+        &mut self,
+        agent_type: String,
+        constructor: String,
+        method: String,
+    ) -> Result<(), String>;
+    fn kept_agent_rpc_invoke_and_await_result(&self, method: String) -> Result<(), String>;
+    async fn kept_agent_rpc_async_invoke_and_await_result(
+        &self,
+        method: String,
+    ) -> Result<(), String>;
+    fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String>;
     fn read_own_oplog_result(&self) -> Result<(), String>;
     fn search_own_oplog_result(&self, query: String) -> Result<(), String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
@@ -235,6 +249,15 @@ impl EphemeralPromise for EphemeralPromiseImpl {
 pub struct GolemHostApiImpl {
     _name: String,
     recorded_tools: Option<Vec<ToolSummary>>,
+    kept_rpc: Option<WasmRpc>,
+}
+
+impl GolemHostApiImpl {
+    fn kept_rpc(&self) -> &WasmRpc {
+        self.kept_rpc
+            .as_ref()
+            .expect("keep_agent_rpc must be called before a kept_agent_rpc method")
+    }
 }
 
 fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
@@ -287,6 +310,7 @@ impl GolemHostApi for GolemHostApiImpl {
         Self {
             _name: name,
             recorded_tools: None,
+            kept_rpc: None,
         }
     }
 
@@ -717,6 +741,51 @@ impl GolemHostApi for GolemHostApiImpl {
         )
         .map(|_| ())
         .map_err(|error| format!("{error:?}"))
+    }
+
+    fn keep_agent_rpc(
+        &mut self,
+        agent_type: String,
+        constructor: String,
+        method: String,
+    ) -> Result<(), String> {
+        let rpc = WasmRpc::new(
+            &agent_type,
+            encode_parameters(vec![SchemaValue::String(constructor)])?,
+            None,
+            Vec::new(),
+        );
+        rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map_err(|error| format!("{error:?}"))?;
+        self.kept_rpc = Some(rpc);
+        Ok(())
+    }
+
+    fn kept_agent_rpc_invoke_and_await_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn kept_agent_rpc_async_invoke_and_await_result(
+        &self,
+        method: String,
+    ) -> Result<(), String> {
+        self.kept_rpc()
+            .async_invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .future
+            .get()
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn kept_agent_rpc_invoke_result(&self, method: String) -> Result<(), String> {
+        self.kept_rpc()
+            .invoke(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn read_own_oplog_result(&self) -> Result<(), String> {

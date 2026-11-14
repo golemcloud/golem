@@ -268,7 +268,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 
         loop {
-            match self.lookup_invocation_result(key).await {
+            let lookup = match self.try_lookup_invocation_result(key).await {
+                Ok(lookup) => lookup,
+                Err(error) => break Ok(LookupResult::Complete(Err(error))),
+            };
+            match lookup {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
@@ -323,12 +327,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 // that. `store_invocation_success` fills `invocation_results`
                                 // before it publishes, so the result is already readable
                                 // here, and a real result always beats a reroute.
-                                match self.lookup_invocation_result(key).await {
-                                    LookupResult::New | LookupResult::Pending => {
+                                match self.try_lookup_invocation_result(key).await {
+                                    Ok(LookupResult::New | LookupResult::Pending) => {
                                         debug!("Agent is no longer owned by this executor, ending the wait for its invocation result");
                                         break Ok(LookupResult::Complete(Err(error)));
                                     }
-                                    settled => break Ok(settled),
+                                    Ok(settled) => break Ok(settled),
+                                    // The shard has moved, so the reroute error is the answer.
+                                    Err(_) => break Ok(LookupResult::Complete(Err(error))),
                                 }
                             }
                             continue;
@@ -355,7 +361,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &InvocationId,
     ) -> Result<Option<AgentInvocationPayload>, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        let status = self.state_actor.try_status().await?;
         if let Some(pending) = status
             .pending_invocations
             .iter()
@@ -414,11 +420,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &InvocationId) -> LookupResult {
-        // Kept as an `Arc` rather than cloned out of. The ordered actor read ensures a preceding
-        // completion fold is published first. The record owns
-        // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
-        // one key made each lookup cost more than the last.
         let status = self.state_actor.status().await;
+        self.lookup_invocation_result_in(status, key).await
+    }
+
+    /// [`Self::lookup_invocation_result`] for a caller that may hold a generation whose state
+    /// actor a deletion has stopped: that read fails instead of panicking.
+    pub(in crate::worker) async fn try_lookup_invocation_result(
+        &self,
+        key: &InvocationId,
+    ) -> Result<LookupResult, WorkerExecutorError> {
+        let status = self.state_actor.try_status().await?;
+        Ok(self.lookup_invocation_result_in(status, key).await)
+    }
+
+    /// The lookup in a status read from the state actor with `status` or `try_status`, which are
+    /// ordered after a preceding completion fold; `last_known_status` can lag behind it.
+    async fn lookup_invocation_result_in(
+        &self,
+        // Kept as an `Arc` rather than cloned out of. The record owns `invocation_results`,
+        // which gains an entry per invocation, so deep-copying it to read one key made each
+        // lookup cost more than the last.
+        status: Arc<AgentStatusRecord>,
+        key: &InvocationId,
+    ) -> LookupResult {
         let cached = self
             .hydrated_invocation_results
             .read()
