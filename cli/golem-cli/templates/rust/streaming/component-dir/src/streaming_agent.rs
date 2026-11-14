@@ -107,7 +107,14 @@ impl StreamingAgent for StreamingAgentImpl {
                 let value = match value {
                     Ok(value) => value,
                     Err(error) => {
-                        let _ = writer.finish(Err(error)).await;
+                        let failure =
+                            golem_rust::schema::try_into_typed_schema_value(&error.to_string())
+                                .expect("a stream error message is a valid schema value");
+                        let _ = writer
+                            .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                                failure,
+                            ))))
+                            .await;
                         return;
                     }
                 };
@@ -159,7 +166,14 @@ impl StreamingAgent for StreamingAgentImpl {
                 let value = match value {
                     Ok(value) => value,
                     Err(error) => {
-                        let _ = writer.finish(Err(error)).await;
+                        let failure =
+                            golem_rust::schema::try_into_typed_schema_value(&error.to_string())
+                                .expect("a stream error message is a valid schema value");
+                        let _ = writer
+                            .finish(Err(golem_rust::agentic::StreamError::Failed(Box::new(
+                                failure,
+                            ))))
+                            .await;
                         return;
                     }
                 };

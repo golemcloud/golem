@@ -198,8 +198,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
                     }
                     Some(Err(error)) => {
                         INPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
-                        let _ = writer.finish(Err(error)).await;
-                        break;
+                        panic!("input stream failed: {error}");
                     }
                 }
             }
@@ -342,10 +341,7 @@ where
         while let Some(value) = input.next().await {
             let value = match value {
                 Ok(value) => value,
-                Err(error) => {
-                    let _ = writer.finish(Err(error)).await;
-                    return;
-                }
+                Err(error) => panic!("input stream failed: {error}"),
             };
             if writer.write_one(map(value)).await.is_err() {
                 return;

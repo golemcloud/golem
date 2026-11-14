@@ -1370,14 +1370,14 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
                         "the promise must hold the caller before its terminal read"
                     );
                     assert_eq!(terminals.len(), 1);
-                    assert_eq!(terminals[0].1.authored_by, StreamTerminalAuthor::Protocol);
+                    assert_eq!(terminals[0].1.authored_by, StreamTerminalAuthor::Guest);
                     assert_eq!(terminals[0].1.origin, StreamTerminalOrigin::Source);
                     assert_eq!(terminals[0].1.sequence, 1);
                     assert_eq!(
                         terminals[0].1.terminal,
-                        StreamTerminal::Failed(StreamError::Interrupted(
-                            "value-node index out of range: 0".into()
-                        ))
+                        StreamTerminal::Failed(StreamError::Failed(Box::new(
+                            golem_common::schema::try_into_typed_schema_value(&73u32)?,
+                        )))
                     );
                     return Ok::<_, anyhow::Error>(terminals);
                 }
@@ -1437,7 +1437,7 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
         let diagnostic = if lose_source {
             "durable stream source unavailable"
         } else {
-            "value-node index out of range: 0"
+            "U32(73)"
         };
         assert!(format!("{failure:#}").contains(diagnostic), "{failure:?}");
         let caller_history = user.get_oplog(&caller, OplogIndex::INITIAL).await?;
@@ -1454,10 +1454,21 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
             })
             .collect::<Vec<_>>();
         assert_eq!(consumed.len(), 1);
-        assert_eq!(consumed[0].authored_by, before[0].1.authored_by);
+        assert_eq!(
+            consumed[0].authored_by,
+            if lose_source {
+                StreamTerminalAuthor::Protocol
+            } else {
+                before[0].1.authored_by
+            }
+        );
         assert_eq!(
             consumed[0].terminal,
-            StreamTerminal::Failed(StreamError::Interrupted(diagnostic.into()))
+            if lose_source {
+                StreamTerminal::Failed(StreamError::Interrupted(diagnostic.into()))
+            } else {
+                before[0].1.terminal.clone()
+            }
         );
         assert_eq!(consumed[0].source_offset, before[0].1.offset);
         assert_eq!(caller_history.iter().filter(|entry| matches!(&entry.entry,
@@ -2289,18 +2300,33 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     cancelled_input
         .cancel_stream(cancelled_input_id, 1, StreamDirection::Input)
         .await?;
+    let target: AgentId = cancelled_input
+        .acceptance
+        .agent_id
+        .clone()
+        .expect("accepted cancellation target")
+        .try_into()
+        .map_err(anyhow::Error::msg)?;
     let cancelled_input = cancelled_input.finish(cancelled_input_report).await?;
     assert!(cancelled_input.result.is_none());
     assert_eq!(
         cancelled_input.failure()?.kind(),
         InvocationFailureKind::Execution
     );
-    assert!(
-        cancelled_input
-            .failure()?
-            .message
-            .contains("integration test cancelled the stream")
-    );
+    let history = user
+        .get_oplog(&target, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(history.iter().any(|entry| {
+        use golem_common::model::durable_stream::{
+            StreamError, StreamSessionRecord, StreamTerminal,
+        };
+        use golem_common::model::oplog::PublicOplogEntry;
+        matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+            if matches!(StreamSessionRecord::from_value(session.record.value()),
+                Ok(StreamSessionRecord::ConsumerTerminal(record))
+                    if record.terminal == StreamTerminal::Failed(StreamError::Interrupted(
+                        "integration test cancelled the stream".into()))))
+    }));
 
     Ok(())
 }

@@ -2087,17 +2087,25 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 Some(invocation_response::Response::Finished(completion)) => {
                     match completion.outcome {
                         Some(invocation_session_completion::Outcome::Success(_)) => {
-                            assert_eq!(terminal, StreamTerminal::Finished);
-                            assert_eq!(observed, Some(SchemaValue::U64(1)));
+                            let expected = match &terminal {
+                                StreamTerminal::Finished => {
+                                    SchemaValue::Result(ResultValuePayload::Ok {
+                                        value: Some(Box::new(SchemaValue::U64(1))),
+                                    })
+                                }
+                                StreamTerminal::Failed(error) => {
+                                    SchemaValue::Result(ResultValuePayload::Err {
+                                        value: Some(Box::new(SchemaValue::String(format!(
+                                            "{error:?}"
+                                        )))),
+                                    })
+                                }
+                                _ => unreachable!(),
+                            };
+                            assert_eq!(observed, Some(expected), "restart={restart}");
                         }
                         Some(invocation_session_completion::Outcome::Failure(failure)) => {
-                            assert_ne!(terminal, StreamTerminal::Finished);
-                            assert!(observed.is_none(), "failed native read must not return EOF");
-                            assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
-                            assert!(
-                                failure.message.contains("stream terminated: Failed("),
-                                "wrong failure for {terminal:?}, restart={restart}: {failure:?}"
-                            );
+                            anyhow::bail!("stream outcome must be catchable: {failure:?}");
                         }
                         None => anyhow::bail!("terminal observation has no completion outcome"),
                     }

@@ -512,7 +512,11 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
-    async fn observe_input_terminal(&mut self, input: AgentStream<u32>, gate: PromiseId) -> u64;
+    async fn observe_input_terminal(
+        &mut self,
+        input: AgentStream<u32>,
+        gate: PromiseId,
+    ) -> Result<u64, String>;
     fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32>;
     async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
     async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
@@ -602,12 +606,17 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         &mut self,
         mut input: AgentStream<u32>,
         gate: PromiseId,
-    ) -> u64 {
+    ) -> Result<u64, String> {
         self.scalar += 1;
         assert_eq!(input.next().await, Some(Ok(17)));
         golem_rust::await_promise(&gate).await;
+        let result = match input.next().await {
+            None => Ok(self.scalar),
+            Some(Err(error)) => Err(format!("{error:?}")),
+            Some(Ok(value)) => panic!("unexpected second item: {value}"),
+        };
         assert_eq!(input.next().await, None);
-        self.scalar
+        result
     }
 
     fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32> {

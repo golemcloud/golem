@@ -1438,6 +1438,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     golem_rust::await_promise(gate).await;
                 }
             }
+            writer.close().await.unwrap();
         });
         stream
     }
@@ -1473,6 +1474,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 _ => panic!("unknown producer mode"),
             }
             writer.write_one("completed".to_string()).await.unwrap();
+            writer.close().await.unwrap();
         });
         stream
     }
