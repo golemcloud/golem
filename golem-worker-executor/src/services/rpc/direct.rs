@@ -354,6 +354,81 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .map_err(Into::into)
     }
 
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, WorkerExecutorError> {
+        let owned_agent_id = self
+            .canonicalize_owned_agent_id(target, environment_id)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        if self
+            .shard_service()
+            .check_worker(&owned_agent_id.agent_id)
+            .is_err()
+        {
+            return self
+                .remote_rpc
+                .create_and_initialize(
+                    AgentTarget::Current(owned_agent_id.agent_id()),
+                    owned_agent_id.environment_id,
+                    self_created_by,
+                    self_agent_id,
+                    self_env,
+                    self_stack,
+                    config,
+                    auth_ctx,
+                    idempotency_key,
+                )
+                .await;
+        }
+        self.direct_invocation_auth
+            .check(
+                self_created_by,
+                &owned_agent_id,
+                AgentVerb::Invoke,
+                AgentResourcePattern::Any,
+                auth_ctx,
+            )
+            .await
+            .map_err(|error| match error {
+                RpcError::Denied { details } => WorkerExecutorError::permission_denied(details),
+                other => WorkerExecutorError::runtime(other.to_string()),
+            })?;
+        let worker = Worker::get_or_create_suspended_with_freshness(
+            self,
+            &owned_agent_id,
+            Some(self_env.to_vec()),
+            config,
+            None,
+            Some(self_agent_id.clone()),
+            &self_stack,
+            Principal::Agent(AgentPrincipal {
+                agent_id: self_agent_id.clone(),
+            }),
+            InvocationFreshnessDisposition::MayExist,
+            CreateIntent::Create {
+                exclusive: false,
+                idempotency_key: Some(idempotency_key),
+            },
+        )
+        .await?;
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        worker.await_initialization().await?;
+        Ok(Box::new(LoggingDemand::new(
+            owned_agent_id.agent_id(),
+            fingerprint,
+        )))
+    }
+
     async fn create_demand(
         &self,
         target: AgentTarget,

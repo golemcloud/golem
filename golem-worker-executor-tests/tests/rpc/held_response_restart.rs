@@ -42,6 +42,45 @@ struct HoldResponseRpc {
 
 #[async_trait]
 impl Rpc for HoldResponseRpc {
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        let hold = {
+            let mut activations = self.activations.lock().unwrap();
+            activations.push(Some(idempotency_key.clone()));
+            matches!(self.hold, Hold::Activation) && activations.len() == 1
+        };
+        let demand = self
+            .inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await;
+        if hold {
+            self.effect_applied.notify_one();
+            std::future::pending::<()>().await;
+        }
+        demand
+    }
+
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -694,10 +733,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
         create_requests[0].kind,
         golem_common::model::oplog::CreateRequestKind::GetOrCreate
     );
-    assert_eq!(
-        create_requests[0].idempotency_key,
-        Some(InvocationRequestKey::Internal(activations[0].clone().unwrap()).owner_key("inc_by"))
-    );
+    assert_eq!(create_requests[0].idempotency_key, activations[0].clone());
     assert_eq!(
         create_requests[0].principal,
         Principal::Agent(AgentPrincipal {

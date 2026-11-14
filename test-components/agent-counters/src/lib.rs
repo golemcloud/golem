@@ -604,3 +604,230 @@ impl FailingCounter for FailingCounterImpl {
         self.total
     }
 }
+
+mod constructor_probe {
+    use golem_rust::agentic::{
+        AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
+        BaseAgent, DirectAgentInput, Principal, ResolvedAgent, SnapshotData,
+        SnapshotRestoreContext, custom_error, invalid_input_error, invalid_method_error,
+    };
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentConstructor, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeKind,
+        InputSchema, OutputSchema, Snapshotting,
+    };
+    use golem_rust::schema::wit::{direct, wire};
+    use golem_rust::{PromiseId, agent_client, agent_definition, agent_implementation};
+    use std::marker::PhantomData;
+
+    #[allow(dead_code)]
+    #[agent_client(type_name = "ConstructorProbe")]
+    trait ConstructorProbe {
+        fn new(name: String, fail: bool, block: bool) -> Self;
+        fn increment(&mut self) -> u32;
+    }
+
+    struct ConstructorProbeImpl {
+        count: u32,
+    }
+
+    fn definition() -> AgentType {
+        let mut schema = direct::WireSchemaBuilder::default();
+        let parameters = vec![
+            (&AgentParameterProbe::<String>(PhantomData)).parameter_schema("name", &mut schema),
+            (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("fail", &mut schema),
+            (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("block", &mut schema),
+        ];
+        let output = <u32 as direct::WireSchema>::append_schema(&mut schema);
+        let root = schema.push(wire::SchemaTypeBody::RecordType(vec![]));
+        AgentType {
+            type_name: "ConstructorProbe".to_string(),
+            kind: AgentTypeKind::Regular,
+            description: String::new(),
+            source_language: "rust".to_string(),
+            schema: schema.finish(root),
+            constructor: AgentConstructor {
+                name: Some("new".to_string()),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(parameters),
+            },
+            methods: vec![AgentMethod {
+                name: "increment".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Single(output),
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled,
+            config: vec![],
+        }
+    }
+
+    // Macro-generated constructors return Self, so a public SDK initiator is
+    // required to return an AgentError from initialization without trapping.
+    struct ConstructorProbeInitiator;
+
+    #[async_trait::async_trait(?Send)]
+    impl AgentInitiator for ConstructorProbeInitiator {
+        async fn initiate(
+            &self,
+            params: wire::SchemaValueTree,
+            _principal: Principal,
+        ) -> Result<ResolvedAgent, AgentError> {
+            let (name, fail, block) = (|| {
+                let mut input = DirectAgentInput::new(params)?;
+                let name = input.take::<String>()?;
+                let fail = input.take::<bool>()?;
+                let block = input.take::<bool>()?;
+                input.finish()?;
+                Ok::<_, direct::WireError>((name, fail, block))
+            })()
+            .map_err(invalid_input_error)?;
+
+            println!("constructor-probe:entered:{name}");
+            if block {
+                let promise = golem_rust::create_promise();
+                println!("constructor-probe:promise:{}", promise.oplog_idx);
+                golem_rust::await_promise(&promise).await;
+            }
+            if fail {
+                println!("constructor-probe:failed:{name}");
+                return Err(custom_error(format!("constructor-probe:rejected:{name}")));
+            }
+            println!("constructor-probe:initialized:{name}");
+            Ok(ResolvedAgent::new(Box::new(ConstructorProbeImpl {
+                count: 0,
+            })))
+        }
+
+        async fn restore(
+            &self,
+            _snapshot: SnapshotData,
+            _context: SnapshotRestoreContext,
+        ) -> Result<ResolvedAgent, String> {
+            Err("ConstructorProbe snapshots are disabled".to_string())
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl BaseAgent for ConstructorProbeImpl {
+        fn get_agent_id(&self) -> String {
+            golem_rust::agentic::get_agent_id().agent_id
+        }
+
+        async fn invoke(
+            &mut self,
+            method_name: String,
+            input: wire::SchemaValueTree,
+            _principal: Principal,
+        ) -> Result<AgentInvocationResult, AgentError> {
+            if method_name != "increment" {
+                return Err(invalid_method_error(method_name));
+            }
+            DirectAgentInput::new(input)
+                .and_then(DirectAgentInput::finish)
+                .map_err(invalid_input_error)?;
+            self.count += 1;
+            Ok(AgentInvocationResult {
+                value: Some(direct::encode(&self.count).map_err(invalid_input_error)?),
+            })
+        }
+
+        fn get_definition(&self) -> AgentType {
+            definition()
+        }
+
+        async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
+            Err("ConstructorProbe snapshots are disabled".to_string())
+        }
+    }
+
+    #[ctor::ctor]
+    fn register_constructor_probe() {
+        golem_rust::agentic::install_agent_exports();
+        golem_rust::agentic::register_wire_agent_type(
+            golem_rust::agentic::AgentTypeName("ConstructorProbe".to_string()),
+            definition,
+        );
+        golem_rust::agentic::register_agent_initiator(
+            "ConstructorProbe",
+            std::sync::Arc::new(ConstructorProbeInitiator),
+        );
+    }
+
+    #[agent_definition]
+    trait ConstructorExitProbe {
+        fn new(name: String) -> Self;
+    }
+
+    struct ConstructorExitProbeImpl;
+
+    #[agent_implementation]
+    impl ConstructorExitProbe for ConstructorExitProbeImpl {
+        fn new(_name: String) -> Self {
+            std::process::exit(0)
+        }
+    }
+
+    #[agent_definition]
+    trait ConstructorProbeParent {
+        fn new(name: String) -> Self;
+        fn create_child(&self, name: String, fail: bool, block: bool) -> String;
+        fn create_child_result_then_wait(&self, name: String, fail: bool)
+        -> Result<String, String>;
+        fn create_child_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+            block: bool,
+            promise_id: PromiseId,
+        ) -> String;
+    }
+
+    struct ConstructorProbeParentImpl;
+
+    #[agent_implementation]
+    impl ConstructorProbeParent for ConstructorProbeParentImpl {
+        fn new(_name: String) -> Self {
+            Self
+        }
+
+        fn create_child(&self, name: String, fail: bool, block: bool) -> String {
+            let child = ConstructorProbeClient::get(name, fail, block)
+                .expect("failed to create ConstructorProbe client");
+            child.get_agent_id()
+        }
+
+        fn create_child_result_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+        ) -> Result<String, String> {
+            let result = ConstructorProbeClient::get(name, fail, false)
+                .map(|child| child.get_agent_id())
+                .map_err(|error| format!("{error:?}"));
+            let promise = golem_rust::create_promise();
+            println!("constructor-parent:promise:{}", promise.oplog_idx);
+            golem_rust::blocking_await_promise(&promise);
+            result
+        }
+
+        fn create_child_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+            block: bool,
+            promise_id: PromiseId,
+        ) -> String {
+            let child = ConstructorProbeClient::get(name, fail, block)
+                .expect("failed to create ConstructorProbe client");
+            golem_rust::blocking_await_promise(&promise_id);
+            child.get_agent_id()
+        }
+    }
+}

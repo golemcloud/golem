@@ -14,12 +14,11 @@
 
 use super::{
     AccountId, AgentConfigEntryDto, AgentFingerprint, AgentId, AuthCtx, CancelInvocationRequest,
-    DeleteWorkerRequest, EnvironmentId, Event, ForkWorkerRequest, ForkWorkerResponse, HasAll,
-    HasEvents, HasPromiseService, LookupResult, OplogIndex, OwnedAgentId, RecvError,
-    ResolveRevertLastInvocationsRequest, ResolvedRevert, RevertWorkerRequest, UpdateMode,
-    UpdateWorkerRequest, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
-    WorkerUpdateMode, common_model, extract_owned_agent_id, extract_principal,
-    from_proto_invocation_context, golem,
+    DeleteWorkerRequest, EnvironmentId, ForkWorkerRequest, ForkWorkerResponse, HasAll,
+    HasPromiseService, LookupResult, OplogIndex, OwnedAgentId, ResolveRevertLastInvocationsRequest,
+    ResolvedRevert, RevertWorkerRequest, UpdateMode, UpdateWorkerRequest, UsesAllDeps, Worker,
+    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, WorkerUpdateMode, common_model,
+    extract_owned_agent_id, extract_principal, from_proto_invocation_context, golem,
 };
 use crate::worker::CreateIntent;
 use golem_common::model::agent::{
@@ -34,7 +33,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
-        wait_until_loaded: bool,
+        wait_until_initialized: bool,
     ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
@@ -48,7 +47,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let freshness_disposition = if !wait_until_loaded
+        let freshness_disposition = if !wait_until_initialized
             && request.freshness_disposition
                 == golem::worker::InvocationFreshnessDisposition::KnownFresh as i32
         {
@@ -112,40 +111,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
 
-        if !wait_until_loaded {
+        if !wait_until_initialized {
             return Ok(fingerprint);
         }
 
-        let mut subscription = self.events().subscribe();
-        let start_attempt = Worker::start_if_needed(worker.clone()).await?;
-        if let Some(start_attempt) = start_attempt {
-            match subscription
-                .wait_for(|event| match event {
-                    Event::WorkerLoaded {
-                        agent_id,
-                        start_attempt: event_attempt,
-                        result,
-                    } if agent_id == &owned_agent_id.agent_id
-                        && event_attempt == &start_attempt =>
-                    {
-                        Some(result.clone())
-                    }
-                    _ => None,
-                })
-                .await
-            {
-                Ok(Ok(())) => Ok(fingerprint),
-                Ok(Err(e)) => Err(e),
-                Err(RecvError::Closed) => {
-                    Err(WorkerExecutorError::unknown("Events subscription closed"))
-                }
-                Err(RecvError::Lagged(_)) => Err(WorkerExecutorError::unknown(
-                    "Worker executor is overloaded and could not wait for worker to load",
-                )),
-            }
-        } else {
-            Ok(fingerprint)
-        }
+        worker.await_initialization().await?;
+        Ok(fingerprint)
     }
 
     pub(super) async fn complete_promise_internal(

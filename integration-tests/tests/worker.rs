@@ -92,6 +92,339 @@ async fn rest_exclusive_create_rejects_an_existing_agent(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_create_waits_for_promise_blocked_constructor(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rest_create_constructor_probe(deps, false).await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn rest_create_reports_constructor_rejection_and_keeps_failed_agent(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rest_create_constructor_probe(deps, true).await
+}
+
+async fn rest_create_constructor_probe(
+    deps: &EnvBasedTestDependencies,
+    fail: bool,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let name = if fail {
+        "rest-constructor-rejection"
+    } else {
+        "rest-constructor-gate"
+    };
+    let parsed_id = agent_id!("ConstructorProbe", name, fail, true);
+    let child_id = AgentId::from_agent_id(component.id, &parsed_id).map_err(anyhow::Error::msg)?;
+    let create = user.try_start_agent(&component.id, parsed_id.clone());
+    tokio::pin!(create);
+
+    // Wait for storage before connecting; connecting to a missing agent can create it.
+    let stored = async {
+        loop {
+            if user.get_worker_metadata_opt(&child_id).await?.is_some() {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    };
+    tokio::select! {
+        biased;
+        response = &mut create => anyhow::bail!("create returned before its constructor gate: {response:?}"),
+        result = stored => result?,
+    }
+    let mut output = tokio::select! {
+        biased;
+        response = &mut create => anyhow::bail!("create returned before its constructor gate: {response:?}"),
+        stream = user.make_worker_log_event_stream(&child_id) => stream?,
+    };
+    let mut stdout = String::new();
+    let promise_index = loop {
+        tokio::select! {
+            biased;
+            response = &mut create => anyhow::bail!("create returned before promise completion: {response:?}"),
+            event = output.message() => {
+                let event = event?.ok_or_else(|| anyhow!("constructor output closed"))?;
+                if let Some(log_event::Event::Stdout(inner)) = event.event {
+                    stdout.push_str(&inner.message);
+                    if let Some(index) = stdout.lines().find_map(|line| {
+                        line.strip_prefix("constructor-probe:promise:")
+                            .and_then(|index| index.parse::<u64>().ok())
+                    }) {
+                        break index;
+                    }
+                }
+            }
+        }
+    };
+    assert!(
+        futures::poll!(create.as_mut()).is_pending(),
+        "create returned while its constructor promise was unresolved"
+    );
+    user.complete_promise(
+        &PromiseId {
+            agent_id: child_id.clone(),
+            fingerprint: user.get_worker_metadata(&child_id).await?.fingerprint,
+            oplog_idx: OplogIndex::from_u64(promise_index),
+        },
+        vec![],
+    )
+    .await?;
+
+    let result = create.await?;
+    if fail {
+        match result.expect_err("the constructor rejected explicit create") {
+            golem_client::Error::Item(WorkerError::Error500(body)) => {
+                assert_eq!(
+                    body.code,
+                    golem_common::base_model::api::error_code::INTERNAL_UNKNOWN
+                );
+                assert!(
+                    body.error
+                        .starts_with(&format!("Failed to create worker: {child_id}: ")),
+                    "{body:?}"
+                );
+                assert!(
+                    body.error
+                        .contains(&format!("constructor-probe:rejected:{name}")),
+                    "{body:?}"
+                );
+            }
+            other => anyhow::bail!("expected a constructor rejection over HTTP 500, got {other:?}"),
+        }
+        user.wait_for_status(&child_id, AgentStatus::Failed, Duration::from_secs(30))
+            .await?;
+        let error = user
+            .try_start_agent(&component.id, parsed_id)
+            .await?
+            .expect_err("failed explicit create must leave the incarnation stored");
+        match error {
+            golem_client::Error::Item(WorkerError::Error409(body)) => assert_eq!(
+                body.code,
+                golem_common::base_model::api::error_code::AGENT_ALREADY_EXISTS
+            ),
+            other => anyhow::bail!("expected HTTP 409 for the failed incarnation, got {other:?}"),
+        }
+        assert_eq!(
+            user.get_worker_metadata(&child_id).await?.status,
+            AgentStatus::Failed
+        );
+    } else {
+        assert_eq!(result?, child_id);
+        let result = user
+            .invoke_and_await_agent(&component, &parsed_id, "increment", data_value!())
+            .await?;
+        assert_eq!(result.into_return_value(), Some(SchemaValue::U32(1)));
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .unique()
+        .store()
+        .await?;
+
+    for fail in [false, true] {
+        let block = !fail;
+        let routing = deps.shard_manager().get_routing_table().await?;
+        let (parent, child_name, child_id) = (0..10_000)
+            .find_map(|index| {
+                let parent = agent_id!(
+                    "ConstructorProbeParent",
+                    format!("remote-constructor-parent-{fail}-{index}")
+                );
+                let child_name = format!("remote-constructor-child-{fail}-{index}");
+                let child = agent_id!("ConstructorProbe", child_name.clone(), fail, block);
+                let parent_id = AgentId::from_agent_id(component.id, &parent).ok()?;
+                let child_id = AgentId::from_agent_id(component.id, &child).ok()?;
+                (routing.lookup(&parent_id)? != routing.lookup(&child_id)?)
+                    .then_some((parent, child_name, child_id))
+            })
+            .ok_or_else(|| anyhow!("no constructor caller and child on different executors"))?;
+        let parent_id = user.start_agent(&component.id, parent.clone()).await?;
+        let parent_metadata = user.get_worker_metadata(&parent_id).await?;
+        let invocation_key = IdempotencyKey::fresh();
+        let call = user.invoke_and_await_agent_with_key(
+            &component,
+            &parent,
+            &invocation_key,
+            "create_child",
+            data_value!(child_name.clone(), fail, block),
+        );
+        tokio::pin!(call);
+
+        if block {
+            // Connecting must not create the child on behalf of the RPC caller.
+            let stored = async {
+                loop {
+                    if user.get_worker_metadata_opt(&child_id).await?.is_some() {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                }
+            };
+            tokio::select! {
+                biased;
+                response = &mut call => anyhow::bail!("parent returned before its child constructor gate: {response:?}"),
+                result = stored => result?,
+            }
+            let mut output = tokio::select! {
+                biased;
+                response = &mut call => anyhow::bail!("parent returned before its child constructor gate: {response:?}"),
+                stream = user.make_worker_log_event_stream(&child_id) => stream?,
+            };
+            let mut stdout = String::new();
+            let promise_index = loop {
+                tokio::select! {
+                    biased;
+                    response = &mut call => anyhow::bail!("parent returned before child promise completion: {response:?}"),
+                    event = output.message() => {
+                        let event = event?.ok_or_else(|| anyhow!("child constructor output closed"))?;
+                        if let Some(log_event::Event::Stdout(inner)) = event.event {
+                            stdout.push_str(&inner.message);
+                            if let Some(index) = stdout.lines().find_map(|line| {
+                                line.strip_prefix("constructor-probe:promise:")
+                                    .and_then(|index| index.parse::<u64>().ok())
+                            }) {
+                                break index;
+                            }
+                        }
+                    }
+                }
+            };
+            assert!(
+                futures::poll!(call.as_mut()).is_pending(),
+                "parent returned while its child constructor promise was unresolved"
+            );
+            user.complete_promise(
+                &PromiseId {
+                    agent_id: child_id.clone(),
+                    fingerprint: user.get_worker_metadata(&child_id).await?.fingerprint,
+                    oplog_idx: OplogIndex::from_u64(promise_index),
+                },
+                vec![],
+            )
+            .await?;
+        }
+
+        let result = call.await;
+        if fail {
+            let error = result.expect_err("RPC create must report rejection before a child method");
+            let body =
+                match error.downcast_ref::<golem_client::Error<golem_client::api::AgentError>>() {
+                    Some(golem_client::Error::Item(golem_client::api::AgentError::Error500(
+                        body,
+                    ))) => body,
+                    _ => anyhow::bail!(
+                        "expected a failed parent invocation over HTTP 500, got {error:?}"
+                    ),
+                };
+            let failure = body
+                .worker_error
+                .as_ref()
+                .ok_or_else(|| anyhow!("parent failure lost its worker error: {body:?}"))?;
+            let error = format!("{}\n{}", failure.cause, failure.stderr);
+            let child_display = child_id.to_string();
+            assert!(
+                error.contains(&child_display)
+                    || error.contains(&child_display.escape_debug().to_string()),
+                "{error}"
+            );
+            assert!(
+                error.contains(&format!("constructor-probe:rejected:{child_name}")),
+                "{error}"
+            );
+            user.wait_for_status(&child_id, AgentStatus::Failed, Duration::from_secs(30))
+                .await?;
+        } else {
+            assert_eq!(
+                result?.into_return_value(),
+                Some(SchemaValue::String(child_id.agent_id.clone()))
+            );
+        }
+
+        let routing = deps.shard_manager().get_routing_table().await?;
+        let parent_owner = routing
+            .lookup(&parent_id)
+            .ok_or_else(|| anyhow!("parent has no routing owner"))?;
+        let child_owner = routing
+            .lookup(&child_id)
+            .ok_or_else(|| anyhow!("child has no routing owner"))?;
+        assert_ne!(parent_owner, child_owner, "RPC must cross executors");
+        let metadata = user.get_worker_metadata(&child_id).await?;
+        assert_eq!(metadata.created_by, parent_metadata.created_by);
+        assert_eq!(metadata.environment_id, parent_metadata.environment_id);
+        assert_eq!(metadata.component_revision, component.revision);
+
+        let history = user.get_oplog(&child_id, OplogIndex::INITIAL).await?;
+        let mut started = Vec::new();
+        let mut pending = Vec::new();
+        for entry in &history {
+            let (invocation, keys) = match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(start) => {
+                    (&start.invocation, &mut started)
+                }
+                PublicOplogEntry::PendingAgentInvocation(waiting) => {
+                    (&waiting.invocation, &mut pending)
+                }
+                _ => continue,
+            };
+            match invocation {
+                PublicAgentInvocation::AgentInitialization(init) => keys.push(init.invocation_id),
+                other => anyhow::bail!("child must execute only its constructor: {other:?}"),
+            }
+        }
+        assert_eq!(started.len(), 1, "the child must run its constructor once");
+        assert_eq!(pending, started);
+        let parent_invocation_id = InvocationRequestKey::external(
+            Some(IdempotencyScope::User(*user.account_id())),
+            Some(&invocation_key),
+        )
+        .finalize(
+            parent_id.clone(),
+            parent_metadata.fingerprint,
+            "create_child",
+        )
+        .id();
+        let parent_history = user.get_oplog(&parent_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            parent_history.iter().filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(start)
+                    if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.invocation_id == parent_invocation_id && method.method_name == "create_child")
+            )).count(),
+            1
+        );
+    }
+    Ok(())
+}
+
 /// REST/JSON invocation of a method whose only declared input is the
 /// auto-injected `principal` field. The caller supplies no parameters (the
 /// host injects the principal out of band), so the invocation must succeed —

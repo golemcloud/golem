@@ -26,7 +26,6 @@ use crate::model::public_oplog::{
     get_public_oplog_page, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
-use crate::services::events::Event;
 use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
@@ -34,9 +33,9 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
-    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
-    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasOplog, HasOplogService,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
@@ -111,7 +110,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};

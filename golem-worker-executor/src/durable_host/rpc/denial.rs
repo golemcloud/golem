@@ -190,21 +190,6 @@ pub(super) async fn replay_async_rpc_denial<Ctx: WorkerCtx>(
     bake_closed_async_error(ctx.table(), denied_rpc_failure(response.result)?)
 }
 
-pub(super) async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_invoke_and_await_denial_from_begun(ctx, begun, remote_agent_id, method_name, error)
-        .await
-}
-
 pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable, Ctx>,
@@ -226,20 +211,6 @@ pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
-pub(super) async fn persist_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_invoke_denial_from_begun(ctx, begun, remote_agent_id, method_name, error).await
-}
-
 pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     begun: BegunCall<GolemRpcWasmRpcInvoke, NotCancellable, Ctx>,
@@ -259,29 +230,6 @@ pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
         })
         .await?;
     Ok(Err(denied_rpc_failure(response.result)?.into()))
-}
-
-pub(super) async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    resource: &Resource<WasmRpcEntry>,
-    logical_remote_agent_id: OwnedAgentId,
-    method_name: String,
-    error: RpcError,
-) -> anyhow::Result<AsyncInvocationWithMetadata> {
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
-    persist_async_invoke_denial_from_begun(
-        ctx,
-        begun,
-        resource,
-        logical_remote_agent_id,
-        method_name,
-        error,
-    )
-    .await
 }
 
 pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
@@ -434,14 +382,6 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     let span = restore_embedded_span(ctx, &started)?;
     finish_span_in_memory(ctx, span.span_id())?;
     bake_closed_async_error(ctx.table(), denied_rpc_failure(response.result)?)
-}
-
-pub(super) async fn bake_recorded_async_invoke_denial<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    error: RpcError,
-) -> anyhow::Result<AsyncInvocationWithMetadata> {
-    let details = rpc_denied_details(error);
-    bake_closed_async_error(ctx.table(), InternalRpcError::Denied { details })
 }
 
 pub(super) async fn persist_schedule_denial<Ctx: WorkerCtx>(

@@ -109,16 +109,16 @@ pub trait WorkerProxy: Send + Sync {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError>;
 
-    async fn start(
+    async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
-        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError>;
 
     async fn invoke_agent(
@@ -444,18 +444,18 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn start(
+    async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
-        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
         auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
-        debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
+        debug!(owned_agent_id=%owned_agent_id, "Creating remote worker");
 
         let response: LaunchNewWorkerResponse = self
             .worker_service_client
@@ -474,8 +474,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
-                    method_name: Some(method_name.to_string()),
-                    idempotency_key: None,
+                    method_name: None,
+                    idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: 0,
                 }))
             })
@@ -491,10 +491,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 })?;
                 Ok(AgentFingerprint(instance_id.into()))
             }
-            Some(launch_new_worker_response::Result::Error(error)) => match error.error {
-                Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::new()),
-                _ => Err(error.into()),
-            },
+            Some(launch_new_worker_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),
@@ -1225,6 +1222,9 @@ mod tests {
         prepared_workers: Arc<Mutex<Vec<LaunchNewWorkerRequest>>>,
         prepared_fingerprint: AgentFingerprint,
         lose_first_prepare_response: bool,
+        created_workers: Arc<Mutex<Vec<LaunchNewWorkerRequest>>>,
+        create_responses:
+            Arc<Mutex<std::collections::VecDeque<Result<LaunchNewWorkerResponse, Status>>>>,
     }
 
     macro_rules! unimplemented_rpc {
@@ -1253,11 +1253,21 @@ mod tests {
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
 
-        unimplemented_rpc!(
-            launch_new_worker,
-            LaunchNewWorkerRequest,
-            LaunchNewWorkerResponse
-        );
+        async fn launch_new_worker(
+            &self,
+            request: Request<LaunchNewWorkerRequest>,
+        ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
+            self.created_workers
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            self.create_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(Status::unimplemented("no scripted create response")))
+                .map(Response::new)
+        }
         async fn prepare_worker(
             &self,
             request: Request<LaunchNewWorkerRequest>,
@@ -1493,6 +1503,115 @@ mod tests {
                 }))
             }
         }
+    }
+
+    #[test]
+    #[test_r::timeout("20s")]
+    async fn remote_create_preserves_the_key_fingerprint_and_typed_errors() {
+        use golem_api_grpc::proto::golem::common::ErrorBody;
+        use golem_api_grpc::proto::golem::worker::v1::LaunchNewWorkerSuccessResponse;
+
+        let service = FlakyWorkerService::default();
+        let requests = service.created_workers.clone();
+        let caller = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "caller".to_string(),
+        };
+        let target = OwnedAgentId::new(EnvironmentId::new(), &caller);
+        let fingerprint = AgentFingerprint::new();
+        let creation_error =
+            WorkerExecutorError::worker_creation_failed(caller.clone(), "constructor failed");
+        service.create_responses.lock().unwrap().extend([
+            Err(Status::unavailable("creation response lost")),
+            Ok(LaunchNewWorkerResponse {
+                result: Some(launch_new_worker_response::Result::Success(
+                    LaunchNewWorkerSuccessResponse {
+                        instance_id: Some(fingerprint.0.into()),
+                        ..Default::default()
+                    },
+                )),
+            }),
+            Ok(LaunchNewWorkerResponse {
+                result: Some(launch_new_worker_response::Result::Error(AgentError {
+                    error: Some(agent_error::Error::AlreadyExists(ErrorBody {
+                        error: "creation conflict".to_string(),
+                        code: String::new(),
+                    })),
+                })),
+            }),
+            Ok(LaunchNewWorkerResponse {
+                result: Some(launch_new_worker_response::Result::Error(AgentError {
+                    error: Some(agent_error::Error::InternalError(creation_error.into())),
+                })),
+            }),
+            Ok(LaunchNewWorkerResponse {
+                result: Some(launch_new_worker_response::Result::Success(
+                    LaunchNewWorkerSuccessResponse::default(),
+                )),
+            }),
+            Ok(LaunchNewWorkerResponse { result: None }),
+        ]);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        let mut config = WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        };
+        config.client_config.retries_on_unavailable.max_attempts = 2;
+        config.client_config.retries_on_unavailable.min_delay = std::time::Duration::from_millis(1);
+        config.client_config.retries_on_unavailable.max_delay = std::time::Duration::from_millis(1);
+        let proxy = RemoteWorkerProxy::new(&config);
+        let key = IdempotencyKey::fresh();
+        for case in 0..5 {
+            let result = proxy
+                .create(
+                    &target,
+                    &caller,
+                    HashMap::new(),
+                    InvocationContextStack::fresh(),
+                    vec![],
+                    Principal::anonymous(),
+                    &AuthCtx::System,
+                    Some(key.clone()),
+                )
+                .await;
+            match case {
+                0 => assert_eq!(result.unwrap(), fingerprint),
+                1 => assert!(
+                    matches!(result, Err(WorkerProxyError::AlreadyExists(details))
+                    if details == "creation conflict")
+                ),
+                2 => assert!(matches!(result, Err(WorkerProxyError::InternalError(
+                    WorkerExecutorError::AgentCreationFailed { agent_id, details }
+                )) if agent_id == caller && details == "constructor failed")),
+                _ => assert!(matches!(result, Err(WorkerProxyError::InternalError(_)))),
+            }
+        }
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 6);
+        for request in &requests {
+            assert_eq!(request.method_name, None);
+            assert_eq!(request.idempotency_key, Some(key.clone().into()));
+            assert!(request.ignore_already_existing);
+        }
+        assert_eq!(requests[0], requests[1]);
+        let _ = shutdown.send(());
+        server.await.unwrap();
     }
 
     #[test]
