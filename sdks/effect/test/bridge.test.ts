@@ -16,7 +16,10 @@ describe("Bridge", () => {
         const connect = vi.fn(() => Effect.succeed({ drop } as unknown as RpcConnection))
         const services = Layer.merge(
           Layer.succeed(AgentHostClient, { makeAgentId } as never),
-          Layer.succeed(RpcClient, { connect }),
+          Layer.succeed(RpcClient, {
+            bindSelf: () => Effect.die("unexpected self binding"),
+            connect,
+          }),
         )
         const resolve = Bridge.resolveRemoteAgent(
           "Ephemeral",
@@ -46,6 +49,7 @@ describe("Bridge", () => {
             Layer.merge(
               Layer.succeed(AgentHostClient, { makeAgentId } as never),
               Layer.succeed(RpcClient, {
+                bindSelf: () => Effect.die("unexpected self binding"),
                 connect: () => Effect.fail(new RpcHostError(cause, "WasmRpc.create")),
               }),
             ),
@@ -89,6 +93,7 @@ describe("Bridge", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => {
           connects++
           return Effect.succeed(connection)

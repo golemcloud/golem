@@ -51,6 +51,7 @@ import { MethodSpec } from './method';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
+  bindSelfRemoteAgent,
   wireRemoteAgent,
   RemoteOutputError,
   type AgentConfigEntry,
@@ -184,6 +185,8 @@ export interface RemoteClientFactory<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
 > {
+  /** Bind the current durable incarnation without creating or initializing it. */
+  bindSelf(options?: RemoteClientOptions): RemoteClient<Methods>;
   /** Address the durable agent with this constructor identity. */
   get(
     id: InferRecord<CallerInput<Id>>,
@@ -733,6 +736,13 @@ export function buildAgentClientSurface<
     } as EphemeralRemoteClientFactory<Id, Methods, Config>;
   } else {
     client = {
+      bindSelf: (options) =>
+        createRemoteClient<Methods, 'durable'>(
+          methodCodecs,
+          'durable',
+          bindSelfRemoteAgent(def.name),
+          options,
+        ),
       get: (id, config, options) =>
         createClient(id, undefined, config, options) as RemoteClient<Methods>,
       getPhantom: (id, phantomId, config, options) =>

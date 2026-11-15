@@ -23,6 +23,9 @@ const exceptionTag = new WebAssembly.Tag({ parameters: [] })
 let instance
 let componentContext = 0
 let nextWaitableSet = 1
+let selfBindingMode = 0
+let selfBindingDrops = 0
+const selfBindingId = 'Counter("recorded")[00000000-0000-0011-0000-00000000001d]'
 let schemaValueStreamHostMode = 0
 let toolHostMode = 0
 let toolPendingGet = false
@@ -428,8 +431,41 @@ const importObject = {
     },
   },
   "golem:agent/host@2.0.0": {
-    "parse-agent-id"() {
-      throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
+    "parse-agent-id"(ptr, len, retPtr) {
+      if (permissionHostReadString(ptr, len) !== selfBindingId)
+        throw new Error("self binding parsed a different identity")
+      const memory = new DataView(instance.exports.memory.buffer)
+      new Uint8Array(instance.exports.memory.buffer, retPtr, 72).fill(0)
+      if (selfBindingMode === 1) {
+        memory.setUint8(retPtr, 1)
+        memory.setUint8(retPtr + 8, 3) // invalid-agent-id
+        permissionHostWriteString(memory, retPtr + 12, "bad id")
+        return
+      }
+      permissionHostWriteString(memory, retPtr + 8, "Counter")
+      // Binding retains the constructor tree without decoding it. Even empty
+      // arrays need guest allocations because the generated lifter frees them.
+      for (const offset of [16, 24, 36])
+        memory.setInt32(retPtr + offset, permissionHostAllocate(1), true)
+      memory.setUint8(retPtr + 48, 1)
+      memory.setBigUint64(retPtr + 56, 17n, true)
+      memory.setBigUint64(retPtr + 64, 29n, true)
+    },
+    "[static]wasm-rpc.bind-self"(retPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      new Uint8Array(instance.exports.memory.buffer, retPtr, 44).fill(0)
+      if (selfBindingMode === 2) {
+        memory.setUint8(retPtr, 1)
+        memory.setUint8(retPtr + 4, 1) // denied
+        permissionHostWriteString(memory, retPtr + 8, "ephemeral owner")
+        return
+      }
+      permissionHostWriteString(memory, retPtr + 4, selfBindingId)
+      memory.setInt32(retPtr + 12, 800, true)
+    },
+    "[resource-drop]wasm-rpc"(handle) {
+      if (handle !== 800) throw new Error("dropped a different RPC resource")
+      selfBindingDrops++
     },
     "make-agent-id"() {
       throw new Error("unexpected identity creation in SDK unit-test host")
@@ -446,6 +482,14 @@ const importObject = {
   "$root": rootImports,
   "[export]$root": rootImports,
   "golem:test": {
+    "reset-self-binding-host"(mode) {
+      selfBindingMode = mode
+      selfBindingDrops = 0
+      resetPermissionHost()
+    },
+    "self-binding-drops"() {
+      return selfBindingDrops
+    },
     "reset-resource-drop-counts"() {
       for (const kind of Object.keys(resourceDrops)) {
         resourceDrops[kind] = 0

@@ -160,6 +160,14 @@ export interface DurableClient<
   M extends Record<string, AnyMethodSpec>,
   F extends ConfigFields,
 > {
+  /** Bind the recorded current incarnation without creating or initializing it. */
+  readonly bindSelf: (
+    options?: ScopeCardOptions,
+  ) => Effect.Effect<
+    RemoteAgent<M>,
+    RemoteCallError | UnsupportedSchemaError | AgentIdentity.AgentIdentityError,
+    RpcClient | AgentHostClient | Scope.Scope
+  >
   readonly get: (
     input: CallerInput<C>,
     options?: GetOptions<F>,
@@ -772,6 +780,28 @@ const clientForCompiled = <
       )
       return { rpc, codecs, scopeCard: options?.scopeCard }
     })
+  const bindSelf = (options?: ScopeCardOptions) =>
+    Effect.gen(function* () {
+      const host = yield* RpcClient
+      const [id, rpc] = yield* Effect.acquireRelease(
+        host.bindSelf().pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
+        ([, connection]) => Effect.sync(() => connection.drop()),
+      )
+      const identity = yield* AgentIdentity.parse(id)
+      if (identity.typeName !== def.name)
+        return yield* Effect.fail<RemoteCallError>({
+          _tag: "RpcCallError",
+          cause: {
+            tag: "remote-agent-error",
+            val: {
+              tag: "invalid-type",
+              val: `self binding expects ${def.name}, identity is ${identity.typeName}`,
+            },
+          },
+        })
+      const codecs = yield* compile
+      return buildRemote(rpc, codecs, false, options?.scopeCard) as RemoteAgent<Methods>
+    })
   const get = (input: CallerInput<C>, options?: GetOptions<F>) =>
     construct(input, undefined, options).pipe(
       Effect.map(
@@ -826,6 +856,6 @@ const clientForCompiled = <
             ),
           newPhantom,
         }
-      : { get, getPhantom, newPhantom }
+      : { bindSelf, get, getPhantom, newPhantom }
   ) as AgentClient<C, Methods, Mode, F>
 }

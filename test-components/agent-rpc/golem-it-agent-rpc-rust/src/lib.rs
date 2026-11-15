@@ -204,7 +204,10 @@ struct ConstructorSelfSchedulerImpl {
 impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
     fn new(_name: String, seconds: u64) -> Self {
         assert!(
-            RustParentClient::bind_self().is_err(),
+            matches!(
+                RustParentClient::bind_self(),
+                Err(golem_rust::GolemReflectError::InvalidType(_))
+            ),
             "self binding must reject another agent type"
         );
         let mut this =

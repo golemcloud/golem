@@ -173,6 +173,12 @@ func (a *FullAgentClient[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
 	return bindTypedClient[Id](defs, a.name, agentID)
 }
 
+// BindSelf binds the current durable incarnation and validates its declared type.
+// It does not create or initialize an agent.
+func (a *FullAgentClient[Id, Cfg]) BindSelf() (Client[Id], error) {
+	return bindSelfClient[Id](a.name)
+}
+
 // AgentID renders the identity of the instance id (and phantom, if any)
 // names, without creating it.
 func (a *FullAgentClient[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) (string, error) {

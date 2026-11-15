@@ -57,12 +57,12 @@ declare module 'golem:agent/host@2.0.0' {
     static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
     /**
      * Binds the current agent incarnation without creating or initializing it.
-     * The type name must match the current durable agent. This permits scheduling
-     * on self from a constructor. Method calls still require method authority.
+     * This permits scheduling on self from a constructor. Method calls still
+     * require method authority. Typed clients must validate the returned agent type.
      * The returned ID and connection preserve the recorded incarnation during replay.
      * @throws RpcError
      */
-    static bindSelf(agentTypeName: string): [string, WasmRpc];
+    static bindSelf(): [string, WasmRpc];
     /**
      * Invokes a remote method with the given parameters, and awaits the result.
      * `input` encodes the method's parameter list. The returned result is

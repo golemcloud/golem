@@ -28197,16 +28197,14 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 }
 
 //go:wasmimport golem:agent/host@2.0.0 [static]wasm-rpc.bind-self
-func wasm_import_static_wasm_rpc_bind_self(arg0 uintptr, arg1 uint32, arg2 uintptr)
+func wasm_import_static_wasm_rpc_bind_self(arg0 uintptr)
 
-func WasmRpcBindSelf(agentTypeName string) witTypes.Result[witTypes.Tuple2[string, *WasmRpc], RpcError] {
+func WasmRpcBindSelf() witTypes.Result[witTypes.Tuple2[string, *WasmRpc], RpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (11 * 4), 4))
-	utf8 := unsafe.Pointer(unsafe.StringData(agentTypeName))
-	pinner.Pin(utf8)
-	wasm_import_static_wasm_rpc_bind_self(uintptr(utf8), uint32(len(agentTypeName)), returnArea)
+	wasm_import_static_wasm_rpc_bind_self(returnArea)
 	var result211 witTypes.Result[witTypes.Tuple2[string, *WasmRpc], RpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:

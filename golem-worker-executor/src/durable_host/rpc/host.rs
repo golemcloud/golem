@@ -412,17 +412,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
     async fn bind_self(
         &mut self,
-        agent_type_name: String,
     ) -> anyhow::Result<Result<(String, Resource<WasmRpcEntry>), RpcError>> {
         let golem_common::model::agent::ResolvedOwnerContext::Agent(agent) = self.owner_context()
         else {
             return Ok(Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
-                agent_type_name,
+                "self binding requires a durable agent owner".to_string(),
             ))));
         };
-        if agent.agent_type.0 != agent_type_name || self.agent_mode() != AgentMode::Durable {
+        if self.agent_mode() != AgentMode::Durable {
             return Ok(Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
-                agent_type_name,
+                agent.agent_type.0.clone(),
             ))));
         }
         let component = self.owner_component_metadata();

@@ -564,7 +564,7 @@ async fn constructor_schedule_on_itself_is_accepted_and_runs(
         assert_eq!(entries.iter().filter(|entry| matches!(
             &entry.entry,
             PublicOplogEntry::Start(call) if call.function_name == "golem::rpc::wasm-rpc::bind-self"
-        )).count(), 1, "reconstruction must reuse the recorded self binding");
+        )).count(), 2, "reconstruction must reuse both bindings, including the rejected typed client");
         assert_eq!(
             entries
                 .iter()

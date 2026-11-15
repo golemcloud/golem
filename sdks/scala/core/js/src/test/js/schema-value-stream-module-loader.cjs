@@ -110,6 +110,9 @@ Module._load = function (request) {
         static create(...args) {
           return new this(...args);
         }
+        static bindSelf(...args) {
+          return missingHostImport("bindSelf")(...args);
+        }
         invokeAndAwait(...args) {
           return missingHostImport("wasmRpcInvokeAndAwait")(...args);
         }

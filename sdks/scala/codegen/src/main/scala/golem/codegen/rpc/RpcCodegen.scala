@@ -297,6 +297,12 @@ object RpcCodegen {
     sb.append("        bindRemote(resolved.withoutScopeCard)\n")
     sb.append(s"    }\n\n")
 
+    if (agent.metadata.mode != "ephemeral") {
+      sb.append("  /** Bind the current durable incarnation without creating or initializing it. */\n")
+      sb.append(s"  def bindSelf(): _root_.scala.Either[_root_.scala.Predef.String, $remoteName] =\n")
+      sb.append(s"    _root_.golem.runtime.rpc.AgentClientRuntime.bindSelfWire(agentType).map(bindRemote)\n\n")
+    }
+
     // Mode-aware constructors
     generateModeAwareConstructors(sb, agent, remoteName)
   }

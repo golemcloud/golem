@@ -105,10 +105,10 @@ interface host {
       create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
 
       /// Binds the current agent incarnation without creating or initializing it.
-      /// The type name must match the current durable agent. This permits scheduling
-      /// on self from a constructor. Method calls still require method authority.
+      /// This permits scheduling on self from a constructor. Method calls still
+      /// require method authority. Typed clients must validate the returned agent type.
       /// The returned ID and connection preserve the recorded incarnation during replay.
-      bind-self: static func(agent-type-name: string) -> result<tuple<string, wasm-rpc>, rpc-error>;
+      bind-self: static func() -> result<tuple<string, wasm-rpc>, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and awaits the result.
       ///

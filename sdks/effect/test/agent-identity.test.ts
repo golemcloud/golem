@@ -61,9 +61,15 @@ describe("identity boundaries", () => {
       expect(Object.isFrozen(card)).toBe(false)
       expect(identity.constructorValue).not.toBe(tree)
       expect(identity.constructorValue.valueNodes[0]).toEqual(tree.valueNodes[0])
-      yield* identity
-        .dynamicClient()
-        .pipe(Effect.scoped, Effect.provide(Layer.succeed(RpcClient, { connect })))
+      yield* identity.dynamicClient().pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.succeed(RpcClient, {
+            bindSelf: () => Effect.die("unexpected self binding"),
+            connect,
+          }),
+        ),
+      )
       expect(parseAgentId).toHaveBeenCalledTimes(1)
       expect(connect.mock.calls[0]?.[2]).toBe(phantom)
       expect(drop).toHaveBeenCalledTimes(1)

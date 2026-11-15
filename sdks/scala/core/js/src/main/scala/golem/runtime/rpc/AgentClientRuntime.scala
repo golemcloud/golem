@@ -53,6 +53,23 @@ object AgentClientRuntime {
         .map(remote => WireResolvedAgent(agentType, remote))
     }
 
+  /**
+   * Bind the recorded current incarnation without creating or initializing an
+   * agent.
+   */
+  def bindSelfWire[Trait, Constructor](
+    agentType: WireAgentClientType[Trait, Constructor]
+  ): Either[String, WireResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.metadata.name).map(remote => WireResolvedAgent(agentType, remote))
+
+  /** Bind self using a typed reflective agent definition. */
+  def bindSelf[Trait, Constructor](
+    agentType: AgentType[Trait, Constructor]
+  ): Either[String, ResolvedAgent[Trait]] =
+    AgentIdentity.bindSelf(agentType.typeName).map { remote =>
+      ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote)
+    }
+
   private def encodeWireSync[A](
     codec: ConcreteCodec[A],
     containsStream: Boolean,
