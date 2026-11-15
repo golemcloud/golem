@@ -251,6 +251,7 @@ impl Rpc for RemoteInvocationRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -264,7 +265,6 @@ impl Rpc for RemoteInvocationRpc {
         let AgentTarget::Current(agent_id) = target;
         let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
-
         let output = self
             .worker_proxy
             .invoke_agent(
@@ -275,6 +275,7 @@ impl Rpc for RemoteInvocationRpc {
                 None,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -564,6 +565,7 @@ impl Rpc for RemoteInvocationRpc {
         environment_id: EnvironmentId,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         method_name: String,
         method_parameters: SchemaValue,
         _self_created_by: AccountId,
@@ -576,7 +578,6 @@ impl Rpc for RemoteInvocationRpc {
         let AgentTarget::Current(agent_id) = target;
         let owned_agent_id = &OwnedAgentId::new(environment_id, &agent_id);
         let principal = caller_agent_principal(self_agent_id);
-
         self.worker_proxy
             .invoke_agent(
                 &owned_agent_id.agent_id(),
@@ -586,6 +587,7 @@ impl Rpc for RemoteInvocationRpc {
                 None,
                 idempotency_key,
                 freshness_disposition,
+                expected_callee_fingerprint,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,

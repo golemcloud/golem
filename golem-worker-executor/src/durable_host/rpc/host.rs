@@ -1418,6 +1418,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     env,
                     config,
                     deferred_activation,
+                    expected_callee_fingerprint: None,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
                 }),
@@ -1430,14 +1431,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             });
         }
 
-        let deferred_activation = self
-            .table()
-            .get(&this)?
-            .payload
-            .downcast_ref::<WasmRpcEntryPayload>()
-            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
-            .target_activation
-            .deferred_activation();
+        let (deferred_activation, expected_callee_fingerprint) = {
+            let target_activation = &self
+                .table()
+                .get(&this)?
+                .payload
+                .downcast_ref::<WasmRpcEntryPayload>()
+                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
+                .target_activation;
+            (
+                target_activation.deferred_activation(),
+                target_activation.target_fingerprint(),
+            )
+        };
 
         // Open the single durable host call for this async RPC as a `WriteRemote` — the same
         // durable function type as the synchronous `invoke_and_await`. The remote idempotency key
@@ -1589,6 +1595,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 env.clone(),
                 config.clone(),
                 deferred_activation.clone(),
+                expected_callee_fingerprint,
                 span.span_id(),
                 handle.start_index(),
                 initial_freshness_disposition,
@@ -1607,6 +1614,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     env,
                     config,
                     deferred_activation,
+                    expected_callee_fingerprint,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
                 }),
@@ -1634,6 +1642,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     env,
                     config,
                     deferred_activation,
+                    expected_callee_fingerprint,
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
                 }),

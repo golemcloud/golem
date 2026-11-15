@@ -1,0 +1,15 @@
+---
+interface Props {
+  parts: string[];
+}
+const { parts } = Astro.props;
+---
+
+{
+  parts.map((part, index) => (
+    <span class="heading-line">
+      {part}
+      {index < parts.length - 1 ? " " : ""}
+    </span>
+  ))
+}

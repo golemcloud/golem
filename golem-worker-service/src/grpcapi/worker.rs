@@ -1084,6 +1084,7 @@ impl WorkerGrpcApi {
                         context: request.context,
                         principal: Some(principal),
                         attempt_id: Some(uuid::Uuid::new_v4().into()),
+                        expected_callee_fingerprint: request.expected_callee_fingerprint,
                         ..Default::default()
                     },
                     auth,
@@ -1106,6 +1107,9 @@ impl WorkerGrpcApi {
                     principal,
                     environment_id,
                     request.scope_card,
+                    request
+                        .expected_callee_fingerprint
+                        .map(|fingerprint| AgentFingerprint(fingerprint.into())),
                 )
                 .await?
         };

@@ -1348,14 +1348,16 @@ principal and its invocation context. Callers pass a `CreateIntent`. An explicit
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
-no key. The recorded `wasm-rpc` activation call sends the key derived from its own `Start`, so a
-repaired activation sends the same key. Later re-activations send no key and check the recorded
-fingerprint. A fork target records `Fork`, no key and the forker's principal. A self fork also
-records the forking agent's current invocation context; a fork through the worker service records a
-fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
-`AgentInitialization` with the recorded principal and context, not with the loading request's. The
-resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
-not published yet; it carries no principal or context. Tests:
+no key. An invocation session passes the owner key of its `request_key`, from which clients derive
+an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
+from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
+target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
+target records `Fork`, no key and the forker's principal. A self fork also records the forking
+agent's current invocation context; a fork through the worker service records a fresh context.
+When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
+recorded principal and context, not with the loading request's. The resident `unpublished_create`
+flag only records that an attempt committed `Create` and the worker is not published yet; it
+carries no principal or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
 `grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
@@ -1364,6 +1366,28 @@ not published yet; it carries no principal or context. Tests:
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+`ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
+`AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
+whether the worker was resident or loaded cold. A caller that joined another caller's load loads
+again with its own fingerprint when that load answered not found. Invocation admission uses the
+guard for every mode when `InvocationStart.expected_callee_fingerprint` is set, before any
+schedule or `PendingAgentInvocation`, and validates a schedule against the pinned worker; such a
+request cannot be `KnownFresh`. A generation under deletion stays cached until the deletion ends,
+so with a fingerprint set `Worker::get_exact_existing_suspended_for_response` and a refused
+task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` once the deletion
+has completed `DurableStateRemoved`, because nothing committed to the generation can run after
+that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
+still fail and leave an invocation an earlier attempt with the same key committed. A failed
+deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
+worker's status before the bind, with or without a fingerprint, without panicking on a stopped
+status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
+deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
+as reads do, until a retried delete claims it. Failures after the bind keep
+their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
+while it runs. External-tool sessions bind the same way after each acquisition. A call on an
+existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
+owner (`fresh_owner`) has no incarnation a caller can name, so a fingerprint with it is an invalid
+request in every mode.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
@@ -2357,6 +2381,25 @@ repairs, retain admission without re-authorizing.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
    `owner_key(operation)` — deterministic, never random.
+7. A durable call is pinned to the incarnation its activation recorded. The recorded activation
+   (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
+   target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
+   recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
+   `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
+   targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
+   through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
+   the exact-existing lookup too. An unpinned ephemeral call may still create its phantom, keyed by
+   the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
+   can still finish between the lookup and the enqueue; a refusal before admission is therefore
+   answered with `Worker::deleted_incarnation_as_not_found`, which applies the same
+   `pinned_deletion_refusal` rule as admission. Remote dispatch sends the fingerprint in
+   `InvokeAgentRequest.expected_callee_fingerprint`; the worker service checks the incarnation
+   before it validates the method, and the target executor applies the same existing-only check.
+   Both pin the incarnation before they validate the method against its revision. A deleted
+   or re-created child therefore fails the call with `RpcError::NotFound`, which is permanent
+   and recorded in the call's `End`; a call that meets a deletion still running gets the
+   refusal an unpinned caller gets. The method never runs on another incarnation, and an
+   executor restart does not create the deleted child again.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native

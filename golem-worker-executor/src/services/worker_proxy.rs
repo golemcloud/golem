@@ -130,6 +130,7 @@ pub trait WorkerProxy: Send + Sync {
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -507,6 +508,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -582,6 +584,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                     freshness_disposition: proto_freshness_disposition,
                     config: config.clone().into_iter().map(Into::into).collect(),
                     scope_card: proto_scope_card.clone(),
+                    expected_callee_fingerprint: expected_callee_fingerprint
+                        .map(|fingerprint| fingerprint.0.into()),
                 }))
             })
             .await?
@@ -1101,6 +1105,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         as i32,
                     config: Vec::new(),
                     scope_card: None,
+                    expected_callee_fingerprint: None,
                 }))
             })
             .await?
@@ -1203,6 +1208,8 @@ mod tests {
     #[derive(Clone, Default)]
     struct FlakyWorkerService {
         dispositions: Arc<Mutex<Vec<i32>>>,
+        expected_callee_fingerprints:
+            Arc<Mutex<Vec<Option<golem_schema::proto::golem::common::Uuid>>>>,
         streaming_requests: Arc<Mutex<Vec<InvocationRequest>>>,
         require_takeover: bool,
         reject_takeover: bool,
@@ -1487,6 +1494,10 @@ mod tests {
             let mut dispositions = self.dispositions.lock().unwrap();
             let request = request.into_inner();
             dispositions.push(request.freshness_disposition);
+            self.expected_callee_fingerprints
+                .lock()
+                .unwrap()
+                .push(request.expected_callee_fingerprint);
             if let Some(scope_card) = request.scope_card {
                 self.scope_card_payloads
                     .lock()
@@ -1497,9 +1508,10 @@ mod tests {
                 Err(Status::unavailable("ambiguous transport failure"))
             } else {
                 Ok(Response::new(InvokeAgentResponse {
-                    result: Some(invoke_agent_response::Result::Success(
-                        InvokeAgentSuccess::default(),
-                    )),
+                    result: Some(invoke_agent_response::Result::Success(InvokeAgentSuccess {
+                        result: Some(SchemaValue::Tuple { elements: vec![] }.try_into().unwrap()),
+                        ..Default::default()
+                    })),
                 }))
             }
         }
@@ -2093,6 +2105,7 @@ mod tests {
                 None,
                 None,
                 InvocationFreshnessDisposition::KnownFresh,
+                None,
                 agent_id.clone(),
                 HashMap::new(),
                 InvocationContextStack::fresh(),
@@ -2125,6 +2138,83 @@ mod tests {
         let scope_card_payloads = scope_card_payloads.lock().unwrap();
         assert_eq!(scope_card_payloads.len(), 2);
         assert_eq!(scope_card_payloads[0], scope_card_payloads[1]);
+    }
+
+    #[test]
+    async fn remote_rpc_sends_the_expected_callee_fingerprint_on_every_attempt() {
+        let service = FlakyWorkerService::default();
+        let expected_callee_fingerprints = service.expected_callee_fingerprints.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let proxy = Arc::new(RemoteWorkerProxy::new(&WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        }));
+        let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
+        let callee = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "pinned-callee".to_string(),
+        };
+        let caller = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "caller".to_string(),
+        };
+        let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
+
+        // The first attempt fails as unavailable, so the fire-and-forget call is sent twice.
+        rpc.invoke(
+            AgentTarget::Current(callee.clone()),
+            EnvironmentId::new(),
+            Some(IdempotencyKey::fresh()),
+            InvocationFreshnessDisposition::MayExist,
+            Some(fingerprint),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            &caller,
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+        rpc.invoke_and_await(
+            AgentTarget::Current(callee),
+            EnvironmentId::new(),
+            Some(IdempotencyKey::fresh()),
+            InvocationFreshnessDisposition::MayExist,
+            Some(fingerprint),
+            "run".to_string(),
+            SchemaValue::Tuple { elements: vec![] },
+            AccountId::new(),
+            &caller,
+            &[],
+            InvocationContextStack::fresh(),
+            vec![],
+            &AuthCtx::System,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *expected_callee_fingerprints.lock().unwrap(),
+            vec![Some(fingerprint.0.into()); 3]
+        );
     }
 
     #[test]
