@@ -17,10 +17,11 @@
 package tool
 
 import (
+	"reflect"
+
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
@@ -41,4 +42,16 @@ func typedValue(w types.TypedSchemaValue) golem.TypedValue {
 
 func witOf(v golem.TypedValue) types.TypedSchemaValue { return link.TypedValueWit(v) }
 
-func principalFromWit(p common.Principal) golem.Principal { return link.Principal(p).(golem.Principal) }
+// currentCaller returns a function that reads the caller of the running
+// invocation on its first call.
+func currentCaller() func() golem.Caller { return link.Caller().(func() golem.Caller) }
+
+// misplacedCaller is the build-time refusal of a live value in a command's arguments.
+const misplacedCaller = "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.Caller() (golem.Caller), and store ctx.Caller().Original.Ref() as a PrincipalRef."
+
+// isLiveValue reports a principal, a caller or a token provenance.
+func isLiveValue(t reflect.Type) bool {
+	principal := reflect.TypeFor[golem.Principal]()
+	return t == principal || t == reflect.TypeFor[golem.Caller]() || t == reflect.TypeFor[golem.TokenProvenance]() ||
+		(t.Kind() != reflect.Interface && t.Implements(principal))
+}

@@ -173,7 +173,7 @@ func init() {
 		}
 		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
 			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
-			principalFromWit(link.ImmediateCaller()))
+			currentCaller())
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -220,18 +220,28 @@ func init() {
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
 			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stderr(stderr))),
-			principal:   principalFromWit(link.ImmediateCaller()),
+			caller:      currentCaller(),
 			under:       newUnderlyingLayer(wrapped),
 		})
 	}
 }
 
 // Context is the per-invocation context handed to a command handler. The
-// arguments, standard input and principal arrive in the argument struct; the
-// context says which command is running.
+// arguments and standard input arrive in the argument struct; the context says
+// which command is running and who called it.
 type Context struct {
-	tool string
-	path []string
+	tool   string
+	path   []string
+	caller func() golem.Caller
+}
+
+// Caller says who caused the running invocation. The host is asked on the first
+// call, and the answer is kept for the rest of the invocation.
+func (c *Context) Caller() golem.Caller {
+	if c.caller == nil {
+		return golem.AnonymousCaller()
+	}
+	return c.caller()
 }
 
 // Tool returns the name of the tool being invoked.

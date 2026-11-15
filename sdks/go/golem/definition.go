@@ -47,8 +47,9 @@ type definitions struct {
 }
 
 func newDefinitions() *definitions {
-	e := engine.New(principalType, sdkComposites...)
+	e := engine.New(isLiveValueType, misplacedCaller, sdkComposites...)
 	e.PinTypeID(reflect.TypeFor[ProcessExitStatus](), processExitStatusID)
+	e.PinTypeID(reflect.TypeFor[PrincipalRef](), principalRefTypeID)
 	return &definitions{
 		Engine:    e,
 		agents:    map[string]*agentEntry{},
@@ -75,8 +76,7 @@ func init() {
 	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
 	link.AgentError = agentErrorToGo
 	link.TrapPanic = trapRegionPanic
-	link.Principal = func(p common.Principal) any { return principalFromWit(p) }
-	link.ImmediateCaller = func() common.Principal { return immediateCaller() }
+	link.Caller = func() any { return lazyCaller() }
 	link.LocalAgentTypes = func() ([]common.AgentType, error) {
 		found, errs := defs.discover()
 		if len(errs) > 0 {

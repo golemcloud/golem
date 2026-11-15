@@ -59,10 +59,9 @@ var (
 	TypedValue func(types.TypedSchemaValue) any
 	// TypedValueWit unwraps a golem.TypedValue.
 	TypedValueWit func(any) types.TypedSchemaValue
-	// Principal converts a host principal into a golem.Principal.
-	Principal func(common.Principal) any
-	// ImmediateCaller reads the principal that made the running invocation.
-	ImmediateCaller func() common.Principal
+	// Caller returns a function that reads the caller of the running invocation
+	// as a golem.Caller on its first call: a func() golem.Caller, as any.
+	Caller func() any
 	// AgentError converts a host agent-error into a *golem.AgentError.
 	AgentError func(common.AgentError) error
 	// RemoteCallError converts a host rpc-error into a *golem.RemoteCallError.

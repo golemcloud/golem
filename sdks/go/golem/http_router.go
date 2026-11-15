@@ -130,10 +130,9 @@ const (
 )
 
 // routerHandleIn is the handler method's input: the host requires exactly one
-// user-supplied parameter, named "request"; the principal is filled by the host.
+// user-supplied parameter, named "request"; the caller reaches the handler through its context.
 type routerHandleIn struct {
-	Request   HTTPRequest
-	Principal Principal
+	Request HTTPRequest
 }
 
 // routerID and routerState fill the type parameters an agent method needs; a
@@ -162,7 +161,7 @@ func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg]
 		snapshot:  SnapshotDisabled,
 		idType:    reflect.TypeFor[routerID](),
 		methods:   map[string]*methodEntry{},
-		newState:  func(reflect.Value, Principal) any { return &routerState{} },
+		newState:  func(reflect.Value, func() Caller) any { return &routerState{} },
 		zeroState: func() any { return &routerState{} },
 		router:    &routerEntry{staticFiles: spec.StaticFiles, fileHeaders: spec.FileResponseHeaders},
 	}
@@ -221,8 +220,8 @@ func (r *HTTPRouter[Cfg]) HandleRaw(h func(ctx context.Context, req HTTPRequest)
 	}
 	m := MethodDef[routerID, routerHandleIn, HTTPResponse]{name: routerHandleMethod, desc: "Handles an HTTP request"}
 	bindMethodInto[routerID, routerState, routerHandleIn, HTTPResponse](r.d, e, m,
-		func(_ *Context[routerState], in routerHandleIn) HTTPResponse {
-			return h(r.scope(in.Principal), in.Request)
+		func(c *Context[routerState], in routerHandleIn) HTTPResponse {
+			return h(r.scope(c.caller), in.Request)
 		})
 	return Registered{}
 }
@@ -253,26 +252,26 @@ func (r *HTTPRouter[Cfg]) OpenAPI(provide func(ctx context.Context) string) Regi
 }
 
 // routerScopeKey keys the router a context belongs to, and
-// routerPrincipalKey the principal of the request it serves.
+// routerCallerKey the caller of the request it serves.
 type (
-	routerScopeKey     struct{}
-	routerPrincipalKey struct{}
+	routerScopeKey  struct{}
+	routerCallerKey struct{}
 )
 
-func (r *HTTPRouter[Cfg]) scope(principal Principal) context.Context {
+func (r *HTTPRouter[Cfg]) scope(caller func() Caller) context.Context {
 	ctx := context.WithValue(context.Background(), routerScopeKey{}, r.name)
-	return context.WithValue(ctx, routerPrincipalKey{}, principal)
+	return context.WithValue(ctx, routerCallerKey{}, caller)
 }
 
-// Principal returns the principal of the request ctx belongs to — r.Context()
-// in a [net/http.Handler], or the ctx passed to a raw handler. Behind a mount
-// with Auth it is the authenticated user; otherwise it is an
+// Caller returns who caused the request ctx belongs to — r.Context() in a
+// [net/http.Handler], or the ctx passed to a raw handler. Behind a mount with
+// Auth the original principal is the authenticated user; otherwise it is an
 // [AnonymousPrincipal]. The OpenAPI provider serves no request, so there it is
-// nil.
-func (r *HTTPRouter[Cfg]) Principal(ctx context.Context) Principal {
-	checkRouterScope(ctx, r.name, "Principal")
-	p, _ := ctx.Value(routerPrincipalKey{}).(Principal)
-	return p
+// an anonymous caller. The host is asked on the first call.
+func (r *HTTPRouter[Cfg]) Caller(ctx context.Context) Caller {
+	checkRouterScope(ctx, r.name, "Caller")
+	read, _ := ctx.Value(routerCallerKey{}).(func() Caller)
+	return callerOf(read)
 }
 
 // Config returns the router's config. ctx must be the context of one of this

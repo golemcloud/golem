@@ -33,7 +33,7 @@ type methodEntry struct {
 	outType   reflect.Type    // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
-	invoke func(inst *instance, principal Principal, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
+	invoke func(inst *instance, caller func() Caller, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
 }
 
 type agentEntry struct {
@@ -50,12 +50,12 @@ type agentEntry struct {
 	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
 	idFields []engine.Field
-	newState func(idVal reflect.Value, principal Principal) any
+	newState func(idVal reflect.Value, caller func() Caller) any
 	// zeroState returns a fresh zero state for a snapshot restore to load into:
 	// a restore does not run the constructor.
 	zeroState func() any
 	// restore is the optional [AgentImpl.OnRestore] hook, run after the load.
-	restore func(state any, idVal reflect.Value, principal Principal) error
+	restore func(state any, idVal reflect.Value, caller func() Caller) error
 	methods map[string]*methodEntry
 	order   []string
 	// router is set when the entry is an HTTP router rather than an ordinary
@@ -71,8 +71,6 @@ type agentEntry struct {
 type instance struct {
 	def   *agentEntry
 	state any
-	// principal is the one the agent was initialized with.
-	principal Principal
 	// config is the agent's materialized config (its Cfg value), cached for the
 	// worker's life on first read. Its local fields are read from the host once;
 	// its secret fields are lazy handles that re-read on Secret.Get(). nil until
@@ -259,21 +257,21 @@ func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
 // calling it inside func init().
 type Registered struct{}
 
-func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, Principal) any {
+func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, func() Caller) any {
 	if init == nil {
 		return nil
 	}
-	return func(idVal reflect.Value, _ Principal) any { return init(idVal.Interface().(Id)) }
+	return func(idVal reflect.Value, _ func() Caller) any { return init(idVal.Interface().(Id)) }
 }
 
-func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, Principal) any {
+func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, func() Caller) any {
 	if init == nil {
 		return nil
 	}
 	// No host call here: the constructor reads config lazily via ctx.Config(),
 	// keeping get-config-value out of this always-linked path.
-	return func(idVal reflect.Value, principal Principal) any {
-		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), principal: principal})
+	return func(idVal reflect.Value, caller func() Caller) any {
+		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), caller: caller})
 	}
 }
 
@@ -283,7 +281,7 @@ func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cf
 func implementInto[Id any, S any, Cfg any](
 	d *definitions,
 	def *AgentDefinition[Id, Cfg],
-	newState func(reflect.Value, Principal) any,
+	newState func(reflect.Value, func() Caller) any,
 	initNil bool,
 ) *AgentImpl[Id, S, Cfg] {
 	e := d.agents[def.name]
@@ -316,7 +314,7 @@ func implementInto[Id any, S any, Cfg any](
 // from its zero value, the snapshot is loaded into it ([Snapshotter.Load], or
 // the JSON of its exported fields), and then fn runs. Use it to rebuild what the
 // snapshot does not carry — clients, caches, unexported fields the constructor
-// sets up. ic carries the id, the principal and the config, as in the
+// sets up. ic carries the id, the caller and the config, as in the
 // constructor. An error fails the restore.
 func (i *AgentImpl[Id, S, Cfg]) OnRestore(fn func(ic *InitContext[Id, S, Cfg], state *S) error) Registered {
 	if i == nil || i.e == nil {
@@ -328,8 +326,8 @@ func (i *AgentImpl[Id, S, Cfg]) OnRestore(fn func(ic *InitContext[Id, S, Cfg], s
 	case i.e.restore != nil:
 		i.d.RecordErr(i.e.name, "", "OnRestore already registered")
 	default:
-		i.e.restore = func(state any, idVal reflect.Value, principal Principal) error {
-			ic := &InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), principal: principal}
+		i.e.restore = func(state any, idVal reflect.Value, caller func() Caller) error {
+			ic := &InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), caller: caller}
 			return fn(ic, state.(*S))
 		}
 	}
@@ -390,7 +388,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		me.outType = outType
 	}
 
-	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
+	me.invoke = func(inst *instance, caller func() Caller, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
 		// A panic traps the component, as in Rust: the executor fails the
 		// agent. The stage attributes it, so an SDK bug is not reported as if it were the agent's
 		// fault.
@@ -402,12 +400,12 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		}()
 
 		inVal := reflect.New(inType).Elem()
-		if derr := decodeParams(tree, me.inFields, inVal, principal); derr != nil {
+		if derr := decodeParams(tree, me.inFields, inVal); derr != nil {
 			return nil, &decodeError{derr.Error()}
 		}
 
 		stage = stageHandler
-		ctx := &Context[S]{State: inst.state.(*S), principal: inst.principal}
+		ctx := &Context[S]{State: inst.state.(*S), caller: caller}
 		result := h(ctx, inVal.Interface().(In))
 		if me.outCodec == nil {
 			return nil, nil

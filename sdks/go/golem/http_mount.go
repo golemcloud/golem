@@ -391,9 +391,8 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		return mount, endpoints, errs
 	}
 
-	idNames := fieldNameSet(userFields(e.idFields))
-	idPrincipals := fieldNameSet(principalFields(e.idFields))
-	selector, serrs := compilePhantomSelector(e, mp, idNames, idPrincipals)
+	idNames := fieldNameSet(e.idFields)
+	selector, serrs := compilePhantomSelector(e, mp, idNames)
 	for _, se := range serrs {
 		rec("", "%s", se)
 	}
@@ -412,14 +411,12 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		}
 		if s.kind == varSeg {
 			mountVars[s.value] = true
-			if idPrincipals[s.value] {
-				rec("", "HTTP mount path variable {%s} names the principal, which the host fills; it cannot be bound", s.value)
-			} else if !idNames[s.value] {
+			if !idNames[s.value] {
 				rec("", "HTTP mount path variable {%s} is not a constructor (Id) field", s.value)
 			}
 		}
 	}
-	for _, f := range userFields(e.idFields) {
+	for _, f := range e.idFields {
 		if !mountVars[f.Name] {
 			rec("", "HTTP mount path does not bind Id field %q; every constructor field must appear as a {var}", f.Name)
 		}
@@ -470,11 +467,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	endpoints := map[string][]common.HttpEndpointDetails{}
 	for _, name := range e.order {
 		m := e.methods[name]
-		inNames := fieldNameSet(userFields(m.inFields))
-		inKind := fieldKindMap(userFields(m.inFields))
-		principals := fieldNameSet(principalFields(m.inFields))
+		inNames := fieldNameSet(m.inFields)
+		inKind := fieldKindMap(m.inFields)
 		for _, ep := range m.endpoints {
-			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, principals, mountVars, methodStreamSlots(m.inFields, m.outType))
+			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, mountVars, methodStreamSlots(m.inFields, m.outType))
 			for _, ee := range eerrs {
 				rec(name, "%s", ee)
 			}
@@ -490,7 +486,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 
 // compilePhantomSelector checks the mount's phantom selector against the
 // agent's mode, file exposure and Id fields, and compiles it to WIT.
-func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames, idPrincipals map[string]bool) (witTypes.Option[common.PhantomIdBinding], []string) {
+func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames map[string]bool) (witTypes.Option[common.PhantomIdBinding], []string) {
 	sel := e.mount.PhantomID
 	if !sel.declared() {
 		return witTypes.None[common.PhantomIdBinding](), nil
@@ -515,7 +511,7 @@ func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames, idPrincipals 
 			captures++
 		}
 	}
-	if idNames[sel.name] || idPrincipals[sel.name] || captures != 1 {
+	if idNames[sel.name] || captures != 1 {
 		errs = append(errs, fmt.Sprintf("phantom path selector {%s} must name exactly one mount capture, not a constructor (Id) field", sel.name))
 	}
 	return witTypes.Some(common.MakePhantomIdBindingPath(details)), errs
@@ -547,7 +543,7 @@ func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails
 	return ""
 }
 
-func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, principals map[string]bool, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
+func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
 	var errs []string
 	if ep.authCount > 1 {
 		errs = append(errs, fmt.Sprintf("%s %q: EndpointAuth set %d times (an endpoint has one auth setting)", ep.method, ep.path, ep.authCount))
@@ -559,10 +555,6 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 
 	bound := map[string]int{}
 	bind := func(field, where string) {
-		if principals[field] {
-			errs = append(errs, fmt.Sprintf("%s variable {%s} names the principal, which the host fills; it cannot be bound", where, field))
-			return
-		}
 		if !inNames[field] && !mountVars[field] {
 			errs = append(errs, fmt.Sprintf("%s variable {%s} is not an input field of the method (nor a mount variable)", where, field))
 			return
@@ -764,16 +756,6 @@ func verbName(m common.HttpMethod) string {
 	default:
 		return m.Custom()
 	}
-}
-
-// userFields are the fields a caller supplies; principalFields are the ones
-// the host fills.
-func userFields(fs []engine.Field) []engine.Field {
-	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return f.AutoInjected })
-}
-
-func principalFields(fs []engine.Field) []engine.Field {
-	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return !f.AutoInjected })
 }
 
 func fieldNameSet(fs []engine.Field) map[string]bool {

@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
@@ -111,23 +110,23 @@ func toAgentError(err error) common.AgentError {
 // initializeAgent builds the worker's single agent instance from its type name
 // and constructor parameters, running the constructor. It backs the host's
 // `initialize` call for a new agent.
-func initializeAgent(agentType string, input types.SchemaValueTree, principal Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
-	inst, idVal, res := beginAgent(agentType, input, principal)
+func initializeAgent(agentType string, input types.SchemaValueTree, caller func() Caller) witTypes.Result[witTypes.Unit, common.AgentError] {
+	inst, idVal, res := beginAgent(agentType, input)
 	if inst == nil {
 		return res
 	}
-	inst.state = inst.def.newState(idVal, principal)
+	inst.state = inst.def.newState(idVal, caller)
 	return res
 }
 
 // restoreAgent brings the agent back on a fresh instance from a snapshot. It
 // does not run the constructor: see [restoreState].
-func restoreAgent(agentType string, input types.SchemaValueTree, principal Principal, snap savedState) error {
-	inst, idVal, res := beginAgent(agentType, input, principal)
+func restoreAgent(agentType string, input types.SchemaValueTree, caller func() Caller, snap savedState) error {
+	inst, idVal, res := beginAgent(agentType, input)
 	if inst == nil {
 		return agentErrorToGo(res.Err())
 	}
-	state, err := restoreState(inst.def, idVal, principal, snap)
+	state, err := restoreState(inst.def, idVal, caller, snap)
 	if err != nil {
 		active = nil
 		return err
@@ -144,7 +143,7 @@ func restoreAgent(agentType string, input types.SchemaValueTree, principal Princ
 //
 // The constructor input's cards are this component's: the ones the decode did
 // not take go back to the host however the call ends.
-func beginAgent(agentType string, input types.SchemaValueTree, principal Principal) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
+func beginAgent(agentType string, input types.SchemaValueTree) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
 	defer engine.ReleaseCardsIn(input.ValueNodes, releaseCard)
 	fail := func(e common.AgentError) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
 		return nil, reflect.Value{}, witTypes.Err[witTypes.Unit](e)
@@ -165,17 +164,17 @@ func beginAgent(agentType string, input types.SchemaValueTree, principal Princip
 		return fail(customError("agent already initialized"))
 	}
 	idVal := reflect.New(e.idType).Elem()
-	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
+	if err := decodeParams(input, e.idFields, idVal); err != nil {
 		return fail(common.MakeAgentErrorInvalidInput(err.Error()))
 	}
-	inst := &instance{def: e, principal: principal}
+	inst := &instance{def: e}
 	active = inst
 	return inst, idVal, witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
 
 func init() {
 	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError] {
-		return initializeAgent(agentType, input, principalFromWit(immediateCaller()))
+		return initializeAgent(agentType, input, lazyCaller())
 	}
 
 	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
@@ -192,13 +191,9 @@ func init() {
 		if m == nil {
 			return fail(common.MakeAgentErrorInvalidMethod("unknown method: " + methodName))
 		}
-		// The caller is read only for a method that injects it: the read allocates, and an
+		// The caller is read only when the handler asks for it: the read allocates, and an
 		// allocation can start a garbage collection whose clock reads the oplog records.
-		var principal Principal
-		if slices.ContainsFunc(m.inFields, func(f engine.Field) bool { return f.AutoInjected }) {
-			principal = principalFromWit(immediateCaller())
-		}
-		out, err := m.invoke(active, principal, input)
+		out, err := m.invoke(active, lazyCaller(), input)
 		if err != nil {
 			return fail(toAgentError(err))
 		}
@@ -244,7 +239,7 @@ func init() {
 		if active == nil {
 			panic(fmt.Errorf("golem: save-snapshot before initialize"))
 		}
-		snap, err := saveState(active.state, active.principal)
+		snap, err := saveState(active.state)
 		if err != nil {
 			panic(fmt.Errorf("golem: snapshot save failed: %w", err))
 		}
@@ -268,11 +263,11 @@ func init() {
 		if err != nil {
 			return witTypes.Err[witTypes.Unit]("parsing " + agentIDEnvVar + ": " + err.Error())
 		}
-		principal, state, err := splitSnapshot(snap)
+		state, err := splitSnapshot(snap)
 		if err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
-		if err := restoreAgent(agentType, ctorParams, principal, state); err != nil {
+		if err := restoreAgent(agentType, ctorParams, lazyCaller(), state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})

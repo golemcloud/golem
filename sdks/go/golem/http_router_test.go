@@ -86,11 +86,9 @@ func TestARouterPublishesTheRouterKind(t *testing.T) {
 		t.Fatalf("handler endpoint = %+v", handle.HttpEndpoint)
 	}
 	params := handle.InputSchema.Parameters()
-	// The host accepts exactly one user-supplied parameter, request; the
-	// principal rides beside it, filled by the host.
-	if len(params) != 2 || params[0].Name != "request" || params[0].Source.Tag() != common.FieldSourceUserSupplied ||
-		params[1].Name != "principal" || params[1].Source.Tag() != common.FieldSourceAutoInjected {
-		t.Fatalf("the handler takes request plus the host-filled principal, got %+v", params)
+	// The host accepts exactly one user-supplied parameter, request.
+	if len(params) != 1 || params[0].Name != "request" || params[0].Source.Tag() != common.FieldSourceUserSupplied {
+		t.Fatalf("the handler takes only request, got %+v", params)
 	}
 	if provider := methods[routerOpenAPIMethod]; len(provider.HttpEndpoint) != 0 || len(provider.InputSchema.Parameters()) != 0 {
 		t.Fatalf("the OpenAPI provider takes nothing and has no route: %+v", provider)

@@ -2038,10 +2038,6 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant185 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-				case 1:
-
-					variant185 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 				default:
 					panic("unreachable")
 				}
@@ -2129,7 +2125,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 		}
 		result251 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (23 * 4))))), index*(40+12*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (23 * 4))))), index*(32+12*4))
 			value199 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			value200 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			result230 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -2383,10 +2379,6 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 						variant234 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant234 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -2509,7 +2501,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 					panic("unreachable")
 				}
 
-				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249})
 			default:
 				panic("unreachable")
 			}
@@ -4201,10 +4193,6 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 						variant441 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant441 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -4292,7 +4280,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 			}
 			result507 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(40+12*4))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(32+12*4))
 				value455 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 				value456 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 				result486 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -4546,10 +4534,6 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 							variant490 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-						case 1:
-
-							variant490 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 						default:
 							panic("unreachable")
 						}
@@ -4672,7 +4656,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 						panic("unreachable")
 					}
 
-					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505})
 				default:
 					panic("unreachable")
 				}
@@ -6638,10 +6622,6 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant185 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-				case 1:
-
-					variant185 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 				default:
 					panic("unreachable")
 				}
@@ -6729,7 +6709,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 		}
 		result251 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 24*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 24*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 23*4))))), index*(40+12*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 23*4))))), index*(32+12*4))
 			value199 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			value200 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			result230 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -6983,10 +6963,6 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 						variant234 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant234 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -7109,7 +7085,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 					panic("unreachable")
 				}
 
-				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249})
 			default:
 				panic("unreachable")
 			}
@@ -8801,10 +8777,6 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 						variant441 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant441 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -8892,7 +8864,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 			}
 			result507 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(40+12*4))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(32+12*4))
 				value455 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 				value456 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 				result486 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -9146,10 +9118,6 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 							variant490 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-						case 1:
-
-							variant490 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 						default:
 							panic("unreachable")
 						}
@@ -9272,7 +9240,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 						panic("unreachable")
 					}
 
-					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505})
 				default:
 					panic("unreachable")
 				}
@@ -11239,10 +11207,6 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant185 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-				case 1:
-
-					variant185 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 				default:
 					panic("unreachable")
 				}
@@ -11330,7 +11294,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 		}
 		result251 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 24*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 24*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 23*4))))), index*(40+12*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 23*4))))), index*(32+12*4))
 			value199 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			value200 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			result230 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -11584,10 +11548,6 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 						variant234 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant234 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -11710,7 +11670,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 					panic("unreachable")
 				}
 
-				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+				option250 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant249})
 			default:
 				panic("unreachable")
 			}
@@ -13402,10 +13362,6 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 						variant441 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-					case 1:
-
-						variant441 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 					default:
 						panic("unreachable")
 					}
@@ -13493,7 +13449,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 			}
 			result507 := make([]golem_agent_common.AgentMethod, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(40+12*4))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))))), index*(32+12*4))
 				value455 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 				value456 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 				result486 := make([]golem_agent_common.HttpEndpointDetails, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
@@ -13747,10 +13703,6 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 							variant490 = golem_agent_common.MakeFieldSourceUserSupplied()
 
-						case 1:
-
-							variant490 = golem_agent_common.MakeFieldSourceAutoInjected(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 2*4))))))
-
 						default:
 							panic("unreachable")
 						}
@@ -13873,7 +13825,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 						panic("unreachable")
 					}
 
-					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505, UsesPrincipal: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4)))) != 0)})
+					option506 = witTypes.Some[golem_agent_common.ReadOnlyConfig](golem_agent_common.ReadOnlyConfig{CachePolicy: variant505})
 				default:
 					panic("unreachable")
 				}

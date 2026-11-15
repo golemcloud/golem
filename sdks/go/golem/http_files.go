@@ -241,7 +241,7 @@ func validateFileOwner(e *agentEntry, mp parsedPath) []string {
 			errs = append(errs, fmt.Sprintf("ExposeFiles cannot be used with the catch-all mount variable {*%s}: unbound-constructor", s.value))
 		}
 	}
-	for _, f := range userFields(e.idFields) {
+	for _, f := range e.idFields {
 		if captured[f.Name] != 1 {
 			errs = append(errs, fmt.Sprintf("ExposeFiles needs Id field %q captured exactly once by the mount path: unbound-constructor", f.Name))
 			continue
