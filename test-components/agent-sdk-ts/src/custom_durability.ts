@@ -47,6 +47,14 @@ function durableCallback(port: number, payload: string): Promise<string> {
   return durableAsync(generator, { payload }, () => callback(port, payload));
 }
 
+// The body sleeps on a timer before its callback, so the timer's sleep belongs to the operation.
+function timedCallback(port: number, payload: string): Promise<string> {
+  return durableAsync(generator, { payload }, async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+    return await callback(port, payload);
+  });
+}
+
 export const CustomDurabilityTs = defineAgent({
   name: "CustomDurabilityTs",
   id: { name: z.string() },
@@ -64,6 +72,22 @@ export const CustomDurabilityTs = defineAgent({
       returns: z.array(z.string()),
     }),
     outsideScopeWhileWaiting: method({
+      input: { port: z.number() },
+      returns: z.array(z.string()),
+    }),
+    unawaitedChild: method({
+      input: { port: z.number() },
+      returns: z.string(),
+    }),
+    failingBody: method({
+      input: { port: z.number() },
+      returns: z.string(),
+    }),
+    escapedWork: method({
+      input: { port: z.number() },
+      returns: z.array(z.string()),
+    }),
+    concurrentFirstFinishes: method({
       input: { port: z.number() },
       returns: z.array(z.string()),
     }),
@@ -96,6 +120,53 @@ export const CustomDurabilityTsImpl = CustomDurabilityTs.implement({
       const scoped = durableCallback(port, "scoped");
       const outside = await callback(port, "outside");
       return [await scoped, outside];
+    },
+
+    async unawaitedChild({ port }) {
+      return await durableAsync(generatorParent, {}, async () => {
+        void durableCallback(port, "detached-child");
+        return "parent";
+      });
+    },
+
+    async failingBody({ port }) {
+      try {
+        await durableAsync(generator, { payload: "failing" }, async () => {
+          await callback(port, "failing");
+          throw new Error("body failed");
+        });
+        return "finished";
+      } catch (error) {
+        await callback(port, "after-failure");
+        return (error as Error).message;
+      }
+    },
+
+    async escapedWork({ port }) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let escaped!: Promise<string>;
+      const scoped = await durableAsync(
+        generator,
+        { payload: "escape-scoped" },
+        async () => {
+          escaped = gate.then(() => callback(port, "escaped"));
+          return await callback(port, "escape-scoped");
+        },
+      );
+      release();
+      return [scoped, await escaped];
+    },
+
+    async concurrentFirstFinishes({ port }) {
+      return await Promise.all([
+        (async () => {
+          const first = await timedCallback(port, "first");
+          await (await fetch(`http://localhost:${port}/release`)).text();
+          return first;
+        })(),
+        durableCallback(port, "second"),
+      ]);
     },
   },
 });

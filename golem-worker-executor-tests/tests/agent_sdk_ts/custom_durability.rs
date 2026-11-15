@@ -29,8 +29,9 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -44,6 +45,7 @@ inherit_test_dep!(
 const GENERATOR: &str = "golem-it::test-generator";
 const GENERATOR_PARENT: &str = "golem-it::test-generator-parent";
 const HTTP_SEND: &str = "http::client::send";
+const WAIT_FOR: &str = "clocks::monotonic-clock::wait-for";
 
 /// Records each callback in arrival order and answers `<counter>-<payload>`, where the counter is
 /// taken when the response is produced. `slow` answers only after `fast` has answered, and
@@ -99,14 +101,10 @@ async fn start_callback_server() -> (u16, Arc<Mutex<Vec<String>>>) {
     (port, history)
 }
 
-/// The oplog entries of the single agent invocation of `method_name`, from its
-/// `AgentInvocationStarted` (whose index is the invocation anchor) up to its
-/// `AgentInvocationFinished`.
-fn invocation_entries<'a>(
-    oplog: &'a [PublicOplogEntryWithIndex],
-    method_name: &str,
-) -> (OplogIndex, &'a [PublicOplogEntryWithIndex]) {
-    let start = oplog
+/// The position of the `AgentInvocationStarted` of `method_name`. Its index is the anchor of the
+/// invocation's custom Starts.
+fn invocation_start(oplog: &[PublicOplogEntryWithIndex], method_name: &str) -> usize {
+    oplog
         .iter()
         .position(|entry| {
             matches!(
@@ -119,7 +117,17 @@ fn invocation_entries<'a>(
                     )
             )
         })
-        .unwrap_or_else(|| panic!("no invocation of {method_name}"));
+        .unwrap_or_else(|| panic!("no invocation of {method_name}"))
+}
+
+/// The oplog entries of the single agent invocation of `method_name`, from its
+/// `AgentInvocationStarted` (whose index is the invocation anchor) up to its
+/// `AgentInvocationFinished`.
+fn invocation_entries<'a>(
+    oplog: &'a [PublicOplogEntryWithIndex],
+    method_name: &str,
+) -> (OplogIndex, &'a [PublicOplogEntryWithIndex]) {
+    let start = invocation_start(oplog, method_name);
     let end = oplog[start..]
         .iter()
         .position(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
@@ -184,6 +192,36 @@ fn http_send_owners(entries: &[PublicOplogEntryWithIndex]) -> Vec<Option<OplogIn
 
 fn owned_sends(owners: &[Option<OplogIndex>], owner: OplogIndex) -> usize {
     owners.iter().filter(|o| **o == Some(owner)).count()
+}
+
+/// The indices of the Starts of `function_name` whose observational owner is `owner`.
+fn starts_owned_by(
+    entries: &[PublicOplogEntryWithIndex],
+    function_name: &str,
+    owner: Option<OplogIndex>,
+) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == function_name && params.observational_owner == owner =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The indices of the Ends of the Start at `start`.
+fn ends_of(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == start => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -332,5 +370,305 @@ async fn ts_custom_durability_scopes_stay_apart_under_concurrency(
         "replay must not repeat completed effects"
     );
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_custom_durability_parents_wait_and_escaped_work_leaves_the_scope(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let (port, _history) = start_callback_server().await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurabilityTs", "lifecycle");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let parent = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "unawaitedChild",
+            data_value!(port as f64),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(parent, "parent");
+    let failure = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "failingBody",
+            data_value!(port as f64),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(failure, "body failed");
+    let escaped = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "escapedWork",
+            data_value!(port as f64),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(escaped.len(), 2);
+    assert!(escaped[0].ends_with("-escape-scoped"), "{escaped:?}");
+    assert!(escaped[1].ends_with("-escaped"), "{escaped:?}");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    // The parent does not await its child, and still finishes only after it.
+    let (anchor, entries) = invocation_entries(&oplog, "unawaitedChild");
+    let starts = custom_starts(entries, anchor);
+    let names: Vec<_> = starts.iter().map(|s| s.function_name.as_str()).collect();
+    assert_eq!(names, vec![GENERATOR_PARENT, GENERATOR]);
+    let (parent, child) = (&starts[0], &starts[1]);
+    assert_eq!(parent.parent, None);
+    assert_eq!(
+        child.parent,
+        Some(parent.index),
+        "the unawaited child nests"
+    );
+    let parent_end = ends_of(entries, parent.index);
+    let child_end = ends_of(entries, child.index);
+    assert_eq!(parent_end.len(), 1);
+    assert_eq!(child_end.len(), 1);
+    assert!(
+        child_end[0] < parent_end[0],
+        "the parent finishes after its child"
+    );
+    let owners = http_send_owners(entries);
+    assert_eq!(owned_sends(&owners, child.index), 1);
+    assert_eq!(owned_sends(&owners, parent.index), 0);
+
+    // A failing body leaves its operation unfinished; later work is back at the root.
+    let (anchor, entries) = invocation_entries(&oplog, "failingBody");
+    let starts = custom_starts(entries, anchor);
+    assert_eq!(starts.len(), 1);
+    assert_eq!(ends_of(entries, starts[0].index), Vec::<OplogIndex>::new());
+    let owners = http_send_owners(entries);
+    assert_eq!(owners.len(), 2);
+    assert_eq!(owned_sends(&owners, starts[0].index), 1);
+    assert_eq!(owners.iter().filter(|owner| owner.is_none()).count(), 1);
+
+    // A reaction that the body registered and that runs after the operation finished runs in the
+    // nearest open scope, the root.
+    let (anchor, entries) = invocation_entries(&oplog, "escapedWork");
+    let starts = custom_starts(entries, anchor);
+    assert_eq!(starts.len(), 1);
+    let end = ends_of(entries, starts[0].index);
+    assert_eq!(end.len(), 1);
+    assert_eq!(
+        starts_owned_by(entries, HTTP_SEND, Some(starts[0].index)).len(),
+        1
+    );
+    let root_sends = starts_owned_by(entries, HTTP_SEND, None);
+    assert_eq!(
+        root_sends.len(),
+        1,
+        "the escaped call is an ordinary host call"
+    );
+    assert!(
+        root_sends[0] > end[0],
+        "the escaped call runs after the End"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let history = Arc::new(Mutex::new(Vec::<String>::new()));
+    let second_arrived = Arc::new(Notify::new());
+    let checkpoint = Arc::new(Notify::new());
+    let resume = Arc::new(Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    #[derive(Deserialize)]
+    struct Params {
+        payload: String,
+    }
+    let route_history = history.clone();
+    let callback_resume = resume.clone();
+    let release_resume = resume.clone();
+    let route_checkpoint = checkpoint.clone();
+    let route = Router::new()
+        .route(
+            "/callback",
+            any(move |Query(params): Query<Params>| {
+                let history = route_history.clone();
+                let arrived = second_arrived.clone();
+                let resume = callback_resume.clone();
+                async move {
+                    history.lock().unwrap().push(params.payload.clone());
+                    match params.payload.as_str() {
+                        "first" => arrived.notified().await,
+                        "second" => {
+                            arrived.notify_one();
+                            let _ = resume.acquire().await;
+                        }
+                        _ => {}
+                    }
+                    params.payload
+                }
+            }),
+        )
+        .route(
+            "/release",
+            any(move || {
+                let checkpoint = route_checkpoint.clone();
+                let resume = release_resume.clone();
+                async move {
+                    // The guest sends this only after the first operation finished.
+                    checkpoint.notify_one();
+                    let _ = resume.acquire().await;
+                    "released"
+                }
+            }),
+        );
+    let server =
+        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurabilityTs", "partial-recovery");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "concurrentFirstFinishes",
+                    data_value!(port as f64),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
+    executor.commit_oplog(&worker_id).await?;
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let start = invocation_start(&before, "concurrentFirstFinishes");
+    let anchor = before[start].oplog_index;
+    let entries = &before[start..];
+    let siblings: Vec<_> = custom_starts(entries, anchor)
+        .into_iter()
+        .map(|start| {
+            assert_eq!(start.function_name, GENERATOR);
+            assert_eq!(start.parent, None);
+            (start.index, start.ordinal)
+        })
+        .collect();
+    assert_eq!(siblings.len(), 2);
+    assert_eq!((siblings[0].1, siblings[1].1), (0, 1));
+    let (first, second) = (siblings[0].0, siblings[1].0);
+    assert_eq!(
+        ends_of(entries, first).len(),
+        1,
+        "the first sibling completed"
+    );
+    assert_eq!(
+        ends_of(entries, second).len(),
+        0,
+        "the second is incomplete"
+    );
+    // The timer of the completed body sleeps in its scope, so replay skips it with the body.
+    let first_waits = starts_owned_by(entries, WAIT_FOR, Some(first));
+    assert!(
+        !first_waits.is_empty(),
+        "the timer sleep belongs to its operation"
+    );
+    assert_eq!(
+        starts_owned_by(entries, WAIT_FOR, None),
+        Vec::<OplogIndex>::new(),
+        "no timer sleep is a root call"
+    );
+    let release = starts_owned_by(entries, HTTP_SEND, None);
+    assert_eq!(
+        release.len(),
+        1,
+        "the release request is the only root send"
+    );
+    assert_eq!(ends_of(entries, release[0]).len(), 0);
+
+    executor.simulated_crash(&worker_id).await?;
+    // Closing the gate also releases requests from the discarded Store, if still connected.
+    resume.close();
+    assert_eq!(
+        invocation.await??.into_typed::<Vec<String>>()?,
+        vec!["first", "second"]
+    );
+    let effects = history.lock().unwrap().clone();
+    assert_eq!(effects.iter().filter(|p| *p == "first").count(), 1);
+    assert_eq!(effects.iter().filter(|p| *p == "second").count(), 2);
+
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let entries = &recovered[start..];
+    let recovered_siblings: Vec<_> = custom_starts(entries, anchor)
+        .into_iter()
+        .map(|start| (start.index, start.ordinal))
+        .collect();
+    assert_eq!(
+        recovered_siblings, siblings,
+        "recovery keeps both logical identities"
+    );
+    for sibling in [first, second] {
+        assert_eq!(ends_of(entries, sibling).len(), 1);
+        assert!(!starts_owned_by(entries, HTTP_SEND, Some(sibling)).is_empty());
+    }
+    assert_eq!(
+        starts_owned_by(entries, WAIT_FOR, Some(first)),
+        first_waits,
+        "completed replay records no new sleep"
+    );
+    assert_eq!(
+        starts_owned_by(entries, WAIT_FOR, None),
+        Vec::<OplogIndex>::new()
+    );
+    assert_eq!(
+        starts_owned_by(entries, HTTP_SEND, None),
+        release,
+        "the release request completes under its original Start"
+    );
+    assert_eq!(ends_of(entries, release[0]).len(), 1);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !matches!(&entry.entry, PublicOplogEntry::Jump(_))),
+        "recovery must not roll back sibling history"
+    );
+    server.abort();
     Ok(())
 }
