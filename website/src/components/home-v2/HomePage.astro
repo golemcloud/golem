@@ -3,6 +3,7 @@ import { Image } from "astro:assets";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Details from "../../components/home-v2/Details.astro";
 import Visual from "../../components/home-v2/Visual.astro";
+import HeroVMs from "./HeroVMs.astro";
 import Icon from "../../components/home-v2/Icon.astro";
 import UseCase from "../../components/home-v2/UseCase.astro";
 import HeadingLines from "../../components/home-v2/HeadingLines.astro";
@@ -81,23 +82,26 @@ const capabilityIds = ["budget", "journal", "coordinate", "operate"];
         <div class="g2-wrap">
           <div class="hero-grid">
             <div class="hero-copy">
-              <div class="eyebrow">
-                <span class="tiny-mark" aria-hidden="true">◇</span>{t(1, "Eyebrow")}
+              <div class="hero-runtime">
+                <span class="hero-runtime-kind">{t(1, "Eyebrow")}</span>
+                <span class="hero-hosts">
+                  {
+                    t(1, "Deployment choices")
+                      .split(" · ")
+                      .map((choice) => <span>{choice}</span>)
+                  }
+                </span>
               </div><h1>{t(1, "Heading")}</h1><p class="hero-intro">{t(1, "Introduction")}</p><p
                 class="hero-foundation"
               >
                 {t(1, "Execution foundation")}
-              </p><p class="hero-support">
-                {t(1, "Supporting line")}
               </p><div class="actions">
                 <a class="g2-button" href="#start">{lines(t(1, "Actions"))[0]}</a><TextLink
                   href="#platform"
                   label={lines(t(1, "Actions"))[1]}
                 />
-              </div><p class="hero-deployment">{t(1, "Deployment choices")}</p><Details
-                section={1}
-              />
-            </div><Visual kind="hero" />
+              </div>
+            </div><HeroVMs />
           </div><div class="proof-strip">
             <p>{paragraphs(t(1, "Proof strip"))[0]}</p><div>
               {

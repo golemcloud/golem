@@ -6,7 +6,7 @@ Draft 2 · Default-visible reading. [Full content, optional details and visual d
 
 **Eyebrow**
 
-Open source application runtime
+Open source app runtime
 
 **Heading**
 
@@ -18,11 +18,7 @@ Build agents, tools and complete apps—with zero infrastructure to assemble per
 
 **Execution foundation**
 
-Your whole VM is durable: memory, stack and files. Golem enforces permissions your code cannot bypass. Waiting uses zero CPU and memory; resume where you left off.
-
-**Supporting line**
-
-Build with your coding agent. Or run a coding agent inside Golem to build and deploy more apps.
+Golem runs your code in lightweight, durable VMs with persistent memory, call stacks and filesystems. The runtime enforces permissions your code cannot bypass. Waiting VMs suspend to zero CPU and RAM.
 
 **Deployment choices**
 
@@ -30,7 +26,7 @@ Local · Self-hosted · Golem Cloud
 
 **Actions**
 
-- Build with your agent →
+- Start building →
 - Explore the platform ↓
 
 **Proof strip**
