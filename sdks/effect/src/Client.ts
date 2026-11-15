@@ -27,9 +27,8 @@ import {
 } from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
-  compileCallerParamBindings,
+  compileParamBindings,
   compileMethodSpec,
-  type CallerInput,
   type CompiledInputCodec,
   type MethodCodec,
   type MethodInput,
@@ -78,7 +77,7 @@ export interface RemoteMethod<
   S extends MethodSuccess,
   E extends Schema.Top,
 > {
-  (input: CallerInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  (input: MethodInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
   /**
    * The awaited call with `card` attached as its scope card. The card is borrowed for the call
    * and stays usable; it replaces the client's default scope card. A released card fails the
@@ -86,11 +85,11 @@ export interface RemoteMethod<
    */
   readonly withScopeCard: (
     card: GuestScopeCard,
-  ) => (input: CallerInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: CallerInput<P>) => Effect.Effect<void, RemoteCallError>
+  ) => (input: MethodInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  readonly trigger: (input: MethodInput<P>) => Effect.Effect<void, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<
     ScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -103,7 +102,7 @@ export interface EphemeralRemoteMethod<
   E extends Schema.Top,
 > {
   (
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ): Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
   /**
    * The awaited call with `card` attached as its scope card. The card is borrowed for the call
@@ -113,12 +112,12 @@ export interface EphemeralRemoteMethod<
   readonly withScopeCard: (
     card: GuestScopeCard,
   ) => (
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: CallerInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
+  readonly trigger: (input: MethodInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<
     EphemeralScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -161,7 +160,7 @@ export interface DurableClient<
   F extends ConfigFields,
 > {
   readonly get: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: GetOptions<F>,
   ) => Effect.Effect<
     RemoteAgent<M>,
@@ -169,7 +168,7 @@ export interface DurableClient<
     RpcClient | Scope.Scope
   >
   readonly getPhantom: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     phantomId: string,
     options?: GetOptions<F>,
   ) => Effect.Effect<
@@ -178,7 +177,7 @@ export interface DurableClient<
     RpcClient | Scope.Scope
   >
   readonly newPhantom: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: GetOptions<F>,
   ) => Effect.Effect<
     PhantomRemoteAgent<M>,
@@ -192,7 +191,7 @@ export interface EphemeralClient<
   F extends ConfigFields,
 > {
   readonly getPhantom: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     phantomId: string,
     options?: GetOptions<F>,
   ) => Effect.Effect<
@@ -201,7 +200,7 @@ export interface EphemeralClient<
     RpcClient | Scope.Scope
   >
   readonly newPhantom: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: GetOptions<F>,
   ) => Effect.Effect<
     EphemeralRemoteAgent<M>,
@@ -226,7 +225,7 @@ interface WireMethod {
 }
 
 interface CompiledClient<C extends MethodParams = MethodParams> {
-  readonly constructorCodec: CompiledInputCodec<C, CallerInput<C>>
+  readonly constructorCodec: CompiledInputCodec<C, MethodInput<C>>
   readonly methods: ReadonlyMap<string, WireMethod>
 }
 
@@ -254,7 +253,7 @@ export type FullClient<
   readonly client: AgentClient<C, Methods, Mode, F>
   readonly agentId: Mode extends "ephemeral"
     ? (
-        input: CallerInput<C>,
+        input: MethodInput<C>,
         phantomId: string,
       ) => Effect.Effect<
         Identity,
@@ -262,7 +261,7 @@ export type FullClient<
         AgentHostClient
       >
     : (
-        input: CallerInput<C>,
+        input: MethodInput<C>,
         phantomId?: string,
       ) => Effect.Effect<
         Identity,
@@ -475,7 +474,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
       cachedMethods = methods
     }
     if (definition.id !== undefined && cachedConstructor === undefined)
-      cachedConstructor = yield* compileCallerParamBindings(
+      cachedConstructor = yield* compileParamBindings(
         `${definition.name ?? "agent"} constructor`,
         definition.id,
       )
@@ -622,7 +621,7 @@ export function defineAgentClient(definition: {
       return yield* binding.bindWithEntries(identity, entries, options)
     })
   let identityCodec: CompiledInputCodec | undefined
-  const agentId = (input: CallerInput<MethodParams>, phantomId?: string) =>
+  const agentId = (input: MethodInput<MethodParams>, phantomId?: string) =>
     Effect.gen(function* () {
       if (canonical.mode === "ephemeral" && phantomId === undefined)
         return yield* Effect.fail(
@@ -630,7 +629,7 @@ export function defineAgentClient(definition: {
             new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
           ),
         )
-      const codec = (identityCodec ??= yield* compileCallerParamBindings(
+      const codec = (identityCodec ??= yield* compileParamBindings(
         `${canonical.name} constructor`,
         canonical.id,
       ))
@@ -676,10 +675,7 @@ export const clientFor = <
     cached
       ? Effect.succeed(cached)
       : Effect.gen(function* () {
-          const constructorCodec = yield* compileCallerParamBindings(
-            `${def.name} constructor`,
-            def.id,
-          )
+          const constructorCodec = yield* compileParamBindings(`${def.name} constructor`, def.id)
           const methods = new Map<string, WireMethod>()
           for (const [name, spec] of Object.entries(def.methods)) {
             const mc = yield* compileMethodSpec(name, spec)
@@ -751,7 +747,7 @@ const clientForCompiled = <
         ),
 ): AgentClient<C, Methods, Mode, F> => {
   const construct = (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     phantom: CoreTypes.Uuid | undefined,
     options?: GetOptions<F>,
   ) =>
@@ -772,14 +768,14 @@ const clientForCompiled = <
       )
       return { rpc, codecs, scopeCard: options?.scopeCard }
     })
-  const get = (input: CallerInput<C>, options?: GetOptions<F>) =>
+  const get = (input: MethodInput<C>, options?: GetOptions<F>) =>
     construct(input, undefined, options).pipe(
       Effect.map(
         ({ rpc, codecs, scopeCard }) =>
           buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
       ),
     )
-  const getPhantom = (input: CallerInput<C>, id: string, options?: GetOptions<F>) =>
+  const getPhantom = (input: MethodInput<C>, id: string, options?: GetOptions<F>) =>
     Effect.try({
       try: () => parseUuid(id),
       catch: (e): RemoteCallError => ({ _tag: "InvalidUuidError", value: id, reason: String(e) }),
@@ -790,7 +786,7 @@ const clientForCompiled = <
           buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
       ),
     )
-  const newPhantom = (input: CallerInput<C>, options?: GetOptions<F>) =>
+  const newPhantom = (input: MethodInput<C>, options?: GetOptions<F>) =>
     Effect.gen(function* () {
       if ((def.mode ?? "durable") === "ephemeral") {
         const { rpc, codecs, scopeCard } = yield* construct(input, undefined, options)
@@ -809,7 +805,7 @@ const clientForCompiled = <
   return (
     (def.mode ?? "durable") === "ephemeral"
       ? {
-          getPhantom: (input: CallerInput<C>, id: string, options?: GetOptions<F>) =>
+          getPhantom: (input: MethodInput<C>, id: string, options?: GetOptions<F>) =>
             Effect.try({
               try: () => parseUuid(id),
               catch: (e): RemoteCallError => ({

@@ -8,7 +8,8 @@ import { decodeEnvelope } from "../src/internal/snapshotEnvelope.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import { method } from "../src/Method.js"
 import { guest } from "../src/internal/guest.js"
-import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
+import { InvocationContext } from "../src/InvocationContext.js"
+import { accountPrincipal, anonymousPrincipal, toolPrincipal, userPrincipal } from "./callers.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { defineConfig } from "../src/Config.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
@@ -17,7 +18,7 @@ import {
   __resetGetConfigValueImpl as __resetGetConfigValueForTest,
   __setGetConfigValueImpl as __setGetConfigValueForTest,
 } from "./mocks/golem-agent-host.js"
-import { __setCaller, withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { __setCaller, callerReads, withCaller } from "./mocks/golem-agent-invocation-context.js"
 
 const secretHost = vi.hoisted(() => ({
   reveal: (_handle: unknown, _expected: unknown): unknown => {
@@ -83,87 +84,56 @@ const Counter = defineAgent({
   }),
 })
 
-const anonymousPrincipal = { tag: "anonymous" } as const
-
-const oidcPrincipal = (sub: string): PrincipalValue => ({
-  tag: "oidc",
-  val: {
-    sub,
-    issuer: "https://example.test",
-    claims: "{}",
-  },
-})
-
-const principalTag = (p: PrincipalValue): string => (p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag)
+const callerTag = (context: { readonly caller: { readonly immediate: { toString(): string } } }) =>
+  context.caller.immediate.toString()
+const userText = (subject: string) => `user ("https://example.test",${JSON.stringify(subject)})`
 
 /**
- * Exercises the Principal service in BOTH the constructor effect (where
- * it should resolve to the initialize-time principal) AND a method
- * handler (where it should resolve to the per-call principal — which
- * may differ from the initialize-time one).
+ * Exercises the InvocationContext service in BOTH the constructor effect (where it resolves to the
+ * caller of `initialize`) AND a method handler (where it resolves to the caller of that specific
+ * call, which may differ from the initialize-time one).
  */
-const PrincipalAgent = defineAgent({
-  name: "PrincipalAgent",
+const CallerAgent = defineAgent({
+  name: "CallerAgent",
   id: {},
   methods: {
     owner: method({ input: {}, success: Schema.String }),
     caller: method({ input: {}, success: Schema.String }),
+    original: method({ input: {}, success: Schema.String }),
     callerForked: method({ input: {}, success: Schema.String }),
+    unread: method({ input: {}, success: Schema.String }),
   },
 }).implement({
   init: () =>
     Effect.gen(function* () {
-      const ownerPrincipal = yield* Principal
-      return principalTag(ownerPrincipal)
+      return callerTag(yield* InvocationContext)
     }),
   methods: (owner) => ({
     owner: () => Effect.succeed(owner),
-    caller: () =>
-      Effect.gen(function* () {
-        const callerPrincipal = yield* Principal
-        return principalTag(callerPrincipal)
-      }),
-    // Verifies that the per-call Principal service propagates to
+    caller: () => Effect.map(InvocationContext, callerTag),
+    original: () => Effect.map(InvocationContext, (context) => context.caller.original.toString()),
+    // Verifies that the per-call InvocationContext service propagates to
     // child fibers spawned inside a handler.
     callerForked: () =>
       Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(
-          Effect.gen(function* () {
-            const childPrincipal = yield* Principal
-            return principalTag(childPrincipal)
-          }),
-        )
+        const fiber = yield* Effect.forkChild(Effect.map(InvocationContext, callerTag))
         return yield* Fiber.join(fiber)
       }),
+    // Never reads the caller: the host must not be asked for it.
+    unread: () => Effect.succeed("unread"),
   }),
 })
 
-const ReadOnlyPrincipalAgent = defineAgent({
-  name: "ReadOnlyPrincipalAgent",
+const ReadOnlyCallerAgent = defineAgent({
+  name: "ReadOnlyCallerAgent",
   id: {},
   methods: {
-    bypass: method({ input: {}, success: Schema.String, readOnly: true }),
-    explicit: method({
-      input: { principal: PrincipalSchema },
-      success: Schema.String,
-      readOnly: true,
-    }),
-    mixed: method({
-      input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
-      success: Schema.String,
-    }),
+    whoami: method({ input: {}, success: Schema.String, readOnly: true }),
   },
 }).implement({
   init: () => Effect.void,
   methods: () => ({
-    bypass: (() => Effect.map(Principal, principalTag)) as never,
-    explicit: ({ principal }) =>
-      Effect.map(Principal, (current) => {
-        expect(principal).toEqual(current)
-        return principalTag(principal)
-      }),
-    mixed: ({ before, principal, after }) =>
-      Effect.succeed(`${before}:${principalTag(principal)}:${after}`),
+    whoami: () => Effect.map(InvocationContext, callerTag),
   }),
 })
 
@@ -226,8 +196,8 @@ describe("agent-guest exports", () => {
     // (their `defineAgent` calls auto-register at import time).
     void Greeter
     void Counter
-    void PrincipalAgent
-    void ReadOnlyPrincipalAgent
+    void CallerAgent
+    void ReadOnlyCallerAgent
     void ConfigAgent
   })
 
@@ -235,24 +205,21 @@ describe("agent-guest exports", () => {
     Effect.gen(function* () {
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       expect(types.map((t) => t.typeName).sort()).toEqual([
+        "CallerAgent",
         "ConfigAgent",
         "Counter",
         "Greeter",
-        "PrincipalAgent",
-        "ReadOnlyPrincipalAgent",
+        "ReadOnlyCallerAgent",
       ])
       const greeter = types.find((t) => t.typeName === "Greeter")!
       expect(greeter.methods.map((m) => m.name).sort()).toEqual(["greet", "ping"])
-      const principal = types.find((t) => t.typeName === "ReadOnlyPrincipalAgent")!
-      expect(
-        principal.methods
-          .find((m) => m.name === "mixed")!
-          .inputSchema.val.map((field) => [field.name, field.source.tag]),
-      ).toEqual([
-        ["before", "user-supplied"],
-        ["principal", "auto-injected"],
-        ["after", "user-supplied"],
-      ])
+      // The invocation context is injected: it is never part of an input schema.
+      for (const type of types) {
+        for (const m of type.methods) {
+          for (const field of m.inputSchema.val) expect(field.source.tag).toBe("user-supplied")
+          expect(m.readOnly === undefined || !("usesPrincipal" in m.readOnly)).toBe(true)
+        }
+      }
     }),
   )
 
@@ -420,102 +387,86 @@ describe("agent-guest exports", () => {
     expect(val).toMatch(/Greeter/)
   })
 
-  it.effect("Principal service resolves to the initialize-time principal in impl", () =>
+  it.effect("InvocationContext resolves to the initialize-time caller in impl", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
+        withCaller(userPrincipal("alice"), () => guest.initialize("CallerAgent", wire())),
       )
       const out = yield* Effect.promise(() =>
-        // The 'caller' principal here is irrelevant for `owner`, which
-        // captured the initialize-time principal in its closure.
+        // The 'caller' here is irrelevant for `owner`, which captured the
+        // initialize-time caller in its closure.
         withCaller(anonymousPrincipal, () => guest.invoke("owner", wire())),
       )
-      const decoded = read<string>(out!)
-      expect(decoded).toBe("oidc:alice")
+      expect(read<string>(out!)).toBe(userText("alice"))
     }),
   )
 
-  it.effect("Principal service resolves to the per-call principal in method handlers", () =>
+  it.effect("InvocationContext resolves to the per-call caller in method handlers", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
+        withCaller(userPrincipal("alice"), () => guest.initialize("CallerAgent", wire())),
       )
 
       // First call as Bob: should see Bob, not Alice.
       const out1 = yield* Effect.promise(() =>
-        withCaller(oidcPrincipal("bob"), () => guest.invoke("caller", wire())),
+        withCaller(userPrincipal("bob"), () => guest.invoke("caller", wire())),
       )
-      const decoded1 = read<string>(out1!)
-      expect(decoded1).toBe("oidc:bob")
+      expect(read<string>(out1!)).toBe(userText("bob"))
 
-      // Second call as anonymous, on the SAME initialized agent: per-call
-      // principal must update, owner closure must not.
+      // Second call as anonymous, on the SAME initialized agent: the per-call
+      // caller must update, the owner closure must not.
       const out2 = yield* Effect.promise(() =>
         withCaller(anonymousPrincipal, () => guest.invoke("caller", wire())),
       )
-      const decoded2 = read<string>(out2!)
-      expect(decoded2).toBe("anonymous")
+      expect(read<string>(out2!)).toBe("anonymous")
 
       const ownerOut = yield* Effect.promise(() =>
         withCaller(anonymousPrincipal, () => guest.invoke("owner", wire())),
       )
-      const ownerDecoded = read<string>(ownerOut!)
-      expect(ownerDecoded).toBe("oidc:alice")
+      expect(read<string>(ownerOut!)).toBe(userText("alice"))
     }),
   )
 
-  it("Principal service resolves to the immediate caller, not the original caller", async () => {
-    __setCaller(oidcPrincipal("alice"), oidcPrincipal("root"))
-    await guest.initialize("PrincipalAgent", wire())
-    __setCaller(oidcPrincipal("bob"), oidcPrincipal("root"))
-    expect(read<string>((await guest.invoke("caller", wire()))!)).toBe("oidc:bob")
-    expect(read<string>((await guest.invoke("owner", wire()))!)).toBe("oidc:alice")
+  it("exposes both roles of the caller", async () => {
+    __setCaller(userPrincipal("alice"), userPrincipal("root"))
+    await guest.initialize("CallerAgent", wire())
+    __setCaller(accountPrincipal(7n), toolPrincipal("fmt"))
+    expect(read<string>((await guest.invoke("caller", wire()))!)).toBe(
+      'account ("golem","account:7")',
+    )
+    expect(read<string>((await guest.invoke("original", wire()))!)).toBe(
+      'tool ("golem","tool:fmt")',
+    )
+    expect(read<string>((await guest.invoke("owner", wire()))!)).toBe(userText("alice"))
   })
 
-  it("does not provide Principal to read-only handlers without PrincipalSchema input", async () => {
-    await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyPrincipalAgent", wire()))
-    await expect(
-      withCaller(oidcPrincipal("bypassed"), () => guest.invoke("bypass", wire())),
-    ).rejects.toThrow(/Principal|service/i)
+  it("asks the host for the caller only when a handler reads it", async () => {
+    __setCaller(userPrincipal("alice"))
+    await guest.initialize("CallerAgent", wire())
+    const afterInit = callerReads()
+    await guest.invoke("unread", wire())
+    expect(callerReads()).toBe(afterInit)
+    await guest.invoke("caller", wire())
+    expect(callerReads()).toBe(afterInit + 1)
   })
 
-  it("provides Principal to read-only handlers with explicit PrincipalSchema input", async () => {
-    await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyPrincipalAgent", wire()))
-    const principal = oidcPrincipal("allowed")
-    const out = await withCaller(principal, () => guest.invoke("explicit", wire()))
-    expect(read<string>(out!)).toBe("oidc:allowed")
-    const anonymous = await withCaller(anonymousPrincipal, () => guest.invoke("explicit", wire()))
+  it("provides the invocation context to read-only handlers", async () => {
+    await withCaller(anonymousPrincipal, () => guest.initialize("ReadOnlyCallerAgent", wire()))
+    const out = await withCaller(userPrincipal("allowed"), () => guest.invoke("whoami", wire()))
+    expect(read<string>(out!)).toBe(userText("allowed"))
+    const anonymous = await withCaller(anonymousPrincipal, () => guest.invoke("whoami", wire()))
     expect(read<string>(anonymous!)).toBe("anonymous")
   })
 
-  it("injects the current principal between caller-supplied method fields", async () => {
-    await withCaller(oidcPrincipal("owner"), () =>
-      guest.initialize("ReadOnlyPrincipalAgent", wire()),
-    )
-    const before = await Effect.runPromise(toWitCodec(Schema.String))
-    const after = await Effect.runPromise(toWitCodec(Schema.Number))
-    const first = await Effect.runPromise(
-      Schema.encodeEffect(before.codec)("first") as Effect.Effect<SchemaValue>,
-    )
-    const last = await Effect.runPromise(
-      Schema.encodeEffect(after.codec)(7) as Effect.Effect<SchemaValue>,
-    )
-    const out = await withCaller(oidcPrincipal("caller"), () =>
-      guest.invoke("mixed", wire(first, last)),
-    )
-    expect(read<string>(out!)).toBe("first:oidc:caller:7")
-  })
-
-  it.effect("Principal service propagates to child fibers forked inside a handler", () =>
+  it.effect("InvocationContext propagates to child fibers forked inside a handler", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
-        withCaller(oidcPrincipal("alice"), () => guest.initialize("PrincipalAgent", wire())),
+        withCaller(userPrincipal("alice"), () => guest.initialize("CallerAgent", wire())),
       )
       const out = yield* Effect.promise(() =>
-        withCaller(oidcPrincipal("carol"), () => guest.invoke("callerForked", wire())),
+        withCaller(userPrincipal("carol"), () => guest.invoke("callerForked", wire())),
       )
-      const decoded = read<string>(out!)
-      expect(decoded).toBe("oidc:carol")
+      expect(read<string>(out!)).toBe(userText("carol"))
     }),
   )
 
@@ -642,7 +593,7 @@ describe("agent-guest exports", () => {
         after: "Identity(child)",
       })
       const snapshot = await dispatchSaveSnapshot()
-      const envelope = decodeEnvelope(snapshot, anonymousPrincipal)
+      const envelope = decodeEnvelope(snapshot)
       expect(envelope.kind).toBe("binary")
       if (envelope.kind !== "binary") throw new Error("expected binary snapshot")
       expect(JSON.parse(new TextDecoder().decode(envelope.userPayload))).toEqual({

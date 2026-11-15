@@ -18,11 +18,10 @@ import {
   defineConfig,
   Http,
   method,
-  Principal,
+  InvocationContext,
   Snapshot,
   Unstructured,
 } from "@golemcloud/effect-golem"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,
@@ -37,7 +36,7 @@ const CounterSpec = defineAgent({
   id: { name: Schema.String },
   http: Http.mount("/counters/{name}", { cors: ["*"] }),
   snapshotting: Snapshot.define({
-    schema: Schema.Struct({ count: Schema.Number }),
+    schema: Schema.Struct({ count: Schema.Number, ownerTag: Schema.String }),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
@@ -71,13 +70,13 @@ const CounterSpec = defineAgent({
       description: "Resets the counter back to zero.",
       http: [Http.post("/reset")],
     }),
-    /** Returns the principal that originally created this Counter. */
+    /** Returns the caller that originally created this Counter, as text. */
     owner: method({
       input: {},
       success: Schema.String,
       http: [Http.get("/owner")],
     }),
-    /** Returns the principal that issued THIS call. */
+    /** Returns the caller that issued THIS call, as text. */
     caller: method({
       input: {},
       success: Schema.String,
@@ -153,8 +152,9 @@ interface CounterState {
   readonly ownerTag: string
 }
 
-const principalTag = (principal: AgentCommon.Principal): string =>
-  principal.tag === "oidc" ? `oidc:${principal.val.sub}` : principal.tag
+/** The immediate caller as "<kind> <ref text>", or "anonymous". */
+const callerTag = (context: { readonly caller: InvocationContext.Caller }): string =>
+  context.caller.immediate.toString()
 
 const counterMethods = (state: CounterState) => ({
   value: () =>
@@ -178,7 +178,7 @@ const counterMethods = (state: CounterState) => ({
   owner: () => Effect.succeed(state.ownerTag),
   caller: () =>
     Effect.gen(function* () {
-      return principalTag(yield* Principal.Principal)
+      return callerTag(yield* InvocationContext.InvocationContext)
     }),
   currentGreeting: () =>
     Effect.gen(function* () {
@@ -221,15 +221,15 @@ export const Counter = CounterSpec.implement<CounterState>({
   init: ({ name }) =>
     Effect.gen(function* () {
       yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
-      const ownerPrincipal = yield* Principal.Principal
-      return { count: yield* Ref.make({ count: 0 }), ownerTag: principalTag(ownerPrincipal) }
+      const owner = yield* InvocationContext.InvocationContext
+      return { count: yield* Ref.make({ count: 0 }), ownerTag: callerTag(owner) }
     }),
   methods: counterMethods,
   snapshot: {
-    save: (state) => Ref.get(state.count),
-    restore: (saved, context) =>
-      Ref.make(saved).pipe(
-        Effect.map((count) => ({ count, ownerTag: principalTag(context.principal) })),
+    save: (state) => Ref.get(state.count).pipe(Effect.map((s) => ({ ...s, ownerTag: state.ownerTag }))),
+    restore: (saved) =>
+      Ref.make({ count: saved.count }).pipe(
+        Effect.map((count) => ({ count, ownerTag: saved.ownerTag })),
       ),
   },
 })

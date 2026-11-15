@@ -39,9 +39,12 @@ Counter.implement({
 ```
 
 `method` optionally accepts `error`, `description`, `promptHint`, HTTP endpoints, and `readOnly`.
-Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
-`PrincipalSchema` input. Public modules are namespaces from
-the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
+Read-only metadata may be `true` or `{ cache }`. Every handler, read-only ones included, can read
+the caller of its invocation with `(yield* InvocationContext.InvocationContext).caller`; the host is
+asked only when the handler reads it. A `Principal`, a `Caller` and a `TokenProvenance` are live
+values and are refused in method inputs, results, agent ids and value types; store
+`caller.original.ref` as an `InvocationContext.PrincipalRefSchema` value instead. Public modules are
+namespaces from the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
 `defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
 
@@ -278,7 +281,7 @@ Config is never stored in snapshots. Restoration reads current host values.
 
 Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
 strategy restores that state before `methods(state)` constructs handlers. Custom restoration
-receives a `SnapshotRestorationContext` containing `id`, `principal`, `phantomId`, `agentId`,
+receives a `SnapshotRestorationContext` containing `id`, `phantomId`, `agentId`,
 `parsedAgentId`, and current `config`; it must not perform fresh-instance initialization effects.
 
 ```ts
@@ -323,7 +326,7 @@ databases? })` and provide an explicit strategy. `save(ref)` returns an Effect o
 `yield* Snapshot.requirePart(saved.parts, "index", "application/octet-stream")` checks both presence
 and MIME type. Binary-only applications use `Schema.Null` state. Logical names are case-sensitive
 `[A-Za-z0-9_][A-Za-z0-9_.-]*`; content types are bare ASCII MIME types without parameters.
-The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
+The SDK owns the envelope (which holds no caller), always emits multipart (including zero parts), and never
 interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
 
 Optional managed SQLite composition uses the same `databases` accessor in both `Snapshot.define`

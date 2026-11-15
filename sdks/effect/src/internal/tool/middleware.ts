@@ -1,10 +1,13 @@
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as UnderlyingWit from "golem:tool/underlying@0.1.0"
 import type * as StreamsWit from "golem:tool/streams@0.1.0"
-import type * as Agent from "golem:agent/common@2.0.0"
+import type { Caller } from "../../InvocationContext.js"
 import { Cause, Context, Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "../abortableStreamIterable.js"
-import { immediateCaller, InvocationContextLive } from "../../host/InvocationContextClient.js"
+import {
+  currentInvocationContext,
+  InvocationContextLive,
+} from "../../host/InvocationContextClient.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
 import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
@@ -110,7 +113,8 @@ export type TypedUnderlying<D extends ToolDefinition<any, any>> = TypedUnderlyin
 
 /** Context passed to a definition-derived middleware command. @since 1.6.0 @category models */
 export interface TypedHandlerContext<D extends ToolDefinition<any, any>, Parameters> {
-  readonly principal: Agent.Principal
+  /** Who caused the running invocation. The host is asked on first use. */
+  readonly caller: Caller
   readonly parameters: Parameters
   readonly stdin?: Stream.Stream<Uint8Array, MiddlewareError>
   readonly stdout?: <R2>(
@@ -165,7 +169,8 @@ export interface MiddlewareInvocation<Parameters> {
   readonly stdin?: Stream.Stream<Uint8Array, MiddlewareError>
   readonly stdout?: StreamsWit.ToolOutputWriter
   readonly stderr?: StreamsWit.ToolOutputWriter
-  readonly principal: Agent.Principal
+  /** Who caused the running invocation. The host is asked on first use. */
+  readonly caller: Caller
   readonly parameters: Parameters
 }
 
@@ -413,7 +418,9 @@ const typedHandler =
             )
           })
       const result = yield* (commandHandler as any)(input, {
-        principal: invocation.principal,
+        get caller() {
+          return invocation.caller
+        },
         parameters: invocation.parameters,
         stdin: invocation.stdin,
         stdout: body.model.stdout ? captureOutput("stdout") : undefined,
@@ -727,8 +734,8 @@ export const toolMiddlewareGuest = {
   ): Promise<Common.InvocationResult> => {
     const entry = entries.get(middlewareName)
     if (!entry) throw { tag: "invalid-tool-name", val: middlewareName } satisfies Common.ToolError
-    const principal = await Effect.runPromise(
-      Effect.provide(immediateCaller, InvocationContextLive),
+    const invocationContext = await Effect.runPromise(
+      Effect.provide(currentInvocationContext, InvocationContextLive),
     )
     const ownership = new InvocationOwnership()
     const managedStdin = stdin ? ownership.own(decodeByteStream(stdin)) : undefined
@@ -827,7 +834,9 @@ export const toolMiddlewareGuest = {
           stdin: middlewareStdin,
           stdout,
           stderr,
-          principal,
+          get caller() {
+            return invocationContext.caller
+          },
           parameters: decodedParameters,
         },
         underlying,

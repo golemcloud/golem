@@ -2,7 +2,7 @@ use effect_fixture_guest_client::{
     EffectFixture, Header, Items, TransformInRequest, TransformStreamInRequest,
     TransformStreamInRequestItems, new_transform_stream_in_request_items_stream,
 };
-use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
+use golem_rust::agentic::{DynamicToolClient, PrincipalRef, get_tool_type, spawn_local};
 use golem_rust::permissions;
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::{
@@ -15,6 +15,7 @@ use std::rc::Rc;
 #[derive(IntoSchema)]
 struct PrincipalPeerId {
     tenant: String,
+    owner: PrincipalRef,
 }
 
 #[derive(IntoSchema)]
@@ -90,10 +91,14 @@ impl RustPeer for RustPeerImpl {
     async fn principal_identity_round_trip(&self) -> String {
         let result = async {
             let tenant = format!("principal-rust-{}", self.name);
+            let owner = PrincipalRef::new("https://cross-sdk.example", "rust");
             let agent_type = get_agent_type("TsPrincipalPeer")?;
             let reflected = agent_type
                 .client()
-                .get_json(&serde_json::json!({ "tenant": tenant }))?;
+                .get_json(&serde_json::json!({
+                    "tenant": tenant,
+                    "owner": { "issuer": owner.issuer(), "subject": owner.subject() },
+                }))?;
             let first = reflected
                 .method("value")?
                 .invoke_json(&serde_json::json!({}))
@@ -103,10 +108,18 @@ impl RustPeer for RustPeerImpl {
             if parts.type_name != "TsPrincipalPeer"
                 || parts.constructor_value
                     != (SchemaValue::Record {
-                        fields: vec![SchemaValue::String(tenant.clone())],
+                        fields: vec![
+                            SchemaValue::String(tenant.clone()),
+                            SchemaValue::Record {
+                                fields: vec![
+                                    SchemaValue::String(owner.issuer().to_string()),
+                                    SchemaValue::String(owner.subject().to_string()),
+                                ],
+                            },
+                        ],
                     })
             {
-                return Ok::<_, GolemReflectError>("principal-in-id".to_string());
+                return Ok::<_, GolemReflectError>("owner-not-a-record".to_string());
             }
             let full = MethodOnlyAgentClientDefinition::builder()
                 .durable::<PrincipalPeerId>("TsPrincipalPeer")
@@ -119,6 +132,7 @@ impl RustPeer for RustPeerImpl {
             let local_id = full.agent_id(
                 &PrincipalPeerId {
                     tenant: tenant.clone(),
+                    owner: owner.clone(),
                 },
                 None,
             )?;

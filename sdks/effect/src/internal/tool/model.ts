@@ -8,6 +8,7 @@ import { composeSchemaGraphs } from "../schema-model/builder.js"
 import { compile, type CompiledWitCodec } from "../../WitCodec.js"
 import { Uint32 } from "../../WitTypes.js"
 import type { HostServices } from "../../host/HostLive.js"
+import type { Caller } from "../../InvocationContext.js"
 import type { Scope } from "effect"
 import { registerTool } from "./registry.js"
 export { registeredTools, resetTools } from "./registry.js"
@@ -249,7 +250,8 @@ export class BodyBuilder<
 }
 
 export type HandlerContext = {
-  readonly principal: unknown
+  /** Who caused the running invocation. The host is asked on first use. */
+  readonly caller: Caller
   readonly stdin?: Stream.Stream<Uint8Array, ToolInvokeError>
   readonly stdout?: <R2>(
     source: Stream.Stream<Uint8Array, ToolInvokeError, R2>,

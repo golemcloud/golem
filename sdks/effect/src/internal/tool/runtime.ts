@@ -3,7 +3,7 @@ import type * as Host from "golem:tool/host@0.1.0"
 import type * as Streams from "golem:tool/streams@0.1.0"
 import { Cause, Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
-import { immediateCaller } from "../../host/InvocationContextClient.js"
+import { currentInvocationContext } from "../../host/InvocationContextClient.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
 const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
@@ -169,8 +169,11 @@ export async function invokeRegistered(
       const decoded = yield* body
         .decodeInput(input)
         .pipe(Effect.mapError((cause) => asError({ tag: "invalid-input", val: String(cause) })))
+      const context = yield* currentInvocationContext
       const invocation = handler(decoded, {
-        principal: yield* immediateCaller,
+        get caller() {
+          return context.caller
+        },
         stdin: bytes(stdinIterator),
         stdout: stdoutOutput.consume,
         stderr: stderrOutput.consume,

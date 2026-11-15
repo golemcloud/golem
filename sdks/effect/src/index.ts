@@ -140,6 +140,14 @@ export * as HttpRouter from "./HttpRouter.js"
  */
 export * as Ids from "./Ids.js"
 
+/**
+ * The caller of an invocation: `InvocationContext`, `Caller`, `Principal` and `PrincipalRef`.
+ *
+ * @since 2.0.0
+ * @category modules
+ */
+export * as InvocationContext from "./InvocationContext.js"
+
 /** Typed IDs of agent invocations in the `<agent-id>.<uuid>` text form. @since 1.6.0 @category modules */
 export * as InvocationId from "./InvocationId.js"
 
@@ -207,14 +215,6 @@ export * as Permissions from "./Permissions.js"
 
 /** Runtime agent-type discovery. @since 1.6.0 @category modules */
 export * as Reflection from "./Reflection.js"
-
-/**
- * Principal identity types attached to agent invocations and snapshots.
- *
- * @since 1.5.0
- * @category modules
- */
-export * as Principal from "./Principal.js"
 
 /**
  * Effect-typed wrappers around `golem:quota/types@1.5.0` (`acquireQuotaToken`,
