@@ -28,13 +28,13 @@ fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
         saved,
         AgentMode::Durable,
         true,
+        false,
         Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
             0, 200, 0, 0, 0,
         )),
         Arc::new(StdMutex::new(MemoryGrant::inert(saved))),
         Instant::now(),
     );
-    tracker.begin_instantiation(false);
     tracker.reconcile(current, Instant::now());
     tracker
 }

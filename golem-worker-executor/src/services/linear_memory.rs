@@ -131,19 +131,21 @@ struct PendingGrowthGrant {
 impl LinearMemoryTracker {
     #[cfg(test)]
     pub(crate) fn new(
-        bytes: u64,
+        persisted_startup_bytes: u64,
         initially_reserved_bytes: u64,
         mode: AgentMode,
         replaying: bool,
+        historical_admission: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         now: Instant,
     ) -> Self {
         Self::new_at(
-            bytes,
+            persisted_startup_bytes,
             initially_reserved_bytes,
             mode,
             replaying,
+            historical_admission,
             resource_entry,
             retained_growth_grant,
             MeteringTime::now().at_instant(now),
@@ -152,39 +154,46 @@ impl LinearMemoryTracker {
 
     #[cfg(test)]
     pub(crate) fn new_at(
-        bytes: u64,
+        persisted_startup_bytes: u64,
         initially_reserved_bytes: u64,
         mode: AgentMode,
         replaying: bool,
+        historical_admission: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         now: MeteringTime,
     ) -> Self {
         Self::new_inner(
-            bytes,
+            persisted_startup_bytes,
             initially_reserved_bytes,
             mode,
             replaying,
+            historical_admission,
             resource_entry,
             retained_growth_grant,
             Some(now),
         )
     }
 
+    /// Starts an unallocated Store, retaining its saved baseline and prepaid reservation.
+    /// Replay controls reconciliation and usage; historical admission independently bypasses
+    /// current admission for reconstructed entity allocations, but not primary allocations.
     pub(crate) fn new_with_metering(
-        bytes: u64,
+        persisted_startup_bytes: u64,
         initially_reserved_bytes: u64,
         mode: AgentMode,
         replaying: bool,
+        historical_admission: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         metering_enabled: bool,
     ) -> Self {
         Self::new_inner(
-            bytes,
+            persisted_startup_bytes,
             initially_reserved_bytes,
             mode,
             replaying,
+            historical_admission,
             resource_entry,
             retained_growth_grant,
             metering_enabled.then(MeteringTime::now),
@@ -192,24 +201,25 @@ impl LinearMemoryTracker {
     }
 
     fn new_inner(
-        bytes: u64,
+        persisted_startup_bytes: u64,
         initially_reserved_bytes: u64,
         mode: AgentMode,
         replaying: bool,
+        historical_admission: bool,
         resource_entry: Arc<AtomicResourceEntry>,
         retained_growth_grant: Arc<Mutex<MemoryGrant>>,
         meter_started_at: Option<MeteringTime>,
     ) -> Self {
         let inner = Arc::new(Inner {
-            bytes: AtomicU64::new(bytes),
+            bytes: AtomicU64::new(0),
             protected_bytes: AtomicU64::new(initially_reserved_bytes),
-            persisted_startup_bytes: bytes,
+            persisted_startup_bytes,
             initially_reserved_bytes,
             state: Mutex::new(TrackerState {
                 reconciling: true,
                 replaying,
                 accounting_started: false,
-                historical_admission: replaying,
+                historical_admission,
                 live_reservation_activated: false,
                 pending_initial_bytes: 0,
                 pending_growth_protected_total: 0,
@@ -227,7 +237,7 @@ impl LinearMemoryTracker {
             resource_entry: resource_entry.clone(),
             limit_exceeded: Mutex::new(None),
             meter: meter_started_at.map(|now| {
-                let meter = AgentMemoryMeter::new_at(mode, bytes, false, resource_entry, now);
+                let meter = AgentMemoryMeter::new_at(mode, 0, false, resource_entry, now);
                 meter.set_billable_at(!replaying, now);
                 meter
             }),
@@ -241,18 +251,6 @@ impl LinearMemoryTracker {
 
     pub fn current_bytes(&self) -> u64 {
         self.inner.bytes.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn begin_instantiation(&self, historical_admission: bool) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        let mut state = self.inner.state.lock().unwrap();
-        state.growth_failure = None;
-        self.inner.bytes.store(0, Ordering::Release);
-        state.historical_admission = historical_admission;
-        drop(state);
-        if let Some(meter) = &self.inner.meter {
-            meter.set_bytes(0, Instant::now());
-        }
     }
 
     /// Enqueues the absolute baseline and enables subsequent delta recording in one transition.
@@ -727,6 +725,91 @@ mod tests {
     }
 
     #[test]
+    fn construction_separates_saved_baseline_reservation_and_allocation() {
+        for metering in [false, true] {
+            for (replaying, historical_admission) in [(false, false), (true, false), (true, true)] {
+                let tracker = LinearMemoryTracker::new_with_metering(
+                    25,
+                    40,
+                    AgentMode::Durable,
+                    replaying,
+                    historical_admission,
+                    Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
+                    Arc::new(Mutex::new(MemoryGrant::inert(40))),
+                    metering,
+                );
+                assert_eq!(tracker.current_bytes(), 0);
+                assert_eq!(tracker.billable_bytes(), 0);
+                assert_eq!(tracker.usage_is_live(), !replaying);
+                assert_eq!(tracker.initially_reserved_bytes(), 40);
+                assert_eq!(tracker.reserved_bytes(), 40);
+                assert_eq!(tracker.meter_if_enabled().is_some(), metering);
+                let now = Instant::now();
+                assert_eq!(
+                    tracker
+                        .prepare_unshared_growth(0, 30)
+                        .unwrap()
+                        .admission_delta,
+                    0
+                );
+                tracker.grow(30, now);
+                let growth = tracker.prepare_unshared_growth(30, 55).unwrap();
+                assert_eq!(growth.protected_total, 55);
+                assert_eq!(
+                    growth.admission_delta,
+                    if historical_admission { 0 } else { 15 }
+                );
+                tracker.retain_growth_grant(MemoryGrant::inert(growth.admission_delta));
+                tracker.grow(25, now);
+                assert_eq!(tracker.current_bytes(), 55);
+                assert_eq!(tracker.billable_bytes(), 0);
+                assert_eq!(tracker.reconcile(55, now), if replaying { 0 } else { 30 });
+                assert_eq!(
+                    tracker.start_memory_accounting(false, |bytes| bytes),
+                    Some(55)
+                );
+                assert_eq!(tracker.start_memory_accounting(false, |bytes| bytes), None);
+            }
+        }
+    }
+
+    #[test]
+    fn unallocated_store_enforces_its_reservation_before_and_after_callback_installation() {
+        for metering in [false, true] {
+            for initially_low in [false, true] {
+                let entry = Arc::new(AtomicResourceEntry::new(
+                    0,
+                    if initially_low { 35 } else { 50 },
+                    0,
+                    0,
+                    0,
+                ));
+                let tracker = LinearMemoryTracker::new_with_metering(
+                    25,
+                    40,
+                    AgentMode::Durable,
+                    true,
+                    false,
+                    entry.clone(),
+                    Arc::new(Mutex::new(MemoryGrant::inert(40))),
+                    metering,
+                );
+                let exceeded = Arc::new(AtomicBool::new(false));
+                let observed = exceeded.clone();
+                tracker.set_limit_exceeded_callback(Arc::new(move || {
+                    observed.store(true, Ordering::Release);
+                }));
+                assert_eq!(exceeded.load(Ordering::Acquire), initially_low);
+                entry.update_memory_limit(35);
+                assert!(exceeded.load(Ordering::Acquire));
+                assert_eq!(tracker.current_bytes(), 0);
+                assert_eq!(tracker.billable_bytes(), 0);
+                assert_eq!(tracker.reserved_bytes(), 40);
+            }
+        }
+    }
+
+    #[test]
     fn independent_memory_growth_uses_specific_memory_delta() {
         let (delta, total) = desired_total_after_growth(80, 30, 45).unwrap();
         assert_eq!(delta, 15);
@@ -743,6 +826,7 @@ mod tests {
             30,
             30,
             AgentMode::Durable,
+            false,
             false,
             Arc::new(AtomicResourceEntry::new(0, 42, 0, 0, 0)),
             Arc::new(Mutex::new(MemoryGrant::inert(30))),
@@ -782,10 +866,12 @@ mod tests {
             40,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             grant(),
             now,
         );
+        tracker.grow_at(40, now);
         tracker.grow_at(20, now);
         tracker.reconcile_at(60, now);
 
@@ -801,11 +887,11 @@ mod tests {
             40,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             Arc::new(Mutex::new(MemoryGrant::inert(40))),
             now,
         );
-        tracker.begin_instantiation(false);
 
         assert_eq!(
             tracker.prepare_unshared_growth(0, 15),
@@ -838,12 +924,12 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             grant(),
             now,
         );
         *tracker.retained_growth_grant().lock().unwrap() = MemoryGrant::inert(40);
-        tracker.begin_instantiation(false);
         tracker.switch_to_live();
 
         assert_eq!(
@@ -870,11 +956,11 @@ mod tests {
             40,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             Arc::new(Mutex::new(retained_grant)),
             now,
         );
-        tracker.begin_instantiation(false);
         let headroom_before_instantiation = controller.headroom_bytes();
 
         let growth = tracker.prepare_unshared_growth(0, 40).unwrap();
@@ -899,10 +985,12 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            true,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             retained_grant.clone(),
             now,
         );
+        tracker.grow_at(40, now);
 
         let acquire_controller = controller.clone();
         tracker
@@ -940,10 +1028,12 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            true,
             Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
             Arc::new(Mutex::new(MemoryGrant::inert(40))),
             now,
         );
+        tracker.grow_at(40, now);
         let mut activation = Box::pin(tracker.activate_live_reservation(|bytes| {
             let controller = controller.clone();
             let tracker = tracker.clone();
@@ -991,10 +1081,12 @@ mod tests {
                 10,
                 AgentMode::Durable,
                 true,
+                true,
                 Arc::new(AtomicResourceEntry::new(0, 10, 0, 0, 0)),
                 Arc::new(Mutex::new(MemoryGrant::inert(10))),
                 now,
             );
+            tracker.grow_at(5, now);
             let observations = Arc::new(Mutex::new(Vec::new()));
             let observed = observations.clone();
             let reader = tracker.clone();
@@ -1053,10 +1145,12 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            true,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             retained_grant.clone(),
             now,
         );
+        tracker.grow_at(40, now);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let first_request = Arc::new(Mutex::new(Some(started)));
@@ -1111,10 +1205,12 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            true,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             retained_grant.clone(),
             now,
         );
+        tracker.grow_at(40, now);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let first_request = Arc::new(Mutex::new(Some(started)));
@@ -1169,11 +1265,11 @@ mod tests {
             40,
             AgentMode::Durable,
             true,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             grant(),
             now,
         );
-        tracker.begin_instantiation(false);
         tracker.switch_to_live();
 
         tracker.prepare_unshared_growth(0, 40).unwrap();
@@ -1192,11 +1288,11 @@ mod tests {
             50,
             AgentMode::Durable,
             true,
+            true,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             grant(),
             now,
         );
-        tracker.begin_instantiation(true);
 
         assert_eq!(
             tracker.prepare_unshared_growth(0, 40),
@@ -1230,6 +1326,7 @@ mod tests {
             0,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
             grant(),
             now,
@@ -1260,6 +1357,7 @@ mod tests {
             40,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
             Arc::new(Mutex::new(initial_grant)),
             now,
@@ -1288,7 +1386,7 @@ mod tests {
         let now = Instant::now();
         let entry = Arc::new(AtomicResourceEntry::new(0, 10, 0, 0, 0));
         let tracker =
-            LinearMemoryTracker::new(5, 5, AgentMode::Durable, false, entry, grant(), now);
+            LinearMemoryTracker::new(5, 5, AgentMode::Durable, false, false, entry, grant(), now);
         tracker.reconcile_at(5, now);
         let exceeded = Arc::new(AtomicBool::new(false));
         let exceeded_clone = exceeded.clone();
@@ -1309,6 +1407,7 @@ mod tests {
             5,
             5,
             AgentMode::Durable,
+            false,
             false,
             entry.clone(),
             grant(),
@@ -1336,6 +1435,7 @@ mod tests {
             5,
             5,
             AgentMode::Durable,
+            false,
             false,
             entry.clone(),
             grant(),

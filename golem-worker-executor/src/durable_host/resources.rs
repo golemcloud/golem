@@ -380,6 +380,7 @@ mod tests {
                 0,
                 AgentMode::Durable,
                 false,
+                false,
                 Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
                 Arc::new(Mutex::new(
                     controller.admit(0, &NoEvictionSource).await.unwrap(),
@@ -488,6 +489,7 @@ mod tests {
                 0,
                 AgentMode::Durable,
                 false,
+                false,
                 Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
                 Arc::new(Mutex::new(
                     controller.admit(0, &NoEvictionSource).await.unwrap(),
@@ -585,6 +587,7 @@ mod tests {
                 0,
                 AgentMode::Durable,
                 false,
+                false,
                 Arc::new(AtomicResourceEntry::new(0, limit as usize, 0, 0, 0)),
                 Arc::new(Mutex::new(
                     controller.admit(0, &NoEvictionSource).await.unwrap(),
@@ -652,11 +655,11 @@ mod tests {
                 actual,
                 AgentMode::Durable,
                 replaying,
+                false,
                 Arc::new(AtomicResourceEntry::new(0, CAPACITY as usize, 0, 0, 0)),
                 Arc::new(Mutex::new(reservation)),
                 Instant::now(),
             );
-            tracker.begin_instantiation(false);
             let mut store = Store::new(
                 &engine,
                 LimitedMemory {
@@ -708,11 +711,11 @@ mod tests {
                 80,
                 AgentMode::Durable,
                 true,
+                false,
                 limits.clone(),
                 Arc::new(Mutex::new(reservation)),
                 Instant::now(),
             );
-            tracker.begin_instantiation(false);
             tracker.reconcile(40, Instant::now());
             let (release, gate) = tokio::sync::oneshot::channel();
             let admission_controller = controller.clone();
@@ -768,6 +771,7 @@ mod tests {
             40,
             AgentMode::Durable,
             false,
+            false,
             Arc::new(AtomicResourceEntry::new(0, 50, 0, 0, 0)),
             Arc::new(Mutex::new(reservation)),
             Instant::now(),
@@ -808,11 +812,11 @@ mod tests {
                 40,
                 AgentMode::Durable,
                 true,
+                false,
                 Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
                 Arc::new(Mutex::new(reservation)),
                 Instant::now(),
             );
-            tracker.begin_instantiation(false);
             admit_memory_growth(
                 &tracker,
                 100,

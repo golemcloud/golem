@@ -1464,10 +1464,12 @@ async fn replay_state_and_oplog_over(
 }
 
 fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker {
-    crate::services::linear_memory::LinearMemoryTracker::new(
+    let now = std::time::Instant::now();
+    let memory = crate::services::linear_memory::LinearMemoryTracker::new(
         2,
         2,
         golem_common::model::agent::AgentMode::Durable,
+        true,
         true,
         Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
             0, 10, 0, 0, 0,
@@ -1475,8 +1477,10 @@ fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker
         Arc::new(std::sync::Mutex::new(
             crate::services::active_agents::MemoryGrant::inert(2),
         )),
-        std::time::Instant::now(),
-    )
+        now,
+    );
+    memory.grow(2, now);
+    memory
 }
 
 async fn held_completed_reconstruction() -> (

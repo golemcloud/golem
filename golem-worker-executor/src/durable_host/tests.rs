@@ -700,6 +700,7 @@ pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
         0,
         AgentMode::Durable,
         true,
+        true,
         Arc::new(AtomicResourceEntry::new(
             0,
             usize::MAX,
@@ -994,6 +995,7 @@ fn aggregate_memory_growth_over_worker_limit_is_rejected() {
         60,
         60,
         AgentMode::Durable,
+        false,
         false,
         Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
         Arc::new(Mutex::new(MemoryGrant::inert(60))),

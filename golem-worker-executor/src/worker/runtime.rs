@@ -190,11 +190,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             admitted_startup_bytes,
             self.agent_mode(),
             replaying,
+            replaying,
             Arc::clone(&self.resource_entry),
             retained_memory_grant,
             self.config().effective_resource_usage_metering().memory,
         );
-        linear_memory.begin_instantiation(replaying);
         if let Some(meter) = linear_memory.meter_if_enabled() {
             self.owner_runtime_resources
                 .register_resource_usage_flusher(meter.usage_flusher());
@@ -799,11 +799,11 @@ impl RunningWorker {
             admitted_startup_bytes,
             parent.agent_mode(),
             true,
+            false,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
             parent.config().effective_resource_usage_metering().memory,
         );
-        linear_memory.begin_instantiation(false);
         let account = ResourceUsageAccount::new(
             parent.agent_mode(),
             linear_memory.clone(),
