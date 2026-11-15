@@ -60,7 +60,7 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
-use golem_common::schema::{ParsedAgentId, SchemaType, SchemaValue, TypedSchemaValue};
+use golem_common::schema::{ParsedAgentKey, SchemaType, SchemaValue, TypedSchemaValue};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::Serializer;
@@ -465,7 +465,7 @@ fn representative_agent_names(agent_type: &AgentTypeName) -> Vec<String> {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: Vec::new() },
             );
-            ParsedAgentId::new(agent_type.clone(), no_parameters, phantom_id).to_string()
+            ParsedAgentKey::new(agent_type.clone(), no_parameters, phantom_id).to_string()
         })
         .collect()
 }
