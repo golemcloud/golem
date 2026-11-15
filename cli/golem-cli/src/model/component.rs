@@ -52,7 +52,7 @@ use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionC
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{
-    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
+    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
@@ -643,7 +643,6 @@ pub(crate) fn render_input_schema(
     input
         .fields()
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| {
             let rendered_type = render_type_for_language(lang, graph, &field.schema, true);
             if show_param_names {

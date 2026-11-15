@@ -7092,25 +7092,14 @@
           "required": ["tag"],
           "properties": { "tag": { "const": "user-supplied" } },
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["tag", "value"],
-          "properties": { "tag": { "const": "auto-injected" }, "value": { "$ref": "#/definitions/AutoInjectedKind" } },
-          "additionalProperties": false
         }
       ]
     },
-    "AutoInjectedKind": {
-      "type": "string",
-      "enum": ["principal"]
-    },
     "ReadOnlyConfig": {
       "type": "object",
-      "required": ["cachePolicy", "usesPrincipal"],
+      "required": ["cachePolicy"],
       "properties": {
-        "cachePolicy": { "$ref": "#/definitions/CachePolicy" },
-        "usesPrincipal": { "type": "boolean" }
+        "cachePolicy": { "$ref": "#/definitions/CachePolicy" }
       },
       "additionalProperties": false
     },
