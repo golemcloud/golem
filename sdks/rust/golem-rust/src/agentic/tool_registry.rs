@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::agentic::InputStream;
+use crate::agentic::InvocationContext;
 use crate::agentic::extended_tool_type::{ExtendedToolType, PreparedToolDescriptor};
 use crate::golem_agentic::exports::golem::tool::guest::{
     InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
-use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -36,7 +36,7 @@ pub type ToolInvoker = fn(
     Option<InputStream>,
     Option<ToolOutputWriter>,
     Option<ToolOutputWriter>,
-    Principal,
+    InvocationContext,
 ) -> ToolInvokeFuture;
 
 #[derive(Default)]

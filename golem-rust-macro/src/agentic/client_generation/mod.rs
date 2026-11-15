@@ -16,7 +16,7 @@ use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_r
 use crate::rpc_client_common::{
     FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
     encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
-    is_principal_param, is_static_method, positional_record_schema_value,
+    is_invocation_context_param, is_static_method, positional_record_schema_value,
 };
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
@@ -634,7 +634,7 @@ fn get_remote_agent_methods_info(
                 )));
             }
 
-            let keep = |pat_type: &syn::PatType| !is_principal_param(pat_type);
+            let keep = |pat_type: &syn::PatType| !is_invocation_context_param(pat_type);
             let input_defs = collect_kept_args(&method.sig, keep);
             let input_idents: Vec<syn::Ident> = collect_typed_params(&method.sig, keep)
                 .into_iter()

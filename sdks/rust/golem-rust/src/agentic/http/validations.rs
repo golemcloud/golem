@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{
-    AutoInjectedParamType, EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor,
-};
+use crate::agentic::{EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor};
 use crate::golem_agentic::golem::agent::common::{
     HttpEndpointDetails, HttpMountDetails, PathSegment, PhantomIdBinding,
 };
@@ -26,11 +24,10 @@ pub fn validate_wire_agent_http(
 ) -> Result<(), String> {
     use crate::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
     use crate::schema::wit::wire::Role;
-    let names = |input: &InputSchema, principal: bool| {
+    let names = |input: &InputSchema| {
         let InputSchema::Parameters(fields) = input;
         fields
             .iter()
-            .filter(|field| matches!(field.source, FieldSource::AutoInjected(_)) == principal)
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>()
     };
@@ -53,14 +50,8 @@ pub fn validate_wire_agent_http(
     };
     if let Some(mount) = &agent.http_mount {
         let input = &agent.constructor.input_schema;
-        let parameters = names(input, false);
-        validate_phantom_selector(
-            mount,
-            &names(input, false)
-                .union(&names(input, true))
-                .cloned()
-                .collect(),
-        )?;
+        let parameters = names(input);
+        validate_phantom_selector(mount, &parameters)?;
         if mount.phantom_id_binding.is_some()
             && (agent.mode == crate::golem_agentic::golem::agent::common::AgentMode::Ephemeral
                 || agent.kind
@@ -81,7 +72,6 @@ pub fn validate_wire_agent_http(
                 ));
             }
         }
-        validate_mount_variables_are_not_principal(mount, &names(input, true))?;
         validate_mount_variables_exist_in_constructor(mount, &parameters)?;
         validate_constructor_vars_are_satisfied(mount, &parameters)?;
     }
@@ -100,8 +90,7 @@ pub fn validate_wire_agent_http(
             validate_phantom_endpoint(agent.http_mount.as_ref().unwrap(), endpoint)?;
             validate_endpoint_variables(
                 endpoint,
-                &names(input, false),
-                &names(input, true),
+                &names(input),
                 &roles(input, Role::UnstructuredBinary),
                 &roles(input, Role::UnstructuredText),
                 &roles(input, Role::Multimodal),
@@ -117,18 +106,12 @@ pub fn validate_http_mount(
     agent_class_name: &str,
     agent_mount: &HttpMountDetails,
     agent_constructor: &ExtendedAgentConstructor,
-    parameters_for_principal: &HashSet<String>,
 ) -> Result<(), String> {
     let constructor_input_params = collect_constructor_input_parameter_names(agent_constructor);
 
-    let all_parameters = constructor_input_params
-        .union(parameters_for_principal)
-        .cloned()
-        .collect();
-    validate_phantom_selector(agent_mount, &all_parameters)?;
+    validate_phantom_selector(agent_mount, &constructor_input_params)?;
     validate_no_catch_all_in_http_mount(agent_class_name, agent_mount)?;
     validate_constructor_params_are_http_safe(agent_class_name, agent_constructor)?;
-    validate_mount_variables_are_not_principal(agent_mount, parameters_for_principal)?;
     validate_mount_variables_exist_in_constructor(agent_mount, &constructor_input_params)?;
     validate_constructor_vars_are_satisfied(agent_mount, &constructor_input_params)?;
 
@@ -150,10 +133,7 @@ pub fn validate_http_endpoint(
         http_mount_details,
     )?;
 
-    let method_vars_without_auto_injected_variables =
-        collect_method_input_vars(&agent_method.input_schema);
-
-    let principal_params = collect_principal_parameter_names(&agent_method.input_schema);
+    let method_vars = collect_method_input_vars(&agent_method.input_schema);
 
     let unstructured_binary_params = collect_unstructured_binary_params(&agent_method.input_schema);
     let unstructured_text_params = collect_unstructured_text_params(&agent_method.input_schema);
@@ -163,8 +143,7 @@ pub fn validate_http_endpoint(
         validate_phantom_endpoint(http_mount_details.unwrap(), endpoint)?;
         validate_endpoint_variables(
             endpoint,
-            &method_vars_without_auto_injected_variables,
-            &principal_params,
+            &method_vars,
             &unstructured_binary_params,
             &unstructured_text_params,
             &multimodal_params,
@@ -172,24 +151,6 @@ pub fn validate_http_endpoint(
     }
 
     Ok(())
-}
-
-fn collect_principal_parameter_names(
-    input_schema: &[(String, EnrichedParameterSchema)],
-) -> HashSet<String> {
-    let mut principal_params = HashSet::new();
-
-    for (param_name, param_schema) in input_schema {
-        if let EnrichedParameterSchema::AutoInject(auto_injected_schema) = param_schema {
-            match auto_injected_schema {
-                AutoInjectedParamType::Principal => {
-                    principal_params.insert(param_name.clone());
-                }
-            }
-        }
-    }
-
-    principal_params
 }
 
 fn collect_unstructured_binary_params(
@@ -240,20 +201,11 @@ fn collect_multimodal_params(
     multimodal_params
 }
 
-// Collects method input variable names, excluding auto-injected variables.
+// Collects method input variable names.
 fn collect_method_input_vars(
     input_schema: &[(String, EnrichedParameterSchema)],
 ) -> HashSet<String> {
-    let mut param_names = HashSet::new();
-
-    for (param_name, param_schema) in input_schema {
-        if let EnrichedParameterSchema::AutoInject(_) = param_schema {
-            continue;
-        }
-        param_names.insert(param_name.clone());
-    }
-
-    param_names
+    input_schema.iter().map(|(name, _)| name.clone()).collect()
 }
 
 fn is_unstructured_text_schema(schema: &crate::schema::SchemaGraph) -> bool {
@@ -271,7 +223,6 @@ fn is_multimodal_schema(schema: &crate::schema::SchemaGraph) -> bool {
 fn validate_endpoint_variables(
     endpoint: &HttpEndpointDetails,
     method_vars: &HashSet<String>,
-    principal_params: &HashSet<String>,
     unstructured_binary_params: &HashSet<String>,
     unstructured_text_params: &HashSet<String>,
     multimodal_params: &HashSet<String>,
@@ -279,7 +230,6 @@ fn validate_endpoint_variables(
     fn validate_variable(
         variable_name: &str,
         location: &str,
-        principal_params: &HashSet<String>,
         unstructured_binary_params: &HashSet<String>,
         unstructured_text_params: &HashSet<String>,
         multimodal_params: &HashSet<String>,
@@ -288,13 +238,6 @@ fn validate_endpoint_variables(
         text_error: &str,
         multimodal_error: &str,
     ) -> Result<(), String> {
-        if principal_params.contains(variable_name) {
-            return Err(format!(
-                "HTTP endpoint {} variable '{}' cannot be used for parameters of type 'Principal'",
-                location, variable_name
-            ));
-        }
-
         if unstructured_binary_params.contains(variable_name) {
             return Err(binary_error.to_string());
         }
@@ -321,7 +264,6 @@ fn validate_endpoint_variables(
         validate_variable(
             &var.variable_name,
             "header",
-            principal_params,
             unstructured_binary_params,
             unstructured_text_params,
             multimodal_params,
@@ -345,7 +287,6 @@ fn validate_endpoint_variables(
         validate_variable(
             &var.variable_name,
             "query",
-            principal_params,
             unstructured_binary_params,
             unstructured_text_params,
             multimodal_params,
@@ -373,7 +314,6 @@ fn validate_endpoint_variables(
                 validate_variable(
                     name,
                     "path",
-                    principal_params,
                     unstructured_binary_params,
                     unstructured_text_params,
                     multimodal_params,
@@ -470,10 +410,8 @@ fn collect_constructor_input_parameter_names(
 ) -> HashSet<String> {
     let mut param_names = HashSet::new();
 
-    for (name, schema) in &agent_constructor.input_schema {
-        if let EnrichedParameterSchema::Value(_) = schema {
-            param_names.insert(name.clone());
-        }
+    for (name, _) in &agent_constructor.input_schema {
+        param_names.insert(name.clone());
     }
 
     param_names
@@ -484,45 +422,24 @@ fn validate_constructor_params_are_http_safe(
     agent_constructor: &ExtendedAgentConstructor,
 ) -> Result<(), String> {
     for (name, schema) in &agent_constructor.input_schema {
-        if let EnrichedParameterSchema::Value(schema) = schema {
-            if is_unstructured_text_schema(schema) {
-                return Err(format!(
-                    "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredText' when used with HTTP mount",
-                    agent_class_name, name
-                ));
-            }
-            if is_unstructured_binary_schema(schema) {
-                return Err(format!(
-                    "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredBinary' when used with HTTP mount",
-                    agent_class_name, name
-                ));
-            }
-            if is_multimodal_schema(schema) {
-                return Err(format!(
-                    "Agent '{}' constructor parameter '{}' cannot be of type 'Multimodal' when used with HTTP mount",
-                    agent_class_name, name
-                ));
-            }
+        let EnrichedParameterSchema::Value(schema) = schema;
+        if is_unstructured_text_schema(schema) {
+            return Err(format!(
+                "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredText' when used with HTTP mount",
+                agent_class_name, name
+            ));
         }
-    }
-
-    Ok(())
-}
-
-fn validate_mount_variables_are_not_principal(
-    agent_mount: &HttpMountDetails,
-    parameters_for_principal: &HashSet<String>,
-) -> Result<(), String> {
-    for segment in &agent_mount.path_prefix {
-        if let PathSegment::PathVariable(variable) = segment {
-            let variable_name = &variable.variable_name;
-
-            if parameters_for_principal.contains(variable_name) {
-                return Err(format!(
-                    "HTTP mount path variable '{}' cannot be used for constructor parameters of type 'Principal'",
-                    variable_name,
-                ));
-            }
+        if is_unstructured_binary_schema(schema) {
+            return Err(format!(
+                "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredBinary' when used with HTTP mount",
+                agent_class_name, name
+            ));
+        }
+        if is_multimodal_schema(schema) {
+            return Err(format!(
+                "Agent '{}' constructor parameter '{}' cannot be of type 'Multimodal' when used with HTTP mount",
+                agent_class_name, name
+            ));
         }
     }
 
@@ -617,22 +534,12 @@ mod tests {
         AuthDetails, CorsOptions, HeaderVariable, HttpMethod, PathVariable, QueryVariable,
     };
     use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes};
-    use std::collections::HashSet;
-
-    fn principal_params(names: &[&str]) -> HashSet<String> {
-        names.iter().map(|s| s.to_string()).collect()
-    }
 
     fn constructor_with_params(params: Vec<(&str, StructuredSchema)>) -> ExtendedAgentConstructor {
         let input_schema = params
             .into_iter()
             .map(|(name, schema)| {
-                let schema = match schema {
-                    StructuredSchema::Default(schema) => schema,
-                    StructuredSchema::AutoInject(_) => {
-                        panic!("AutoInjected schema not supported in this test constructor")
-                    }
-                };
+                let StructuredSchema::Default(schema) = schema;
 
                 (name.to_string(), EnrichedParameterSchema::Value(schema))
             })
@@ -689,10 +596,10 @@ mod tests {
             name: "instance".into(),
             optional: true,
         }));
-        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_ok());
+        assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
         mount.path_prefix.push(path_var("other"));
         assert!(
-            validate_http_mount("Selected", &mount, &constructor, &HashSet::new())
+            validate_http_mount("Selected", &mount, &constructor)
                 .unwrap_err()
                 .contains("other")
         );
@@ -702,13 +609,13 @@ mod tests {
             ("instance", String::get_type()),
         ]);
         assert!(
-            validate_http_mount("Selected", &mount, &colliding, &HashSet::new())
+            validate_http_mount("Selected", &mount, &colliding)
                 .unwrap_err()
                 .contains("constructor parameter")
         );
         mount.path_prefix.pop();
         assert!(
-            validate_http_mount("Selected", &mount, &constructor, &HashSet::new())
+            validate_http_mount("Selected", &mount, &constructor)
                 .unwrap_err()
                 .contains("exactly one")
         );
@@ -716,9 +623,9 @@ mod tests {
             name: "instance".into(),
             optional: false,
         }));
-        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_ok());
+        assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
         mount.path_prefix.push(path_var("instance"));
-        assert!(validate_http_mount("Selected", &mount, &constructor, &HashSet::new()).is_err());
+        assert!(validate_http_mount("Selected", &mount, &constructor).is_err());
     }
 
     #[test]
@@ -730,9 +637,7 @@ mod tests {
 
         let mount = mount_with_segments(vec![literal(), path_var("user_id"), path_var("org_id")]);
 
-        let principal_params = principal_params(&[]);
-
-        let result = validate_http_mount("MyAgent", &mount, &constructor, &principal_params);
+        let result = validate_http_mount("MyAgent", &mount, &constructor);
 
         assert!(result.is_ok());
     }
@@ -743,8 +648,7 @@ mod tests {
 
         let mount = mount_with_segments(vec![path_var("id"), catch_all("rest")]);
 
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+        let err = validate_http_mount("MyAgent", &mount, &constructor).unwrap_err();
 
         assert_eq!(
             err,
@@ -766,29 +670,11 @@ mod tests {
 
         let mount = mount_with_segments(vec![path_var("blob")]);
 
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+        let err = validate_http_mount("MyAgent", &mount, &constructor).unwrap_err();
 
         assert_eq!(
             err,
             "Agent 'MyAgent' constructor parameter 'blob' cannot be of type 'UnstructuredBinary' when used with HTTP mount"
-        );
-    }
-
-    #[test]
-    fn fails_when_mount_variable_is_principal() {
-        let constructor = constructor_with_params(vec![("user", String::get_type())]);
-
-        let mount = mount_with_segments(vec![path_var("user")]);
-
-        let principal_params = principal_params(&["user"]);
-
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &principal_params).unwrap_err();
-
-        assert_eq!(
-            err,
-            "HTTP mount path variable 'user' cannot be used for constructor parameters of type 'Principal'"
         );
     }
 
@@ -798,8 +684,7 @@ mod tests {
 
         let mount = mount_with_segments(vec![path_var("missing")]);
 
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+        let err = validate_http_mount("MyAgent", &mount, &constructor).unwrap_err();
 
         assert_eq!(
             err,
@@ -816,8 +701,7 @@ mod tests {
 
         let mount = mount_with_segments(vec![path_var("id")]);
 
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+        let err = validate_http_mount("MyAgent", &mount, &constructor).unwrap_err();
 
         assert_eq!(
             err,
@@ -827,15 +711,13 @@ mod tests {
 
     fn make_schema(
         normal_vars: Vec<&str>,
-        principal_vars: Vec<&str>,
         unstructured_vars: Vec<&str>,
     ) -> Vec<(String, EnrichedParameterSchema)> {
-        make_schema_with_text(normal_vars, principal_vars, unstructured_vars, vec![])
+        make_schema_with_text(normal_vars, unstructured_vars, vec![])
     }
 
     fn make_schema_with_text(
         normal_vars: Vec<&str>,
-        principal_vars: Vec<&str>,
         unstructured_binary_vars: Vec<&str>,
         unstructured_text_vars: Vec<&str>,
     ) -> Vec<(String, EnrichedParameterSchema)> {
@@ -845,13 +727,6 @@ mod tests {
             fields.push((
                 name.to_string(),
                 EnrichedParameterSchema::Value(String::get_type().get_schema_graph().unwrap()),
-            ));
-        }
-
-        for name in principal_vars {
-            fields.push((
-                name.to_string(),
-                EnrichedParameterSchema::AutoInject(AutoInjectedParamType::Principal),
             ));
         }
 
@@ -935,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_no_http_endpoints() {
-        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![], vec![]), vec![]);
+        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![]), vec![]);
         assert!(validate_http_endpoint("AgentA", &agent_method, None).is_ok());
     }
 
@@ -949,11 +824,7 @@ mod tests {
             Some(true),
             vec![],
         );
-        let agent_method = make_agent_method(
-            "foo",
-            make_schema(vec!["x"], vec![], vec![]),
-            vec![endpoint],
-        );
+        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![]), vec![endpoint]);
         let err = validate_http_endpoint("AgentA", &agent_method, None).unwrap_err();
         assert!(err.contains("defines HTTP endpoints but the agent is not mounted over HTTP"));
     }
@@ -968,33 +839,9 @@ mod tests {
             Some(true),
             vec!["*"],
         );
-        let agent_method = make_agent_method(
-            "foo",
-            make_schema(vec!["x"], vec![], vec![]),
-            vec![endpoint],
-        );
+        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![]), vec![endpoint]);
         let mount = mount_with_segments(vec![path_var("foo")]);
         assert!(validate_http_endpoint("AgentA", &agent_method, Some(&mount)).is_ok());
-    }
-
-    #[test]
-    fn test_header_principal_error() {
-        let endpoint = make_endpoint(
-            HttpMethod::Get,
-            vec![],
-            vec![("X-Test", "p")],
-            vec![],
-            Some(true),
-            vec![],
-        );
-        let agent_method = make_agent_method(
-            "foo",
-            make_schema(vec![], vec!["p"], vec![]),
-            vec![endpoint],
-        );
-        let mount = mount_with_segments(vec![path_var("foo")]);
-        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
-        assert!(err.contains("cannot be used for parameters of type 'Principal'"));
     }
 
     #[test]
@@ -1007,11 +854,7 @@ mod tests {
             Some(true),
             vec![],
         );
-        let agent_method = make_agent_method(
-            "foo",
-            make_schema(vec![], vec![], vec!["b"]),
-            vec![endpoint],
-        );
+        let agent_method = make_agent_method("foo", make_schema(vec![], vec!["b"]), vec![endpoint]);
         let mount = mount_with_segments(vec![path_var("foo")]);
         let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
         assert!(err.contains("cannot be used for method parameters of type 'UnstructuredBinary'"));
@@ -1027,11 +870,7 @@ mod tests {
             Some(true),
             vec![],
         );
-        let agent_method = make_agent_method(
-            "foo",
-            make_schema(vec!["x"], vec![], vec![]),
-            vec![endpoint],
-        );
+        let agent_method = make_agent_method("foo", make_schema(vec!["x"], vec![]), vec![endpoint]);
         let mount = mount_with_segments(vec![path_var("foo")]);
         let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
         assert!(err.contains("is not defined in method input parameters"));
@@ -1052,8 +891,7 @@ mod tests {
 
         let mount = mount_with_segments(vec![path_var("body")]);
 
-        let err =
-            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+        let err = validate_http_mount("MyAgent", &mount, &constructor).unwrap_err();
 
         assert_eq!(
             err,
@@ -1073,7 +911,7 @@ mod tests {
         );
         let agent_method = make_agent_method(
             "foo",
-            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            make_schema_with_text(vec![], vec![], vec!["t"]),
             vec![endpoint],
         );
         let mount = mount_with_segments(vec![path_var("foo")]);
@@ -1093,7 +931,7 @@ mod tests {
         );
         let agent_method = make_agent_method(
             "foo",
-            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            make_schema_with_text(vec![], vec![], vec!["t"]),
             vec![endpoint],
         );
         let mount = mount_with_segments(vec![path_var("foo")]);
@@ -1113,7 +951,7 @@ mod tests {
         );
         let agent_method = make_agent_method(
             "foo",
-            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            make_schema_with_text(vec![], vec![], vec!["t"]),
             vec![endpoint],
         );
         let mount = mount_with_segments(vec![path_var("foo")]);

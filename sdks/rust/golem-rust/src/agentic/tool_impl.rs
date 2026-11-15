@@ -124,7 +124,7 @@ impl Guest for ToolRuntime {
     ) -> Result<InvocationResult, ToolError> {
         let invoker = get_tool_invoker_by_name(&tool_name)
             .ok_or_else(|| ToolError::InvalidToolName(tool_name.clone()))?;
-        let principal = crate::agentic::immediate_caller();
-        invoker(command_path, input, stdin, stdout, stderr, principal).await
+        let context = crate::agentic::InvocationContext::current();
+        invoker(command_path, input, stdin, stdout, stderr, context).await
     }
 }

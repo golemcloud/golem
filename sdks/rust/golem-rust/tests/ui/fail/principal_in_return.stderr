@@ -1,0 +1,78 @@
+error[E0277]: the trait bound `golem_rust::agentic::Caller: FromWire` is not satisfied
+ --> tests/ui/fail/principal_in_return.rs:7:22
+  |
+7 |     fn run(&self) -> Caller;
+  |                      ^^^^^^ the trait `FromWire` is not implemented for `golem_rust::agentic::Caller`
+  |
+  = help: the following other types implement trait `FromWire`:
+            ()
+            (A, B)
+            (A, B, C)
+            (A, B, C, D)
+            (A, B, C, D, E)
+            (A, B, C, D, E, F)
+            (A, B, C, D, E, F, G)
+            (A, B, C, D, E, F, G, H)
+          and $N others
+note: required by a bound in `decode_result_payload`
+ --> $GOLEM_SCHEMA/src/schema/wit/direct.rs
+  |
+  | pub fn decode_result_payload<T: FromWire>(
+  |                                 ^^^^^^^^ required by this bound in `decode_result_payload`
+
+error[E0277]: the trait bound `golem_rust::agentic::Caller: WireSchema` is not satisfied
+ --> tests/ui/fail/principal_in_return.rs:7:22
+  |
+7 |     fn run(&self) -> Caller;
+  |                      ^^^^^^ the trait `WireSchema` is not implemented for `golem_rust::agentic::Caller`
+  |
+  = help: the following other types implement trait `WireSchema`:
+            &T
+            ()
+            (A, B)
+            (A, B, C)
+            (A, B, C, D)
+            (A, B, C, D, E)
+            (A, B, C, D, E, F)
+            (A, B, C, D, E, F, G)
+          and $N others
+
+error[E0277]: the trait bound `golem_rust::agentic::Caller: WireSchema` is not satisfied
+  --> tests/ui/fail/principal_in_return.rs:18:22
+   |
+18 |     fn run(&self) -> Caller {
+   |                      ^^^^^^ the trait `WireSchema` is not implemented for `golem_rust::agentic::Caller`
+   |
+   = help: the following other types implement trait `WireSchema`:
+             &T
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             (A, B, C, D, E)
+             (A, B, C, D, E, F)
+             (A, B, C, D, E, F, G)
+           and $N others
+
+error[E0277]: the trait bound `golem_rust::agentic::Caller: IntoWire` is not satisfied
+  --> tests/ui/fail/principal_in_return.rs:12:1
+   |
+12 | #[agent_implementation]
+   | ^^^^^^^^^^^^^^^^^^^^^^^ the trait `IntoWire` is not implemented for `golem_rust::agentic::Caller`
+   |
+   = help: the following other types implement trait `IntoWire`:
+             &T
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             (A, B, C, D, E)
+             (A, B, C, D, E, F)
+             (A, B, C, D, E, F, G)
+           and $N others
+note: required by a bound in `encode_async`
+  --> $GOLEM_SCHEMA/src/schema/wit/direct.rs
+   |
+   | pub async fn encode_async<T: IntoWire + ?Sized>(
+   |                              ^^^^^^^^ required by this bound in `encode_async`
+   = note: this error originates in the attribute macro `agent_implementation` (in Nightly builds, run with -Z macro-backtrace for more info)

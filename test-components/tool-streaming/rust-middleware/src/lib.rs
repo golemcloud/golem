@@ -4,9 +4,10 @@ use golem_rust::schema::tool::{ErrorCase, ErrorKind};
 use golem_rust::schema::try_into_schema_graph;
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::tool::{
-    EmptyMiddlewareParameters, InputStream, InvocationResult, MonomorphicToolMiddlewareScope,
-    OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, ToolMiddleware,
-    ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
+    EmptyMiddlewareParameters, InputStream, InvocationContext, InvocationResult,
+    MonomorphicToolMiddlewareScope, OutputStream, RawCustomToolError, Tool, ToolInvokeError,
+    ToolMiddleware, ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying,
+    UnderlyingTool,
 };
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaType, SchemaValue,
@@ -41,7 +42,7 @@ pub trait Streaming {
         mode: String,
         stdin: InputStream,
         stdout: OutputStream,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> Result<StreamSummary, StreamingError>;
 }
 
@@ -215,7 +216,7 @@ fn invoke_mcp_projection(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture {
     Box::pin(async move {
@@ -411,7 +412,7 @@ async fn universal_pass_through(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying
@@ -428,7 +429,7 @@ async fn k3_rate_limit_pre_leaf_checkpoint(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     if tool_name == "middleware-probe" {
@@ -448,7 +449,7 @@ fn invoke_streaming_pass_through(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture {
     Box::pin(async move {
@@ -534,7 +535,7 @@ async fn human_approval(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let request_id = golem_rust::generate_idempotency_key();
@@ -553,12 +554,7 @@ async fn human_approval(
         policy: parameters.policy,
         tool_name,
         command_path: command_path.clone(),
-        principal: match principal {
-            Principal::Anonymous => "anonymous",
-            Principal::Oidc(_) => "oidc",
-            Principal::Agent(_) => "agent",
-            Principal::GolemUser(_) => "golem-user",
-        },
+        principal: context.caller().immediate().kind().as_str(),
     };
     let token = std::env::var("GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN").map_err(|_| {
         ToolInvokeError::InternalError(
@@ -680,7 +676,7 @@ async fn universal_secret_policy_audit(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     if tool_name != "secret-policy-probe" {
@@ -731,7 +727,7 @@ async fn universal_transform_input(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let (graph, mut value) = input.into_parts();
@@ -762,7 +758,7 @@ async fn universal_mcp_fanout(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     fn with_suffix(input: &TypedSchemaValue, suffix: &str) -> TypedSchemaValue {

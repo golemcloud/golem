@@ -311,7 +311,7 @@ fn schema_checks(ir: &ToolDefinitionIr) -> TokenStream {
     let mut types = Vec::new();
     for cmd in &ir.commands {
         for param in &cmd.params {
-            if is_auto_injected_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            if is_injected_context_type(&param.ty) || is_stream_type(&param.ty) {
                 continue;
             }
             types.push(unwrap_generic1(&param.ty, "Option").unwrap_or(&param.ty));
@@ -800,7 +800,7 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
-            if is_auto_injected_principal_type(&param.ty) {
+            if is_injected_context_type(&param.ty) {
                 return None;
             }
             let arg = arg_for(cmd, &param.ident);
@@ -826,7 +826,7 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
-            if is_auto_injected_principal_type(&param.ty) {
+            if is_injected_context_type(&param.ty) {
                 return None;
             }
             let arg = arg_for(cmd, &param.ident);
@@ -840,11 +840,11 @@ fn build_command_node(
         });
 
     for (idx, param) in cmd.params.iter().enumerate() {
-        if is_auto_injected_principal_type(&param.ty) {
+        if is_injected_context_type(&param.ty) {
             if let Some(arg) = arg_for(cmd, &param.ident) {
                 return Err(Error::new(
                     arg.param.span(),
-                    "auto-injected Principal parameters cannot have #[arg] attributes because they are not part of the tool input schema",
+                    "auto-injected InvocationContext parameters cannot have #[arg] attributes because they are not part of the tool input schema",
                 ));
             }
             continue;
@@ -1203,7 +1203,7 @@ fn vec_tail_spec(
 /// them like any other parameter and the runtime (`reinfer_body_tail`) decides
 /// which candidates survive.
 fn is_positional_candidate(param: &crate::tool::ir::ParamIr, arg: Option<&ArgIr>) -> bool {
-    if is_stream_type(&param.ty) || is_auto_injected_principal_type(&param.ty) {
+    if is_stream_type(&param.ty) || is_injected_context_type(&param.ty) {
         return false;
     }
     match arg.and_then(|a| a.placement) {
@@ -2915,7 +2915,7 @@ fn type_last_ident(ty: &Type) -> Option<String> {
     }
 }
 
-fn is_auto_injected_principal_type(ty: &Type) -> bool {
+fn is_injected_context_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };
@@ -2928,16 +2928,8 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic" | "tool", "Principal"]
-            | ["golem_native_tool" | "crate", "Principal"]
-            | [
-                "golem_rust",
-                "golem_agentic",
-                "golem",
-                "agent",
-                "common",
-                "Principal"
-            ]
+        ["golem_rust", "agentic" | "tool", "InvocationContext"]
+            | ["golem_native_tool" | "crate", "Caller"]
     )
 }
 

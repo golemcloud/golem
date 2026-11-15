@@ -218,7 +218,7 @@ fn request(request_id: u128, promise_oplog_idx: u64) -> ApprovalRequest {
         policy: "production-change".to_string(),
         tool_name: "matrix-core".to_string(),
         command_path: vec!["artifact".to_string(), "inspect".to_string()],
-        principal: "oidc".to_string(),
+        principal: "user".to_string(),
     }
 }
 
@@ -315,12 +315,12 @@ async fn approval_1_request_identity_auth_state_and_late_decision_contract() {
 async fn approval_1_rejects_unrecognized_principal_kinds() {
     let harness = Harness::start().await;
     let mut request = request(2, 42);
-    request.principal = "oidc:forged-subject".to_string();
+    request.principal = "user:forged-subject".to_string();
 
     assert_eq!(
         harness.register(&request, REQUEST_TOKEN).await.status(),
         StatusCode::UNPROCESSABLE_ENTITY,
-        "principal must be one of anonymous, oidc, agent, or golem-user"
+        "principal must be one of anonymous, user, account, agent, or tool"
     );
 }
 

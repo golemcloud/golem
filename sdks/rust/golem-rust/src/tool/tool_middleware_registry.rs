@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    InputStream, OutputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
+    InputStream, InvocationContext, OutputStream, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
     ToolMiddlewareScope, UnderlyingTool,
 };
 use crate::TypedSchemaValue;
@@ -32,7 +32,7 @@ pub type ToolMiddlewareInvoker = fn(
     Option<InputStream>,
     Option<OutputStream>,
     Option<OutputStream>,
-    Principal,
+    InvocationContext,
     UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture;
 
@@ -181,7 +181,7 @@ mod tests {
         _stdin: Option<InputStream>,
         _stdout: Option<OutputStream>,
         _stderr: Option<OutputStream>,
-        _principal: Principal,
+        _context: InvocationContext,
         _underlying: UnderlyingTool,
     ) -> ToolMiddlewareInvokeFuture {
         Box::pin(async {
@@ -291,7 +291,7 @@ mod tests {
                 None,
                 None,
                 None,
-                Principal::Anonymous,
+                crate::tool::InvocationContext::from_caller(crate::tool::Caller::anonymous()),
                 underlying(),
             )
             .await
