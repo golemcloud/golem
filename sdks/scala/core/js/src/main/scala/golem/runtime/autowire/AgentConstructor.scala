@@ -16,7 +16,7 @@
 
 package golem.runtime.autowire
 
-import golem.Principal
+import golem.InvocationContext
 import golem.FutureInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
 import golem.runtime.{ConstructorMetadata, InputRecordCodec, WireAgentMetadata, WireAgentInputError}
@@ -34,41 +34,41 @@ import scala.util.control.NonFatal
 trait AgentConstructor[Instance] {
   def info: ConstructorMetadata
 
-  def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance]
+  def initialize(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Instance]
 }
 
 object AgentConstructor {
 
   def wire[A, Instance](descriptor: WireAgentMetadata, codec: ConcreteCodec[A])(
-    build: (A, Principal) => Instance
+    build: (A, InvocationContext) => Instance
   ): AgentConstructor[Instance] = new AgentConstructor[Instance] {
-    def info: ConstructorMetadata                                                        = descriptor.reflectedConstructor
-    def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
+    def info: ConstructorMetadata                                                              = descriptor.reflectedConstructor
+    def initialize(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Instance] =
       FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
         val decoded =
           try codec.decode(value)
           catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
-        Future.successful(build(decoded, principal))
+        Future.successful(build(decoded, context))
       })
   }
 
   def sync[A, Instance](info: ConstructorMetadata, inputCodec: InputRecordCodec[A])(
-    build: (A, Principal) => Instance
+    build: (A, InvocationContext) => Instance
   ): AgentConstructor[Instance] =
-    async[A, Instance](info, inputCodec)((a, principal) => Future.successful(build(a, principal)))
+    async[A, Instance](info, inputCodec)((a, context) => Future.successful(build(a, context)))
 
   def async[A, Instance](info: ConstructorMetadata, inputCodec: InputRecordCodec[A])(
-    build: (A, Principal) => Future[Instance]
+    build: (A, InvocationContext) => Future[Instance]
   ): AgentConstructor[Instance] = {
     val ctorInfo = info
     new AgentConstructor[Instance] {
       override val info: ConstructorMetadata = ctorInfo
 
-      override def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
+      override def initialize(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Instance] =
         FutureInterop.toPromise(
           SchemaPayload.withDecodedInput[A, Instance](input) {
             case Left(err)    => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
-            case Right(value) => build(value, principal)
+            case Right(value) => build(value, context)
           }(inputCodec)
         )
     }

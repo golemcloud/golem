@@ -18,11 +18,11 @@ package golem.runtime.http
 
 import zio.test._
 
-object HttpValidationPrincipalSpec extends ZIOSpecDefault {
+object HttpValidationInvocationContextSpec extends ZIOSpecDefault {
 
-  private val principalParams = Set("caller")
+  private val contextParams = Set("caller")
 
-  def spec = suite("HttpValidationPrincipalSpec")(
+  def spec = suite("HttpValidationInvocationContextSpec")(
     test("low-level HTTP model preserves mapping order/provider and distinguishes Any from Custom ANY") {
       val mount = HttpMountDetails(
         Nil,
@@ -43,8 +43,8 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
         HttpMethod.fromString("any") == Right(HttpMethod.Custom("any"))
       )
     },
-    suite("endpoint Principal validation")(
-      test("rejects path variable referencing Principal param") {
+    suite("endpoint InvocationContext validation")(
+      test("rejects path variable referencing InvocationContext param") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Get,
           pathSuffix = List(PathSegment.PathVariable("caller")),
@@ -58,15 +58,15 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           "myMethod",
           endpoint,
           Set("caller", "name"),
-          principalParams,
+          contextParams,
           hasMount = true
         )
         assertTrue(
           result.isLeft,
-          result.left.toOption.get.contains("Principal-typed parameter")
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
         )
       },
-      test("rejects header variable referencing Principal param") {
+      test("rejects header variable referencing InvocationContext param") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Post,
           pathSuffix = List(PathSegment.Literal("action")),
@@ -80,15 +80,15 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           "myMethod",
           endpoint,
           Set("caller", "name"),
-          principalParams,
+          contextParams,
           hasMount = true
         )
         assertTrue(
           result.isLeft,
-          result.left.toOption.get.contains("Principal-typed parameter")
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
         )
       },
-      test("rejects query variable referencing Principal param") {
+      test("rejects query variable referencing InvocationContext param") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Get,
           pathSuffix = Nil,
@@ -102,15 +102,15 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           "myMethod",
           endpoint,
           Set("caller", "name"),
-          principalParams,
+          contextParams,
           hasMount = true
         )
         assertTrue(
           result.isLeft,
-          result.left.toOption.get.contains("Principal-typed parameter")
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
         )
       },
-      test("accepts endpoint with non-Principal params") {
+      test("accepts endpoint with non-InvocationContext params") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Get,
           pathSuffix = List(PathSegment.PathVariable("name")),
@@ -124,12 +124,12 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           "myMethod",
           endpoint,
           Set("caller", "name"),
-          principalParams,
+          contextParams,
           hasMount = true
         )
         assertTrue(result.isRight)
       },
-      test("accepts endpoint when principalParamNames is empty") {
+      test("accepts endpoint when contextParamNames is empty") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Get,
           pathSuffix = List(PathSegment.PathVariable("caller")),
@@ -148,7 +148,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
         )
         assertTrue(result.isRight)
       },
-      test("rejects remaining path variable referencing Principal param") {
+      test("rejects remaining path variable referencing InvocationContext param") {
         val endpoint = HttpEndpointDetails(
           httpMethod = HttpMethod.Get,
           pathSuffix = List(PathSegment.RemainingPathVariable("caller")),
@@ -162,17 +162,17 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           "myMethod",
           endpoint,
           Set("caller"),
-          principalParams,
+          contextParams,
           hasMount = true
         )
         assertTrue(
           result.isLeft,
-          result.left.toOption.get.contains("Principal-typed parameter")
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
         )
       }
     ),
-    suite("mount Principal validation")(
-      test("rejects mount path variable referencing Principal param") {
+    suite("mount InvocationContext validation")(
+      test("rejects mount path variable referencing InvocationContext param") {
         val mount = HttpMountDetails(
           pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("caller")),
           authRequired = false,
@@ -183,13 +183,13 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           filesystemBindings = Nil,
           openapiProviderMethod = None
         )
-        val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, contextParams)
         assertTrue(
           result.isLeft,
-          result.left.toOption.get.contains("Principal-typed constructor parameter")
+          result.left.toOption.get.contains("InvocationContext-typed constructor parameter")
         )
       },
-      test("accepts mount with non-Principal path variables") {
+      test("accepts mount with non-InvocationContext path variables") {
         val mount = HttpMountDetails(
           pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("name")),
           authRequired = false,
@@ -200,10 +200,10 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           filesystemBindings = Nil,
           openapiProviderMethod = None
         )
-        val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, principalParams)
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, contextParams)
         assertTrue(result.isRight)
       },
-      test("accepts mount when principalParamNames is empty") {
+      test("accepts mount when contextParamNames is empty") {
         val mount = HttpMountDetails(
           pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("caller")),
           authRequired = false,
@@ -214,7 +214,7 @@ object HttpValidationPrincipalSpec extends ZIOSpecDefault {
           filesystemBindings = Nil,
           openapiProviderMethod = None
         )
-        val result = HttpValidation.validateMountVarsAreNotPrincipal("TestAgent", mount, Set.empty)
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, Set.empty)
         assertTrue(result.isRight)
       }
     )

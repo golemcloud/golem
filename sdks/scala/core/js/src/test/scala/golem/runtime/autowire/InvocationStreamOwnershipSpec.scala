@@ -6,7 +6,7 @@
  */
 package golem.runtime.autowire
 
-import golem.{FutureInterop, Principal}
+import golem.{FutureInterop, InvocationContext}
 import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
 import golem.schema.{AgentStream, FromSchema, FromSchemaError, IntoSchema, SchemaGraph, SchemaValue}
 import zio.ZIO
@@ -67,7 +67,9 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
   }
 
   private def invoke[Out](binding: MethodBinding[Unit]) =
-    FutureInterop.fromPromise(binding.invoke((), SchemaPayload.encode(true)(using booleanInput), Principal.Anonymous))
+    FutureInterop.fromPromise(
+      binding.invoke((), SchemaPayload.encode(true)(using booleanInput), InvocationContext.anonymous)
+    )
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("InvocationStreamOwnershipSpec")(
@@ -198,7 +200,7 @@ object InvocationStreamOwnershipSpec extends ZIOSpecDefault {
           SchemaPayload.encodeAsync(source)(using inputInto).flatMap { input =>
             streamMock.reset()
             FutureInterop
-              .fromPromise(binding.invoke((), input, Principal.Anonymous))
+              .fromPromise(binding.invoke((), input, InvocationContext.anonymous))
               .failed
               .map(_ => assertTrue(streamMock.state.unwraps.asInstanceOf[Int] == 1, finalizations == 1))
           }

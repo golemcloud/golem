@@ -164,13 +164,13 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         )
         assertTrue(errors.exists(_.contains("duplicate @arg(...) for parameter `input`")))
       },
-      test("@arg on an auto-injected Principal parameter") {
+      test("@arg on an auto-injected InvocationContext parameter") {
         val errors = errorsOf(
           prelude + """
           @toolDefinition(version = "1.0.0")
           trait Run {
-            @arg("principal", doc = "who")
-            def run(input: String, principal: golem.Principal): Unit
+            @arg("context", doc = "who")
+            def run(input: String, context: golem.InvocationContext): Unit
           }
           ToolDefinitionMacro.metadata[Run]
           """
@@ -178,7 +178,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         assertTrue(
           errors.exists(
             _.contains(
-              "auto-injected Principal parameters cannot have @arg annotations because they are " +
+              "auto-injected InvocationContext parameters cannot have @arg annotations because they are " +
                 "not part of the tool input schema"
             )
           )

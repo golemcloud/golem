@@ -19,7 +19,7 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     fileResponseHeaders = Array(("Content-Security-Policy", "default-src 'self'"), ("Referrer-Policy", "same-origin"))
   )
   trait Website {
-    @httpHandler def arbitraryName(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
+    @httpHandler def arbitraryName(request: HttpRequest, context: golem.InvocationContext): Future[HttpResponse]
     @openApiProvider def description(): Future[String]
   }
   @httpRouter("files", "/", staticBindings = Array(("/", "/index.html")))
@@ -175,12 +175,12 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
         )
       )
     },
-    test("reject caller-dependent live-file identities even when Principal is not mounted") {
+    test("reject caller-dependent live-file identities even when InvocationContext is not mounted") {
       val errors: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
         import golem.runtime.annotations.*
         import golem.runtime.macros.AgentDefinitionMacro
         @agentDefinition(mount = "/", exposeFiles = Array(("/*", "/public/$1")))
-        trait Bad { class Id(val principal: golem.Principal) }
+        trait Bad { class Id(val context: golem.InvocationContext) }
         AgentDefinitionMacro.generate[Bad]
       """)
       assertTrue(errors.exists(_.message.contains("filesystem-constructor")))

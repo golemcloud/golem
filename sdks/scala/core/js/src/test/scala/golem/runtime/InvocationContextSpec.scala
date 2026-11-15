@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, Caller, InvocationContext, Principal, PrincipalRef}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.runtime.autowire.{AgentDefinition, AgentImplementation, MethodBinding, SchemaPayload}
 import golem.runtime.guest.Guest
@@ -32,7 +32,7 @@ import zio.blocks.schema.Schema
 import scala.concurrent.Future
 import scala.scalajs.js
 
-object PrincipalInjectionSpec extends ZIOSpecDefault {
+object InvocationContextSpec extends ZIOSpecDefault {
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -61,63 +61,57 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
   // ---------------------------------------------------------------------------
 
   @agentDefinition()
-  trait CtorPrincipalAgent extends BaseAgent {
+  trait CtorContextAgent extends BaseAgent {
     class Id(val value: String)
     def getCreator(): Future[String]
   }
 
   @agentImplementation()
-  final class CtorPrincipalAgentImpl(input: String, principal: Principal) extends CtorPrincipalAgent {
-    override def getCreator(): Future[String] = principal match {
-      case Principal.Anonymous                            => Future.successful(s"anonymous:$input")
-      case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => Future.successful(s"oidc:$sub:$input")
-      case _                                              => Future.successful(s"other:$input")
-    }
+  final class CtorContextAgentImpl(input: String, context: InvocationContext) extends CtorContextAgent {
+    override def getCreator(): Future[String] =
+      Future.successful(s"${context.caller.immediate}:$input")
   }
 
-  private lazy val ctorDefn: AgentDefinition[CtorPrincipalAgent] =
-    AgentImplementation.registerClass[CtorPrincipalAgent, CtorPrincipalAgentImpl]
+  private lazy val ctorDefn: AgentDefinition[CtorContextAgent] =
+    AgentImplementation.registerClass[CtorContextAgent, CtorContextAgentImpl]
 
   // ---------------------------------------------------------------------------
   // 2. Method injection
   // ---------------------------------------------------------------------------
 
   @agentDefinition()
-  trait MethodPrincipalAgent extends BaseAgent {
+  trait MethodContextAgent extends BaseAgent {
     class Id()
-    def identify(name: String, principal: Principal): Future[String]
+    def identify(name: String, context: InvocationContext): Future[String]
   }
 
   @agentImplementation()
-  final class MethodPrincipalAgentImpl() extends MethodPrincipalAgent {
-    override def identify(name: String, principal: Principal): Future[String] = principal match {
-      case Principal.Anonymous                            => Future.successful(s"$name:anonymous")
-      case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => Future.successful(s"$name:oidc:$sub")
-      case _                                              => Future.successful(s"$name:other")
-    }
+  final class MethodContextAgentImpl() extends MethodContextAgent {
+    override def identify(name: String, context: InvocationContext): Future[String] =
+      Future.successful(s"$name:${context.caller.immediate}")
   }
 
-  private val methodImpl = new MethodPrincipalAgentImpl()
+  private val methodImpl = new MethodContextAgentImpl()
 
-  private lazy val methodDefn: AgentDefinition[MethodPrincipalAgent] =
-    AgentImplementation.registerClass[MethodPrincipalAgent, MethodPrincipalAgentImpl]
+  private lazy val methodDefn: AgentDefinition[MethodContextAgent] =
+    AgentImplementation.registerClass[MethodContextAgent, MethodContextAgentImpl]
 
   // ---------------------------------------------------------------------------
-  // 3. Schema exclusion – method with Principal in params
+  // 3. Schema exclusion – method with InvocationContext in params
   // ---------------------------------------------------------------------------
 
   @agentDefinition()
   trait SchemaCheckAgent extends BaseAgent {
     class Id()
-    def greet(name: String, principal: Principal): Future[String]
-    def multi(a: String, b: Int, principal: Principal): Future[String]
+    def greet(name: String, context: InvocationContext): Future[String]
+    def multi(a: String, b: Int, context: InvocationContext): Future[String]
   }
 
   @agentImplementation()
   final class SchemaCheckAgentImpl() extends SchemaCheckAgent {
-    override def greet(name: String, principal: Principal): Future[String] =
+    override def greet(name: String, context: InvocationContext): Future[String] =
       Future.successful(s"hi $name")
-    override def multi(a: String, b: Int, principal: Principal): Future[String] =
+    override def multi(a: String, b: Int, context: InvocationContext): Future[String] =
       Future.successful(s"$a-$b")
   }
 
@@ -125,9 +119,9 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
     AgentImplementation.registerClass[SchemaCheckAgent, SchemaCheckAgentImpl]
 
   // ---------------------------------------------------------------------------
-  // 4. Mixed params – Config[_] + Principal in constructor (compile check)
+  // 4. Mixed params – Config[_] + InvocationContext in constructor (compile check)
   //
-  // The macro validates that Config + Principal params co-exist at compile time.
+  // The macro validates that Config + InvocationContext params co-exist at compile time.
   // We cannot call registerClass here because ConfigBuilder triggers WASI host
   // imports that are unavailable in the unit-test linker environment.  Instead
   // we verify that the macro's compile-time reflection (implementationTypeFromClass)
@@ -146,81 +140,86 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
   }
 
   @agentImplementation()
-  final class MixedParamsAgentImpl(input: String, principal: Principal) extends MixedParamsAgent {
+  final class MixedParamsAgentImpl(input: String, context: InvocationContext) extends MixedParamsAgent {
     override def info(): Future[String] =
-      Future.successful(s"$input:$principal")
+      Future.successful(s"$input:${context.caller}")
   }
 
   private lazy val mixedDefn: AgentDefinition[MixedParamsAgent] =
     AgentImplementation.registerClass[MixedParamsAgent, MixedParamsAgentImpl]
 
   // ---------------------------------------------------------------------------
-  // Test principals
+  // Test callers
   // ---------------------------------------------------------------------------
 
-  private val anonymousPrincipal: Principal = Principal.Anonymous
+  private val anonymousContext: InvocationContext = InvocationContext.anonymous
 
-  private val oidcPrincipal: Principal = Principal.Oidc(
-    sub = "user-42",
-    issuer = "https://auth.example.com",
-    claims = "{}",
-    email = Some("user@example.com")
+  private val userPrincipal: Principal = Principal.User(
+    PrincipalRef("https://auth.example.com", "user-42"),
+    "{}",
+    java.time.Instant.EPOCH
   )
+
+  private val userContext: InvocationContext =
+    InvocationContext.of(Caller(userPrincipal, userPrincipal))
 
   // ---------------------------------------------------------------------------
   // Tests
   // ---------------------------------------------------------------------------
 
-  def spec = suite("PrincipalInjectionSpec")(
+  def spec = suite("InvocationContextSpec")(
     // 1. Constructor injection
     suite("constructor injection")(
-      test("constructor receives Principal.Anonymous via registerClass") {
+      test("constructor receives an InvocationContext via registerClass") {
         assertTrue(ctorDefn.typeName.nonEmpty)
       },
-      test("constructor agent initializes with Anonymous principal") {
+      test("constructor agent initializes with an anonymous caller") {
         ZIO.fromFuture { implicit ec =>
           FutureInterop
-            .fromPromise(ctorDefn.initialize(singleInput[String]("hello"), anonymousPrincipal))
+            .fromPromise(ctorDefn.initialize(singleInput[String]("hello"), anonymousContext))
             .flatMap(_.getCreator())
         }.map(r => assertTrue(r == "anonymous:hello"))
       },
-      test("constructor agent initializes with Oidc principal") {
+      test("constructor agent initializes with a user caller") {
         ZIO.fromFuture { implicit ec =>
           FutureInterop
-            .fromPromise(ctorDefn.initialize(singleInput[String]("world"), oidcPrincipal))
+            .fromPromise(ctorDefn.initialize(singleInput[String]("world"), userContext))
             .flatMap(_.getCreator())
-        }.map(r => assertTrue(r == "oidc:user-42:world"))
+        }.map(r => assertTrue(r == """user ("https://auth.example.com","user-42"):world"""))
       }
     ),
 
     // 2. Method injection
     suite("method injection")(
-      test("method receives Principal.Anonymous through binding invoke") {
+      test("method receives an anonymous caller through binding invoke") {
         val b = binding("identify", methodDefn)
         ZIO.fromFuture { implicit ec =>
           FutureInterop
-            .fromPromise(b.invoke(methodImpl, singleInput[String]("alice"), anonymousPrincipal))
+            .fromPromise(b.invoke(methodImpl, singleInput[String]("alice"), anonymousContext))
             .map(decodeSingle[String])
         }.map(r => assertTrue(r == "alice:anonymous"))
       },
-      test("method receives Principal.Oidc through binding invoke") {
+      test("method receives a user caller through binding invoke") {
         val b = binding("identify", methodDefn)
         ZIO.fromFuture { implicit ec =>
           FutureInterop
-            .fromPromise(b.invoke(methodImpl, singleInput[String]("bob"), oidcPrincipal))
+            .fromPromise(b.invoke(methodImpl, singleInput[String]("bob"), userContext))
             .map(decodeSingle[String])
-        }.map(r => assertTrue(r == "bob:oidc:user-42"))
+        }.map(r => assertTrue(r == """bob:user ("https://auth.example.com","user-42")"""))
       }
     ),
 
-    // Guest exports read the principal from `invocation-context.caller`
+    // Guest exports read the caller from `invocation-context.caller`, on first use only
     suite("guest exports")(
-      test("initialize and invoke receive the immediate caller principal") {
+      test("initialize and invoke receive a context that reads the immediate caller") {
         val caller = js.Dynamic.literal(
-          "tag" -> "oidc",
-          "val" -> js.Dynamic.literal("sub" -> "user-7", "issuer" -> "https://auth.example.com", "claims" -> "{}")
+          "tag" -> "user",
+          "val" -> js.Dynamic.literal(
+            "pair"            -> js.Dynamic.literal("issuer" -> "https://auth.example.com", "subject" -> "user-7"),
+            "claims"          -> "{}",
+            "authenticatedAt" -> js.Dynamic.literal("seconds" -> js.BigInt(0), "nanoseconds" -> 0)
+          )
         )
-        val expected = Principal.Oidc(sub = "user-7", issuer = "https://auth.example.com", claims = "{}")
         val guest    = Guest.golemAgent200Guest
         val typeName = methodDefn.typeName
         Guest.resetForTesting()
@@ -240,29 +239,40 @@ object PrincipalInjectionSpec extends ZIOSpecDefault {
             FutureInterop.fromPromise(invoked).map(result => (state, decodeSingle[String](result.toOption)))
           }
         }.ensuring(ZIO.succeed(Guest.resetForTesting())).map { case (state, result) =>
-          assertTrue(state == (true, Some(expected)), result == "dave:oidc:user-7")
+          assertTrue(state, result == """dave:user ("https://auth.example.com","user-7")""")
         }
+      },
+      test("the host is asked for the caller only when it is read") {
+        var reads = 0
+        val ctx   = InvocationContext.lazily {
+          reads += 1
+          Caller.anonymous
+        }
+        val before = reads
+        ctx.caller
+        ctx.caller
+        assertTrue(before == 0, reads == 1)
       }
     ),
 
     // 3. Schema exclusion
     suite("schema exclusion")(
-      test("method input excludes Principal (single user param)") {
+      test("method input excludes InvocationContext (single user param)") {
         val greetBinding = binding("greet", schemaDefn)
         assertTrue(greetBinding.metadata.input.userSupplied.length == 1)
       },
-      test("method input excludes Principal (multiple user params)") {
+      test("method input excludes InvocationContext (multiple user params)") {
         val multiBinding = binding("multi", schemaDefn)
         assertTrue(multiBinding.metadata.input.userSupplied.length == 2)
       },
-      test("constructor input excludes Principal") {
+      test("constructor input excludes InvocationContext") {
         assertTrue(ctorDefn.constructor.info.input.userSupplied.length == 1)
       }
     ),
 
-    // 4. Mixed params – Config + Principal compile check
+    // 4. Mixed params – Config + InvocationContext compile check
     suite("mixed params")(
-      test("agent with Config + Principal in constructor registers successfully") {
+      test("agent with Config + InvocationContext in constructor registers successfully") {
         assertTrue(mixedDefn.typeName.nonEmpty)
       },
       test("mixed agent has correct method count") {

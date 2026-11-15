@@ -88,7 +88,7 @@ object ToolMiddlewareGuest {
           parameters,
           input,
           stdin,
-          InvocationContextHost.immediatePrincipal(),
+          InvocationContextHost.current(),
           wrapped
         ) match {
           case Left(error)    => rejectToolError(error)
@@ -104,7 +104,7 @@ object ToolMiddlewareGuest {
                   decoded.input,
                   decoded.parameters,
                   decoded.stdin,
-                  decoded.principal,
+                  decoded.context,
                   validateFinalOutput
                 )
               case ToolMiddlewareRegistry.ToolMiddlewareInvoker.Universal(handle) =>
@@ -117,7 +117,7 @@ object ToolMiddlewareGuest {
                   commandPath.toList,
                   decoded.input,
                   decoded.stdin,
-                  decoded.principal,
+                  decoded.context,
                   validateFinalOutput
                 )
             }
@@ -142,7 +142,7 @@ object ToolMiddlewareGuest {
     parameters: golem.schema.TypedSchemaValue,
     input: golem.schema.TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
-    principal: golem.Principal,
+    context: golem.InvocationContext,
     wrapped: RawToolUnderlying
   )
 
@@ -156,7 +156,7 @@ object ToolMiddlewareGuest {
     parameters: JsTypedSchemaValue,
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
-    principal: golem.Principal,
+    context: golem.InvocationContext,
     wrapped: JsUnderlyingTool
   ): Either[ToolInvokeError.InvalidInput, DecodedInvocation] =
     try {
@@ -166,7 +166,7 @@ object ToolMiddlewareGuest {
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(parameters)),
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(input)),
           stdin.toOption.map(new JsMiddlewareInputStream(_)),
-          principal,
+          context,
           rawUnderlying(wrapped)
         )
       )

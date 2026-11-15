@@ -35,7 +35,7 @@ client-only fixture exercises generated typed tool RPC through a host stub into
 the real provider entry; it must import tool RPC while keeping local discovery
 empty. These checks do not test platform permissions, durable RPC, or scheduling.
 The existing `core/testOnly golem.runtime.SnapshottingSpec` exercises nonempty
-snapshot save/restore, including config and principals.
+snapshot save/restore, including config.
 
 ## Size and latency
 

@@ -267,7 +267,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("_root_.scala.Vector[_root_.scala.Any](key, value)"), s"missing packed args in:\n$content")
   }
 
-  test("principal params are filtered out from remote methods") {
+  test("context params are filtered out from remote methods") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -277,7 +277,7 @@ class RpcCodegenSpec extends munit.FunSuite {
           methods = List(
             MethodSurface(
               "process",
-              List(ParamSurface("caller", "Principal"), ParamSurface("data", "String")),
+              List(ParamSurface("caller", "InvocationContext"), ParamSurface("data", "String")),
               "Future[String]",
               List(true, false)
             )
@@ -289,14 +289,14 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
-    assert(!content.contains("caller: Principal"), s"principal param should be filtered out:\n$content")
+    assert(!content.contains("caller: InvocationContext"), s"context param should be filtered out:\n$content")
     assert(
       content.contains("AbstractWireRemoteMethod[_root_.example.MyAgent, String, String]"),
       s"wrong method type in:\n$content"
     )
   }
 
-  test("all-principal method generates no-arg apply") {
+  test("all-context method generates no-arg apply") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -304,7 +304,7 @@ class RpcCodegenSpec extends munit.FunSuite {
           "example",
           "MyAgent",
           methods = List(
-            MethodSurface("whoami", List(ParamSurface("caller", "Principal")), "Future[String]", List(true))
+            MethodSurface("whoami", List(ParamSurface("caller", "InvocationContext")), "Future[String]", List(true))
           )
         )
       ),
@@ -493,7 +493,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
     assert(handwrittenClient.errors.isEmpty, handwrittenClient.errors.toString)
     assertEquals(handwrittenClient.warnings.size, 1)
-    // A method without valid principal flags gets no wrapper, so its names are free.
+    // A method without valid context flags gets no wrapper, so its names are free.
     val skippedMethod = RpcCodegen.generate(
       agents = List(
         agent(
@@ -533,7 +533,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(!content.contains("bindRemote"), s"should not contain bindRemote when no methods:\n$content")
   }
 
-  test("method with mismatched principalParams length is skipped") {
+  test("method with mismatched contextParams length is skipped") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(

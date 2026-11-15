@@ -48,8 +48,7 @@ private[autowire] object AgentRequestBuilder {
       JsNamedField(
         p.name,
         p.source match {
-          case FieldSource.UserSupplied          => JsFieldSource.userSupplied
-          case FieldSource.AutoInjectedPrincipal => JsFieldSource.autoInjectedPrincipal
+          case FieldSource.UserSupplied => JsFieldSource.userSupplied
         },
         p.schema,
         SchemaWireInterop.metadataToJs(p.metadata)
@@ -148,8 +147,7 @@ private[autowire] object AgentRequestBuilder {
     AgentTypeEncoderV2.Param(
       name = p.name,
       source = p.source match {
-        case FieldSource.UserSupplied          => AgentTypeEncoderV2.FieldSource.UserSupplied
-        case FieldSource.AutoInjectedPrincipal => AgentTypeEncoderV2.FieldSource.AutoInjectedPrincipal
+        case FieldSource.UserSupplied => AgentTypeEncoderV2.FieldSource.UserSupplied
       },
       graph = p.graph,
       metadata = p.metadata
@@ -264,7 +262,7 @@ private[autowire] object AgentRequestBuilder {
       case CachePolicy.UntilWrite => JsCachePolicy.untilWrite
       case CachePolicy.Ttl(nanos) => JsCachePolicy.ttl(js.BigInt(nanos.toString))
     }
-    JsReadOnlyConfig(policy, config.usesPrincipal)
+    JsReadOnlyConfig(policy)
   }
 
   private def encodeSnapshotting(snapshotting: Snapshotting): JsSnapshotting = snapshotting match {

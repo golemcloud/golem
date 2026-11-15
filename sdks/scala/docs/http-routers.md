@@ -30,7 +30,7 @@ provider, and static mappings are independently optional; even a static-only rou
 an implementation for registration.
 
 The sole handler takes `request: HttpRequest` and returns `HttpResponse` or
-`Future[HttpResponse]`. An optional injected `Principal` uses ordinary method injection.
+`Future[HttpResponse]`. An optional injected `InvocationContext` uses ordinary method injection.
 The provider takes no arguments and returns `String` or `Future[String]` containing an
 OpenAPI 3.1.0 JSON fragment. Method names are arbitrary. Configure authentication and CORS
 on the router mount, not with endpoint overrides. The host validates, mounts, merges, and
@@ -75,7 +75,7 @@ trait Documents extends BaseAgent {
 ```
 
 The constructor may create the files and ordinary methods may update them. All identity
-fields must be scalar, bound exactly once by mount captures; caller-dependent `Principal`
+fields must be scalar, bound exactly once by mount captures; caller-dependent `InvocationContext`
 identity/constructor injection and phantom or ephemeral owners are rejected. These agents
 remain ordinary callable agents. `filesystemBindings` is internal metadata; the public
 declaration is `exposeFiles`.

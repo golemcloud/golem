@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.*
 import golem.schema.SchemaTypeBody.{ListType, S8Type, U8Type, UuidType}
 import golem.schema.validation.RefResolution
@@ -70,7 +70,7 @@ object WireToolSpec extends ZIOSpecDefault {
       None,
       None,
       None,
-      Principal.Anonymous
+      InvocationContext.anonymous
     )
 
   private def invoke(tool: WireToolImplementation, path: String, input: WireToolInput) =
@@ -120,7 +120,7 @@ object WireToolSpec extends ZIOSpecDefault {
           None,
           None,
           None,
-          Principal.Anonymous
+          InvocationContext.anonymous
         )
       )
       assertTrue(text(result) == "origin=https://example.test")
@@ -150,7 +150,7 @@ object WireToolSpec extends ZIOSpecDefault {
           None,
           None,
           None,
-          Principal.Anonymous
+          InvocationContext.anonymous
         )
       )
       val reflected = ToolReflection.fromWire(uuidTool.descriptor)
@@ -193,7 +193,7 @@ object WireToolSpec extends ZIOSpecDefault {
           None,
           None,
           None,
-          Principal.Anonymous
+          InvocationContext.anonymous
         )
       )
       assertTrue(

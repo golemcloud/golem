@@ -19,7 +19,7 @@ package golem.runtime
 import golem.runtime.autowire.{AgentImplementation, MethodBinding, SchemaPayload}
 import golem.runtime.{InputRecordCodec, ParamCodec}
 import golem.runtime.Sum
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, InvocationContext}
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.FutureInterop
 import golem.host.js.schema.{JsSchemaValueTree, JsSchemaValueNode}
@@ -125,7 +125,7 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   private lazy val broadDefn = AgentImplementation.registerClass[BroadAgent, BroadAgentImpl]
   private lazy val broadImpl = new BroadAgentImpl()
 
-  private val testPrincipal: Principal = Principal.Anonymous
+  private val testContext: InvocationContext = InvocationContext.anonymous
 
   private def binding[T](
     name: String,
@@ -156,7 +156,7 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   ): ZIO[Any, Throwable, TestResult] = {
     val b = binding(methodName, broadDefn)
     ZIO.fromFuture { implicit ec =>
-      FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[In](input), testPrincipal)).map(decodeSingle[Out])
+      FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[In](input), testContext)).map(decodeSingle[Out])
     }.map(decoded => assertTrue(decoded == expected))
   }
 
@@ -183,7 +183,7 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
       )
       ZIO.fromFuture { implicit ec =>
         FutureInterop
-          .fromPromise(customWireDefn.invoke(new CustomWireImpl(), "echo", input, testPrincipal))
+          .fromPromise(customWireDefn.invoke(new CustomWireImpl(), "echo", input, testContext))
           .map { result =>
             val output = SchemaWireInterop.valueTreeFromJs(result.get)
             assertTrue(
@@ -206,9 +206,9 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
       )
       ZIO.fromFuture { implicit ec =>
         for {
-          instance <- FutureInterop.fromPromise(wireDefn.initialize(constructor, testPrincipal))
+          instance <- FutureInterop.fromPromise(wireDefn.initialize(constructor, testContext))
           result   <- FutureInterop.fromPromise(
-                      wireDefn.invoke(instance, "adjust", SchemaWireInterop.valueTreeToJs(input), testPrincipal)
+                      wireDefn.invoke(instance, "adjust", SchemaWireInterop.valueTreeToJs(input), testContext)
                     )
         } yield {
           val output  = SchemaWireInterop.valueTreeFromJs(result.get)
@@ -227,7 +227,7 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
         Future
           .sequence(List(missing, invalid).map { input =>
             FutureInterop
-              .fromPromise(wireDefn.invoke(new WireOnlyImpl(9), "adjust", input, testPrincipal))
+              .fromPromise(wireDefn.invoke(new WireOnlyImpl(9), "adjust", input, testContext))
               .map(_ => false)
               .recover { case js.JavaScriptException(error) =>
                 error.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input"
@@ -276,13 +276,13 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
         InputRecordCodec.fromParams(List(paramCodec[String]("a"), paramCodec[Int]("b")))
       )
       ZIO.fromFuture { implicit ec =>
-        FutureInterop.fromPromise(b.invoke(broadImpl, inputTree, testPrincipal)).map(decodeSingle[String])
+        FutureInterop.fromPromise(b.invoke(broadImpl, inputTree, testContext)).map(decodeSingle[String])
       }.map(decoded => assertTrue(decoded == "hello-42"))
     },
     test("Future[Unit] return roundtrips through binding as an absent result") {
       val b = binding("asyncVoid", broadDefn)
       ZIO.fromFuture { implicit ec =>
-        FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[String]("ignored"), testPrincipal))
+        FutureInterop.fromPromise(b.invoke(broadImpl, singleInput[String]("ignored"), testContext))
       }.map(raw => assertTrue(raw.isEmpty))
     }
   )

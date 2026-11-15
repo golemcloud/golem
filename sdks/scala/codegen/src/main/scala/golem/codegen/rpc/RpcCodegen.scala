@@ -136,13 +136,13 @@ object RpcCodegen {
     Result(files = files.result(), warnings = warnings.result(), errors = errors.result())
   }
 
-  /** Methods that get a generated wrapper: those with valid principalParams. */
+  /** Methods that get a generated wrapper: those with valid contextParams. */
   private def generatedMethods(agent: AgentSurface): List[MethodSurface] =
-    agent.methods.filter(m => m.principalParams.length == m.params.length)
+    agent.methods.filter(m => m.contextParams.length == m.params.length)
 
-  /** Filter out Principal parameters from a method surface. */
+  /** Filter out InvocationContext parameters from a method surface. */
   private def remoteParams(method: MethodSurface): List[ParamSurface] =
-    method.params.zip(method.principalParams).collect { case (p, false) =>
+    method.params.zip(method.contextParams).collect { case (p, false) =>
       p
     }
 

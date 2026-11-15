@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.Principal
+import golem.InvocationContext
 import golem.config.ConfigBuilder
 import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
 
@@ -26,7 +26,7 @@ import scala.util.control.NonFatal
 final case class WireAgentImplementationType[Instance, Ctor](
   metadata: WireAgentMetadata,
   ctorCodec: ConcreteCodec[Ctor],
-  buildInstance: (Ctor, Principal) => Instance,
+  buildInstance: (Ctor, InvocationContext) => Instance,
   methods: List[WireImplementationMethod[Instance]],
   configBuilder: Option[ConfigBuilder[?]],
   configInjectedViaConstructor: Boolean,
@@ -35,25 +35,29 @@ final case class WireAgentImplementationType[Instance, Ctor](
 
 trait WireImplementationMethod[Instance] {
   def name: String
-  def invoke(instance: Instance, input: WitSchemaValueTree, principal: Principal): Future[Option[WitSchemaValueTree]]
+  def invoke(
+    instance: Instance,
+    input: WitSchemaValueTree,
+    context: InvocationContext
+  ): Future[Option[WitSchemaValueTree]]
 }
 
 final case class WireAgentInputError(message: String) extends RuntimeException(message)
 
 object WireImplementationMethod {
   def apply[Instance, In, Out](methodName: String, input: ConcreteCodec[In], output: Option[ConcreteCodec[Out]])(
-    handler: (Instance, In, Principal) => Future[Out]
+    handler: (Instance, In, InvocationContext) => Future[Out]
   ): WireImplementationMethod[Instance] = new WireImplementationMethod[Instance] {
     def name: String = methodName
     def invoke(
       instance: Instance,
       value: WitSchemaValueTree,
-      principal: Principal
+      context: InvocationContext
     ): Future[Option[WitSchemaValueTree]] = {
       val decoded =
         try input.decode(value)
         catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
-      handler(instance, decoded, principal)
+      handler(instance, decoded, context)
         .map(value => output.map(_.encodeValue(value)))(using ExecutionContext.parasitic)
     }
   }
