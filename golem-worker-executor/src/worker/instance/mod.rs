@@ -984,6 +984,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
 
         let live_instantiation_growth =
             tracker.reconcile(allocated_bytes, std::time::Instant::now());
+        // Preparation keeps the replay reservation floor and shrinks after reconciliation's
+        // quota callbacks and grant merge. Preserve the pre-merge tracked decision: merging
+        // can adopt a controller, while shrinking an inert grant changes its historical bytes.
         if grant_is_tracked {
             retained_grant
                 .lock()

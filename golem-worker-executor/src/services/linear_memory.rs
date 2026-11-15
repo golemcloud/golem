@@ -20,7 +20,7 @@ use crate::services::resource_usage_metering::ResourceUsageLiveActivation;
 use golem_common::model::agent::AgentMode;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 pub(crate) const SHARED_LINEAR_MEMORY_ERROR: &str =
@@ -88,6 +88,7 @@ struct TrackerState {
 }
 
 impl TrackerState {
+    // Reconstruction preserves the prepaid floor until replay is published live.
     fn reconciliation_grant_bytes(&self, bytes: u64, initially_reserved_bytes: u64) -> u64 {
         if self.replaying {
             bytes.max(initially_reserved_bytes)
@@ -370,16 +371,11 @@ impl LinearMemoryTracker {
         let _transition = self.inner.transitions.lock().unwrap();
         let mut state = self.inner.state.lock().unwrap();
         if !state.reconciling {
+            // Publication drops the replay floor, but not capacity promised to pending growth.
             let protected = self
                 .current_bytes()
                 .max(state.pending_growth_protected_total);
-            self.inner
-                .retained_growth_grant
-                .lock()
-                .unwrap()
-                .shrink_to(protected);
-            drop(state);
-            self.set_protected_bytes_and_enforce_limit(protected);
+            self.shrink_retained_reservation(state, protected);
             state = self.inner.state.lock().unwrap();
         }
         state.historical_admission = false;
@@ -505,11 +501,6 @@ impl LinearMemoryTracker {
         self.grow_inner(delta, Some(now), Some(&record));
     }
 
-    #[cfg(test)]
-    fn grow_at(&self, delta: u64, now: Instant) -> (u64, bool) {
-        self.grow_inner(delta, Some(now), None)
-    }
-
     fn grow_inner(
         &self,
         delta: u64,
@@ -593,18 +584,26 @@ impl LinearMemoryTracker {
             state.pending_growth_grants.pop();
         }
         if state.live_reservation_activated || (!state.replaying && !state.reconciling) {
+            // Rollback removes failed growth before applying the remaining replay floor.
             let protected = state.required_live_reservation_bytes(
                 self.current_bytes(),
                 self.inner.initially_reserved_bytes,
             );
-            self.inner
-                .retained_growth_grant
-                .lock()
-                .unwrap()
-                .shrink_to(protected);
-            drop(state);
-            self.set_protected_bytes_and_enforce_limit(protected);
+            self.shrink_retained_reservation(state, protected);
         }
+    }
+
+    /// The caller holds the transition gate and chooses the target from its lifecycle policy.
+    /// Shrinking never admits capacity. Release private guards before quota callbacks, even
+    /// when no bytes were released, so callbacks can read the updated reservation state.
+    fn shrink_retained_reservation(&self, state: MutexGuard<'_, TrackerState>, protected: u64) {
+        self.inner
+            .retained_growth_grant
+            .lock()
+            .unwrap()
+            .shrink_to(protected);
+        drop(state);
+        self.set_protected_bytes_and_enforce_limit(protected);
     }
 
     pub(crate) fn prepare_unshared_growth(
@@ -842,7 +841,7 @@ mod tests {
             })
         );
         tracker.retain_growth_grant(MemoryGrant::inert(10));
-        assert_eq!(tracker.grow_at(10, now), (40, false));
+        assert_eq!(tracker.grow(10, now), (40, false));
         assert_eq!(
             tracker.prepare_unshared_growth(20, 25),
             Some(UnsharedMemoryGrowth {
@@ -871,8 +870,8 @@ mod tests {
             grant(),
             now,
         );
-        tracker.grow_at(40, now);
-        tracker.grow_at(20, now);
+        tracker.grow(40, now);
+        tracker.grow(20, now);
         tracker.reconcile_at(60, now);
 
         assert_eq!(tracker.initially_reserved_bytes(), 40);
@@ -939,7 +938,7 @@ mod tests {
                 protected_total: 40,
             })
         );
-        assert_eq!(tracker.grow_at(40, now), (40, true));
+        assert_eq!(tracker.grow(40, now), (40, true));
         assert_eq!(tracker.reconcile_at(40, now), 0);
     }
 
@@ -965,7 +964,7 @@ mod tests {
 
         let growth = tracker.prepare_unshared_growth(0, 40).unwrap();
         assert_eq!(growth.admission_delta, 0);
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
 
         assert_eq!(tracker.reconcile_at(40, now), 0);
         assert_eq!(controller.headroom_bytes(), headroom_before_instantiation);
@@ -990,7 +989,7 @@ mod tests {
             retained_grant.clone(),
             now,
         );
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
 
         let acquire_controller = controller.clone();
         tracker
@@ -1033,7 +1032,7 @@ mod tests {
             Arc::new(Mutex::new(MemoryGrant::inert(40))),
             now,
         );
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
         let mut activation = Box::pin(tracker.activate_live_reservation(|bytes| {
             let controller = controller.clone();
             let tracker = tracker.clone();
@@ -1086,7 +1085,7 @@ mod tests {
                 Arc::new(Mutex::new(MemoryGrant::inert(10))),
                 now,
             );
-            tracker.grow_at(5, now);
+            tracker.grow(5, now);
             let observations = Arc::new(Mutex::new(Vec::new()));
             let observed = observations.clone();
             let reader = tracker.clone();
@@ -1128,6 +1127,40 @@ mod tests {
                     (15, 15, 10),
                 ]
             );
+
+            let tracker = LinearMemoryTracker::new(
+                80,
+                80,
+                AgentMode::Durable,
+                true,
+                true,
+                Arc::new(AtomicResourceEntry::new(0, 30, 0, 0, 0)),
+                Arc::new(Mutex::new(MemoryGrant::inert(80))),
+                now,
+            );
+            tracker.reconcile(40, now);
+            let observations = Arc::new(Mutex::new(Vec::new()));
+            let observed = observations.clone();
+            let reader = tracker.clone();
+            tracker.set_limit_exceeded_callback(Arc::new(move || {
+                observed.lock().unwrap().push((
+                    reader.reserved_bytes(),
+                    reader.reconciliation_grant_bytes(reader.current_bytes()),
+                ));
+            }));
+            assert_eq!(*observations.lock().unwrap(), vec![(80, 80)]);
+            observations.lock().unwrap().clear();
+
+            tracker.switch_to_live();
+            assert_eq!(*observations.lock().unwrap(), vec![(40, 80)]);
+            assert_eq!(tracker.reconciliation_grant_bytes(40), 40);
+            tracker.switch_to_live();
+            tracker.memory_grow_failed();
+            tracker.clear_limit_exceeded_callback();
+            assert_eq!(
+                *observations.lock().unwrap(),
+                vec![(40, 80), (40, 40), (40, 40)]
+            );
             done.send(()).unwrap();
         });
         completed
@@ -1150,7 +1183,7 @@ mod tests {
             retained_grant.clone(),
             now,
         );
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let first_request = Arc::new(Mutex::new(Some(started)));
@@ -1210,7 +1243,7 @@ mod tests {
             retained_grant.clone(),
             now,
         );
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let first_request = Arc::new(Mutex::new(Some(started)));
@@ -1273,9 +1306,9 @@ mod tests {
         tracker.switch_to_live();
 
         tracker.prepare_unshared_growth(0, 40).unwrap();
-        tracker.grow_at(40, now);
+        tracker.grow(40, now);
         tracker.prepare_unshared_growth(40, 50).unwrap();
-        tracker.grow_at(10, now);
+        tracker.grow(10, now);
 
         assert_eq!(tracker.reconcile_at(50, now), 10);
     }
@@ -1310,7 +1343,7 @@ mod tests {
                 protected_total: 70,
             })
         );
-        tracker.grow_at(30, now);
+        tracker.grow(30, now);
         assert_eq!(tracker.current_bytes(), 70);
     }
 
@@ -1394,7 +1427,7 @@ mod tests {
             exceeded_clone.store(true, Ordering::Release);
         }));
 
-        tracker.grow_at(10, now);
+        tracker.grow(10, now);
 
         assert!(exceeded.load(Ordering::Acquire));
     }
