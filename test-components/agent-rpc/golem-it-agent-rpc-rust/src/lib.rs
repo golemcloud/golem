@@ -191,16 +191,28 @@ pub trait ConstructorSelfScheduler {
     fn new(name: String, seconds: u64) -> Self;
     fn inc_global_by(&mut self, value: u64);
     fn get_global_value(&self) -> u64;
+    fn bind_and_schedule(&mut self) -> String;
+    fn last_binding_id(&self) -> Option<String>;
 }
 
 struct ConstructorSelfSchedulerImpl {
     global: u64,
+    last_binding_id: Option<String>,
 }
 
 #[agent_implementation]
 impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
-    fn new(name: String, seconds: u64) -> Self {
-        let mut this = ConstructorSelfSchedulerClient::get(name, seconds);
+    fn new(_name: String, seconds: u64) -> Self {
+        assert!(
+            RustParentClient::bind_self().is_err(),
+            "self binding must reject another agent type"
+        );
+        let mut this =
+            ConstructorSelfSchedulerClient::bind_self().expect("bind current incarnation");
+        assert_eq!(
+            this.get_agent_id(),
+            golem_rust::agentic::get_agent_id().agent_id
+        );
         this.schedule_inc_global_by(
             1,
             Datetime {
@@ -209,7 +221,10 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
             },
         )
         .expect("failed to schedule an invocation on itself from the constructor");
-        Self { global: 0 }
+        Self {
+            global: 0,
+            last_binding_id: None,
+        }
     }
 
     fn inc_global_by(&mut self, value: u64) {
@@ -218,6 +233,26 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
 
     fn get_global_value(&self) -> u64 {
         self.global
+    }
+
+    fn bind_and_schedule(&mut self) -> String {
+        let mut this =
+            ConstructorSelfSchedulerClient::bind_self().expect("bind current incarnation");
+        this.schedule_inc_global_by(
+            7,
+            Datetime {
+                seconds: 0,
+                nanoseconds: 0,
+            },
+        )
+        .expect("schedule on bound incarnation");
+        let id = this.get_agent_id().to_string();
+        self.last_binding_id = Some(id.clone());
+        id
+    }
+
+    fn last_binding_id(&self) -> Option<String> {
+        self.last_binding_id.clone()
     }
 }
 

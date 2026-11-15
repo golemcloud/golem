@@ -2322,8 +2322,15 @@ records success with the actual fingerprint, or a terminal constructor failure o
 refusal. Infrastructure errors and interruption leave the call incomplete. Repair reuses its
 Start and key. Completed replay returns the recorded success or failure without contacting the
 child; a reconstructed successful handle retains that fingerprint for existing-only reactivation.
-Phantom-less ephemeral clients remain logical per-invocation proxies. Fixed ephemeral handles
-remain observation/control identities, and `create_demand` remains non-running preparation.
+`wasm-rpc.bind-self` instead binds the current durable incarnation without creating, starting or
+waiting for it. It validates the type against owner metadata and records a separate local binding
+call. Its Start records the ID, environment and fingerprint. Completed replay and incomplete repair
+reconstruct that same binding without target contact, even when a fork changes the current owner.
+The operation returns the recorded ID together with the connection; do not replace that ID with a
+separate current-environment read. Rust clients expose fallible `bind_self()` for constructor
+self-scheduling. Later scheduling still checks the exact method authority. Phantom-less ephemeral clients remain
+logical per-invocation proxies. Fixed ephemeral handles remain observation/control identities,
+and `create_demand` remains non-running preparation.
 
 Method permission checks run inside `ResolvedCall::Live`, after resolution. Denials use
 `persist_*_denial_from_begun` on that already-begun call. Recorded calls, including incomplete

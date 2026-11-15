@@ -617,16 +617,47 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
     DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
     Arc<InvocationContextSpan>,
 )> {
+    let expected = request.remote_agent_id.clone();
+    let (mut handle, span, recorded) = start_rpc_binding_call::<_, GolemRpcWasmRpcNew>(
+        ctx,
+        request,
+        &expected,
+        with_agent_authority,
+    )
+    .await?;
+    if recorded.remote_agent_id != expected {
+        return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+            format!("RPC connection to {expected}"),
+            format!("RPC connection to {}", recorded.remote_agent_id),
+        )));
+    }
+    Ok((handle, span))
+}
+
+pub(super) async fn start_rpc_binding_call<Ctx, F>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    request: F::Req,
+    target_agent_id: &AgentId,
+    with_agent_authority: bool,
+) -> anyhow::Result<(
+    DurableCallSession<F, NotCancellable>,
+    Arc<InvocationContextSpan>,
+    F::Req,
+)>
+where
+    Ctx: WorkerCtx,
+    F: golem_common::model::oplog::payload::HostPayloadPair,
+    F::Req: Clone,
+{
     let function_type = rpc_connection_function_type(with_agent_authority);
     let begun = if with_agent_authority {
-        DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin_with_agent_authority(
+        DurableCallSession::<F, NotCancellable>::begin_with_agent_authority(
             ctx,
             function_type.clone(),
         )
         .await?
     } else {
-        DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::begin(ctx, function_type.clone())
-            .await?
+        DurableCallSession::<F, NotCancellable>::begin(ctx, function_type.clone()).await?
     };
     match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
@@ -637,7 +668,7 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
                 ),
                 (
                     "target_agent_id".to_string(),
-                    AttributeValue::String(request.remote_agent_id.to_string()),
+                    AttributeValue::String(target_agent_id.to_string()),
                 ),
             ]);
             let started = SpanStarted {
@@ -652,8 +683,11 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
             };
             let parent = ctx.state.current_span_id.clone();
             let span = install_embedded_span(ctx, &started, &parent)?;
-            match begun.start_live_with_span(ctx, request, started).await {
-                Ok(handle) => Ok((handle, span)),
+            match begun
+                .start_live_with_span(ctx, request.clone(), started)
+                .await
+            {
+                Ok(handle) => Ok((handle, span, request)),
                 Err(error) => {
                     finish_span_in_memory(ctx, span.span_id())?;
                     Err(error.into())
@@ -665,12 +699,6 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
                 Ok(recorded) => recorded,
                 Err(error) => return Err(handle.trap(error)),
             };
-            if recorded.remote_agent_id != request.remote_agent_id {
-                return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("RPC connection to {}", request.remote_agent_id),
-                    format!("RPC connection to {}", recorded.remote_agent_id),
-                )));
-            }
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     "RPC connection Start carrying span_started",
@@ -681,7 +709,7 @@ pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
                 )
             })?;
             let span = restore_embedded_span(ctx, &started)?;
-            Ok((handle, span))
+            Ok((handle, span, recorded))
         }
     }
 }

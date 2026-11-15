@@ -2401,9 +2401,19 @@ async fn worker_suspends_when_running_out_of_fuel(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let http_agent_id = agent_id!("HttpClient");
-    let agent_id = user
-        .start_agent_with(&component.id, http_agent_id.clone(), env, Vec::new())
-        .await?;
+    let agent_id =
+        AgentId::from_agent_id(component.id, &http_agent_id).map_err(anyhow::Error::msg)?;
+    let create = user.start_agent_with(&component.id, http_agent_id.clone(), env, Vec::new());
+    tokio::pin!(create);
+    tokio::select! {
+        result = &mut create => { result?; },
+        result = tokio::time::timeout(Duration::from_secs(30), async {
+            while user.get_worker_metadata_opt(&agent_id).await?.is_none() {
+                tokio::task::yield_now().await;
+            }
+            anyhow::Ok(())
+        }) => { result??; },
+    }
 
     let invoker_task = tokio::spawn({
         let user = user.clone();

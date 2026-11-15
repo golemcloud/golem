@@ -27,8 +27,8 @@ use super::{
     remote_method_uses_streams, replay_async_rpc_denial, replay_rpc_denial,
     resolve_method_and_lift_input, restore_embedded_span, rpc_input_root, rpc_output_root,
     rpc_span_finished, run_invoke, run_invoke_and_await, schema_value_to_wire_output,
-    spawn_invoke_and_await_task, spawn_streaming_invoke_and_await_task, start_rpc_connection_call,
-    streaming_target_fingerprint,
+    spawn_invoke_and_await_task, spawn_streaming_invoke_and_await_task, start_rpc_binding_call,
+    start_rpc_connection_call, streaming_target_fingerprint,
 };
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
@@ -75,9 +75,11 @@ use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::HostResponseGolemRpcCreate;
 use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
 use golem_common::model::oplog::HostResponseGolemRpcUnitOrFailure;
+use golem_common::model::oplog::host_functions::GolemRpcWasmRpcBindSelf;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvoke;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
+use golem_common::model::oplog::{HostRequestGolemRpcBindSelf, HostResponseGolemRpcUnit};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::decode_typed_rejecting_quota_with;
@@ -406,6 +408,94 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             creation_index,
         )
         .await
+    }
+
+    async fn bind_self(
+        &mut self,
+        agent_type_name: String,
+    ) -> anyhow::Result<Result<(String, Resource<WasmRpcEntry>), RpcError>> {
+        let golem_common::model::agent::ResolvedOwnerContext::Agent(agent) = self.owner_context()
+        else {
+            return Ok(Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
+                agent_type_name,
+            ))));
+        };
+        if agent.agent_type.0 != agent_type_name || self.agent_mode() != AgentMode::Durable {
+            return Ok(Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
+                agent_type_name,
+            ))));
+        }
+        let component = self.owner_component_metadata();
+        let agent_type = Arc::new(
+            component
+                .metadata
+                .find_agent_type_by_name(&agent.agent_type)
+                .ok_or_else(|| anyhow::anyhow!("current agent type is missing"))?
+                .clone(),
+        );
+        let streams = Arc::new(
+            agent_type
+                .methods
+                .iter()
+                .map(|method| {
+                    component
+                        .metadata
+                        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+                        .map(|metadata| (method.name.clone(), metadata.uses_streams()))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("current agent method streaming metadata is missing")
+                        })
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
+        );
+        let remote_agent_id = self.agent_id().clone();
+        let environment_id = self.owned_agent_id.environment_id;
+        let fingerprint = self
+            .public_state
+            .worker()
+            .get_initial_worker_metadata()
+            .fingerprint;
+        let owner = crate::durable_host::authorization::targets::agent_owner(self);
+        let (handle, span, binding) = start_rpc_binding_call::<_, GolemRpcWasmRpcBindSelf>(
+            self,
+            HostRequestGolemRpcBindSelf {
+                remote_agent_id: remote_agent_id.clone(),
+                target_environment_id: environment_id,
+                fingerprint,
+            },
+            &remote_agent_id,
+            false,
+        )
+        .await?;
+        let creation_index = (!self.state.snapshotting_mode).then(|| handle.start_index());
+        let live = if handle.is_live() {
+            Some(handle)
+        } else {
+            match handle.replay(self).await? {
+                CallReplayOutcome::Replayed(_) => None,
+                CallReplayOutcome::Incomplete(live) => Some(live),
+            }
+        };
+        if let Some(live) = live {
+            live.complete(self, HostResponseGolemRpcUnit {}).await?;
+        }
+        let bound_id = binding.remote_agent_id.agent_id.clone();
+        let resource = reconstruct_wasm_rpc_resource(
+            self,
+            binding.remote_agent_id,
+            binding.target_environment_id,
+            binding.fingerprint,
+            vec![],
+            vec![],
+            span,
+            agent_type,
+            streams,
+            owner,
+            false,
+            creation_index,
+        )
+        .await?;
+        Ok(Ok((bound_id, resource)))
     }
 
     async fn invoke_and_await(

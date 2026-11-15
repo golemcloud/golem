@@ -513,7 +513,14 @@ async fn wait_for_policy_rejection(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let probe = probe_agent(exhaustion);
-            let result = if policy_probe_uses_start(exhaustion) {
+            let result = if matches!(exhaustion, IntegrationExhaustion::DurableStorage) {
+                let worker_id = golem_common::model::AgentId::from_agent_id(component.id, &probe)
+                    .map_err(anyhow::Error::msg)?;
+                executor
+                    .invoke_agent(component, &probe, "increment", data_value!())
+                    .await
+                    .map(|_| Some(worker_id))
+            } else if policy_probe_uses_start(exhaustion) {
                 executor.start_agent(&component.id, probe).await.map(Some)
             } else {
                 executor
