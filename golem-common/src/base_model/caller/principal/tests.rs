@@ -18,9 +18,10 @@ use super::{
 };
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
+use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
-use crate::base_model::{AgentFingerprint, Timestamp};
+use crate::base_model::{AgentFingerprint, AgentId, Timestamp};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -57,6 +58,10 @@ fn agent(fingerprint: &str) -> AgentPrincipal {
     AgentPrincipal {
         issuer: ISSUER.to_string(),
         agent_id: uuid(AGENT_ID),
+        address: AgentId {
+            component_id: ComponentId(Uuid::from_u128(0x6b1f0c2d)),
+            agent_id: "Analyst(\"a\")".to_string(),
+        },
         fingerprint: AgentFingerprint(uuid(fingerprint)),
         agent_type: AgentTypeName("Analyst".to_string()),
         environment_id: EnvironmentId(uuid(ENVIRONMENT)),
@@ -408,6 +413,7 @@ fn visit_every_field(caller: &Caller) {
                 let AgentPrincipal {
                     issuer: _,
                     agent_id: _,
+                    address: _,
                     fingerprint: _,
                     agent_type: _,
                     environment_id: _,
@@ -501,6 +507,8 @@ fn a_serialized_caller_has_no_token_value_cookie_key_or_proof_field() {
         "accountId",
         "authentication",
         "agentId",
+        "address",
+        "componentId",
         "fingerprint",
         "agentType",
         "environmentId",

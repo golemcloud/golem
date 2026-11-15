@@ -4,11 +4,14 @@ package golem.component;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
 import "golem/component/agent_files.proto";
 import "golem/component/plugin.proto";
 import "golem/http/http.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/worker_id.proto";
+import "google/protobuf/timestamp.proto";
 
 enum AgentMode {
   DURABLE = 0;
@@ -17,7 +20,8 @@ enum AgentMode {
 
 message ReadOnlyConfig {
   CachePolicy cache_policy = 1;
-  bool uses_principal = 2;
+  reserved 2;
+  reserved "uses_principal";
 }
 
 message CachePolicy {
@@ -176,37 +180,65 @@ message AgentHttpAuthDetails {
   bool required = 1;
 }
 
+message Pair {
+  string issuer = 1;
+  string subject = 2;
+}
+
 message Principal {
+  reserved 1 to 4;
+  reserved "oidc", "golem_user";
   oneof value {
-    OidcPrincipal oidc = 1;
-    AgentPrincipal agent = 2;
-    GolemUserPrincipal golem_user = 3;
-    golem.common.Empty anonymous = 4;
+    UserPrincipal user = 5;
+    AccountPrincipal account = 6;
+    AgentPrincipal agent = 7;
+    ToolPrincipal tool = 8;
+    golem.common.Empty anonymous = 9;
   }
 }
 
-message OidcPrincipal {
-  string sub = 1;
-  string issuer = 2;
+message UserPrincipal {
+  Pair pair = 1;
+  string claims = 2;
+  google.protobuf.Timestamp authenticated_at = 3;
+}
 
-  optional string email = 3;
-  optional string name = 4;
-  optional bool email_verified = 5;
+enum AccountAuthentication {
+  ACCOUNT_AUTHENTICATION_UNSPECIFIED = 0;
+  ACCOUNT_AUTHENTICATION_API_TOKEN = 1;
+  ACCOUNT_AUTHENTICATION_BOOTSTRAP_TOKEN = 2;
+  ACCOUNT_AUTHENTICATION_SIGN_IN = 3;
+}
 
-  optional string given_name = 6;
-  optional string family_name = 7;
-  optional string picture = 8;
-  optional string preferred_username = 9;
-
-  string claims = 10;
+message AccountPrincipal {
+  string issuer = 1;
+  golem.common.AccountId account_id = 2;
+  AccountAuthentication authentication = 3;
 }
 
 message AgentPrincipal {
-  golem.worker.AgentId agent_id = 1;
+  string issuer = 1;
+  golem.worker.AgentId agent_id = 2;
+  golem.common.UUID fingerprint = 3;
+  string agent_type = 4;
+  golem.common.EnvironmentId environment_id = 5;
 }
 
-message GolemUserPrincipal {
-  golem.common.AccountId account_id = 1;
+message ToolPrincipal {
+  string issuer = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  string tool_name = 3;
+}
+
+message TokenProvenance {
+  golem.common.UUID id = 1;
+  optional Pair maker = 2;
+}
+
+message Caller {
+  Principal original = 1;
+  Principal immediate = 2;
+  repeated TokenProvenance tokens = 3;
 }
 
 enum AgentConfigSource {

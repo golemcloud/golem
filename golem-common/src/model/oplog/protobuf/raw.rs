@@ -1714,7 +1714,7 @@ fn create_request_to_proto(
     let CreateRequest {
         kind,
         idempotency_key,
-        principal,
+        caller,
         trace_id,
         trace_states,
         invocation_context,
@@ -1727,7 +1727,7 @@ fn create_request_to_proto(
             CreateRequestKind::Fork => RawCreateRequestKind::Fork,
         } as i32,
         idempotency_key: idempotency_key.map(Into::into),
-        principal: Some(principal.into()),
+        caller: Some(caller.into()),
         trace_id: trace_id.to_string(),
         trace_states,
         invocation_context: invocation_context
@@ -1753,9 +1753,9 @@ fn create_request_from_proto(
     Ok(CreateRequest {
         kind,
         idempotency_key: value.idempotency_key.map(Into::into),
-        principal: value
-            .principal
-            .ok_or("Missing create request principal")?
+        caller: value
+            .caller
+            .ok_or("Missing create request caller")?
             .try_into()?,
         trace_id: TraceId::from_string(value.trace_id)?,
         trace_states: value.trace_states,

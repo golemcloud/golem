@@ -18,8 +18,8 @@ use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
 use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource,
-    InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, NamedField,
+    OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
@@ -128,9 +128,6 @@ impl From<FieldSource> for proto::FieldSource {
         use proto::field_source::Source;
         let source = match value {
             FieldSource::UserSupplied => Source::UserSupplied(ProtoEmpty {}),
-            FieldSource::AutoInjected(kind) => {
-                Source::AutoInjected(proto::AutoInjectedKind::from(kind) as i32)
-            }
         };
         Self {
             source: Some(source),
@@ -145,31 +142,7 @@ impl TryFrom<proto::FieldSource> for FieldSource {
         use proto::field_source::Source;
         match value.source {
             Some(Source::UserSupplied(_)) => Ok(FieldSource::UserSupplied),
-            Some(Source::AutoInjected(kind)) => {
-                let kind = proto::AutoInjectedKind::try_from(kind)
-                    .map_err(|_| format!("Invalid AutoInjectedKind: {kind}"))?;
-                Ok(FieldSource::AutoInjected(kind.try_into()?))
-            }
             None => Err("Missing field: FieldSource.source".to_string()),
-        }
-    }
-}
-
-impl From<AutoInjectedKind> for proto::AutoInjectedKind {
-    fn from(value: AutoInjectedKind) -> Self {
-        match value {
-            AutoInjectedKind::Principal => proto::AutoInjectedKind::Principal,
-        }
-    }
-}
-
-impl TryFrom<proto::AutoInjectedKind> for AutoInjectedKind {
-    type Error = String;
-
-    fn try_from(value: proto::AutoInjectedKind) -> Result<Self, Self::Error> {
-        match value {
-            proto::AutoInjectedKind::Principal => Ok(AutoInjectedKind::Principal),
-            proto::AutoInjectedKind::Unspecified => Err("Unspecified AutoInjectedKind".to_string()),
         }
     }
 }

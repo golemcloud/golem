@@ -505,7 +505,6 @@ fn walk_agent_method(
             for field in fields {
                 let scope = match field.source {
                     FieldSource::UserSupplied => SchemaScope::AgentMethodInput,
-                    FieldSource::AutoInjected(_) => SchemaScope::Boundary,
                 };
                 let mut visited = Vec::new();
                 walk_type(

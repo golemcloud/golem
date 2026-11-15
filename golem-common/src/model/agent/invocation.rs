@@ -14,7 +14,8 @@
 
 use desert_rust::BinaryCodec;
 
-use super::{InvocationStatus, Principal};
+use super::InvocationStatus;
+use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
@@ -50,14 +51,14 @@ pub enum AgentInvocation {
         idempotency_key: InvocationId,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     },
     AgentMethod {
         idempotency_key: InvocationId,
         method_name: String,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     ExternalTool {
@@ -70,16 +71,17 @@ pub enum AgentInvocation {
         stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         idempotency_key: InvocationId,
         snapshot: RawSnapshotData, // TODO
+        caller: Caller,
     },
     SaveSnapshot {
         idempotency_key: InvocationId,
-        // TODO
+        caller: Caller,
     },
     ProcessOplogEntries {
         idempotency_key: InvocationId,
@@ -88,6 +90,7 @@ pub enum AgentInvocation {
         metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
+        caller: Caller,
     },
 }
 
@@ -99,12 +102,12 @@ pub enum AgentInvocationPayload {
     },
     AgentInitialization {
         input: SchemaValue,
-        principal: Principal,
+        caller: Caller,
     },
     AgentMethod {
         method_name: String,
         input: SchemaValue,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     ExternalTool {
@@ -115,19 +118,23 @@ pub enum AgentInvocationPayload {
         stdout: bool,
         stderr: bool,
         activation: Box<ToolActivationSnapshot>,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
+        caller: Caller,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: Caller,
+    },
     ProcessOplogEntries {
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<crate::model::oplog::OplogEntry>,
+        caller: Caller,
     },
 }
 
@@ -137,28 +144,28 @@ impl AgentInvocationPayload {
     pub fn same_caller_request(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Self::AgentInitialization { input, principal },
+                Self::AgentInitialization { input, caller },
                 Self::AgentInitialization {
                     input: other_input,
-                    principal: other_principal,
+                    caller: other_caller,
                 },
-            ) => principal == other_principal && schema_value_same_request(input, other_input),
+            ) => caller == other_caller && schema_value_same_request(input, other_input),
             (
                 Self::AgentMethod {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
-                    principal: other_principal,
+                    caller: other_caller,
                     scope_card: other_card,
                 },
             ) => {
                 method_name == other_method
-                    && principal == other_principal
+                    && caller == other_caller
                     && scope_card == other_card
                     && schema_value_same_request(input, other_input)
             }
@@ -170,7 +177,7 @@ impl AgentInvocationPayload {
                     stdin,
                     stdout,
                     stderr,
-                    principal,
+                    caller,
                     scope_card,
                     ..
                 },
@@ -181,7 +188,7 @@ impl AgentInvocationPayload {
                     stdin: other_stdin,
                     stdout: other_stdout,
                     stderr: other_stderr,
-                    principal: other_principal,
+                    caller: other_caller,
                     scope_card: other_card,
                     ..
                 },
@@ -193,7 +200,7 @@ impl AgentInvocationPayload {
                     && stdin == other_stdin
                     && stdout == other_stdout
                     && stderr == other_stderr
-                    && principal == other_principal
+                    && caller == other_caller
                     && scope_card == other_card
             }
             _ => self == other,
@@ -473,25 +480,25 @@ impl AgentInvocation {
             AgentInvocationPayload::ManualUpdate { target_revision } => {
                 Self::ManualUpdate { target_revision }
             }
-            AgentInvocationPayload::AgentInitialization { input, principal } => {
+            AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
                     input,
                     invocation_context,
-                    principal,
+                    caller,
                 }
             }
             AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
-                principal,
+                caller,
                 scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             },
             AgentInvocationPayload::ExternalTool {
@@ -502,7 +509,7 @@ impl AgentInvocation {
                 stdout,
                 stderr,
                 activation,
-                principal,
+                caller,
                 scope_card,
             } => Self::ExternalTool {
                 idempotency_key,
@@ -514,20 +521,25 @@ impl AgentInvocation {
                 stderr,
                 activation,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             },
-            AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
+            AgentInvocationPayload::LoadSnapshot { snapshot, caller } => Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
+                caller,
             },
-            AgentInvocationPayload::SaveSnapshot => Self::SaveSnapshot { idempotency_key },
+            AgentInvocationPayload::SaveSnapshot { caller } => Self::SaveSnapshot {
+                idempotency_key,
+                caller,
+            },
             AgentInvocationPayload::ProcessOplogEntries {
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             } => Self::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
@@ -535,6 +547,7 @@ impl AgentInvocation {
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             },
         }
     }
@@ -550,10 +563,10 @@ impl AgentInvocation {
                 idempotency_key,
                 input,
                 invocation_context,
-                principal,
+                caller,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::AgentInitialization { input, principal },
+                AgentInvocationPayload::AgentInitialization { input, caller },
                 invocation_context,
             ),
             Self::AgentMethod {
@@ -561,14 +574,14 @@ impl AgentInvocation {
                 method_name,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 invocation_context,
@@ -583,7 +596,7 @@ impl AgentInvocation {
                 stderr,
                 activation,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
                 ..
             } => (
@@ -596,7 +609,7 @@ impl AgentInvocation {
                     stdout,
                     stderr,
                     activation,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 invocation_context,
@@ -604,14 +617,18 @@ impl AgentInvocation {
             Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
+                caller,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::LoadSnapshot { snapshot },
+                AgentInvocationPayload::LoadSnapshot { snapshot, caller },
                 InvocationContextStack::fresh(),
             ),
-            Self::SaveSnapshot { idempotency_key } => (
+            Self::SaveSnapshot {
                 idempotency_key,
-                AgentInvocationPayload::SaveSnapshot,
+                caller,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::SaveSnapshot { caller },
                 InvocationContextStack::fresh(),
             ),
             Self::ProcessOplogEntries {
@@ -621,6 +638,7 @@ impl AgentInvocation {
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::ProcessOplogEntries {
@@ -629,6 +647,7 @@ impl AgentInvocation {
                     metadata,
                     first_entry_index,
                     entries,
+                    caller,
                 },
                 InvocationContextStack::fresh(),
             ),
@@ -653,7 +672,9 @@ impl AgentInvocation {
             Self::ProcessOplogEntries {
                 idempotency_key, ..
             } => Some(idempotency_key),
-            Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
+            Self::SaveSnapshot {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             Self::LoadSnapshot {
                 idempotency_key, ..
             } => Some(idempotency_key),
@@ -704,11 +725,14 @@ impl AgentInvocation {
         }
     }
 
-    pub fn principal(&self) -> Option<&Principal> {
+    pub fn caller(&self) -> Option<&Caller> {
         match self {
-            Self::AgentInitialization { principal, .. }
-            | Self::AgentMethod { principal, .. }
-            | Self::ExternalTool { principal, .. } => Some(principal),
+            Self::AgentInitialization { caller, .. }
+            | Self::AgentMethod { caller, .. }
+            | Self::ExternalTool { caller, .. }
+            | Self::LoadSnapshot { caller, .. }
+            | Self::SaveSnapshot { caller, .. }
+            | Self::ProcessOplogEntries { caller, .. } => Some(caller),
             _ => None,
         }
     }
@@ -837,7 +861,7 @@ mod request_equality_tests {
                 middleware_chain: None,
                 mcp_import: None,
             }),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         }
     }
@@ -846,16 +870,53 @@ mod request_equality_tests {
         vec![
             AgentInvocationPayload::AgentInitialization {
                 input: value.clone(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
             },
             AgentInvocationPayload::AgentMethod {
                 method_name: "run".to_string(),
                 input: value.clone(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             tool_request(TypedSchemaValue::new(SchemaGraph::anonymous(schema), value)),
         ]
+    }
+
+    #[test]
+    fn same_caller_request_compares_the_whole_caller() {
+        use crate::base_model::caller::test_support::sample_caller;
+
+        let mut other_tokens = sample_caller();
+        other_tokens.tokens.clear();
+        let callers = [Caller::anonymous(), sample_caller(), other_tokens];
+        for (index, caller) in callers.iter().enumerate() {
+            let payloads = |caller: &Caller| {
+                vec![
+                    AgentInvocationPayload::AgentInitialization {
+                        input: SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        },
+                        caller: caller.clone(),
+                    },
+                    AgentInvocationPayload::AgentMethod {
+                        method_name: "run".to_string(),
+                        input: SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        },
+                        caller: caller.clone(),
+                        scope_card: None,
+                    },
+                    AgentInvocationPayload::SaveSnapshot {
+                        caller: caller.clone(),
+                    },
+                ]
+            };
+            for (other_index, other) in callers.iter().enumerate() {
+                for (a, b) in payloads(caller).iter().zip(payloads(other)) {
+                    assert_eq!(a.same_caller_request(&b), index == other_index, "{a:?}");
+                }
+            }
+        }
     }
 
     #[test]

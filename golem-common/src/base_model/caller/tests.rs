@@ -324,3 +324,109 @@ fn every_expected_reference_follows_the_conversion_rules() {
         assert_eq!(vector, rule, "{name}");
     }
 }
+
+/// The live entry points build principals from the same inputs as the 1.6 conversion: the user
+/// of a sign-in is the token's issuer and subject exactly as written, and an account without a
+/// login mapping is the account pair under the Golem issuer.
+#[test]
+fn live_entry_pairs_match_the_1_6_conversion_vectors() {
+    use super::{AccountAuthentication, AccountPrincipal, Claims, Principal, UserPrincipal};
+    use crate::base_model::Timestamp;
+
+    let vectors = vectors();
+    let golem_issuer = text(&vectors["golemIssuer"], "golemIssuer").to_string();
+    let mut checked = BTreeSet::new();
+    for case in cases(&vectors) {
+        let name = text(&case["name"], "a case name");
+        let (live, expected_kind): (Principal, &str) = match case_of(case) {
+            OIDC => {
+                let oidc = &case["principal"]["val"];
+                (
+                    Principal::User(UserPrincipal {
+                        pair: Pair::new(text(&oidc["issuer"], "issuer"), text(&oidc["sub"], "sub")),
+                        claims: Claims::from_json(text(&oidc["claims"], "claims").to_string())
+                            .unwrap(),
+                        authenticated_at: Timestamp::from(1_893_452_400_000),
+                    }),
+                    "user",
+                )
+            }
+            GOLEM_USER_WITHOUT_MAPPING => (
+                Principal::Account(AccountPrincipal {
+                    issuer: golem_issuer.clone(),
+                    account_id: AccountId(uuid(&case["principal"]["val"]["accountId"])),
+                    authentication: AccountAuthentication::ApiToken,
+                }),
+                "account",
+            ),
+            _ => continue,
+        };
+        let expected = &case["expected"];
+        assert_eq!(live.kind().as_str(), expected_kind, "{name}");
+        assert_eq!(
+            live.pair().expect("a pair").to_string(),
+            text(&expected["pair"], "the expected pair"),
+            "{name}"
+        );
+        checked.insert(name.to_string());
+    }
+    assert!(checked.len() >= 3, "checked only {checked:?}");
+}
+
+#[test]
+fn caller_with_512_kib_claims_round_trips_byte_for_byte_through_desert() {
+    use super::test_support::{original_claims_json, user_principal};
+    use super::{Caller, Claims, Principal, UserPrincipal};
+
+    let padding = "x".repeat(512 * 1024);
+    let json =
+        format!("{{\"sub\":\"user-1\",\"padding\":\"{padding}\",\"spaced\":  [ 1 ,2.50,  1e3 ]}}");
+    let Principal::User(user) = user_principal() else {
+        unreachable!()
+    };
+    let claims = Claims::from_json(json.clone()).unwrap();
+    let caller = Caller::entry(Principal::User(UserPrincipal { claims, ..user }));
+
+    let bytes = desert_rust::serialize_to_byte_vec(&caller).unwrap();
+    let decoded: Caller = desert_rust::deserialize(&bytes).unwrap();
+
+    assert_eq!(decoded, caller);
+    assert_eq!(original_claims_json(&decoded), json);
+}
+
+#[test]
+fn recorded_callers_are_equal_only_when_every_field_is_the_same_record() {
+    use super::test_support::{every_principal, sample_caller, user_principal};
+    use super::{Caller, Claims, Principal, UserPrincipal};
+
+    assert_eq!(sample_caller(), sample_caller());
+    for principal in every_principal() {
+        assert_eq!(Caller::entry(principal.clone()), Caller::entry(principal));
+    }
+
+    // The same user with claims that differ only in whitespace is another record.
+    let Principal::User(user) = user_principal() else {
+        unreachable!()
+    };
+    let respaced = Principal::User(UserPrincipal {
+        claims: Claims::from_json(user.claims.as_json().replace(',', ", ")).unwrap(),
+        ..user.clone()
+    });
+    assert_ne!(
+        Caller::entry(Principal::User(user)),
+        Caller::entry(respaced)
+    );
+
+    let mut other_tokens = sample_caller();
+    other_tokens.tokens.pop();
+    assert_ne!(sample_caller(), other_tokens);
+
+    let mut swapped = sample_caller();
+    std::mem::swap(&mut swapped.original, &mut swapped.immediate);
+    assert_ne!(sample_caller(), swapped);
+
+    // Identity is not record equality: anonymous equals nothing, yet two anonymous callers are
+    // the same record.
+    assert!(!Principal::Anonymous.equals(&Principal::Anonymous));
+    assert_eq!(Caller::anonymous(), Caller::anonymous());
+}

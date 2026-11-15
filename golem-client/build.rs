@@ -687,7 +687,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("OutputSchema", "golem_common::schema::OutputSchema"),
             ("NamedField", "golem_common::schema::NamedField"),
             ("FieldSource", "golem_common::schema::FieldSource"),
-            ("AutoInjectedKind", "golem_common::schema::AutoInjectedKind"),
             ("SchemaGraph", "golem_common::schema::SchemaGraph"),
             ("SchemaTypeDef", "golem_common::schema::SchemaTypeDef"),
             ("TypedSchemaValue", "golem_common::schema::TypedSchemaValue"),

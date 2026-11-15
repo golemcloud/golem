@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::caller::Caller;
+use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::agent::Principal;
 use crate::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
     InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
@@ -933,7 +934,7 @@ fn create_serialization_poem_serde_equivalence() {
 #[test]
 fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
     use super::{CreateParameters, CreateRequest, CreateRequestKind, OplogEnrichmentEntry};
-    use crate::model::agent::{AgentMode, AgentPrincipal, AgentTypeName, OwnerKind};
+    use crate::model::agent::{AgentMode, AgentTypeName, OwnerKind};
     use crate::model::environment::EnvironmentId;
     use crate::model::invocation_context::{
         AttributeValue, InvocationContextSpan, InvocationContextStack,
@@ -954,12 +955,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             )]))
             .build(),
     );
-    let creator = Principal::Agent(AgentPrincipal {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Creator(1)".to_string(),
-        },
-    });
+    let creator = sample_caller();
     let mut requests = [
         CreateRequestKind::GetOrCreate,
         CreateRequestKind::Exclusive,
@@ -1057,6 +1053,29 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                 &mut proto.entry
             else {
                 panic!("expected Create");
+            };
+            let mut without_caller = create.clone();
+            without_caller
+                .create_request
+                .as_mut()
+                .expect("create request")
+                .caller = None;
+            let mut proto_without_caller = proto.clone();
+            let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(
+                create_without_caller,
+            )) = &mut proto_without_caller.entry
+            else {
+                unreachable!()
+            };
+            *create_without_caller = without_caller;
+            assert_eq!(
+                OplogEntry::try_from(proto_without_caller).unwrap_err(),
+                "Missing create request caller"
+            );
+            let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(create)) =
+                &mut proto.entry
+            else {
+                unreachable!()
             };
             create.component_id = None;
             assert_eq!(
@@ -1956,7 +1975,9 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
             invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
-                    &crate::model::AgentInvocationPayload::SaveSnapshot,
+                    &crate::model::AgentInvocationPayload::SaveSnapshot {
+                        caller: Caller::anonymous(),
+                    },
                 )
                 .unwrap(),
                 cached: None,
@@ -2733,13 +2754,14 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
         wallet_id_hash: [0x42; 32],
         generation: 73,
     };
+    let caller = sample_caller();
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: caller.clone(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -2755,7 +2777,29 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         raw_entry.clone().try_into().unwrap();
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
-        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+        OplogEntry::AgentInvocationStarted {
+            wallet_pin,
+            payload,
+            ..
+        } => {
+            let payload = match payload {
+                OplogPayload::Inline(payload) => *payload,
+                OplogPayload::SerializedInline { bytes, .. } => {
+                    crate::serialization::deserialize::<AgentInvocationPayload>(&bytes).unwrap()
+                }
+                other => panic!("expected an inline payload, got {other:?}"),
+            };
+            let AgentInvocationPayload::AgentMethod {
+                caller: decoded, ..
+            } = payload
+            else {
+                panic!("expected a method payload");
+            };
+            assert_eq!(decoded, caller);
+            assert_eq!(
+                original_claims_json(&decoded),
+                original_claims_json(&caller)
+            );
             assert_eq!(
                 wallet_pin.as_ref(),
                 &InvocationWalletPin {

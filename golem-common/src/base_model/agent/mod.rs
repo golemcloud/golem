@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::AgentId;
 use crate::base_model::account::{AccountEmail, AccountId};
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
@@ -497,7 +496,6 @@ pub enum BinaryReference {
 #[serde(rename_all = "camelCase")]
 pub struct ReadOnlyConfig {
     pub cache_policy: CachePolicy,
-    pub uses_principal: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -950,72 +948,6 @@ pub struct AgentHttpAuthDetails {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-pub enum Principal {
-    Oidc(OidcPrincipal),
-    Agent(AgentPrincipal),
-    GolemUser(GolemUserPrincipal),
-    Anonymous(Empty),
-}
-
-impl Principal {
-    pub fn anonymous() -> Self {
-        Self::Anonymous(Empty {})
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-// Meaning of the various claims: https://openid.net/specs/openid-connect-core-1_0.html#StandardClaims
-pub struct OidcPrincipal {
-    pub sub: String,
-    pub issuer: String,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub email_verified: Option<bool>,
-    pub given_name: Option<String>,
-    pub family_name: Option<String>,
-    pub picture: Option<String>,
-    pub preferred_username: Option<String>,
-    pub claims: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct AgentPrincipal {
-    pub agent_id: AgentId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct GolemUserPrincipal {
-    pub account_id: AccountId,
-}
-
 #[cfg(test)]
 mod tests {
     use test_r::test;
@@ -1068,7 +1000,6 @@ mod tests {
                 "get",
                 Some(ReadOnlyConfig {
                     cache_policy: CachePolicy::UntilWrite(Empty {}),
-                    uses_principal: false,
                 }),
             )],
         );
@@ -1089,7 +1020,6 @@ mod tests {
                 "get",
                 Some(ReadOnlyConfig {
                     cache_policy: CachePolicy::UntilWrite(Empty {}),
-                    uses_principal: false,
                 }),
             )],
         );
@@ -1160,15 +1090,12 @@ mod tests {
     fn all_read_only_methods() -> Vec<AgentMethodSchema> {
         let mut out = vec![mock_method("not-read-only", None)];
         for policy in all_cache_policies() {
-            for uses_principal in [false, true] {
-                out.push(mock_method(
-                    "ro",
-                    Some(ReadOnlyConfig {
-                        cache_policy: policy.clone(),
-                        uses_principal,
-                    }),
-                ));
-            }
+            out.push(mock_method(
+                "ro",
+                Some(ReadOnlyConfig {
+                    cache_policy: policy.clone(),
+                }),
+            ));
         }
         out
     }

@@ -23,9 +23,8 @@ use crate::base_model::agent::{
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::account::AccountEmail;
 use crate::schema::agent::{
-    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-    AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    RegisteredAgentTypeSchema,
+    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema, FieldSource,
+    InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
@@ -103,11 +102,7 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
             prompt_hint: Some("hint".to_string()),
             input_schema: InputSchema::parameters([
                 NamedField::user_supplied("location", SchemaType::ref_to(TypeId::new("city"))),
-                NamedField::auto_injected(
-                    "principal",
-                    AutoInjectedKind::Principal,
-                    SchemaType::string(),
-                ),
+                NamedField::user_supplied("principal", SchemaType::string()),
             ]),
         },
         methods: vec![AgentMethodSchema {
@@ -267,14 +262,16 @@ fn deployed_registered_agent_type_preserves_type_id() {
 
 #[test]
 fn field_source_round_trips() {
-    for source in [
-        FieldSource::UserSupplied,
-        FieldSource::AutoInjected(AutoInjectedKind::Principal),
-    ] {
-        let proto: golem_api_grpc::proto::golem::schema::FieldSource = source.clone().into();
-        let back: FieldSource = proto.try_into().expect("decode");
-        assert_eq!(source, back);
-    }
+    let source = FieldSource::UserSupplied;
+    let proto: golem_api_grpc::proto::golem::schema::FieldSource = source.clone().into();
+    let back: FieldSource = proto.try_into().expect("decode");
+    assert_eq!(source, back);
+}
+
+#[test]
+fn field_source_without_a_source_is_an_error() {
+    let proto = golem_api_grpc::proto::golem::schema::FieldSource { source: None };
+    assert!(FieldSource::try_from(proto).is_err());
 }
 
 #[test]
