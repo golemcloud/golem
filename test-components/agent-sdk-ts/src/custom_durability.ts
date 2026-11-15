@@ -91,6 +91,10 @@ export const CustomDurabilityTs = defineAgent({
       input: { port: z.number() },
       returns: z.array(z.string()),
     }),
+    cancelledCall: method({
+      input: { port: z.number() },
+      returns: z.array(z.string()),
+    }),
   },
 });
 
@@ -167,6 +171,30 @@ export const CustomDurabilityTsImpl = CustomDurabilityTs.implement({
         })(),
         durableCallback(port, "second"),
       ]);
+    },
+
+    // The body aborts a request that the server holds, after the server confirmed its arrival.
+    async cancelledCall({ port }) {
+      const scoped = await durableAsync(
+        generator,
+        { payload: "cancel-scoped" },
+        async () => {
+          const controller = new AbortController();
+          const hanging = fetch(
+            `http://localhost:${port}/callback?payload=hang`,
+            { signal: controller.signal },
+          );
+          await callback(port, "hang-ready");
+          controller.abort();
+          const outcome = await hanging.then(
+            () => "not-aborted",
+            (error: unknown) => `aborted-${(error as Error).name}`,
+          );
+          await callback(port, "after-abort");
+          return outcome;
+        },
+      );
+      return [scoped, await callback(port, "after-cancel")];
     },
   },
 });

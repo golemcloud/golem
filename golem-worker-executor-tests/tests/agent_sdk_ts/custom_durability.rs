@@ -672,3 +672,203 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
     server.abort();
     Ok(())
 }
+
+/// The indices of the Cancelled entries of the Start at `start`.
+fn cancellations_of(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(params) if params.start_index == start => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let history = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hang_arrived = Arc::new(Notify::new());
+    let checkpoint = Arc::new(Notify::new());
+    let resume = Arc::new(Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    #[derive(Deserialize)]
+    struct Params {
+        payload: String,
+    }
+    let route_history = history.clone();
+    let route_checkpoint = checkpoint.clone();
+    let route_resume = resume.clone();
+    let route = Router::new().route(
+        "/callback",
+        any(move |Query(params): Query<Params>| {
+            let history = route_history.clone();
+            let hang_arrived = hang_arrived.clone();
+            let checkpoint = route_checkpoint.clone();
+            let resume = route_resume.clone();
+            async move {
+                history.lock().unwrap().push(params.payload.clone());
+                match params.payload.as_str() {
+                    // Never answers; the guest aborts it.
+                    "hang" => {
+                        hang_arrived.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    "hang-ready" => hang_arrived.notified().await,
+                    // The operation is still open, after its request was cancelled.
+                    "after-abort" => {
+                        checkpoint.notify_one();
+                        let _ = resume.acquire().await;
+                    }
+                    _ => {}
+                }
+                params.payload
+            }
+        }),
+    );
+    let server =
+        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurabilityTs", "cancelled-call");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "cancelledCall",
+                    data_value!(port as f64),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
+    executor.commit_oplog(&worker_id).await?;
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let start = invocation_start(&before, "cancelledCall");
+    let anchor = before[start].oplog_index;
+    let entries = &before[start..];
+    let operations = custom_starts(entries, anchor);
+    assert_eq!(operations.len(), 1);
+    let operation = operations[0].index;
+    assert_eq!(operations[0].parent, None);
+    assert_eq!(
+        ends_of(entries, operation).len(),
+        0,
+        "the operation is open"
+    );
+    let sends = starts_owned_by(entries, HTTP_SEND, Some(operation));
+    assert_eq!(sends.len(), 3, "every request of the body belongs to it");
+    let cancelled: Vec<_> = sends
+        .iter()
+        .copied()
+        .filter(|send| !cancellations_of(entries, *send).is_empty())
+        .collect();
+    let ended: Vec<_> = sends
+        .iter()
+        .copied()
+        .filter(|send| !ends_of(entries, *send).is_empty())
+        .collect();
+    assert_eq!(cancelled.len(), 1, "the aborted request is cancelled");
+    assert_eq!(ended.len(), 1, "the ready request completed");
+    assert!(
+        cancellations_of(entries, cancelled[0])[0] > ends_of(entries, ended[0])[0],
+        "the abort follows the ready answer"
+    );
+    assert_eq!(
+        starts_owned_by(entries, HTTP_SEND, None),
+        Vec::<OplogIndex>::new()
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    resume.close();
+    assert_eq!(
+        invocation.await??.into_typed::<Vec<String>>()?,
+        vec!["aborted-AbortError", "after-cancel"]
+    );
+    // Recovery of an incomplete custom operation runs its whole body again.
+    let effects = history.lock().unwrap().clone();
+    let count = |payload: &str| effects.iter().filter(|p| *p == payload).count();
+    assert_eq!(
+        count("hang"),
+        2,
+        "each attempt sends and aborts its own request"
+    );
+    assert_eq!(count("hang-ready"), 2);
+    assert_eq!(count("after-abort"), 2);
+    assert_eq!(count("after-cancel"), 1);
+
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let entries = &recovered[start..];
+    let recovered_operations: Vec<_> = custom_starts(entries, anchor)
+        .into_iter()
+        .map(|start| start.index)
+        .collect();
+    assert_eq!(
+        recovered_operations,
+        vec![operation],
+        "recovery keeps the identity of the operation"
+    );
+    assert_eq!(ends_of(entries, operation).len(), 1);
+    let terminals = |send: OplogIndex| {
+        (
+            ends_of(entries, send).len(),
+            cancellations_of(entries, send).len(),
+        )
+    };
+    // The first attempt keeps its terminals; its request open at the crash stays incomplete.
+    assert_eq!(terminals(cancelled[0]), (0, 1));
+    assert_eq!(terminals(ended[0]), (1, 0));
+    let interrupted: Vec<_> = sends
+        .iter()
+        .copied()
+        .filter(|send| *send != cancelled[0] && *send != ended[0])
+        .collect();
+    assert_eq!(interrupted.len(), 1);
+    assert_eq!(terminals(interrupted[0]), (0, 0));
+    // The second attempt runs in the same scope, and its abort is again a cancellation there.
+    let rerun: Vec<_> = starts_owned_by(entries, HTTP_SEND, Some(operation))
+        .into_iter()
+        .filter(|send| !sends.contains(send))
+        .collect();
+    assert_eq!(rerun.len(), 3);
+    let mut rerun_terminals: Vec<_> = rerun.iter().map(|send| terminals(*send)).collect();
+    rerun_terminals.sort();
+    assert_eq!(rerun_terminals, vec![(0, 1), (1, 0), (1, 0)]);
+    assert!(rerun.iter().all(|send| *send > interrupted[0]));
+    let root_sends = starts_owned_by(entries, HTTP_SEND, None);
+    assert_eq!(root_sends.len(), 1);
+    assert!(root_sends[0] > ends_of(entries, operation)[0]);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !matches!(&entry.entry, PublicOplogEntry::Jump(_))),
+        "recovery must not roll back history"
+    );
+    server.abort();
+    Ok(())
+}
