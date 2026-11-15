@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use caller::{
+pub use crate::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, InvocationContext, Principal,
     PrincipalKind, PrincipalRef, PrincipalRefParseError, TokenProvenance, ToolPrincipal,
     UserPrincipal,
@@ -76,7 +76,6 @@ mod agent_registry;
 mod agent_stream;
 pub mod ambient_tool_rpc;
 mod async_utils;
-pub(crate) mod caller;
 mod errors;
 pub(crate) mod exports;
 mod extended_agent_type;

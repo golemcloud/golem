@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "export_golem_agentic")]
-pub use crate::agentic::{
+pub use crate::caller::{
     Caller, InvocationContext, Principal, PrincipalKind, PrincipalRef, TokenProvenance,
 };
 #[cfg(not(feature = "export_golem_agentic"))]

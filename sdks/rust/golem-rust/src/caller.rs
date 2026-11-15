@@ -24,6 +24,9 @@
 //! [`Principal`] and [`Caller`] are live values and have no schema. To store who called, keep
 //! [`Caller::original`]'s [`PrincipalRef`], which is plain data.
 
+#[cfg(not(feature = "export_golem_agentic"))]
+use crate::bindings::golem::agent::common as wit;
+#[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::agent::common as wit;
 use crate::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 use std::fmt::{self, Display, Formatter, Write};
@@ -339,6 +342,7 @@ impl UserPrincipal {
     }
 
     /// The claims, parsed on demand.
+    #[cfg(any(feature = "json", feature = "export_golem_agentic"))]
     pub fn claims(&self) -> Result<serde_json::Value, serde_json::Error> {
         serde_json::from_str(&self.claims)
     }
@@ -613,6 +617,7 @@ pub struct InvocationContext {
 
 impl InvocationContext {
     /// The context of the running invocation, read from the host.
+    #[cfg(feature = "export_golem_agentic")]
     pub(crate) fn current() -> Self {
         Self {
             caller: crate::golem_agentic::golem::agent::invocation_context::caller().into(),

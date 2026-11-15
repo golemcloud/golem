@@ -450,6 +450,7 @@ dependencies = [
 name = "golem_it_agent_sdk_rust"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "chrono",
  "futures",
  "golem-rust",

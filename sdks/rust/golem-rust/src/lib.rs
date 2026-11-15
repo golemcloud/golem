@@ -18,6 +18,7 @@ test_r::enable!();
 pub use uuid::Uuid;
 pub use wasip3;
 
+pub mod caller;
 pub mod http;
 
 #[doc(hidden)]
