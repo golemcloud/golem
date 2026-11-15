@@ -471,7 +471,7 @@ pub trait TestDsl {
         &self,
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
-        principal: golem_common::model::agent::Principal,
+        principal: golem_common::model::caller::Caller,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
@@ -493,7 +493,7 @@ pub trait TestDsl {
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
-        principal: Option<golem_common::model::agent::Principal>,
+        principal: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult>;

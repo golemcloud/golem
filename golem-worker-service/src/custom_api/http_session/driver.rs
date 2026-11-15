@@ -97,9 +97,7 @@ pub(super) async fn run_session(
             debug!(attempt = recovery.attempts, "HTTP session reattach attempt");
             let resume = recovery
                 .pending
-                .get_or_insert_with(|| {
-                    make_resume(identity, &output.cursors, start.principal.clone())
-                })
+                .get_or_insert_with(|| make_resume(identity, &output.cursors, start.caller.clone()))
                 .clone();
             first_request = InvocationRequest {
                 request: Some(invocation_request::Request::ResumeAttach(resume.clone())),
@@ -215,7 +213,7 @@ pub(super) async fn run_session(
                 recovery.pending = Some(make_resume(
                     accepted.as_ref().unwrap(),
                     &output.cursors,
-                    start.principal.clone(),
+                    start.caller.clone(),
                 ));
                 recovery.pending.as_mut().unwrap().operation = operation as i32;
                 continue;
@@ -675,7 +673,7 @@ fn accepted_identity(accepted: InvocationAccepted) -> Result<AcceptedIdentity, H
 fn make_resume(
     identity: &AcceptedIdentity,
     cursors: &HashMap<(u64, u64), Vec<u8>>,
-    principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    caller: Option<golem_api_grpc::proto::golem::component::Caller>,
 ) -> ResumeAttach {
     let mut cursors = cursors
         .iter()
@@ -699,7 +697,7 @@ fn make_resume(
         operation: ResumeOperation::Resume as i32,
         cursors,
         auth_ctx: None,
-        principal,
+        caller,
     }
 }
 

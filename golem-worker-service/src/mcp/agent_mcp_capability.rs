@@ -195,7 +195,7 @@ mod tests {
     use super::*;
     use golem_common::base_model::agent::{CachePolicy, ReadOnlyConfig};
     use golem_common::model::Empty;
-    use golem_common::schema::agent::{AutoInjectedKind, InputSchema, NamedField};
+    use golem_common::schema::agent::{InputSchema, NamedField};
     use golem_common::schema::schema_type::SchemaType;
     use test_r::test;
 
@@ -218,7 +218,6 @@ mod tests {
             http_endpoint: vec![],
             read_only: read_only.then_some(ReadOnlyConfig {
                 cache_policy: CachePolicy::NoCache(Empty {}),
-                uses_principal: false,
             }),
         }
     }
@@ -283,51 +282,6 @@ mod tests {
         .unwrap();
 
         assert!(matches!(capability, McpAgentCapability::Tool(_)));
-    }
-
-    #[test]
-    fn read_only_method_with_only_auto_injected_input_is_a_resource() {
-        let capability = capability(
-            SchemaGraph::empty(),
-            &method(
-                vec![NamedField::auto_injected(
-                    "principal",
-                    AutoInjectedKind::Principal,
-                    SchemaType::string(),
-                )],
-                OutputSchema::Unit,
-                true,
-            ),
-        )
-        .unwrap();
-
-        assert!(matches!(capability, McpAgentCapability::Resource(_)));
-    }
-
-    #[test]
-    fn auto_injected_constructor_input_keeps_resource_static() {
-        let constructor = AgentConstructorSchema {
-            name: None,
-            description: String::new(),
-            prompt_hint: None,
-            input_schema: InputSchema::Parameters(vec![NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::string(),
-            )]),
-        };
-        let capability = capability_with_constructor(
-            SchemaGraph::empty(),
-            &method(vec![], OutputSchema::Unit, true),
-            &constructor,
-        )
-        .unwrap();
-
-        assert!(matches!(
-            capability,
-            McpAgentCapability::Resource(resource)
-                if matches!(resource.kind, AgentMcpResourceKind::Static(_))
-        ));
     }
 
     #[test]

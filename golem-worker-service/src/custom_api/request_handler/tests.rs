@@ -306,7 +306,6 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
     };
     call.read_only = Some(ReadOnlyConfig {
         cache_policy: CachePolicy::UntilWrite(Empty {}),
-        uses_principal: false,
     });
     let bound_call = call.clone();
     let mut ids = vec![];

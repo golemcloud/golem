@@ -2096,7 +2096,6 @@ mod tests {
     fn read_only_until_write() -> golem_common::model::agent::ReadOnlyConfig {
         golem_common::model::agent::ReadOnlyConfig {
             cache_policy: CachePolicy::UntilWrite(Empty {}),
-            uses_principal: false,
         }
     }
 
@@ -2105,7 +2104,6 @@ mod tests {
             cache_policy: CachePolicy::Ttl(golem_common::model::agent::CachePolicyTtl {
                 duration_nanos: nanos,
             }),
-            uses_principal: false,
         }
     }
 

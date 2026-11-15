@@ -814,6 +814,10 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
+        let caller = request
+            .caller
+            .ok_or_else(|| bad_request_error("caller is missing"))?;
+
         let (latest_component_revision, fingerprint) = if prepare {
             let method_name = request
                 .method_name
@@ -831,7 +835,7 @@ impl WorkerGrpcApi {
                     request.ignore_already_existing,
                     auth,
                     request.context,
-                    request.principal,
+                    caller,
                     request.idempotency_key.map(Into::into),
                     freshness_disposition,
                 )
@@ -846,7 +850,7 @@ impl WorkerGrpcApi {
                     request.ignore_already_existing,
                     auth,
                     request.context,
-                    request.principal,
+                    caller,
                 )
                 .await?
         } else {
@@ -858,7 +862,7 @@ impl WorkerGrpcApi {
                     request.ignore_already_existing,
                     auth,
                     request.context,
-                    request.principal,
+                    caller,
                 )
                 .await?
         };
@@ -954,18 +958,19 @@ impl WorkerGrpcApi {
         let source_agent_id = validate_protobuf_agent_id(request.source_agent_id)?;
         let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
-        let principal = request
-            .principal
-            .map(golem_common::model::agent::Principal::try_from)
-            .transpose()
-            .map_err(|e| bad_request_error(format!("failed converting principal: {e}")))?;
+        let caller = golem_common::model::caller::Caller::try_from(
+            request
+                .caller
+                .ok_or_else(|| bad_request_error("caller is missing"))?,
+        )
+        .map_err(|e| bad_request_error(format!("failed converting caller: {e}")))?;
 
         self.worker_service
             .fork_worker(
                 &source_agent_id,
                 &target_agent_id,
                 oplog_idx,
-                principal,
+                Some(caller),
                 auth,
             )
             .await?;
@@ -1062,9 +1067,9 @@ impl WorkerGrpcApi {
             }
         }
 
-        let principal = request
-            .principal
-            .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
+        let caller = request
+            .caller
+            .ok_or_else(|| bad_request_error("caller is missing"))?;
 
         let environment_id = request
             .environment_id
@@ -1080,7 +1085,7 @@ impl WorkerGrpcApi {
                         idempotency_key: request.idempotency_key,
                         request_key: Some(request_key.into()),
                         context: request.context,
-                        principal: Some(principal),
+                        caller: Some(caller),
                         attempt_id: Some(uuid::Uuid::new_v4().into()),
                         expected_callee_fingerprint: request.expected_callee_fingerprint,
                         ..Default::default()
@@ -1102,7 +1107,7 @@ impl WorkerGrpcApi {
                     freshness_disposition,
                     config,
                     auth,
-                    principal,
+                    caller,
                     environment_id,
                     request.scope_card,
                     request

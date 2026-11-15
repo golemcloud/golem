@@ -168,6 +168,7 @@ impl Services {
             limit_service.clone(),
             worker_client.clone(),
             agent_resolution_cache.clone(),
+            golem_issuer.clone(),
         ));
 
         let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(

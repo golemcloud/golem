@@ -11,7 +11,8 @@ use golem_api_grpc::proto::golem::worker::{
     StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result,
 };
-use golem_common::model::agent::{OwnerKind, Principal};
+use golem_common::model::agent::OwnerKind;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
     PermissionTarget,
@@ -144,7 +145,7 @@ pub async fn invoke(
             },
             Box::pin(ReceiverStream::new(receiver)),
             auth,
-            Principal::anonymous(),
+            Caller::anonymous(),
             request_key,
             |_| Ok(()),
         )

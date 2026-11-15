@@ -1,7 +1,7 @@
 use golem_native_tool::{
-    HostResult, IntoTypedSchemaValue, NativeToolCancellation, NativeToolInvocation,
+    Caller, HostResult, IntoTypedSchemaValue, NativeToolCancellation, NativeToolInvocation,
     NativeToolInvoker, NativeToolOutput, NativeToolOutputHandle, NativeToolRpcError,
-    NativeToolStdin, NativeToolStdinHandle, Principal, SchemaValue, ToolError, TypedSchemaValue,
+    NativeToolStdin, NativeToolStdinHandle, SchemaValue, ToolError, TypedSchemaValue,
     tool_definition, tool_implementation,
 };
 use std::future::Future;
@@ -61,7 +61,7 @@ async fn metadata_and_send_invocation_share_sdk_authoring() {
             NativeToolInvocation {
                 command_path: vec![],
                 input,
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 cancellation: NativeToolCancellation::unavailable(),
                 stdin: None,
                 stdout: None,
@@ -144,7 +144,7 @@ fn invocation<Ctx>(
     NativeToolInvocation {
         command_path: vec![command.to_string()],
         input: TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields }),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         cancellation: NativeToolCancellation::unavailable(),
         stdin: None,
         stdout: None,
@@ -243,7 +243,7 @@ trait NativeChild<Ctx: Send + Extend<String>> {
         context: &mut Ctx,
         verbose: bool,
         name: String,
-        principal: golem_native_tool::Principal,
+        caller: golem_native_tool::Caller,
         cancellation: NativeToolCancellation,
         stdin: NativeToolStdin<Ctx>,
         stdout: Option<NativeToolOutput<Ctx>>,
@@ -262,7 +262,7 @@ where
         context: &mut Ctx,
         verbose: bool,
         name: String,
-        principal: Principal,
+        caller: Caller,
         cancellation: NativeToolCancellation,
         mut stdin: NativeToolStdin<Ctx>,
         mut stdout: Option<NativeToolOutput<Ctx>>,
@@ -274,7 +274,7 @@ where
         }
         context.extend([name.clone()]);
         format!(
-            "{verbose}:{name}:{principal:?}:{}",
+            "{verbose}:{name}:{caller:?}:{}",
             cancellation.is_cancelled()
         )
     }
@@ -410,7 +410,7 @@ async fn native_invocation_delivers_distinct_stdout_and_stderr_handles() {
     let invocation = NativeToolInvocation {
         command_path: Vec::new(),
         input: ().into_typed_schema_value().unwrap(),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         cancellation: NativeToolCancellation::unavailable(),
         stdin: None,
         stdout: Some(Box::new(RecordingOutput {
@@ -465,7 +465,7 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
             NativeToolInvocation {
                 command_path: vec!["c".into(), "run".into()],
                 input,
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 cancellation: NativeToolCancellation::from_observer(Cancelled),
                 stdin: Some(Box::new(Input(Some(b"hello".to_vec())))),
                 stdout: Some(Box::new(Output)),

@@ -17,8 +17,9 @@ mod parameter_parsing;
 mod response_mapping;
 
 use self::cache_headers::{
-    add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
-    if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
+    CacheVisibility, add_vary_header, build_cache_control_value, build_etag_value,
+    headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
+    supports_http_revalidation,
 };
 use self::parameter_parsing::{parse_path_segment_value, parse_query_or_header_value};
 use self::response_mapping::interpret_agent_response;
@@ -30,9 +31,9 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
-use golem_common::model::agent::{
-    AgentMode, AgentTarget, OidcPrincipal, ParsedAgentKey, Principal, ReadOnlyConfig,
-};
+use golem_common::model::Timestamp;
+use golem_common::model::agent::{AgentMode, AgentTarget, ParsedAgentKey, ReadOnlyConfig};
+use golem_common::model::caller::{Caller, Claims, Pair, Principal, UserPrincipal};
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
@@ -116,9 +117,9 @@ impl CallAgentHandler {
             tracing: Some(request.invocation_context().into()),
         });
 
-        let principal = principal_from_request(request)?;
-        debug!("Using principal for invocation: {principal:?}");
-        let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller = caller_from_request(request)?;
+        debug!(kind = %caller.original.kind(), "Using caller for invocation");
+        let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
 
         let agent_response = self
             .worker_service
@@ -134,7 +135,7 @@ impl CallAgentHandler {
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
                 Vec::new(),
                 AuthCtx::System,
-                proto_principal,
+                proto_caller,
                 Some(resolved_route.route.environment_id),
                 None,
                 None,
@@ -178,6 +179,8 @@ impl CallAgentHandler {
                 read_only,
                 behaviour,
                 resolved_route,
+                &caller,
+                request.headers(),
             );
 
             if request_method == Method::HEAD {
@@ -225,6 +228,7 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
+        let caller = caller_from_request(request)?;
         let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
@@ -234,6 +238,8 @@ impl CallAgentHandler {
             read_only,
             behaviour,
             resolved_route,
+            &caller,
+            request.headers(),
         );
 
         Ok(Some(RouteExecutionResult {
@@ -324,7 +330,7 @@ impl CallAgentHandler {
         // The producer emits `method_parameters` in user-supplied input
         // declaration order, so iterating them in order builds the positional
         // `SchemaValue::Record` the executor validates against (which excludes
-        // auto-injected fields like the principal).
+        // auto-injected fields like the caller).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
 
         for param in &behaviour.method_parameters {
@@ -492,8 +498,9 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
 /// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (`Authorization` / session-header for principal-aware
-/// methods, plus any header-bound method parameters).
+/// the response (the headers that carry a credential for a public response,
+/// plus any header-bound method parameters).
+#[allow(clippy::too_many_arguments)]
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
     agent_id: &AgentId,
@@ -502,10 +509,20 @@ fn add_read_only_cache_headers(
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
     resolved_route: &ResolvedRouteEntry,
+    caller: &Caller,
+    request_headers: &http::HeaderMap,
 ) {
+    let session_header = session_header_name(&resolved_route.route.security);
+    let visibility = CacheVisibility::for_request(caller, request_headers, session_header);
+    let issues_token = headers.contains_key(http::header::SET_COOKIE);
     headers.insert(
         cache_header::CACHE_CONTROL,
-        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
+        http::HeaderValue::from_str(&build_cache_control_value(
+            read_only,
+            visibility,
+            issues_token,
+        ))
+        .unwrap(),
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -526,14 +543,16 @@ fn add_read_only_cache_headers(
         );
     }
 
-    // Vary on every request header that may influence the response: the
-    // principal-bound header for principal-aware methods, and any header-bound
-    // method parameters bound by the route.
-    if read_only.uses_principal {
-        add_vary_header(
-            headers,
-            principal_vary_header_name(&resolved_route.route.security),
-        );
+    // A public response may be served by a shared cache to any request, so it varies on every
+    // header that can carry a credential, which then makes the response private. The headers
+    // that method parameters are bound to vary the response as well.
+    if visibility == CacheVisibility::Public {
+        for name in ["Authorization", "Cookie", "Golem-Token"]
+            .into_iter()
+            .chain(session_header)
+        {
+            add_vary_header(headers, name);
+        }
     }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
@@ -542,16 +561,13 @@ fn add_read_only_cache_headers(
     }
 }
 
-/// Return the request header used to derive the caller's principal for the
-/// route's security configuration. Defaults to `Authorization` for OIDC /
-/// session-based security; uses the configured header name for
-/// `SessionFromHeader` security.
-fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
+/// The header that carries the session of a `SessionFromHeader` route.
+fn session_header_name(security: &RichRouteSecurity) -> Option<&str> {
     match security {
-        RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
+        RichRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
         RichRouteSecurity::None
         | RichRouteSecurity::SecurityScheme(_)
-        | RichRouteSecurity::Unavailable => "Authorization",
+        | RichRouteSecurity::Unavailable => None,
     }
 }
 
@@ -592,24 +608,31 @@ pub(super) fn resolve_phantom_id(
         })
 }
 
-pub(super) fn principal_from_request(
-    request: &RichRequest,
-) -> Result<Principal, RequestHandlerError> {
+/// The caller of a request: the user of its authenticated session, or anonymous. The pair is the
+/// session's issuer and subject exactly as written, never the email or the name. The claims are
+/// the session's claim set, kept as the JSON text that was serialized.
+pub(super) fn caller_from_request(request: &RichRequest) -> Result<Caller, RequestHandlerError> {
     match request.authenticated_session() {
-        Some(session) => Ok(Principal::Oidc(OidcPrincipal {
-            sub: session.subject.clone(),
-            issuer: session.issuer.clone(),
-            email: session.email.clone(),
-            name: session.name.clone(),
-            email_verified: session.email_verified,
-            given_name: session.given_name.clone(),
-            family_name: session.family_name.clone(),
-            picture: session.picture.clone(),
-            preferred_username: session.preferred_username.clone(),
-            claims: serde_json::to_string(&session.claims)
-                .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?,
-        })),
-        None => Ok(Principal::anonymous()),
+        Some(session) => {
+            let claims_json = serde_json::to_string(&session.claims)
+                .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?;
+            let claims = Claims::from_json(claims_json)
+                .map_err(|e| anyhow!("the session claims are not a valid claim set: {e}"))?;
+            let authenticated_at = session
+                .claims
+                .auth_time()
+                .unwrap_or_else(|| session.claims.issue_time());
+            let authenticated_at = Timestamp::from(
+                u64::try_from(authenticated_at.timestamp_millis())
+                    .map_err(|_| anyhow!("the session claims have a time before 1970"))?,
+            );
+            Ok(Caller::entry(Principal::User(UserPrincipal {
+                pair: Pair::new(session.issuer.clone(), session.subject.clone()),
+                claims,
+                authenticated_at,
+            })))
+        }
+        None => Ok(Caller::anonymous()),
     }
 }
 
@@ -620,6 +643,66 @@ mod tests {
     use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
     use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
     use test_r::test;
+
+    fn oidc_session(issuer: &str, subject: &str) -> crate::custom_api::model::OidcSession {
+        use chrono::{TimeDelta, Utc};
+        use openidconnect::{
+            EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, StandardClaims, SubjectIdentifier,
+        };
+
+        let issued_at = Utc::now();
+        crate::custom_api::model::OidcSession {
+            subject: subject.to_string(),
+            issuer: issuer.to_string(),
+            email: Some("ana@acme.example".to_string()),
+            name: Some("Ana".to_string()),
+            email_verified: Some(true),
+            given_name: None,
+            family_name: None,
+            picture: None,
+            preferred_username: Some("ana".to_string()),
+            claims: IdTokenClaims::new(
+                IssuerUrl::new(issuer.to_string()).unwrap(),
+                Vec::new(),
+                issued_at + TimeDelta::hours(1),
+                issued_at,
+                StandardClaims::new(SubjectIdentifier::new(subject.to_string())),
+                EmptyAdditionalClaims {},
+            ),
+            scopes: Default::default(),
+            expires_at: issued_at + TimeDelta::hours(1),
+        }
+    }
+
+    #[test]
+    fn caller_from_request_builds_the_user_pair_from_issuer_and_sub() {
+        let mut request = RichRequest::new(poem::Request::default());
+        assert_eq!(caller_from_request(&request).unwrap(), Caller::anonymous());
+
+        let session = oidc_session("https://login.acme.example/", "Ana.Example");
+        let claims_text = serde_json::to_string(&session.claims).unwrap();
+        request.set_authenticated_session(session);
+
+        let caller = caller_from_request(&request).unwrap();
+        assert!(caller.tokens.is_empty());
+        assert_eq!(
+            caller.original.kind(),
+            golem_common::model::caller::Kind::User
+        );
+        // Both roles hold the same user.
+        assert!(caller.original.equals(&caller.immediate));
+        // The pair is the issuer and subject as written, never the email or the name.
+        assert_eq!(
+            caller.original.pair().unwrap().to_string(),
+            "(\"https://login.acme.example/\",\"Ana.Example\")"
+        );
+        let Principal::User(user) = &caller.original else {
+            panic!("expected a user");
+        };
+        // The claims text is the exact serialization of the session's claims.
+        assert_eq!(user.claims.as_json(), claims_text);
+        assert!(!format!("{:?}", caller.original.pair()).contains("ana@acme.example"));
+    }
 
     #[test]
     async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {

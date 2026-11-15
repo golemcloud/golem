@@ -20,9 +20,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::agent::{
-    AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
-};
+use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey};
+use golem_common::model::caller::Caller;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
@@ -128,7 +127,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 InvocationFreshnessDisposition::KnownFresh,
                 vec![],
                 AuthCtx::System,
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 Some(call.environment_id),
                 None,
                 None,

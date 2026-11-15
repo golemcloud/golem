@@ -125,6 +125,7 @@ impl WorkerApi {
             .normalize_agent_id_by_latest_version(component_id, &name)
             .await?;
 
+        let caller = self.worker_service.rest_caller(&auth).into();
         let (component_revision, _created_at) = self
             .worker_service
             .create_with_component(
@@ -135,7 +136,7 @@ impl WorkerApi {
                 false,
                 auth,
                 None,
-                None,
+                caller,
             )
             .await?;
 
