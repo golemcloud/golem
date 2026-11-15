@@ -35,7 +35,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// generation can run, so the answer is `AgentNotFound`. Before that the deletion can still
     /// fail and leave an invocation that an earlier attempt with the same key committed, so a
     /// running deletion answers the refusal an unpinned enqueue gets. A failed attempt leaves the
-    /// agent in place and a lost shard is a routing miss, so neither answers.
+    /// agent in place and a lost shard is a routing miss, so neither answers. Reads and management
+    /// calls use [`Self::answers_as_deleted`] instead, which answers a running deletion as missing.
     pub(in crate::worker) async fn pinned_deletion_refusal(&self) -> Option<WorkerExecutorError> {
         let instance = self.instance.lock().await;
         let WorkerInstance::Deleting(deleting) = instance.state() else {
