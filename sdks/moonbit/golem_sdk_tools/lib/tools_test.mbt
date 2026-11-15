@@ -125,7 +125,7 @@ test "tool metadata, hidden types, result, and constraints" {
         #|#derive.tool("tool")
         #|struct Tool {}
         #|
-        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> String { ... }
+        #|pub fn Tool::execute(path : String, context : @tool.InvocationContext, input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> String { ... }
         #|
       ),
     ),
@@ -140,7 +140,7 @@ test "tool metadata, hidden types, result, and constraints" {
     content=(
       #|[
       #|  ("path", Public(Simple("String"))),
-      #|  ("principal", Hidden(Principal)),
+      #|  ("context", Hidden(InvocationContext)),
       #|  ("input", Hidden(InputStream)),
       #|  ("output", Hidden(OutputStream)),
       #|]
@@ -278,9 +278,9 @@ test "strict tool parser diagnostics" {
   )
   inspect(
     parse_error(
-      "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : Principal) -> Unit {}\n",
+      "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : InvocationContext) -> Unit {}\n",
     ),
-    content="Hidden SDK type 'Principal' must use its exact qualified name",
+    content="Hidden SDK type 'InvocationContext' must use its exact qualified name",
   )
 }
 
@@ -422,4 +422,22 @@ test "root command invariants are rejected while parsing" {
     ),
     content="Command 'Runner::run' cannot override itself into the tool root",
   )
+}
+
+///|
+test "a tool signature refuses live values" {
+  for ty in ["@common.Principal", "Caller", "Array[TokenProvenance]"] {
+    inspect(
+      parse_error(
+        "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : \{ty}) -> Unit {}\n",
+      ),
+      content=live_value_message,
+    )
+    inspect(
+      parse_error(
+        "#derive.tool\nstruct Bad {}\npub fn Bad::run() -> \{ty} { abort(\"x\") }\n",
+      ),
+      content=live_value_message,
+    )
+  }
 }

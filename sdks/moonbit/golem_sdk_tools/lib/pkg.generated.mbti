@@ -16,6 +16,8 @@ pub fn component_target_dir(String, String) -> String
 
 pub fn config_has_overridable_fields(ConfigTypeInfo, Map[String, ConfigTypeInfo]) -> Bool
 
+pub fn contains_live_value_type(ParamType) -> Bool
+
 pub fn decode_qualified(String) -> (String, String)?
 
 pub fn discover_and_scan(String) -> Array[PackageScanResult] raise
@@ -30,7 +32,7 @@ pub fn error_message(Error) -> String
 
 pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int32)?
 
-pub fn find_principal_index(Array[(String, ParamType)]) -> Int32?
+pub fn find_invocation_context_index(Array[(String, ParamType)]) -> Int32?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
@@ -62,11 +64,13 @@ pub fn has_middleware_annotations(Array[(String, String)]) -> Bool raise Compone
 
 pub fn is_config_type(ParamType) -> Bool
 
+pub fn is_invocation_context_type(ParamType) -> Bool
+
 pub fn is_multimodal_type(ParamType) -> Bool
 
-pub fn is_principal_type(ParamType) -> Bool
-
 pub fn is_secret_type(ParamType) -> Bool
+
+pub let live_value_message : String
 
 pub fn moonbit_name_to_kebab_case(String) -> String
 
@@ -423,7 +427,7 @@ pub(all) struct ToolExample {
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ToolHiddenType {
-  Principal
+  InvocationContext
   InputStream
   OutputStream
   ErrorStream
@@ -467,7 +471,7 @@ pub(all) struct ToolMiddlewareInfo {
 pub(all) enum ToolMiddlewareParamSource {
   CanonicalInput(String)
   Stdin
-  Principal
+  InvocationContext
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ToolMiddlewareScopeInfo {

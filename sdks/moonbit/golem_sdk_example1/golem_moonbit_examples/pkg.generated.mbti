@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 import {
   "golemcloud/golem_sdk/agents",
   "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/caller",
   "golemcloud/golem_sdk/config",
   "golemcloud/golem_sdk/http",
   "golemcloud/golem_sdk/interface/golem/agent/common",
@@ -43,7 +44,7 @@ pub fn AppConfigOverride::empty() -> Self
 pub impl @rpc.AgentConfigOverrides for AppConfigOverride
 
 type AuditLog
-pub fn AuditLog::add_entry(Self, String, @common.Principal) -> Unit
+pub fn AuditLog::add_entry(Self, String, @caller.InvocationContext) -> Unit
 pub fn AuditLog::get_creator(Self) -> String
 pub fn AuditLog::get_entries(Self) -> Array[String]
 

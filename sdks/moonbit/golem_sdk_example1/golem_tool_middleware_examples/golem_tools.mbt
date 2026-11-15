@@ -218,7 +218,7 @@ async fn __golem_tool_invoke_Messages(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["send"].contains(__golem_command_path[0]) {
@@ -449,7 +449,7 @@ async fn __golem_tool_invoke_PublicFiles(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["read"].contains(__golem_command_path[0]) {
@@ -680,7 +680,7 @@ async fn __golem_tool_invoke_Storage(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["fetch"].contains(__golem_command_path[0]) {

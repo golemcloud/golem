@@ -23,7 +23,7 @@ pub async fn invoke(
   stderr : @streams.ToolOutputWriter?,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
-  let principal = @invocationContext.caller().immediate
+  let context = @tool.InvocationContext::current()
   let stdin = stdin.map(source => @tool.byte_stream(source))
   match
     @tool.validate_tool_outputs(
@@ -52,7 +52,7 @@ pub async fn invoke(
         stdin,
         None,
         None,
-        principal,
+        context,
       )
     (Some(writer), None) => {
       let stdout = @tool.provider_output(writer)
@@ -64,7 +64,7 @@ pub async fn invoke(
           stdin,
           Some(stdout),
           None,
-          principal,
+          context,
         )
       })
     }
@@ -78,7 +78,7 @@ pub async fn invoke(
           stdin,
           None,
           Some(stderr),
-          principal,
+          context,
         )
       })
     }
@@ -94,7 +94,7 @@ pub async fn invoke(
             stdin,
             Some(stdout),
             Some(stderr),
-            principal,
+            context,
           )
         })
       })

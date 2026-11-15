@@ -14,7 +14,7 @@ pub async fn initialize(
     @agents.construct_and_set_instance(
       agent_type,
       input,
-      @invocationContext.caller().immediate,
+      @agents.InvocationContext::current(),
     )
   }
 }
@@ -33,7 +33,7 @@ pub async fn invoke(
       instance.interface.invoke(
         method_name,
         input,
-        @invocationContext.caller().immediate,
+        @agents.InvocationContext::current(),
       )
   }
 }

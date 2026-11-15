@@ -694,7 +694,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["stream"].contains(__golem_command_path[0]) {
@@ -1204,7 +1204,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     if __golem_stdin is None {
@@ -2298,7 +2298,7 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() > 0 &&
     ["remote", "rmt"].contains(__golem_command_path[0]) {
@@ -2308,7 +2308,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_stdin,
       __golem_stdout,
       __golem_stderr,
-      __golem_principal,
+      __golem_context,
     )
   }
   if __golem_command_path.length() > 0 &&
@@ -2319,7 +2319,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_stdin,
       __golem_stdout,
       __golem_stderr,
-      __golem_principal,
+      __golem_context,
     )
   }
   if __golem_command_path.length() == 1 &&
@@ -2845,7 +2845,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_1(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["add"].contains(__golem_command_path[0]) {
@@ -3430,7 +3430,7 @@ async fn __golem_tool_invoke_CanonicalGit_subtree_2(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -4205,7 +4205,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["add"].contains(__golem_command_path[0]) {
@@ -4913,7 +4913,7 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -5394,7 +5394,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -5793,7 +5793,7 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["echo"].contains(__golem_command_path[0]) {

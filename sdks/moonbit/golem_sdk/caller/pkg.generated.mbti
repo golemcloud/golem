@@ -1,0 +1,110 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/caller"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
+}
+
+// Values
+
+// Errors
+pub suberror PrincipalRefParseError {
+  PrincipalRefParseError(String)
+} derive(@debug.Debug)
+
+// Types and methods
+pub(all) enum AccountAuthentication {
+  ApiToken
+  BootstrapToken
+  SignIn
+} derive(Eq, @debug.Debug)
+
+pub(all) struct AccountPrincipal {
+  principal_ref : PrincipalRef
+  account_id : @types.AccountId
+  authentication : AccountAuthentication
+}
+
+pub(all) struct AgentPrincipal {
+  principal_ref : PrincipalRef
+  agent_id : @types.AgentId
+  agent_type : String
+  environment_id : @types.EnvironmentId
+}
+
+pub(all) struct Caller {
+  original : Principal
+  immediate : Principal
+  tokens : Array[TokenProvenance]
+}
+pub fn Caller::anonymous() -> Self
+pub fn Caller::from_wit(@common.Caller) -> Self
+
+pub struct InvocationContext {
+  // private fields
+}
+pub fn InvocationContext::anonymous() -> Self
+pub fn InvocationContext::caller(Self) -> Caller
+pub fn InvocationContext::current() -> Self
+pub fn InvocationContext::from_caller(Caller) -> Self
+
+pub(all) enum Principal {
+  User(UserPrincipal)
+  Account(AccountPrincipal)
+  Agent(AgentPrincipal)
+  Tool(ToolPrincipal)
+  Anonymous
+}
+pub fn Principal::equals(Self, Self) -> Bool
+pub fn Principal::equals_ref(Self, PrincipalRef) -> Bool
+pub fn Principal::from_wit(@common.Principal) -> Self
+pub fn Principal::kind(Self) -> PrincipalKind
+pub fn Principal::principal_ref(Self) -> PrincipalRef?
+pub fn Principal::to_string(Self) -> String
+pub impl Show for Principal
+
+pub(all) enum PrincipalKind {
+  User
+  Account
+  Agent
+  Tool
+  Anonymous
+} derive(Eq, @debug.Debug)
+pub fn PrincipalKind::to_string(Self) -> String
+
+pub(all) struct PrincipalRef {
+  issuer : String
+  subject : String
+} derive(Eq, Hash, @debug.Debug)
+pub fn PrincipalRef::equals(Self, Self) -> Bool
+pub fn PrincipalRef::new(String, String) -> Self
+pub fn PrincipalRef::parse(String) -> Self raise PrincipalRefParseError
+pub fn PrincipalRef::to_string(Self) -> String
+pub impl @schema.FromSchema for PrincipalRef
+pub impl @schema.IntoSchema for PrincipalRef
+pub impl Show for PrincipalRef
+
+pub(all) struct TokenProvenance {
+  id : @types.Uuid
+  maker : PrincipalRef?
+}
+
+pub(all) struct ToolPrincipal {
+  principal_ref : PrincipalRef
+  environment_id : @types.EnvironmentId
+  tool_name : String
+}
+
+pub(all) struct UserPrincipal {
+  principal_ref : PrincipalRef
+  claims : String
+  authenticated_at : @types.Datetime
+}
+
+// Type aliases
+
+// Traits

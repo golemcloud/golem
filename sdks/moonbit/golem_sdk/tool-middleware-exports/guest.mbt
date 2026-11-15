@@ -45,7 +45,7 @@ pub async fn invoke_tool_middleware(
     stdin,
     stdout,
     stderr,
-    @invocationContext.caller().immediate,
+    @caller.InvocationContext::current(),
     underlying,
   )
 }
