@@ -15,8 +15,13 @@
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { HttpEndpointSpec } from './http';
 import type { BindableKeys, ValidateEndpointsTuple, ValidateSingleEndpoint } from './httpTypes';
+import type { RejectLiveValues } from './liveValues';
 
 export type InputRecord = Record<string, StandardSchemaV1>;
+
+type InferRecord<R extends InputRecord> = {
+  [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
+};
 
 declare const MethodHasHttp: unique symbol;
 
@@ -42,8 +47,7 @@ export type MethodHasHttpOf<M> = M extends { readonly http: readonly [] }
  *   - `'until-write'`: cache until a mutating (non-read-only) method runs — this
  *     is the policy used when `readOnly` is set to the convenience boolean `true`;
  *   - `{ ttlNanos }`: cache for the given time-to-live (nanoseconds).
- * The cache key includes the caller principal when the method declares a direct
- * `s.principal()` input parameter.
+ * The cache key always includes the caller: every read-only result is cached per caller.
  */
 export type ReadOnlyOption = {
   cache?: 'no-cache' | 'until-write' | { ttlNanos: bigint };
@@ -55,8 +59,7 @@ export type ReadOnlyOption = {
  *
  * The optional metadata fields surface on the WIT `agent-method` record:
  * `description` → `description`, `promptHint` → `prompt-hint`, and `readOnly`
- * → `read-only`. A bare `true` selects `until-write` caching; a direct
- * `s.principal()` input enables per-principal caching.
+ * → `read-only`. A bare `true` selects `until-write` caching.
  */
 export interface MethodSpec<
   Input extends InputRecord = InputRecord,
@@ -74,8 +77,7 @@ export interface MethodSpec<
   /**
    * Marks the method as read-only (surfaced as `agent-method.read-only`).
    * `true` uses the `until-write` cache policy; pass a {@link ReadOnlyOption}
-   * for `no-cache` / `ttl` caching. A direct `s.principal()` input automatically
-   * enables per-principal caching.
+   * for `no-cache` / `ttl` caching.
    */
   readonly readOnly?: boolean | ReadOnlyOption;
   /**
@@ -111,52 +113,60 @@ export function method<
   Input extends InputRecord,
   Output,
   const Eps extends ReadonlyArray<HttpEndpointSpec<BindableKeys<Input>>>,
->(spec: {
-  input: Input;
-  returns: StandardSchemaV1<unknown, Output>;
-  description?: string;
-  promptHint?: string;
-  readOnly?: boolean | ReadOnlyOption;
-  http: ValidateEndpointsTuple<Eps, Input>;
-}): MethodSpec<Input, Output, Eps extends readonly [] ? false : true> & {
+>(
+  spec: {
+    input: Input;
+    returns: StandardSchemaV1<unknown, Output>;
+    description?: string;
+    promptHint?: string;
+    readOnly?: boolean | ReadOnlyOption;
+    http: ValidateEndpointsTuple<Eps, Input>;
+  } & RejectLiveValues<[InferRecord<Input>, Output]>,
+): MethodSpec<Input, Output, Eps extends readonly [] ? false : true> & {
   readonly http: ValidateEndpointsTuple<Eps, Input>;
 };
 export function method<
   Input extends InputRecord,
   Output,
   const Ep extends HttpEndpointSpec<BindableKeys<Input>>,
->(spec: {
-  input: Input;
-  returns: StandardSchemaV1<unknown, Output>;
-  description?: string;
-  promptHint?: string;
-  readOnly?: boolean | ReadOnlyOption;
-  http: ValidateSingleEndpoint<Ep, Input>;
-}): MethodSpec<Input, Output, true> & { readonly http: ValidateSingleEndpoint<Ep, Input> };
+>(
+  spec: {
+    input: Input;
+    returns: StandardSchemaV1<unknown, Output>;
+    description?: string;
+    promptHint?: string;
+    readOnly?: boolean | ReadOnlyOption;
+    http: ValidateSingleEndpoint<Ep, Input>;
+  } & RejectLiveValues<[InferRecord<Input>, Output]>,
+): MethodSpec<Input, Output, true> & { readonly http: ValidateSingleEndpoint<Ep, Input> };
 export function method<
   Input extends InputRecord,
   Output,
   const Eps extends ReadonlyArray<HttpEndpointSpec<BindableKeys<Input>>> = readonly [],
->(spec: {
-  input: Input;
-  returns: StandardSchemaV1<unknown, Output>;
-  description?: string;
-  promptHint?: string;
-  readOnly?: boolean | ReadOnlyOption;
-  http?: ValidateEndpointsTuple<Eps, Input>;
-}): MethodSpec<Input, Output, false>;
+>(
+  spec: {
+    input: Input;
+    returns: StandardSchemaV1<unknown, Output>;
+    description?: string;
+    promptHint?: string;
+    readOnly?: boolean | ReadOnlyOption;
+    http?: ValidateEndpointsTuple<Eps, Input>;
+  } & RejectLiveValues<[InferRecord<Input>, Output]>,
+): MethodSpec<Input, Output, false>;
 export function method<
   Input extends InputRecord,
   Output,
   const Ep extends HttpEndpointSpec<BindableKeys<Input>> = HttpEndpointSpec<BindableKeys<Input>>,
->(spec: {
-  input: Input;
-  returns: StandardSchemaV1<unknown, Output>;
-  description?: string;
-  promptHint?: string;
-  readOnly?: boolean | ReadOnlyOption;
-  http?: ValidateSingleEndpoint<Ep, Input>;
-}): MethodSpec<Input, Output, false>;
+>(
+  spec: {
+    input: Input;
+    returns: StandardSchemaV1<unknown, Output>;
+    description?: string;
+    promptHint?: string;
+    readOnly?: boolean | ReadOnlyOption;
+    http?: ValidateSingleEndpoint<Ep, Input>;
+  } & RejectLiveValues<[InferRecord<Input>, Output]>,
+): MethodSpec<Input, Output, false>;
 export function method(spec: any): MethodSpec<InputRecord, unknown, boolean> {
   return {
     input: spec.input,

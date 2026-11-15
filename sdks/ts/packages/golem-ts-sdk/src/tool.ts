@@ -36,7 +36,7 @@ import {
   type StartedToolInvocation,
   type ToolInputStream,
 } from './internal/tool/startedToolInvocation';
-import type { Principal } from './principal';
+import type { Caller } from './caller';
 import {
   type ExtendedCommandBody,
   type ExtendedCommandNode,
@@ -368,11 +368,7 @@ export type ToolInvocationContext<
   Stdout extends StreamPresence = StreamPresence,
   Stderr extends StreamPresence = StreamPresence,
 > = Simplify<
-  { readonly principal: Principal } & StreamContextField<
-    'stdin',
-    Stdin,
-    ReadableStream<Uint8Array>
-  > &
+  { readonly caller: Caller } & StreamContextField<'stdin', Stdin, ReadableStream<Uint8Array>> &
     StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>> &
     StreamContextField<'stderr', Stderr, WritableStream<Uint8Array>>
 >;
@@ -671,7 +667,7 @@ export type ToolMiddlewareInvocationContext<
   Parameters = {},
 > = Simplify<
   {
-    readonly principal: Principal;
+    readonly caller: Caller;
     readonly underlying: ToolUnderlying<UnderlyingDefinition>;
     readonly parameters: Parameters;
   } & StreamContextField<'stdin', Stdin, AsyncIterable<number>>
@@ -871,7 +867,7 @@ export interface UniversalToolMiddlewareInvocation {
   readonly stdin?: AsyncIterable<number>;
   readonly stdout?: ToolOutputWriter;
   readonly stderr?: ToolOutputWriter;
-  readonly principal: Principal;
+  readonly caller: Caller;
 }
 
 export interface UniversalToolMiddlewareContext<Parameters = {}> {

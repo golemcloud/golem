@@ -35,6 +35,7 @@ import {
   SchemaType,
   SchemaValue,
   t,
+  type TypeId,
   v,
   variantCase,
   VariantCaseType,
@@ -78,15 +79,9 @@ import { SchemaCodec } from './codec';
 import { buildResultCodec } from './result';
 import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
-import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../principal';
+import { PrincipalRef } from '../caller';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
 import { Uuid } from '../uuid';
-import type {
-  Principal as HostPrincipal,
-  OidcPrincipal as HostOidcPrincipal,
-  AgentId as HostAgentId,
-  AccountId as HostAccountId,
-} from 'golem:agent/common@2.0.0';
 
 /**
  * Hidden brand key carried by every marker schema. The value is a
@@ -119,7 +114,6 @@ export type MarkerKind =
   | 'result'
   | 'option'
   | 'typed-array'
-  | 'principal'
   | 'stream';
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
@@ -1142,176 +1136,45 @@ function resultMarker<Ok, Err>(
 }
 
 // ============================================================
-// Principal (WIT `golem:agent/common` `principal` variant)
+// PrincipalRef (the named record `principal-ref { issuer, subject }`)
 // ============================================================
 
-// The SDK `Principal` (produced by `this.getPrincipal()`) carried as a WIT
-// `principal` variant value. Unlike `this.getPrincipal()` (a capability read),
-// this marker lets a `Principal` travel as ordinary structured data in a method
-// param / return. The graph mirrors the host `Principal` shape from
-// `golem:agent/common@2.0.0` exactly (case order oidc/agent/golem-user/anonymous),
-// and the codec round-trips SDK `Principal` <-> `SchemaValue` via the host shape.
+// A `PrincipalRef` is the identity of a principal as plain data: an issuer and a subject.
+// Unlike a `Principal` or a `Caller` (live values, never data), it can be a method parameter,
+// a result and a field of stored state. Every SDK emits the same named record, so a
+// cross-SDK call with a `PrincipalRef` argument decodes the same everywhere.
 
-const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
+const PRINCIPAL_REF_TYPE_ID = 'principal-ref' as TypeId;
 
-// --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.uuid();
-const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
-const agentIdType = (): SchemaType =>
-  t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
-const accountIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
-const oidcType = (): SchemaType =>
-  t.record([
-    field('sub', t.string()),
-    field('issuer', t.string()),
-    field('email', t.option(t.string())),
-    field('name', t.option(t.string())),
-    field('emailVerified', t.option(t.bool())),
-    field('givenName', t.option(t.string())),
-    field('familyName', t.option(t.string())),
-    field('picture', t.option(t.string())),
-    field('preferredUsername', t.option(t.string())),
-    field('claims', t.string()),
-  ]);
-const agentPrincipalType = (): SchemaType => t.record([field('agentId', agentIdType())]);
-const golemUserType = (): SchemaType => t.record([field('accountId', accountIdType())]);
-
-// --- SchemaValue field accessors (positional record reads) ---
-const recFields = (sv: SchemaValue): SchemaValue[] =>
-  (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
-const strOf = (f: SchemaValue): string => (f as { tag: 'string'; value: string }).value;
-const boolOf = (f: SchemaValue): boolean => (f as { tag: 'bool'; value: boolean }).value;
-const optOf = (f: SchemaValue): SchemaValue | undefined =>
-  (f as { tag: 'option'; value?: SchemaValue }).value;
-
-// --- codec helpers (round-trip via the host shape) ---
-type HostUuid = { highBits: bigint; lowBits: bigint };
-
-function uuidToValue(u: HostUuid): SchemaValue {
-  return v.uuid(Uuid.from(u));
-}
-function uuidFromValue(sv: SchemaValue): HostUuid {
-  const uuid = (sv as { tag: 'uuid'; value: Uuid }).value;
-  return { highBits: uuid.highBits, lowBits: uuid.lowBits };
-}
-
-function agentIdToValue(a: HostAgentId): SchemaValue {
-  return v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)]);
-}
-function agentIdFromValue(sv: SchemaValue): HostAgentId {
-  const f = recFields(sv);
-  const uuid = uuidFromValue(recFields(f[0])[0]);
-  return { componentId: { uuid }, agentId: strOf(f[1]) };
-}
-
-function accountIdToValue(a: HostAccountId): SchemaValue {
-  return v.record([uuidToValue(a.uuid)]);
-}
-function accountIdFromValue(sv: SchemaValue): HostAccountId {
-  return { uuid: uuidFromValue(recFields(sv)[0]) };
-}
-
-function oidcToValue(o: HostOidcPrincipal): SchemaValue {
-  const optStr = (x: string | undefined): SchemaValue =>
-    v.option(x === undefined ? undefined : v.string(x));
-  return v.record([
-    v.string(o.sub),
-    v.string(o.issuer),
-    optStr(o.email),
-    optStr(o.name),
-    v.option(o.emailVerified === undefined ? undefined : v.bool(o.emailVerified)),
-    optStr(o.givenName),
-    optStr(o.familyName),
-    optStr(o.picture),
-    optStr(o.preferredUsername),
-    v.string(o.claims),
-  ]);
-}
-function oidcFromValue(sv: SchemaValue): HostOidcPrincipal {
-  const f = recFields(sv);
-  const optStr = (field: SchemaValue): string | undefined => {
-    const val = optOf(field);
-    return val === undefined ? undefined : strOf(val);
-  };
-  const out: HostOidcPrincipal = { sub: strOf(f[0]), issuer: strOf(f[1]), claims: strOf(f[9]) };
-  const email = optStr(f[2]);
-  if (email !== undefined) out.email = email;
-  const name = optStr(f[3]);
-  if (name !== undefined) out.name = name;
-  const ev = optOf(f[4]);
-  if (ev !== undefined) out.emailVerified = boolOf(ev);
-  const givenName = optStr(f[5]);
-  if (givenName !== undefined) out.givenName = givenName;
-  const familyName = optStr(f[6]);
-  if (familyName !== undefined) out.familyName = familyName;
-  const picture = optStr(f[7]);
-  if (picture !== undefined) out.picture = picture;
-  const preferredUsername = optStr(f[8]);
-  if (preferredUsername !== undefined) out.preferredUsername = preferredUsername;
-  return out;
-}
-
-function principalMarker(): MarkerSchema<Principal, 'principal'> {
-  const validate: Validator<Principal> = (value) =>
-    value !== null &&
-    typeof value === 'object' &&
-    typeof (value as { tag?: unknown }).tag === 'string' &&
-    PRINCIPAL_TAGS.includes((value as { tag: string }).tag)
-      ? ok(value as Principal)
-      : fail('Expected a Principal (e.g. from this.getPrincipal())');
+function principalRefMarker(): MarkerSchema<PrincipalRef, 'scalar'> {
+  const validate: Validator<PrincipalRef> = (value) =>
+    value instanceof PrincipalRef
+      ? ok(value)
+      : fail('Expected a PrincipalRef (e.g. ctx.caller.original.ref)');
   const descriptor: MarkerDescriptor = () => ({
     graph: {
-      defs: new Map(),
-      root: t.variant([
-        variantCase('oidc', oidcType()),
-        variantCase('agent', agentPrincipalType()),
-        variantCase('golem-user', golemUserType()),
-        variantCase('anonymous'),
+      defs: new Map([
+        [
+          PRINCIPAL_REF_TYPE_ID,
+          { body: t.record([field('issuer', t.string()), field('subject', t.string())]) },
+        ],
       ]),
+      root: t.ref(PRINCIPAL_REF_TYPE_ID),
     },
-    // A bare `s.principal()` PARAMETER is auto-injected from the caller (the host
-    // supplies it, no wire field); see SchemaCodec.autoInjected. As a return /
-    // nested field the codec below carries it as ordinary data.
-    autoInjected: 'principal',
-    toValue: (value) => {
-      const h = sdkPrincipalToHost(value as Principal);
-      switch (h.tag) {
-        case 'oidc':
-          return v.variant(0, oidcToValue(h.val));
-        case 'agent':
-          return v.variant(1, v.record([agentIdToValue(h.val.agentId)]));
-        case 'golem-user':
-          return v.variant(2, v.record([accountIdToValue(h.val.accountId)]));
-        case 'anonymous':
-          return v.variant(3);
-      }
-    },
+    toValue: (value) =>
+      v.record([
+        v.string((value as PrincipalRef).issuer),
+        v.string((value as PrincipalRef).subject),
+      ]),
     fromValue: (sv) => {
-      const vv = sv as { tag: 'variant'; caseIndex: number; payload?: SchemaValue };
-      let host: HostPrincipal;
-      switch (vv.caseIndex) {
-        case 0:
-          host = { tag: 'oidc', val: oidcFromValue(vv.payload as SchemaValue) };
-          break;
-        case 1:
-          host = {
-            tag: 'agent',
-            val: { agentId: agentIdFromValue(recFields(vv.payload as SchemaValue)[0]) },
-          };
-          break;
-        case 2:
-          host = {
-            tag: 'golem-user',
-            val: { accountId: accountIdFromValue(recFields(vv.payload as SchemaValue)[0]) },
-          };
-          break;
-        default:
-          host = { tag: 'anonymous' };
-      }
-      return sdkPrincipalFromHost(host);
+      const fields = (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
+      return new PrincipalRef(
+        (fields[0] as { tag: 'string'; value: string }).value,
+        (fields[1] as { tag: 'string'; value: string }).value,
+      );
     },
   });
-  return marker<Principal, 'principal'>(validate, descriptor);
+  return marker<PrincipalRef, 'scalar'>(validate, descriptor);
 }
 
 // ============================================================
@@ -1418,8 +1281,8 @@ export const s = {
   stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
   permissionCard: permissionCardMarker,
 
-  // Principal carried as a data value (WIT `principal` variant).
-  principal: () => principalMarker(),
+  // A principal's identity carried as data (the named record `principal-ref`).
+  principalRef: () => principalRefMarker(),
 
   // Rich nodes.
   multimodal: (cases: MultimodalCase[]) => multimodalMarker(cases),

@@ -18,7 +18,7 @@ import { SchemaValueStream } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
 import { compileSchema } from '../src/schema/adapter';
 import { s } from '../src/schema/markers';
-import { sdkPrincipalFromHost } from '../src/principal';
+import { Caller } from '../src/caller';
 import {
   command,
   decodeDeclaredToolError,
@@ -121,7 +121,7 @@ function controllableStream(...values: number[]): {
   return { stream: { [Symbol.asyncIterator]: () => iterator }, close };
 }
 
-const anonymous = sdkPrincipalFromHost({ tag: 'anonymous' });
+const anonymous = Caller.anonymous();
 
 describe('monomorphic tool middleware registration', () => {
   it('normalizes metadata and compiles every presented leaf, including grafted descendants', () => {
@@ -300,7 +300,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(definition, [], { value }),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       );
@@ -383,7 +383,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(presented, [], { value: 42 }),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       );
@@ -462,7 +462,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: path,
           input: commandInput(presented, path, input),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ).then((result) => decodeValue(z.string(), result.result!));
@@ -506,7 +506,7 @@ describe('monomorphic tool middleware dispatch', () => {
     const invokeWithInput = (input: TypedSchemaValue) =>
       invoke(
         'checked-policy',
-        { commandPath: [], input, stdin: undefined, principal: anonymous },
+        { commandPath: [], input, stdin: undefined, caller: anonymous },
         raw,
       );
 
@@ -545,7 +545,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: ['missing'],
           input: commandInput(definition, [], { value: 'valid' }),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -584,7 +584,7 @@ describe('monomorphic tool middleware dispatch', () => {
         commandPath: [],
         input: commandInput(definition, [], {}),
         stdin: stdin.stream,
-        principal: anonymous,
+        caller: anonymous,
       },
       raw,
     );
@@ -629,7 +629,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(absent, [], {}),
           stdin: unexpected.stream,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -645,7 +645,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(absent, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -659,7 +659,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(required, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -672,7 +672,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(optional, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -686,7 +686,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(optional, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       ),
@@ -726,7 +726,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(definition, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         raw,
       );
@@ -781,7 +781,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(definition, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         {
           invoke: async () => {
@@ -811,7 +811,7 @@ describe('monomorphic tool middleware dispatch', () => {
           commandPath: [],
           input: commandInput(definition, [], {}),
           stdin: undefined,
-          principal: anonymous,
+          caller: anonymous,
         },
         { invoke: async () => ({ result }) },
       ),
