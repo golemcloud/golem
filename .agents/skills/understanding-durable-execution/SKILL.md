@@ -1811,7 +1811,16 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+**TypeScript scope integration:** `durableAsync` follows the Rust order: async begin, then
+`enterLive` from wasm-rquickjs's `wasm-rquickjs:custom-invocation-context` in the parent's scope,
+then the body, `finish-async` and the drop under the child token, then `close`. The runtime's
+promise hook, timer and callback wrappers and import-bridge wrappers capture the scope at
+registration or initiation, install it around each job, poll, sleep and drop, restore the previous
+scope afterwards, and restore the root before control returns to the host. A parent finishes only
+after the operations that started inside it have settled. A closed token resolves to its nearest
+open ancestor, or to the root, and never installs its stale snapshot. `durable` is sync-only.
+
+**Non-Rust SDK limitation:** Effect, Scala, MoonBit, and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1820,7 +1829,8 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations or to the Rust poll/drop scope integration.
+durability outside custom operations, to the Rust poll/drop scope integration, or to TypeScript's
+`durableAsync`.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
